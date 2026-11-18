@@ -1,8 +1,11 @@
 //! The router: the only path from a caller to a tool handler.
 
-use crate::approval::{approval_digest, ApprovalRequest, ApprovalStore, Approver};
+use crate::approval::{
+    approval_digest, ApprovalRequest, ApprovalScope, ApprovalStore, Approver, SessionGrant, WorkerEpoch,
+    APPROVAL_SCHEMA_VERSION,
+};
 use crate::canon::{canonical_json, random_hex};
-use crate::registry::{check_args, CallCtx, Registry};
+use crate::registry::{check_args, CallCtx, Registry, ToolDef};
 use crate::EVENT_SCHEMA_VERSION;
 use ledger::Ledger;
 use policy::{Decision, Policy};
@@ -20,6 +23,22 @@ pub enum CallOutcome {
     /// The call was let through but failed (bad arguments, handler error),
     /// or the ledger could not record it.
     Error(String),
+}
+
+enum DispatchAuth<'a> {
+    Allow,
+    Once { nonce: &'a str, bind_session_digest: Option<String> },
+    Session(u64),
+}
+
+/// `WorkerSession` reuse is allowed only when the tool's epoch provider
+/// reports an active filesystem- and network-restricted sandbox.
+fn effective_scope(def: &ToolDef, epoch_src: Option<&Arc<dyn WorkerEpoch>>) -> ApprovalScope {
+    if def.approval_scope == ApprovalScope::WorkerSession && epoch_src.is_some_and(|e| e.is_contained()) {
+        ApprovalScope::WorkerSession
+    } else {
+        ApprovalScope::Once
+    }
 }
 
 pub struct Router {
@@ -83,7 +102,9 @@ impl Router {
 
     fn call_inner(&self, caller: &str, tool_id: &str, args: &Value, call_id: &str) -> Result<CallOutcome, String> {
         let canonical = canonical_json(args);
-        let def = self.registry.get(tool_id).map(|(d, _)| d);
+        let entry = self.registry.get_entry(tool_id);
+        let def = entry.map(|(d, _, _)| d);
+        let scope = entry.map(|(d, _, epoch_src)| effective_scope(d, epoch_src));
         self.record(
             "tool.request",
             json!({
@@ -92,18 +113,20 @@ impl Router {
                 "tool": tool_id,
                 "tool_def_hash": def.map(|d| d.def_hash()),
                 "effect": def.map(|d| d.effect.as_str()),
+                "approval_scope": scope.map(|s| s.as_str()),
                 "args": self.inline_or_blob(&canonical)?,
             }),
         )?;
-        let Some(def) = def else {
+        let Some((def, _, epoch_src)) = entry else {
             return self.finish_denied(call_id, "unknown tool");
         };
+        let scope = effective_scope(def, epoch_src);
         if let Err(e) = check_args(&def.input_schema, args) {
             return self.finish_error(call_id, &format!("invalid arguments: {e}"));
         }
 
-        let request = self.policy_request(caller, tool_id, &canonical);
-        let response = policy::evaluate(&self.policy, &request.expect("tool exists"));
+        let request = self.policy_request(caller, tool_id, &canonical).expect("tool exists");
+        let response = policy::evaluate(&self.policy, &request);
         self.record(
             "policy.decision",
             json!({
@@ -116,21 +139,61 @@ impl Router {
             }),
         )?;
 
-        let nonce = match response.decision {
-            Decision::Deny => return self.finish_denied(call_id, &format!("policy: {}", response.reason)),
-            Decision::Allow => None,
+        let def_hash = def.def_hash();
+        match response.decision {
+            Decision::Deny => self.finish_denied(call_id, &format!("policy: {}", response.reason)),
+            Decision::Allow => self.dispatch_auth(caller, tool_id, args, DispatchAuth::Allow, call_id),
             Decision::Ask => {
+                if scope == ApprovalScope::WorkerSession {
+                    let Some(epoch_provider) = epoch_src else {
+                        return self.finish_denied(call_id, "approval: worker-session tool has no epoch provider");
+                    };
+                    let live = epoch_provider.live_epoch();
+                    self.store.clear_if_epoch_mismatch(caller, tool_id, live);
+                    if let Some(ep) = live {
+                        if let Some(grant) = self.store.matching_session_grant(
+                            caller,
+                            tool_id,
+                            &def_hash,
+                            &self.policy.version,
+                            ep,
+                        ) {
+                            self.record(
+                                "approval.session_reused",
+                                json!({
+                                    "call_id": call_id,
+                                    "grant_digest": grant.grant_digest,
+                                    "granted_call_id": grant.granted_call_id,
+                                    "worker_epoch": ep,
+                                }),
+                            )?;
+                            return self.dispatch_auth(caller, tool_id, args, DispatchAuth::Session(ep), call_id);
+                        }
+                    }
+                }
+
                 let nonce = random_hex(16);
-                let digest =
-                    approval_digest(caller, tool_id, &def.def_hash(), &canonical, &self.policy.version, &nonce);
-                self.record("approval.requested", json!({ "call_id": call_id, "digest": digest }))?;
+                let digest = approval_digest(
+                    scope,
+                    caller,
+                    tool_id,
+                    &def_hash,
+                    &canonical,
+                    &self.policy.version,
+                    &nonce,
+                );
+                self.record(
+                    "approval.requested",
+                    json!({ "call_id": call_id, "digest": digest, "scope": scope.as_str() }),
+                )?;
                 let reply = self.approver.decide(&ApprovalRequest {
-                    schema_version: EVENT_SCHEMA_VERSION,
+                    schema_version: APPROVAL_SCHEMA_VERSION,
                     session: self.session.clone(),
                     call_id: call_id.to_string(),
                     digest: digest.clone(),
                     caller: caller.to_string(),
                     tool_id: tool_id.to_string(),
+                    scope,
                     effect: def.effect,
                     canonical_args: canonical.clone(),
                     policy_reason: response.reason.clone(),
@@ -144,11 +207,25 @@ impl Router {
                     return self.finish_denied(call_id, &format!("approval: {why}"));
                 }
                 self.store.grant(&digest);
-                self.record("approval.granted", json!({ "call_id": call_id, "digest": digest, "by": reply.by }))?;
-                Some(nonce)
+                self.record(
+                    "approval.granted",
+                    json!({
+                        "call_id": call_id,
+                        "digest": digest,
+                        "scope": scope.as_str(),
+                        "by": reply.by,
+                    }),
+                )?;
+                let bind_session_digest = (scope == ApprovalScope::WorkerSession).then(|| digest.clone());
+                self.dispatch_auth(
+                    caller,
+                    tool_id,
+                    args,
+                    DispatchAuth::Once { nonce: &nonce, bind_session_digest },
+                    call_id,
+                )
             }
-        };
-        self.dispatch(caller, tool_id, args, nonce.as_deref(), call_id)
+        }
     }
 
     fn policy_request(&self, caller: &str, tool_id: &str, canonical: &str) -> Option<policy::Request> {
@@ -164,10 +241,107 @@ impl Router {
         })
     }
 
-    /// The last step before the handler runs. Everything is looked up and
-    /// computed again from what is about to be dispatched: the policy is
-    /// re-evaluated, and for an "ask" decision the digest is rebuilt and must
-    /// match an unused grant, which is consumed here.
+    /// Re-verify policy and authorization immediately before calling the handler.
+    fn dispatch_auth(
+        &self,
+        caller: &str,
+        tool_id: &str,
+        args: &Value,
+        auth: DispatchAuth<'_>,
+        call_id: &str,
+    ) -> Result<CallOutcome, String> {
+        let canonical = canonical_json(args);
+        let Some(request) = self.policy_request(caller, tool_id, &canonical) else {
+            return self.finish_denied(call_id, "unknown tool");
+        };
+        let (def, handler, epoch_src) = self.registry.get_entry(tool_id).expect("checked above");
+        let scope = effective_scope(def, epoch_src);
+        let (required_epoch, bind_session_digest) = match policy::evaluate(&self.policy, &request).decision {
+            Decision::Deny => return self.finish_denied(call_id, "policy denies at dispatch"),
+            Decision::Allow => (None, None),
+            Decision::Ask => match auth {
+                DispatchAuth::Allow => {
+                    return self.finish_denied(call_id, "approval: missing authorization");
+                }
+                DispatchAuth::Once { nonce, bind_session_digest } => {
+                    let digest = approval_digest(
+                        scope,
+                        caller,
+                        tool_id,
+                        &request.tool_def_hash,
+                        &canonical,
+                        &self.policy.version,
+                        nonce,
+                    );
+                    if !self.store.consume(&digest) {
+                        self.record("approval.rejected", json!({ "call_id": call_id, "digest": digest }))?;
+                        return self.finish_denied(call_id, "approval: no unused approval for exactly this call");
+                    }
+                    self.record("approval.consumed", json!({ "call_id": call_id, "digest": digest }))?;
+                    let bind = (scope == ApprovalScope::WorkerSession)
+                        .then_some(bind_session_digest)
+                        .flatten();
+                    (None, bind)
+                }
+                DispatchAuth::Session(expected_ep) => {
+                    let live = epoch_src.and_then(|e| e.live_epoch());
+                    let valid = scope == ApprovalScope::WorkerSession
+                        && live == Some(expected_ep)
+                        && self
+                            .store
+                            .matching_session_grant(caller, tool_id, &request.tool_def_hash, &self.policy.version, expected_ep)
+                            .is_some();
+                    if !valid {
+                        self.store.clear_session_grant(caller, tool_id);
+                        self.record(
+                            "approval.rejected",
+                            json!({ "call_id": call_id, "expected_epoch": expected_ep, "actual_epoch": live }),
+                        )?;
+                        return self.finish_denied(call_id, "approval: worker session grant is no longer valid");
+                    }
+                    (Some(expected_ep), None)
+                }
+            },
+        };
+
+        let ctx = CallCtx::new(&self.session, caller, call_id, &self.ledger, required_epoch);
+        match handler.call(&ctx, args) {
+            Ok(value) => {
+                let stored = self.inline_or_blob(&canonical_json(&value))?;
+                self.record("tool.result", json!({ "call_id": call_id, "ok": true, "result": stored }))?;
+                if scope == ApprovalScope::WorkerSession {
+                    if let (Some(grant_digest), Some(ran_ep)) = (bind_session_digest, ctx.worker_epoch()) {
+                        let live_now = epoch_src.and_then(|e| e.live_epoch());
+                        if live_now == Some(ran_ep) {
+                            self.record(
+                                "approval.session_bound",
+                                json!({ "call_id": call_id, "grant_digest": grant_digest, "worker_epoch": ran_ep }),
+                            )?;
+                            self.store.bind_session_grant(
+                                caller,
+                                tool_id,
+                                SessionGrant {
+                                    tool_def_hash: request.tool_def_hash,
+                                    policy_version: self.policy.version.clone(),
+                                    worker_epoch: ran_ep,
+                                    grant_digest,
+                                    granted_call_id: call_id.to_string(),
+                                },
+                            );
+                        }
+                    }
+                }
+                Ok(CallOutcome::Ok(value))
+            }
+            Err(e) => {
+                self.store
+                    .clear_if_epoch_mismatch(caller, tool_id, epoch_src.and_then(|s| s.live_epoch()));
+                self.finish_error(call_id, &e)
+            }
+        }
+    }
+
+    #[cfg(test)]
     fn dispatch(
         &self,
         caller: &str,
@@ -176,39 +350,13 @@ impl Router {
         nonce: Option<&str>,
         call_id: &str,
     ) -> Result<CallOutcome, String> {
-        let canonical = canonical_json(args);
-        let Some(request) = self.policy_request(caller, tool_id, &canonical) else {
-            return self.finish_denied(call_id, "unknown tool");
-        };
-        match policy::evaluate(&self.policy, &request).decision {
-            Decision::Deny => return self.finish_denied(call_id, "policy denies at dispatch"),
-            Decision::Allow => {}
-            Decision::Ask => {
-                let digest = approval_digest(
-                    caller,
-                    tool_id,
-                    &request.tool_def_hash,
-                    &canonical,
-                    &self.policy.version,
-                    nonce.unwrap_or(""),
-                );
-                if !self.store.consume(&digest) {
-                    self.record("approval.rejected", json!({ "call_id": call_id, "digest": digest }))?;
-                    return self.finish_denied(call_id, "approval: no unused approval for exactly this call");
-                }
-                self.record("approval.consumed", json!({ "call_id": call_id, "digest": digest }))?;
-            }
-        }
-        let (_, handler) = self.registry.get(tool_id).expect("checked above");
-        let ctx = CallCtx { session: &self.session, caller, call_id, ledger: &self.ledger };
-        match handler.call(&ctx, args) {
-            Ok(value) => {
-                let stored = self.inline_or_blob(&canonical_json(&value))?;
-                self.record("tool.result", json!({ "call_id": call_id, "ok": true, "result": stored }))?;
-                Ok(CallOutcome::Ok(value))
-            }
-            Err(e) => self.finish_error(call_id, &e),
-        }
+        self.dispatch_auth(
+            caller,
+            tool_id,
+            args,
+            DispatchAuth::Once { nonce: nonce.unwrap_or(""), bind_session_digest: None },
+            call_id,
+        )
     }
 
     fn finish_denied(&self, call_id: &str, why: &str) -> Result<CallOutcome, String> {

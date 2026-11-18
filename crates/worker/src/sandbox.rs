@@ -20,6 +20,10 @@ pub struct Containment {
 }
 
 impl Containment {
+    pub fn is_contained(&self) -> bool {
+        self.filesystem_restricted && self.network_restricted
+    }
+
     pub fn summary(&self) -> String {
         let yn = |b: bool| if b { "yes" } else { "NO" };
         format!(
@@ -66,5 +70,29 @@ impl Sandbox for JobObjectSandbox {
     #[cfg(not(windows))]
     fn spawn(&self, _command: Command) -> io::Result<Box<dyn Contained>> {
         Err(io::Error::new(io::ErrorKind::Unsupported, "the v0 worker runs on Windows only"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_object_sandbox_is_not_contained() {
+        assert!(!JobObjectSandbox.containment().is_contained());
+        assert!(Containment {
+            backend: "test",
+            filesystem_restricted: true,
+            network_restricted: true,
+            process_tree_killed_with_core: true,
+        }
+        .is_contained());
+        assert!(!Containment {
+            backend: "fs-only",
+            filesystem_restricted: true,
+            network_restricted: false,
+            process_tree_killed_with_core: true,
+        }
+        .is_contained());
     }
 }

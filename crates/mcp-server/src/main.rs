@@ -1,15 +1,15 @@
-//! `core`: the stdio MCP server that exposes the core's tools to an external
-//! agent loop (v0: the Claude Code CLI).
+//! `core`: the stdio MCP server that exposes re:Search core tools to an
+//! external agent loop (v0: the Claude Code CLI).
 //!
 //! stdout carries MCP and nothing else. Diagnostics go to stderr. Every tool
 //! call goes through `tools::Router` (policy, approval, ledger).
 //!
 //! Configuration comes from environment variables set by the supervisor in
 //! the per-session MCP config:
-//!   CORE_SESSION, CORE_DATA_DIR            required
-//!   CORE_APPROVAL_ADDR, CORE_SESSION_TOKEN approval channel (else: deny)
-//!   CORE_PYTHON, CORE_WORKER_SCRIPT, CORE_SCRATCH   compute worker
-//!   CORE_EVAL_TIMEOUT_S                    default 120
+//!   CORE_SESSION, CORE_DATA_DIR                          required
+//!   CORE_APPROVAL_ADDR, CORE_SESSION_TOKEN               approval channel (else: deny)
+//!   CORE_PYTHON, CORE_WORKER_SCRIPT, CORE_SCRATCH, CORE_PYCACHE  compute worker
+//!   CORE_EVAL_TIMEOUT_S                                  default 120
 
 mod approver;
 
@@ -26,7 +26,22 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tools::{builtin, CallCtx, CallOutcome, ClaimStatus, Registry, Router};
 use worker::sandbox::JobObjectSandbox;
-use worker::{Worker, WorkerConfig};
+use worker::{EpochHandle, Worker, WorkerConfig};
+
+struct WorkerEpochAdapter {
+    epoch: Option<EpochHandle>,
+    contained: bool,
+}
+
+impl tools::WorkerEpoch for WorkerEpochAdapter {
+    fn live_epoch(&self) -> Option<u64> {
+        self.epoch.as_ref().and_then(EpochHandle::live)
+    }
+
+    fn is_contained(&self) -> bool {
+        self.contained
+    }
+}
 
 struct CoreServer {
     router: Arc<Router>,
@@ -40,7 +55,8 @@ impl ServerHandler for CoreServer {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("core", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Local research core. `sympy_eval` runs Python/SymPy after the user approves each call. \
+                "Local re:Search core. `sympy_eval` runs Python/SymPy after the user approves it \
+                 (each call when uncontained; once per live worker session when sandboxed). \
                  `ledger_note` records an unverified note. Results are computations, not verified claims.",
             )
     }
@@ -102,13 +118,17 @@ fn build_router() -> Result<Router, String> {
                 python: PathBuf::from(python),
                 script: PathBuf::from(script),
                 scratch: env("CORE_SCRATCH").map(PathBuf::from).unwrap_or_else(|| data_dir.join("scratch")),
-                pycache: data_dir.join("cache").join("pycache"),
+                pycache: env("CORE_PYCACHE")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| data_dir.join("sessions").join(&session).join("pycache")),
                 startup_timeout: Duration::from_secs(90),
             },
             Box::new(JobObjectSandbox),
         )),
         _ => None,
     };
+    let epoch_handle = worker.as_ref().map(Worker::epoch_handle);
+    let contained = worker.as_ref().is_some_and(|w| w.containment().is_contained());
     let containment = match &worker {
         Some(w) => w.containment().summary(),
         None => "no compute worker configured".to_string(),
@@ -116,13 +136,17 @@ fn build_router() -> Result<Router, String> {
     let worker = Arc::new(Mutex::new(worker));
 
     let mut registry = Registry::new();
-    registry.register(
+    registry.register_worker_session(
         builtin::sympy_eval_def(),
-        Arc::new(move |_: &CallCtx<'_>, args: &Value| {
+        Arc::new(WorkerEpochAdapter { epoch: epoch_handle, contained }),
+        Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
             let code = args["code"].as_str().ok_or("`code` must be a string")?;
             let mut guard = worker.lock().map_err(|_| "worker lock poisoned".to_string())?;
             let w = guard.as_mut().ok_or("no compute worker is configured for this session")?;
-            w.evaluate(code, timeout).map_err(|e| e.to_string())
+            let (result, ran_epoch) =
+                w.evaluate_in_epoch(code, timeout, ctx.required_epoch).map_err(|e| e.to_string())?;
+            ctx.record_worker_epoch(ran_epoch);
+            Ok(result)
         }),
     );
     registry.register(

@@ -19,7 +19,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub const PROTOCOL_VERSION: u64 = 1;
@@ -28,11 +30,11 @@ pub const PROTOCOL_VERSION: u64 = 1;
 pub struct WorkerConfig {
     pub python: PathBuf,
     pub script: PathBuf,
-    /// Working directory of the worker; TEMP, the bytecode cache and the
-    /// matplotlib config are redirected here.
+    /// Working directory of the worker; TEMP and the matplotlib config are
+    /// redirected here.
     pub scratch: PathBuf,
-    /// Where Python keeps compiled bytecode. Sharing it between sessions
-    /// saves ~15 s of start-up; it is never inside the user's source trees.
+    /// Per-session directory where Python keeps compiled bytecode
+    /// (`sessions/<id>/pycache`), isolating sessions from each other.
     pub pycache: PathBuf,
     pub startup_timeout: Duration,
 }
@@ -44,6 +46,8 @@ pub enum WorkerError {
     Timeout(Duration),
     /// The worker died or sent something unexpected; it was killed.
     Protocol(String),
+    /// A session-scoped call required a specific live worker epoch, which has ended.
+    EpochMismatch { expected: u64, actual: Option<u64> },
 }
 
 impl fmt::Display for WorkerError {
@@ -54,10 +58,27 @@ impl fmt::Display for WorkerError {
                 write!(f, "no answer within {} s; the worker was killed and its state is lost", d.as_secs())
             }
             WorkerError::Protocol(e) => write!(f, "worker protocol error (worker killed): {e}"),
+            WorkerError::EpochMismatch { expected, actual } => write!(
+                f,
+                "worker session ended (expected epoch {expected}, current {actual:?}); a new approval is required"
+            ),
         }
     }
 }
 impl std::error::Error for WorkerError {}
+
+/// Lock-free handle reporting which worker epoch (`1, 2, ...`) is currently alive.
+#[derive(Clone, Debug)]
+pub struct EpochHandle(Arc<AtomicU64>);
+
+impl EpochHandle {
+    pub fn live(&self) -> Option<u64> {
+        match self.0.load(Ordering::Acquire) {
+            0 => None,
+            n => Some(n),
+        }
+    }
+}
 
 struct Running {
     proc: Box<dyn Contained>,
@@ -72,12 +93,20 @@ pub struct Worker {
     running: Option<Running>,
     next_id: u64,
     spawn_count: u64,
+    epoch: Arc<AtomicU64>,
 }
 
 impl Worker {
     /// Nothing is started until the first call.
     pub fn new(config: WorkerConfig, sandbox: Box<dyn Sandbox>) -> Worker {
-        Worker { config, sandbox, running: None, next_id: 1, spawn_count: 0 }
+        Worker {
+            config,
+            sandbox,
+            running: None,
+            next_id: 1,
+            spawn_count: 0,
+            epoch: Arc::new(AtomicU64::new(0)),
+        }
     }
 
     pub fn containment(&self) -> Containment {
@@ -87,6 +116,16 @@ impl Worker {
     /// How many worker processes have been started so far.
     pub fn spawn_count(&self) -> u64 {
         self.spawn_count
+    }
+
+    /// Handle for querying the live worker epoch without taking the worker lock.
+    pub fn epoch_handle(&self) -> EpochHandle {
+        EpochHandle(self.epoch.clone())
+    }
+
+    /// Epoch of the currently running worker (`None` if not started or exited).
+    pub fn live_epoch(&self) -> Option<u64> {
+        self.epoch_handle().live()
     }
 
     /// The worker's start-up message (pid, Python and SymPy versions), if it
@@ -123,17 +162,26 @@ impl Worker {
             .stderr(Stdio::null());
         let proc = self.sandbox.spawn(command).map_err(err)?;
         self.spawn_count += 1;
+        let my_epoch = self.spawn_count;
+        // Publish before spawning the reader thread so an early exit cannot lose its clear.
+        self.epoch.store(my_epoch, Ordering::Release);
         let requests = to_child.into_ours();
         let responses_file = from_child.into_ours();
 
         let (tx, rx) = mpsc::channel();
+        let epoch_on_exit = self.epoch.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(responses_file).lines() {
-                let Ok(line) = line else { break };
-                if tx.send(line).is_err() {
-                    break;
+                match line {
+                    Ok(line) => {
+                        if tx.send(line).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
                 }
             }
+            let _ = epoch_on_exit.compare_exchange(my_epoch, 0, Ordering::Release, Ordering::Relaxed);
         });
         let mut running = Running { proc, requests, responses: rx, hello: Value::Null };
         match running.responses.recv_timeout(self.config.startup_timeout) {
@@ -145,11 +193,13 @@ impl Worker {
                 }
                 _ => {
                     running.proc.kill_tree();
+                    let _ = self.epoch.compare_exchange(my_epoch, 0, Ordering::Release, Ordering::Relaxed);
                     Err(WorkerError::Spawn(format!("unexpected start-up message: {line}")))
                 }
             },
             Err(_) => {
                 running.proc.kill_tree();
+                let _ = self.epoch.compare_exchange(my_epoch, 0, Ordering::Release, Ordering::Relaxed);
                 Err(WorkerError::Spawn("the worker did not report ready (wrong interpreter, or SymPy missing?)".into()))
             }
         }
@@ -164,6 +214,7 @@ impl Worker {
         if let Some(mut running) = self.running.take() {
             running.proc.kill_tree();
         }
+        self.epoch.store(0, Ordering::Release);
     }
 
     fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value, WorkerError> {
@@ -198,16 +249,38 @@ impl Worker {
         }
     }
 
+    /// Run `code` in the worker, optionally enforcing under `&mut self` that
+    /// the call runs inside `required_epoch` without respawning a dead worker.
+    /// Returns `(result, ran_epoch)`.
+    pub fn evaluate_in_epoch(
+        &mut self,
+        code: &str,
+        timeout: Duration,
+        required_epoch: Option<u64>,
+    ) -> Result<(Value, u64), WorkerError> {
+        if self.running.is_some() && self.epoch.load(Ordering::Acquire) == 0 {
+            self.kill();
+        }
+        if let Some(req) = required_epoch {
+            let current = self.live_epoch();
+            if self.running.is_none() || self.spawn_count != req || current != Some(req) {
+                return Err(WorkerError::EpochMismatch { expected: req, actual: current });
+            }
+        }
+        let answer = self.request("evaluate", json!({ "code": code }), timeout)?;
+        let ran_epoch = self.spawn_count;
+        if answer["ok"] == json!(true) {
+            Ok((answer["result"].clone(), ran_epoch))
+        } else {
+            Err(WorkerError::Protocol(answer["error"].to_string()))
+        }
+    }
+
     /// Run `code` in the worker. Returns the worker's result object:
     /// `value` (repr of the last expression, or null), `stdout`, `stderr`,
     /// `truncated`, optionally `latex`, and `error` if the code raised.
     pub fn evaluate(&mut self, code: &str, timeout: Duration) -> Result<Value, WorkerError> {
-        let answer = self.request("evaluate", json!({ "code": code }), timeout)?;
-        if answer["ok"] == json!(true) {
-            Ok(answer["result"].clone())
-        } else {
-            Err(WorkerError::Protocol(answer["error"].to_string()))
-        }
+        self.evaluate_in_epoch(code, timeout, None).map(|(v, _)| v)
     }
 
     /// Ask the worker to exit; kill it if it does not.

@@ -7,7 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "research-core"
+name = "re-search"
 path = "src/main.rs"
 
 [dependencies]

@@ -1,17 +1,57 @@
-//! Digest-bound, single-use approvals.
+//! Digest-bound approvals: single-use (`Once`) or bound to a live worker
+//! process (`WorkerSession`).
 //!
-//! An approval is for one exact call: the digest covers the caller, the tool
-//! id, the tool-definition hash, the canonical arguments, the policy version
-//! and a fresh nonce. The router grants it only if the approver echoes that
-//! digest, and consumes it (once) immediately before dispatch.
+//! Every human approval begins with a SHA-256 digest covering the scope,
+//! caller, tool id, tool-definition hash, canonical arguments, policy version
+//! and a fresh nonce. For `WorkerSession` tools, once the approved call runs on
+//! a live worker process, subsequent calls by the same caller with the same
+//! tool definition and policy version may reuse that grant only while that
+//! exact worker epoch remains alive.
 
 use crate::canon::hash_fields;
 use policy::EffectClass;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
+/// Version of the loopback approval channel wire protocol shared by supervisor
+/// and MCP server.
+pub const APPROVAL_CHANNEL_VERSION: u32 = 2;
+
+/// Version of [`ApprovalRequest`] payloads.
+pub const APPROVAL_SCHEMA_VERSION: u32 = 2;
+
+/// How broadly a single human approval applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApprovalScope {
+    /// Approved once for one exact call digest.
+    Once,
+    /// Approved for the initial call and subsequent calls while the same
+    /// worker process epoch stays alive.
+    WorkerSession,
+}
+
+impl ApprovalScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ApprovalScope::Once => "once",
+            ApprovalScope::WorkerSession => "worker-session",
+        }
+    }
+}
+
+/// Reports the currently live worker process epoch (`1, 2, ...`), or `None`
+/// when no worker process is running, and whether the worker runs inside a
+/// filesystem- and network-restricted sandbox (`WorkerSession` reuse is gated
+/// on `is_contained()`).
+pub trait WorkerEpoch: Send + Sync {
+    fn live_epoch(&self) -> Option<u64>;
+    fn is_contained(&self) -> bool;
+}
+
 pub fn approval_digest(
+    scope: ApprovalScope,
     caller: &str,
     tool_id: &str,
     tool_def_hash: &str,
@@ -19,7 +59,16 @@ pub fn approval_digest(
     policy_version: &str,
     nonce: &str,
 ) -> String {
-    hash_fields(&["approval-v1", caller, tool_id, tool_def_hash, canonical_args, policy_version, nonce])
+    hash_fields(&[
+        "approval-v2",
+        scope.as_str(),
+        caller,
+        tool_id,
+        tool_def_hash,
+        canonical_args,
+        policy_version,
+        nonce,
+    ])
 }
 
 /// What the human is shown. `schema_version` covers this struct and
@@ -32,6 +81,7 @@ pub struct ApprovalRequest {
     pub digest: String,
     pub caller: String,
     pub tool_id: String,
+    pub scope: ApprovalScope,
     pub effect: EffectClass,
     pub canonical_args: String,
     pub policy_reason: String,
@@ -51,10 +101,21 @@ pub trait Approver: Send + Sync {
     fn decide(&self, request: &ApprovalRequest) -> ApprovalReply;
 }
 
-/// Granted digests that have not been used yet.
+/// An active approval bound to one live worker epoch for `(caller, tool_id)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionGrant {
+    pub tool_def_hash: String,
+    pub policy_version: String,
+    pub worker_epoch: u64,
+    pub grant_digest: String,
+    pub granted_call_id: String,
+}
+
+/// Granted single-use digests and active worker-session grants.
 #[derive(Default)]
 pub struct ApprovalStore {
     granted: Mutex<HashSet<String>>,
+    session_grants: Mutex<HashMap<(String, String), SessionGrant>>,
 }
 
 impl ApprovalStore {
@@ -70,6 +131,47 @@ impl ApprovalStore {
     pub fn consume(&self, digest: &str) -> bool {
         self.granted.lock().unwrap().remove(digest)
     }
+
+    pub fn matching_session_grant(
+        &self,
+        caller: &str,
+        tool_id: &str,
+        tool_def_hash: &str,
+        policy_version: &str,
+        live_epoch: u64,
+    ) -> Option<SessionGrant> {
+        let grants = self.session_grants.lock().unwrap();
+        let grant = grants.get(&(caller.to_string(), tool_id.to_string()))?;
+        if grant.worker_epoch == live_epoch
+            && grant.tool_def_hash == tool_def_hash
+            && grant.policy_version == policy_version
+        {
+            Some(grant.clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn bind_session_grant(&self, caller: &str, tool_id: &str, grant: SessionGrant) {
+        self.session_grants
+            .lock()
+            .unwrap()
+            .insert((caller.to_string(), tool_id.to_string()), grant);
+    }
+
+    pub fn clear_session_grant(&self, caller: &str, tool_id: &str) {
+        self.session_grants.lock().unwrap().remove(&(caller.to_string(), tool_id.to_string()));
+    }
+
+    pub fn clear_if_epoch_mismatch(&self, caller: &str, tool_id: &str, current: Option<u64>) {
+        let mut grants = self.session_grants.lock().unwrap();
+        let key = (caller.to_string(), tool_id.to_string());
+        if let Some(grant) = grants.get(&key) {
+            if current != Some(grant.worker_epoch) {
+                grants.remove(&key);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -78,16 +180,17 @@ mod tests {
 
     #[test]
     fn digest_binds_every_field() {
-        let base = approval_digest("c", "t", "h", "{}", "p", "n");
-        assert_eq!(base, approval_digest("c", "t", "h", "{}", "p", "n"));
+        let base = approval_digest(ApprovalScope::Once, "c", "t", "h", "{}", "p", "n");
+        assert_eq!(base, approval_digest(ApprovalScope::Once, "c", "t", "h", "{}", "p", "n"));
         for other in [
-            approval_digest("c2", "t", "h", "{}", "p", "n"),
-            approval_digest("c", "t2", "h", "{}", "p", "n"),
-            approval_digest("c", "t", "h2", "{}", "p", "n"),
-            approval_digest("c", "t", "h", "{\"a\":1}", "p", "n"),
-            approval_digest("c", "t", "h", "{}", "p2", "n"),
-            approval_digest("c", "t", "h", "{}", "p", "n2"),
-            approval_digest("ct", "", "h", "{}", "p", "n"),
+            approval_digest(ApprovalScope::WorkerSession, "c", "t", "h", "{}", "p", "n"),
+            approval_digest(ApprovalScope::Once, "c2", "t", "h", "{}", "p", "n"),
+            approval_digest(ApprovalScope::Once, "c", "t2", "h", "{}", "p", "n"),
+            approval_digest(ApprovalScope::Once, "c", "t", "h2", "{}", "p", "n"),
+            approval_digest(ApprovalScope::Once, "c", "t", "h", "{\"a\":1}", "p", "n"),
+            approval_digest(ApprovalScope::Once, "c", "t", "h", "{}", "p2", "n"),
+            approval_digest(ApprovalScope::Once, "c", "t", "h", "{}", "p", "n2"),
+            approval_digest(ApprovalScope::Once, "ct", "", "h", "{}", "p", "n"),
         ] {
             assert_ne!(base, other);
         }
@@ -101,5 +204,32 @@ mod tests {
         assert!(!store.consume("other"));
         assert!(store.consume("d"));
         assert!(!store.consume("d"));
+    }
+
+    #[test]
+    fn session_grant_matches_only_same_caller_tool_def_policy_and_epoch() {
+        let store = ApprovalStore::new();
+        store.bind_session_grant(
+            "c1",
+            "sympy_eval",
+            SessionGrant {
+                tool_def_hash: "h1".into(),
+                policy_version: "v0.2".into(),
+                worker_epoch: 1,
+                grant_digest: "d1".into(),
+                granted_call_id: "call-1".into(),
+            },
+        );
+        assert!(store.matching_session_grant("c1", "sympy_eval", "h1", "v0.2", 1).is_some());
+        assert!(store.matching_session_grant("c2", "sympy_eval", "h1", "v0.2", 1).is_none());
+        assert!(store.matching_session_grant("c1", "other", "h1", "v0.2", 1).is_none());
+        assert!(store.matching_session_grant("c1", "sympy_eval", "h2", "v0.2", 1).is_none());
+        assert!(store.matching_session_grant("c1", "sympy_eval", "h1", "v0.3", 1).is_none());
+        assert!(store.matching_session_grant("c1", "sympy_eval", "h1", "v0.2", 2).is_none());
+
+        store.clear_if_epoch_mismatch("c1", "sympy_eval", Some(1));
+        assert!(store.matching_session_grant("c1", "sympy_eval", "h1", "v0.2", 1).is_some());
+        store.clear_if_epoch_mismatch("c1", "sympy_eval", None);
+        assert!(store.matching_session_grant("c1", "sympy_eval", "h1", "v0.2", 1).is_none());
     }
 }

@@ -9,7 +9,10 @@ pub mod canon;
 pub mod registry;
 pub mod router;
 
-pub use approval::{approval_digest, ApprovalReply, ApprovalRequest, ApprovalStore, Approver};
+pub use approval::{
+    approval_digest, ApprovalReply, ApprovalRequest, ApprovalScope, ApprovalStore, Approver, SessionGrant,
+    WorkerEpoch, APPROVAL_CHANNEL_VERSION, APPROVAL_SCHEMA_VERSION,
+};
 pub use registry::{CallCtx, Registry, ToolDef, ToolHandler};
 pub use router::{CallOutcome, Router};
 

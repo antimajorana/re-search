@@ -1,12 +1,13 @@
-//! Definitions of the v0 tools and the v0 static policy. Handlers live with
+//! Definitions of the v0 tools and the static policy. Handlers live with
 //! the process that owns the resources (the MCP server); the supervisor uses
 //! these definitions to know which tools it expects the model to see.
 
+use crate::approval::ApprovalScope;
 use crate::registry::ToolDef;
 use policy::{Decision, EffectClass, Match, Policy, Rule};
 use serde_json::json;
 
-pub const POLICY_VERSION: &str = "v0.1";
+pub const POLICY_VERSION: &str = "v0.2";
 pub const SYMPY_EVAL: &str = "sympy_eval";
 pub const LEDGER_NOTE: &str = "ledger_note";
 
@@ -15,8 +16,9 @@ pub fn sympy_eval_def() -> ToolDef {
         id: SYMPY_EVAL.into(),
         description: "Run Python code in the local compute worker and return the value of the last \
                       expression plus captured stdout/stderr. `sympy` is imported and `from sympy import *` \
-                      is in effect; names persist between calls until the worker restarts. Each call needs \
-                      the user's approval. The result is a computation, not a verified claim."
+                      is in effect; names persist between calls until the worker restarts. Requires the \
+                      user's approval (each call when uncontained; once per live worker session when \
+                      sandboxed). The result is a computation, not a verified claim."
             .into(),
         input_schema: json!({
             "type": "object",
@@ -27,6 +29,7 @@ pub fn sympy_eval_def() -> ToolDef {
             "additionalProperties": false
         }),
         effect: EffectClass::ExecuteCode,
+        approval_scope: ApprovalScope::WorkerSession,
     }
 }
 
@@ -46,6 +49,7 @@ pub fn ledger_note_def() -> ToolDef {
         }),
         // Writes only to the core's own append-only ledger.
         effect: EffectClass::ObserveLocal,
+        approval_scope: ApprovalScope::Once,
     }
 }
 
@@ -53,7 +57,8 @@ pub fn defs() -> Vec<ToolDef> {
     vec![ledger_note_def(), sympy_eval_def()]
 }
 
-/// The static v0 policy: notes are allowed, code execution asks, anything
+/// The static v0.2 policy: notes are allowed, code execution asks (each call
+/// when uncontained; once per live worker session when sandboxed), anything
 /// else is denied.
 pub fn default_policy() -> Policy {
     let rule = |id: &str, tool: &str, decision| Rule {

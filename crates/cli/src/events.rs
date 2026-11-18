@@ -10,6 +10,15 @@ use serde_json::{json, Value};
 /// Version of the NDJSON events this module produces.
 pub const EVENT_VERSION: u32 = 1;
 
+/// Claude Code CLI version this supervisor was tested against.
+pub const TESTED_CLI_VERSION: &str = "2.1.318";
+
+/// Extract the leading version token from `claude --version` output
+/// (for example `"2.1.318 (Claude Code)"` -> `"2.1.318"`).
+pub fn parse_cli_version(raw: &str) -> &str {
+    raw.split_whitespace().next().unwrap_or("")
+}
+
 /// Longest tool-result text copied into an event (the raw line has it all).
 const RESULT_TEXT_LIMIT: usize = 4000;
 
@@ -219,5 +228,13 @@ mod tests {
     fn unknown_lines_are_kept_as_other() {
         let events = map_line(&json!({ "type": "tool_progress", "elapsed": 3 }));
         assert_eq!(events, vec![("cli.other".to_string(), json!({ "type": "tool_progress", "subtype": "" }))]);
+    }
+
+    #[test]
+    fn parses_leading_cli_version_token() {
+        assert_eq!(parse_cli_version("2.1.318 (Claude Code)"), "2.1.318");
+        assert_eq!(parse_cli_version("2.1.318"), "2.1.318");
+        assert_eq!(parse_cli_version("  2.2.0 (Claude Code)\n"), "2.2.0");
+        assert_eq!(parse_cli_version(""), "");
     }
 }

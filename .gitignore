@@ -1,5 +1,6 @@
 /target
 /.research-core
+/.re-search
 *.db
 *.db-wal
 *.db-shm

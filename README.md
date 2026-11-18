@@ -1,9 +1,10 @@
-# research-core (working name)
+# re:Search
 
 A small Rust core for a local mathematics and theoretical-physics research
 assistant on Windows 11. v0 is a first working slice: a model (through the
 Claude Code CLI, on your own login) can ask to run SymPy code; you approve
-each run; everything is written to an append-only ledger.
+each call (`once` while uncontained); everything is written to an append-only
+ledger.
 
 **v0 has no sandbox. Read [THREAT-MODEL.md](THREAT-MODEL.md) first.**
 
@@ -13,10 +14,10 @@ each run; everything is written to an append-only ledger.
 | --- | --- |
 | `crates/policy` | Pure allow / ask / deny engine. No I/O; depends on `serde` only. |
 | `crates/ledger` | Append-only SQLite event store and SHA-256 blob directory. |
-| `crates/tools` | Tool registry, router (policy, approval, ledger), single-use approvals. |
+| `crates/tools` | Tool registry, router (policy, approval, ledger), digest-bound approvals. |
 | `crates/worker` | Python worker under a Windows Job Object, JSON lines on two pipes. |
 | `crates/mcp-server` | `core.exe`, the stdio MCP server (the only crate that uses `rmcp`). |
-| `crates/cli` | `research-core.exe`, the supervisor that runs a session. |
+| `crates/cli` | `re-search.exe`, the supervisor that runs a session. |
 | `python/worker.py` | The worker script (needs SymPy). |
 
 ## Build and test
@@ -29,36 +30,44 @@ cargo test -p policy -p ledger -p tools -p cli
 The worker test needs a Python with SymPy:
 
 ```
-$env:RESEARCH_CORE_PYTHON = "C:\path\to\python.exe"
+$env:RE_SEARCH_PYTHON = "C:\path\to\python.exe"
 cargo test -p worker -- --nocapture
 ```
+
+(`RESEARCH_CORE_*` environment variables are also accepted as fallbacks when
+the corresponding `RE_SEARCH_*` variable is unset.)
 
 ## Run a session
 
 Run this in a real terminal, because the approval prompt reads from it:
 
 ```
-$env:RESEARCH_CORE_PYTHON = "C:\path\to\python.exe"
-.\target\debug\research-core.exe run --prompt "Use sympy_eval to integrate x*sin(x) with respect to x, then state the result."
+$env:RE_SEARCH_PYTHON = "C:\path\to\python.exe"
+.\target\debug\re-search.exe run --prompt "Use sympy_eval to integrate x*sin(x) with respect to x, then state the result."
 ```
 
-You will see the model's request, then a prompt showing the exact code.
-Type `y` to run it once. Afterwards:
+You will see the model's request, then a prompt showing the exact code and
+scope. Because v0 runs under `JobObjectSandbox` (uncontained), `sympy_eval`
+asks for approval on every call (`scope: once`). Type `y` to run that
+single call; `worker-session` reuse activates only when a contained
+sandbox backend (`AppContainer`, Stage 2) restricts both filesystem and
+network access. Afterwards:
 
 ```
-.\target\debug\research-core.exe sessions
-.\target\debug\research-core.exe show s-<id>
+.\target\debug\re-search.exe sessions
+.\target\debug\re-search.exe show s-<id>
 ```
 
-Data (ledger, blobs, per-session folders) lives in
-`%LOCALAPPDATA%\research-core` unless you pass `--data-dir`. The model
-defaults to `haiku`; change it with `--model`.
+Data (ledger, blobs, per-session folders and bytecode caches) lives in
+`%LOCALAPPDATA%\re-search` unless you pass `--data-dir`. The model defaults
+to `haiku`; change it with `--model`.
 
 ## Requirements
 
 - Windows 11, Rust (stable, MSVC).
-- Claude Code CLI, logged in. Developed against 2.1.318; the version in use
-  is recorded in every session.
+- Claude Code CLI, logged in. Developed against `2.1.318`; the version in
+  use is checked on start and at `system/init` (mismatches warn on stderr
+  and are recorded in the ledger).
 - Python 3 with SymPy.
 
 ## Licence

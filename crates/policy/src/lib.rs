@@ -110,8 +110,8 @@ impl Rule {
     fn matches(&self, r: &Request) -> bool {
         self.caller.matches(&r.caller)
             && self.tool.matches(&r.tool_id)
-            && self.effect.map_or(true, |e| e == r.effect)
-            && self.tool_def_hash.as_ref().map_or(true, |h| *h == r.tool_def_hash)
+            && self.effect.is_none_or(|e| e == r.effect)
+            && self.tool_def_hash.as_ref().is_none_or(|h| *h == r.tool_def_hash)
     }
 }
 
@@ -151,7 +151,7 @@ pub fn evaluate(policy: &Policy, req: &Request) -> Response {
     // Strictest matching rule wins; among equals, the first listed.
     let mut best: Option<&Rule> = None;
     for rule in policy.rules.iter().filter(|r| r.matches(req)) {
-        if best.map_or(true, |b| rule.decision > b.decision) {
+        if best.is_none_or(|b| rule.decision > b.decision) {
             best = Some(rule);
         }
     }

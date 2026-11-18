@@ -192,7 +192,7 @@ fn resume_threads(pid: u32) -> io::Result<()> {
         CloseHandle(snap);
     }
     if resumed == 0 {
-        return Err(io::Error::new(io::ErrorKind::Other, "could not resume the worker's main thread"));
+        return Err(io::Error::other("could not resume the worker's main thread"));
     }
     Ok(())
 }

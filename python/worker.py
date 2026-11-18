@@ -1,4 +1,4 @@
-"""Compute worker for research-core (v0).
+"""Compute worker for re:Search (v0).
 
 Started by the Rust `worker` crate as:
 

@@ -5,7 +5,7 @@
 //! "external loop, partial provenance".
 
 use crate::approval;
-use crate::events::{check_init, map_line, EVENT_VERSION};
+use crate::events::{check_init, map_line, parse_cli_version, EVENT_VERSION, TESTED_CLI_VERSION};
 use ledger::Ledger;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -79,9 +79,10 @@ pub fn run(opts: &RunOpts) -> Result<i32, String> {
     let io = |e: std::io::Error| e.to_string();
 
     let dir = opts.data_dir.join("sessions").join(&session);
-    let (work, scratch) = (dir.join("work"), dir.join("scratch"));
+    let (work, scratch, pycache) = (dir.join("work"), dir.join("scratch"), dir.join("pycache"));
     std::fs::create_dir_all(&work).map_err(io)?;
     std::fs::create_dir_all(&scratch).map_err(io)?;
+    std::fs::create_dir_all(&pycache).map_err(io)?;
     let rec = Recorder { ledger: Ledger::open(&opts.data_dir).map_err(|e| e.to_string())?, session: session.clone() };
 
     let approval = approval::start(opts.data_dir.clone(), session.clone(), token.clone()).map_err(io)?;
@@ -97,18 +98,30 @@ pub fn run(opts: &RunOpts) -> Result<i32, String> {
             "CORE_PYTHON": path_str(&opts.python),
             "CORE_WORKER_SCRIPT": path_str(&opts.worker_script),
             "CORE_SCRATCH": path_str(&scratch),
+            "CORE_PYCACHE": path_str(&pycache),
         }
     }}});
     std::fs::write(&mcp_config, serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?).map_err(io)?;
 
-    // Pin and record the CLI version: its headless defaults are due to change.
-    let version = Command::new(&opts.claude)
+    // Check and record the CLI version: its headless defaults are due to change.
+    let ver_output = Command::new(&opts.claude)
         .arg("--version")
         .env_remove("CLAUDECODE")
         .env_remove("CLAUDE_CODE_ENTRYPOINT")
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .map_err(|e| format!("could not run `{} --version`: {e}", opts.claude.display()))?;
+    if !ver_output.status.success() {
+        let err_text = String::from_utf8_lossy(&ver_output.stderr);
+        return Err(format!(
+            "`{} --version` exited with {}: {}",
+            opts.claude.display(),
+            ver_output.status,
+            err_text.trim()
+        ));
+    }
+    let version = String::from_utf8_lossy(&ver_output.stdout).trim().to_string();
+    let detected_version = parse_cli_version(&version).to_string();
+    let version_matches = detected_version == TESTED_CLI_VERSION;
 
     let defs = builtin::defs();
     let expected: Vec<String> = defs.iter().map(|d| format!("mcp__core__{}", d.id)).collect();
@@ -119,18 +132,37 @@ pub fn run(opts: &RunOpts) -> Result<i32, String> {
             "route": "claude-code-cli",
             "provenance": "external loop, partial provenance",
             "cli_version": version,
+            "cli_version_detected": detected_version,
+            "tested_cli_version": TESTED_CLI_VERSION,
+            "cli_version_matches_tested": version_matches,
             "cli_flags": flags[2..],
+            "core_exe": path_str(&opts.core_exe),
             "model_requested": opts.model,
             "prompt": opts.prompt,
             "policy_version": builtin::POLICY_VERSION,
             "expected_tools": expected,
             "tool_defs": defs.iter().map(|d| json!({
-                "id": d.id, "effect": d.effect.as_str(), "def_hash": d.def_hash(),
+                "id": d.id, "effect": d.effect.as_str(), "approval_scope": d.approval_scope.as_str(), "def_hash": d.def_hash(),
             })).collect::<Vec<_>>(),
         }),
         None,
     )?;
     eprintln!("[supervisor] session {session} ({version}); data in {}", opts.data_dir.display());
+    if !version_matches {
+        eprintln!(
+            "[supervisor] WARNING: Claude Code CLI version is {detected_version:?} (raw: {version:?}), tested against {TESTED_CLI_VERSION}; continuing (system/init check remains active)"
+        );
+        rec.emit(
+            "cli.version_warning",
+            json!({
+                "source": "version-flag",
+                "detected": detected_version,
+                "raw": version,
+                "tested": TESTED_CLI_VERSION,
+            }),
+            None,
+        )?;
+    }
 
     let mut command = Command::new(&opts.claude);
     command
@@ -160,6 +192,22 @@ pub fn run(opts: &RunOpts) -> Result<i32, String> {
         };
         let ty = value["type"].as_str().unwrap_or("");
         if ty == "system" && value["subtype"] == "init" {
+            if let Some(init_ver) = value["claude_code_version"].as_str() {
+                if init_ver != TESTED_CLI_VERSION && init_ver != detected_version {
+                    eprintln!(
+                        "[supervisor] WARNING: Claude Code CLI system/init reports version {init_ver:?}, tested against {TESTED_CLI_VERSION}; continuing"
+                    );
+                    rec.emit(
+                        "cli.version_warning",
+                        json!({
+                            "source": "system-init",
+                            "detected": init_ver,
+                            "tested": TESTED_CLI_VERSION,
+                        }),
+                        Some(&raw),
+                    )?;
+                }
+            }
             match check_init(&value, &expected) {
                 Ok(()) => init_ok = true,
                 Err(e) => abort = Some(e),
@@ -186,7 +234,7 @@ pub fn run(opts: &RunOpts) -> Result<i32, String> {
     proc.kill_tree(); // nothing the CLI started may outlive the session
     rec.emit("session.end", json!({ "cli_exit_code": status.code(), "init_verified": init_ok }), None)?;
     eprintln!(
-        "[supervisor] session {session} ended; see it with: research-core show {session} --data-dir \"{}\"",
+        "[supervisor] session {session} ended; see it with: re-search show {session} --data-dir \"{}\"",
         opts.data_dir.display()
     );
     Ok(if init_ok { status.code().unwrap_or(1) } else { EXIT_ABORTED })

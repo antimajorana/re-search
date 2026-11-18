@@ -1,11 +1,13 @@
 //! Tool definitions, their hashes, and a small argument check.
 
+use crate::approval::{ApprovalScope, WorkerEpoch};
 use crate::canon::{canonical_json, hash_fields};
 use ledger::Ledger;
 use policy::EffectClass;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -15,19 +17,21 @@ pub struct ToolDef {
     /// JSON Schema of the arguments (an object schema).
     pub input_schema: Value,
     pub effect: EffectClass,
+    pub approval_scope: ApprovalScope,
 }
 
 impl ToolDef {
     /// SHA-256 of the canonical definition. Changes whenever the id, the
-    /// description, the schema or the effect class changes.
+    /// description, the schema, the effect class or the approval scope changes.
     pub fn def_hash(&self) -> String {
         let canonical = canonical_json(&json!({
             "id": self.id,
             "description": self.description,
             "input_schema": self.input_schema,
             "effect": self.effect.as_str(),
+            "approval_scope": self.approval_scope.as_str(),
         }));
-        hash_fields(&["tool-def-v1", &canonical])
+        hash_fields(&["tool-def-v2", &canonical])
     }
 }
 
@@ -37,6 +41,36 @@ pub struct CallCtx<'a> {
     pub caller: &'a str,
     pub call_id: &'a str,
     pub ledger: &'a Mutex<Ledger>,
+    /// If `Some(e)`, a session-reused call must run inside worker epoch `e`
+    /// without respawning a fresh worker.
+    pub required_epoch: Option<u64>,
+    ran_epoch: AtomicU64,
+}
+
+impl<'a> CallCtx<'a> {
+    pub(crate) fn new(
+        session: &'a str,
+        caller: &'a str,
+        call_id: &'a str,
+        ledger: &'a Mutex<Ledger>,
+        required_epoch: Option<u64>,
+    ) -> Self {
+        CallCtx { session, caller, call_id, ledger, required_epoch, ran_epoch: AtomicU64::new(0) }
+    }
+
+    /// Record the worker epoch (`>= 1`) that actually executed this call while
+    /// holding the worker lock.
+    pub fn record_worker_epoch(&self, epoch: u64) {
+        assert!(epoch > 0, "worker epoch must be >= 1");
+        self.ran_epoch.store(epoch, Ordering::Release);
+    }
+
+    pub(crate) fn worker_epoch(&self) -> Option<u64> {
+        match self.ran_epoch.load(Ordering::Acquire) {
+            0 => None,
+            n => Some(n),
+        }
+    }
 }
 
 pub trait ToolHandler: Send + Sync {
@@ -52,9 +86,12 @@ where
     }
 }
 
+type RegistryEntry = (ToolDef, Arc<dyn ToolHandler>, Option<Arc<dyn WorkerEpoch>>);
+pub(crate) type EntryRef<'a> = (&'a ToolDef, &'a Arc<dyn ToolHandler>, Option<&'a Arc<dyn WorkerEpoch>>);
+
 #[derive(Default)]
 pub struct Registry {
-    tools: BTreeMap<String, (ToolDef, Arc<dyn ToolHandler>)>,
+    tools: BTreeMap<String, RegistryEntry>,
 }
 
 impl Registry {
@@ -62,17 +99,44 @@ impl Registry {
         Self::default()
     }
 
+    /// Register a `Once`-scoped tool.
     pub fn register(&mut self, def: ToolDef, handler: Arc<dyn ToolHandler>) {
-        self.tools.insert(def.id.clone(), (def, handler));
+        assert_eq!(
+            def.approval_scope,
+            ApprovalScope::Once,
+            "WorkerSession tool `{}` must use register_worker_session",
+            def.id
+        );
+        self.tools.insert(def.id.clone(), (def, handler, None));
+    }
+
+    /// Register a `WorkerSession`-scoped tool together with its epoch provider.
+    pub fn register_worker_session(
+        &mut self,
+        def: ToolDef,
+        epoch: Arc<dyn WorkerEpoch>,
+        handler: Arc<dyn ToolHandler>,
+    ) {
+        assert_eq!(
+            def.approval_scope,
+            ApprovalScope::WorkerSession,
+            "register_worker_session requires ApprovalScope::WorkerSession for `{}`",
+            def.id
+        );
+        self.tools.insert(def.id.clone(), (def, handler, Some(epoch)));
     }
 
     pub fn get(&self, id: &str) -> Option<(&ToolDef, &Arc<dyn ToolHandler>)> {
-        self.tools.get(id).map(|(d, h)| (d, h))
+        self.tools.get(id).map(|(d, h, _)| (d, h))
+    }
+
+    pub(crate) fn get_entry(&self, id: &str) -> Option<EntryRef<'_>> {
+        self.tools.get(id).map(|(d, h, e)| (d, h, e.as_ref()))
     }
 
     /// Definitions in id order.
     pub fn defs(&self) -> Vec<&ToolDef> {
-        self.tools.values().map(|(d, _)| d).collect()
+        self.tools.values().map(|(d, _, _)| d).collect()
     }
 }
 
@@ -136,6 +200,7 @@ mod tests {
                 "additionalProperties": false
             }),
             effect: EffectClass::ObserveLocal,
+            approval_scope: ApprovalScope::Once,
         }
     }
 
@@ -147,6 +212,9 @@ mod tests {
         assert_ne!(d.def_hash(), base);
         let mut d = def();
         d.effect = EffectClass::ExecuteCode;
+        assert_ne!(d.def_hash(), base);
+        let mut d = def();
+        d.approval_scope = ApprovalScope::WorkerSession;
         assert_ne!(d.def_hash(), base);
         let mut d = def();
         d.input_schema["required"] = json!([]);

@@ -1,9 +1,9 @@
 use super::*;
-use crate::approval::ApprovalReply;
+use crate::approval::{ApprovalReply, ApprovalScope, WorkerEpoch};
 use crate::registry::ToolDef;
 use policy::{EffectClass, Match, Rule};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 #[derive(Clone, Copy)]
 enum Mode {
@@ -30,14 +30,56 @@ impl Approver for MockApprover {
     }
 }
 
+struct MockEpoch {
+    epoch: AtomicU64,
+    contained: AtomicBool,
+    fail_next: Mutex<bool>,
+}
+
+impl MockEpoch {
+    fn new() -> Self {
+        MockEpoch { epoch: AtomicU64::new(0), contained: AtomicBool::new(true), fail_next: Mutex::new(false) }
+    }
+
+    fn set_dead(&self) {
+        self.epoch.store(0, Ordering::Release);
+    }
+
+    fn set_epoch(&self, ep: u64) {
+        self.epoch.store(ep, Ordering::Release);
+    }
+
+    fn set_contained(&self, contained: bool) {
+        self.contained.store(contained, Ordering::Release);
+    }
+
+    fn set_fail_next(&self, fail: bool) {
+        *self.fail_next.lock().unwrap() = fail;
+    }
+}
+
+impl WorkerEpoch for MockEpoch {
+    fn live_epoch(&self) -> Option<u64> {
+        match self.epoch.load(Ordering::Acquire) {
+            0 => None,
+            n => Some(n),
+        }
+    }
+
+    fn is_contained(&self) -> bool {
+        self.contained.load(Ordering::Acquire)
+    }
+}
+
 struct Fixture {
     router: Router,
     approver: Arc<MockApprover>,
     runs: Arc<AtomicUsize>,
+    epoch: Arc<MockEpoch>,
     dir: PathBuf,
 }
 
-fn tool(id: &str, effect: EffectClass) -> ToolDef {
+fn tool(id: &str, effect: EffectClass, approval_scope: ApprovalScope) -> ToolDef {
     ToolDef {
         id: id.into(),
         description: "test tool".into(),
@@ -48,13 +90,15 @@ fn tool(id: &str, effect: EffectClass) -> ToolDef {
             "additionalProperties": false
         }),
         effect,
+        approval_scope,
     }
 }
 
-fn fixture(name: &str, mode: Mode) -> Fixture {
+fn fixture_with_policy(name: &str, mode: Mode, policy_version: &str, sess_tool_def: ToolDef) -> Fixture {
     let dir = std::env::temp_dir().join(format!("tools-test-{}-{}", name, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let runs = Arc::new(AtomicUsize::new(0));
+    let epoch = Arc::new(MockEpoch::new());
     let mut registry = Registry::new();
     for (id, effect) in [
         ("read", EffectClass::ObserveLocal),
@@ -65,7 +109,7 @@ fn fixture(name: &str, mode: Mode) -> Fixture {
         let runs = runs.clone();
         let fails = id == "fails";
         registry.register(
-            tool(id, effect),
+            tool(id, effect, ApprovalScope::Once),
             Arc::new(move |_: &CallCtx<'_>, args: &Value| {
                 runs.fetch_add(1, Ordering::SeqCst);
                 if fails {
@@ -76,6 +120,35 @@ fn fixture(name: &str, mode: Mode) -> Fixture {
             }),
         );
     }
+    let runs_s = runs.clone();
+    let ep_s = epoch.clone();
+    let sess_id = sess_tool_def.id.clone();
+    registry.register_worker_session(
+        sess_tool_def,
+        epoch.clone(),
+        Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
+            runs_s.fetch_add(1, Ordering::SeqCst);
+            let mut fail = ep_s.fail_next.lock().unwrap();
+            if *fail {
+                *fail = false;
+                ep_s.set_dead();
+                return Err("worker failed before/during call".to_string());
+            }
+            let current = ep_s.live_epoch();
+            if let Some(req) = ctx.required_epoch {
+                if current != Some(req) {
+                    return Err(format!("epoch mismatch: expected {req}, got {current:?}"));
+                }
+                ctx.record_worker_epoch(req);
+            } else {
+                let next = current.unwrap_or(1);
+                ep_s.set_epoch(next);
+                ctx.record_worker_epoch(next);
+            }
+            Ok(json!({ "echo": args["x"] }))
+        }),
+    );
+
     let rule = |tool: &str, decision| Rule {
         id: format!("r-{tool}"),
         caller: Match::Any,
@@ -85,14 +158,23 @@ fn fixture(name: &str, mode: Mode) -> Fixture {
         decision,
     };
     let policy = Policy {
-        version: "test-1".into(),
-        // "run" is listed as allow: the engine must still clamp it to ask.
-        rules: vec![rule("read", Decision::Allow), rule("fails", Decision::Allow), rule("run", Decision::Allow)],
+        version: policy_version.into(),
+        // "run" and `sess_id` are listed as allow: the engine must still clamp them to ask.
+        rules: vec![
+            rule("read", Decision::Allow),
+            rule("fails", Decision::Allow),
+            rule("run", Decision::Allow),
+            rule(&sess_id, Decision::Allow),
+        ],
         default: Decision::Deny,
     };
     let approver = Arc::new(MockApprover { mode, asked: AtomicUsize::new(0) });
     let router = Router::new(registry, policy, Ledger::open(&dir).unwrap(), "s", approver.clone());
-    Fixture { router, approver, runs, dir }
+    Fixture { router, approver, runs, epoch, dir }
+}
+
+fn fixture(name: &str, mode: Mode) -> Fixture {
+    fixture_with_policy(name, mode, "test-1", tool("sess", EffectClass::ExecuteCode, ApprovalScope::WorkerSession))
 }
 
 fn kinds(f: &Fixture) -> Vec<String> {
@@ -130,7 +212,7 @@ fn bad_arguments_stop_before_policy() {
 }
 
 #[test]
-fn execute_code_asks_and_runs_once_when_approved() {
+fn execute_code_once_asks_every_call() {
     let f = fixture("ask-yes", Mode::Approve);
     assert_eq!(f.router.call("c", "run", &json!({"x": 7})), CallOutcome::Ok(json!({"echo": 7})));
     assert_eq!(f.approver.asked.load(Ordering::SeqCst), 1);
@@ -146,9 +228,128 @@ fn execute_code_asks_and_runs_once_when_approved() {
             "tool.result"
         ]
     );
-    // A second identical call needs a second approval: nothing is remembered.
+    // A second identical call for a Once-scoped tool needs a second approval.
     assert!(matches!(f.router.call("c", "run", &json!({"x": 7})), CallOutcome::Ok(_)));
     assert_eq!(f.approver.asked.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn worker_session_asks_once_and_reuses_until_worker_restarts() {
+    let f = fixture("sess-reuse", Mode::Approve);
+    assert_eq!(f.router.call("c", "sess", &json!({"x": 1})), CallOutcome::Ok(json!({"echo": 1})));
+    assert_eq!(f.approver.asked.load(Ordering::SeqCst), 1);
+
+    // Second call with different arguments on the same live epoch reuses the approval.
+    assert_eq!(f.router.call("c", "sess", &json!({"x": 2})), CallOutcome::Ok(json!({"echo": 2})));
+    assert_eq!(f.approver.asked.load(Ordering::SeqCst), 1);
+    assert_eq!(f.runs.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        kinds(&f),
+        [
+            "tool.request",
+            "policy.decision",
+            "approval.requested",
+            "approval.granted",
+            "approval.consumed",
+            "tool.result",
+            "approval.session_bound",
+            "tool.request",
+            "policy.decision",
+            "approval.session_reused",
+            "tool.result",
+        ]
+    );
+
+    // Different caller cannot reuse caller "c"'s session grant even while epoch 1 is live.
+    assert_eq!(f.router.call("other", "sess", &json!({"x": 3})), CallOutcome::Ok(json!({"echo": 3})));
+    assert_eq!(f.approver.asked.load(Ordering::SeqCst), 2);
+
+    // Worker dies and a new epoch (2) starts: caller "c" must be asked again.
+    f.epoch.set_dead();
+    f.epoch.set_epoch(2);
+    assert_eq!(f.router.call("c", "sess", &json!({"x": 4})), CallOutcome::Ok(json!({"echo": 4})));
+    assert_eq!(f.approver.asked.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn uncontained_worker_forces_per_call_once_approval() {
+    let f = fixture("uncontained-once", Mode::Approve);
+    f.epoch.set_contained(false);
+
+    assert_eq!(f.router.call("c", "sess", &json!({"x": 1})), CallOutcome::Ok(json!({"echo": 1})));
+    assert_eq!(f.approver.asked.load(Ordering::SeqCst), 1);
+    assert_eq!(f.epoch.live_epoch(), Some(1));
+
+    // Even while the same worker epoch stays live, uncontained execution must ask again.
+    assert_eq!(f.router.call("c", "sess", &json!({"x": 2})), CallOutcome::Ok(json!({"echo": 2})));
+    assert_eq!(f.approver.asked.load(Ordering::SeqCst), 2);
+    assert_eq!(f.runs.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        kinds(&f),
+        [
+            "tool.request",
+            "policy.decision",
+            "approval.requested",
+            "approval.granted",
+            "approval.consumed",
+            "tool.result",
+            "tool.request",
+            "policy.decision",
+            "approval.requested",
+            "approval.granted",
+            "approval.consumed",
+            "tool.result",
+        ]
+    );
+
+    let ledger = Ledger::open(&f.dir).unwrap();
+    let events = ledger.read_session("s").unwrap();
+    assert!(!events.iter().any(|e| e.kind == "approval.session_bound"));
+    assert!(!events.iter().any(|e| e.kind == "approval.session_reused"));
+    for e in &events {
+        match e.kind.as_str() {
+            "tool.request" => assert_eq!(e.payload["approval_scope"], "once"),
+            "approval.requested" | "approval.granted" => assert_eq!(e.payload["scope"], "once"),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn worker_session_does_not_bind_when_initial_call_fails() {
+    let f = fixture("sess-fail", Mode::Approve);
+    f.epoch.set_fail_next(true);
+    assert!(matches!(f.router.call("c", "sess", &json!({"x": 1})), CallOutcome::Error(_)));
+    assert_eq!(f.approver.asked.load(Ordering::SeqCst), 1);
+    assert_eq!(f.epoch.live_epoch(), None);
+
+    // Next call must prompt again because no worker session became live.
+    assert_eq!(f.router.call("c", "sess", &json!({"x": 2})), CallOutcome::Ok(json!({"echo": 2})));
+    assert_eq!(f.approver.asked.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn worker_session_dispatch_rejects_stale_grant() {
+    let f = fixture("sess-stale-dispatch", Mode::Approve);
+    let args = json!({"x": 5});
+    f.epoch.set_epoch(1);
+    let def_hash = f.router.registry().get("sess").unwrap().0.def_hash();
+    f.router.store.bind_session_grant(
+        "c",
+        "sess",
+        SessionGrant {
+            tool_def_hash: def_hash,
+            policy_version: "test-1".into(),
+            worker_epoch: 1,
+            grant_digest: "d".into(),
+            granted_call_id: "c0".into(),
+        },
+    );
+    // Worker died before dispatch ran: must refuse rather than respawn.
+    f.epoch.set_dead();
+    let out = f.router.dispatch_auth("c", "sess", &args, DispatchAuth::Session(1), "id").unwrap();
+    assert!(matches!(out, CallOutcome::Denied(_)), "{out:?}");
+    assert_eq!(f.runs.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -174,11 +375,21 @@ fn a_grant_cannot_be_replayed_or_moved_to_another_call() {
     let f = fixture("replay", Mode::Approve);
     let args = json!({"x": 7});
     let def_hash = f.router.registry().get("run").unwrap().0.def_hash();
-    let digest = approval_digest("c", "run", &def_hash, &canonical_json(&args), "test-1", "nonce-1");
+    let digest = approval_digest(
+        ApprovalScope::Once,
+        "c",
+        "run",
+        &def_hash,
+        &canonical_json(&args),
+        "test-1",
+        "nonce-1",
+    );
     f.router.store.grant(&digest);
 
     // Same grant, different arguments / caller / nonce: refused, grant untouched.
-    for (caller, a, nonce) in [("c", json!({"x": 8}), "nonce-1"), ("other", args.clone(), "nonce-1"), ("c", args.clone(), "nonce-2")] {
+    for (caller, a, nonce) in
+        [("c", json!({"x": 8}), "nonce-1"), ("other", args.clone(), "nonce-1"), ("c", args.clone(), "nonce-2")]
+    {
         let out = f.router.dispatch(caller, "run", &a, Some(nonce), "id").unwrap();
         assert!(matches!(out, CallOutcome::Denied(_)), "{out:?}");
     }
