@@ -1,0 +1,6 @@
+/target
+/.research-core
+*.db
+*.db-wal
+*.db-shm
+__pycache__/

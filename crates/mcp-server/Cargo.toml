@@ -1,0 +1,22 @@
+[package]
+name = "mcp-server"
+description = "The `core` stdio MCP server: exposes the core's tools to an external agent loop."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "core"
+path = "src/main.rs"
+
+[dependencies]
+policy = { path = "../policy" }
+ledger = { path = "../ledger" }
+tools = { path = "../tools" }
+worker = { path = "../worker" }
+serde_json = { workspace = true }
+# rmcp is Apache-2.0 only. It is a dependency of this crate alone and must
+# stay out of the dependency graphs of `policy` and `ledger`.
+rmcp = { version = "3.11", default-features = false, features = ["server", "transport-io"] }
+tokio = { version = "1", features = ["rt", "macros", "io-std"] }

@@ -1,0 +1,12 @@
+[package]
+name = "ledger"
+description = "Append-only SQLite event store with a content-addressed blob directory."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
