@@ -205,6 +205,7 @@ fn handle_stream(
     let digest = request["digest"].as_str().unwrap_or_default().to_string();
     let scope = request["scope"].as_str().unwrap_or("");
     let valid_scope = matches!(scope, "once" | "worker-session");
+    let contained = message["contained"] == json!(true);
 
     let (approved, by) = if message["v"] != json!(APPROVAL_CHANNEL_VERSION) {
         (false, "supervisor: unknown channel version")
@@ -214,6 +215,8 @@ fn handle_stream(
         (false, "supervisor: request is for another session")
     } else if !valid_scope {
         (false, "supervisor: unknown or missing approval scope")
+    } else if scope == "worker-session" && message.get("contained").is_some_and(|v| v != &json!(true)) {
+        (false, "supervisor: worker-session requires a contained sandbox")
     } else if !terminal.is_interactive() {
         eprintln!("[supervisor] approval requested but no terminal is attached: answering NO");
         (false, "supervisor: no terminal to ask on")
@@ -229,6 +232,7 @@ fn handle_stream(
             &stream,
             request,
             message["containment"].as_str().unwrap_or("unknown"),
+            contained,
             scope,
             terminal,
         ) {
@@ -337,6 +341,7 @@ fn wait_for_decision(
     stream: &TcpStream,
     request: &Value,
     containment: &str,
+    contained: bool,
     scope: &str,
     terminal: TerminalInput,
 ) -> PromptOutcome {
@@ -360,7 +365,7 @@ fn wait_for_decision(
         #[cfg(test)]
         TerminalInput::Test { rx, anti_buffer } => (None, rx, anti_buffer),
     };
-    print_banner(request, containment, scope);
+    print_banner(request, containment, contained, scope);
     let mut printed_at = Instant::now();
 
     loop {
@@ -401,7 +406,12 @@ fn sanitize_terminal_text(s: &str) -> String {
     out
 }
 
+#[cfg(test)]
 fn format_banner(request: &Value, containment: &str, scope: &str) -> String {
+    format_banner_with_containment(request, containment, false, scope)
+}
+
+fn format_banner_with_containment(request: &Value, containment: &str, contained: bool, scope: &str) -> String {
     use std::fmt::Write as _;
 
     let args = request["canonical_args"].as_str().unwrap_or("");
@@ -427,7 +437,12 @@ fn format_banner(request: &Value, containment: &str, scope: &str) -> String {
             let _ = writeln!(out, "arguments: {}", sanitize_terminal_text(args));
         }
     }
-    let _ = writeln!(out, "NOT CONTAINED: this runs as you. It can read and write your files and use the network.");
+    let containment_note = if contained {
+        "CONTAINED (appcontainer): network blocked; user files blocked; writes restricted to session scratch (system/AAP-readable files remain readable)."
+    } else {
+        "NOT CONTAINED: this runs as you. It can read and write your files and use the network."
+    };
+    let _ = writeln!(out, "{containment_note}");
     let _ = writeln!(out, "({})", sanitize_terminal_text(containment));
     let _ = writeln!(out, "digest:  {}", sanitize_terminal_text(request["digest"].as_str().unwrap_or("")));
     let prompt = if scope == "worker-session" {
@@ -439,8 +454,8 @@ fn format_banner(request: &Value, containment: &str, scope: &str) -> String {
     out
 }
 
-fn print_banner(request: &Value, containment: &str, scope: &str) {
-    let banner = format_banner(request, containment, scope);
+fn print_banner(request: &Value, containment: &str, contained: bool, scope: &str) {
+    let banner = format_banner_with_containment(request, containment, contained, scope);
     let mut err = io::stderr().lock();
     let _ = err.write_all(banner.as_bytes());
     let _ = err.flush();

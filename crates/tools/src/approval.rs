@@ -16,7 +16,7 @@ use std::sync::Mutex;
 
 /// Version of the loopback approval channel wire protocol shared by supervisor
 /// and MCP server.
-pub const APPROVAL_CHANNEL_VERSION: u32 = 2;
+pub const APPROVAL_CHANNEL_VERSION: u32 = 3;
 
 /// Version of [`ApprovalRequest`] payloads.
 pub const APPROVAL_SCHEMA_VERSION: u32 = 2;

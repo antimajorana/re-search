@@ -248,3 +248,66 @@ fn banner_escapes_ansi_and_control_sequences_in_code() {
     assert!(banner.contains("\\u{1b}[31mred\\u{1b}[0m\\rFAKE PROMPT\\u{8}\\u{9b}2J"));
     assert!(banner.contains("(backend\\u{1b}[0m)"));
 }
+
+#[test]
+fn uncontained_worker_session_request_is_denied_by_supervisor() {
+    let dir = temp_dir("uncontained-ws");
+    let ledger = Ledger::open(&dir).unwrap();
+    let (mut client, server) = tcp_pair();
+    let msg = json!({
+        "v": APPROVAL_CHANNEL_VERSION,
+        "token": "tok",
+        "request": sample_request("s1", "worker-session"),
+        "containment": "job-object",
+        "contained": false,
+    });
+    writeln!(client, "{msg}").unwrap();
+    client.flush().unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    tx.send(StdinEvent::Line("y\n".into())).unwrap();
+    let h = std::thread::spawn(move || {
+        handle_stream(
+            server,
+            "tok",
+            "s1",
+            &ledger,
+            TerminalInput::Test { rx, anti_buffer: Duration::ZERO },
+        )
+        .unwrap();
+    });
+
+    let mut reply_line = String::new();
+    BufReader::new(&mut client).read_line(&mut reply_line).unwrap();
+    let reply: Value = serde_json::from_str(&reply_line).unwrap();
+    assert_eq!(reply["approved"], false);
+    assert_eq!(reply["by"], "supervisor: worker-session requires a contained sandbox");
+    writeln!(client, "{}", json!({ "v": APPROVAL_CHANNEL_VERSION, "ack": true })).unwrap();
+    client.flush().unwrap();
+    h.join().unwrap();
+
+    let ledger = Ledger::open(&dir).unwrap();
+    let events = ledger.read_session("s1").unwrap();
+    assert_eq!(events.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), ["approval.answered", "approval.delivered"]);
+    assert_eq!(events[0].payload["approved"], false);
+    assert_eq!(events[0].payload["scope"], "worker-session");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn contained_banner_states_contained_limits_and_escapes_controls() {
+    let mut req = sample_request("s1", "worker-session");
+    req["canonical_args"] = json!({
+        "code": "1+1\x1b[31m\r\x08\u{009b}"
+    })
+    .to_string()
+    .into();
+    let banner = format_banner_with_containment(&req, "appcontainer\x1b[0m", true, "worker-session");
+    assert!(banner.contains("CONTAINED (appcontainer):"), "{banner}");
+    assert!(!banner.contains("NOT CONTAINED:"), "{banner}");
+    assert!(!banner.contains('\x1b'), "raw ESC leaked: {banner:?}");
+    assert!(!banner.contains('\r'), "raw CR leaked: {banner:?}");
+    assert!(!banner.contains('\x08'), "raw BS leaked: {banner:?}");
+    assert!(!banner.contains('\u{009b}'), "raw CSI leaked: {banner:?}");
+    assert!(banner.contains("(appcontainer\\u{1b}[0m)"), "{banner}");
+}

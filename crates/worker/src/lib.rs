@@ -2,13 +2,18 @@
 //!
 //! The worker is a separate Python process. The protocol (one JSON object per
 //! line) runs on two dedicated inherited pipes, not on stdin/stdout, so code
-//! that prints cannot corrupt it. v0 methods: `evaluate` and `shutdown`.
+//! that prints cannot corrupt it. Methods: `evaluate` and `shutdown`.
 //! A call that exceeds its timeout gets the whole process tree killed; the
 //! next call starts a fresh worker (with fresh state).
 //!
-//! The worker is not sandboxed in v0: see [`sandbox::Containment`].
+//! Containment properties are described by [`sandbox::Containment`] and
+//! implemented by [`appcontainer::AppContainerSandbox`] and [`sandbox::JobObjectSandbox`].
 
+#[cfg(windows)]
+pub mod appcontainer;
 pub mod sandbox;
+#[cfg(windows)]
+pub mod stage;
 #[cfg(windows)]
 pub mod win;
 
@@ -18,7 +23,6 @@ use std::fmt;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
@@ -134,33 +138,57 @@ impl Worker {
         self.running.as_ref().map(|r| &r.hello)
     }
 
+    /// OS process ID of the currently running worker process, if any.
+    pub fn worker_pid(&self) -> Option<u32> {
+        self.running.as_ref().map(|r| r.proc.pid())
+    }
+
     #[cfg(windows)]
     fn spawn(&mut self) -> Result<(), WorkerError> {
+        use sandbox::WorkerLaunch;
+        use stage::strip_verbatim;
+        use std::collections::BTreeMap;
         use win::{Direction, PipePair};
+
         let err = |e: std::io::Error| WorkerError::Spawn(e.to_string());
-        std::fs::create_dir_all(&self.config.scratch).map_err(err)?;
+        let scratch = strip_verbatim(&self.config.scratch);
+        let pycache = strip_verbatim(&self.config.pycache);
+        std::fs::create_dir_all(&scratch).map_err(err)?;
         let to_child = PipePair::new(Direction::ToChild).map_err(err)?;
         let from_child = PipePair::new(Direction::FromChild).map_err(err)?;
 
-        let scratch = &self.config.scratch;
-        let mut command = Command::new(&self.config.python);
-        command
-            .arg("-u")
-            .arg(&self.config.script)
-            .arg(to_child.their_handle_value().to_string())
-            .arg(from_child.their_handle_value().to_string())
-            .current_dir(scratch)
-            .env("TEMP", scratch)
-            .env("TMP", scratch)
-            .env("PYTHONPYCACHEPREFIX", &self.config.pycache)
-            .env("MPLCONFIGDIR", scratch.join("mpl"))
-            .env("PYTHONNOUSERSITE", "1")
-            .env("PYTHONIOENCODING", "utf-8")
-            // Not the protocol: whatever the interpreter itself writes here is dropped.
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let proc = self.sandbox.spawn(command).map_err(err)?;
+        let system_root = std::env::var("SystemRoot")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| r"C:\Windows".to_string());
+        let local_appdata = std::env::var("LOCALAPPDATA")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| scratch.to_string_lossy().into_owned());
+        let s = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        let mut env = BTreeMap::new();
+        env.insert("SystemRoot".into(), system_root);
+        env.insert("LOCALAPPDATA".into(), local_appdata);
+        env.insert("TEMP".into(), s(&scratch));
+        env.insert("TMP".into(), s(&scratch));
+        env.insert("PYTHONPYCACHEPREFIX".into(), s(&pycache));
+        env.insert("MPLCONFIGDIR".into(), s(&scratch.join("mpl")));
+        env.insert("PYTHONNOUSERSITE".into(), "1".into());
+        env.insert("PYTHONIOENCODING".into(), "utf-8".into());
+
+        let launch = WorkerLaunch {
+            exe: self.config.python.clone(),
+            args: vec![
+                "-u".to_string(),
+                strip_verbatim(&self.config.script).to_string_lossy().into_owned(),
+                to_child.their_handle_value().to_string(),
+                from_child.their_handle_value().to_string(),
+            ],
+            cwd: scratch,
+            env,
+            inherit_handles: vec![to_child.their_handle_value(), from_child.their_handle_value()],
+        };
+        let proc = self.sandbox.spawn_worker(launch).map_err(err)?;
         self.spawn_count += 1;
         let my_epoch = self.spawn_count;
         // Publish before spawning the reader thread so an early exit cannot lose its clear.

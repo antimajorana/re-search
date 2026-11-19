@@ -25,7 +25,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tools::{builtin, CallCtx, CallOutcome, ClaimStatus, Registry, Router};
-use worker::sandbox::JobObjectSandbox;
+#[cfg(windows)]
+use worker::appcontainer::AppContainerSandbox;
+use worker::sandbox::Sandbox;
 use worker::{EpochHandle, Worker, WorkerConfig};
 
 struct WorkerEpochAdapter {
@@ -113,18 +115,38 @@ fn build_router() -> Result<Router, String> {
 
     let timeout = Duration::from_secs(env("CORE_EVAL_TIMEOUT_S").and_then(|s| s.parse().ok()).unwrap_or(120));
     let worker = match (env("CORE_PYTHON"), env("CORE_WORKER_SCRIPT")) {
-        (Some(python), Some(script)) => Some(Worker::new(
-            WorkerConfig {
-                python: PathBuf::from(python),
-                script: PathBuf::from(script),
-                scratch: env("CORE_SCRATCH").map(PathBuf::from).unwrap_or_else(|| data_dir.join("scratch")),
-                pycache: env("CORE_PYCACHE")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| data_dir.join("sessions").join(&session).join("pycache")),
-                startup_timeout: Duration::from_secs(90),
-            },
-            Box::new(JobObjectSandbox),
-        )),
+        (Some(python), Some(script)) => {
+            let scratch =
+                PathBuf::from(env("CORE_SCRATCH").ok_or("CORE_SCRATCH must be set when CORE_PYTHON is configured")?);
+            let pycache =
+                PathBuf::from(env("CORE_PYCACHE").ok_or("CORE_PYCACHE must be set when CORE_PYTHON is configured")?);
+            #[cfg(windows)]
+            let sandbox: Box<dyn Sandbox> = Box::new(
+                AppContainerSandbox::new(
+                    data_dir.clone(),
+                    &session,
+                    PathBuf::from(&python),
+                    PathBuf::from(&script),
+                    scratch.clone(),
+                    pycache.clone(),
+                )
+                .map_err(|e| format!("AppContainer sandbox setup failed: {e}"))?,
+            );
+            #[cfg(not(windows))]
+            let sandbox: Box<dyn Sandbox> = {
+                return Err("AppContainer sandbox requires Windows".to_string());
+            };
+            Some(Worker::new(
+                WorkerConfig {
+                    python: PathBuf::from(python),
+                    script: PathBuf::from(script),
+                    scratch,
+                    pycache,
+                    startup_timeout: Duration::from_secs(90),
+                },
+                sandbox,
+            ))
+        }
         _ => None,
     };
     let epoch_handle = worker.as_ref().map(Worker::epoch_handle);
@@ -170,7 +192,7 @@ fn build_router() -> Result<Router, String> {
 
     let approver: Arc<dyn tools::Approver> = match (env("CORE_APPROVAL_ADDR"), env("CORE_SESSION_TOKEN")) {
         (Some(addr), Some(token)) => {
-            Arc::new(TcpApprover { addr, token, containment, wait: Duration::from_secs(900) })
+            Arc::new(TcpApprover { addr, token, containment, contained, wait: Duration::from_secs(900) })
         }
         _ => Arc::new(DenyAll),
     };

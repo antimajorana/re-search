@@ -16,6 +16,8 @@ pub struct TcpApprover {
     pub token: String,
     /// What the worker sandbox does and does not contain, shown to the user.
     pub containment: String,
+    /// Whether the worker backend restricts both filesystem and network access.
+    pub contained: bool,
     pub wait: Duration,
 }
 
@@ -29,6 +31,7 @@ impl TcpApprover {
             "token": self.token,
             "request": request,
             "containment": self.containment,
+            "contained": self.contained,
         });
         stream.write_all(format!("{message}\n").as_bytes()).map_err(|e| format!("send: {e}"))?;
         stream.flush().map_err(|e| format!("flush request: {e}"))?;

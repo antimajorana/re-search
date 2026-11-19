@@ -1114,6 +1114,7 @@ name = "worker"
 version = "0.0.1"
 dependencies = [
  "serde_json",
+ "sha2 0.10.9",
  "windows-sys 0.59.0",
 ]
 

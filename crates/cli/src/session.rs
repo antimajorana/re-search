@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tools::builtin;
 use tools::canon::random_hex;
-use worker::sandbox::{JobObjectSandbox, Sandbox};
+use worker::sandbox::JobObjectSandbox;
 
 pub struct RunOpts {
     pub prompt: String,
@@ -83,6 +83,27 @@ pub fn run(opts: &RunOpts) -> Result<i32, String> {
     std::fs::create_dir_all(&work).map_err(io)?;
     std::fs::create_dir_all(&scratch).map_err(io)?;
     std::fs::create_dir_all(&pycache).map_err(io)?;
+    #[cfg(windows)]
+    worker::appcontainer::sweep_stale_profiles(&opts.data_dir);
+    let active_lock = dir.join(".active.lock");
+    std::fs::write(&active_lock, std::process::id().to_string()).map_err(io)?;
+    struct SessionGuard {
+        #[cfg(windows)]
+        session: String,
+        lock_path: PathBuf,
+    }
+    impl Drop for SessionGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.lock_path);
+            #[cfg(windows)]
+            worker::appcontainer::delete_session_profile(&self.session);
+        }
+    }
+    let _session_guard = SessionGuard {
+        #[cfg(windows)]
+        session: session.clone(),
+        lock_path: active_lock.clone(),
+    };
     let rec = Recorder { ledger: Ledger::open(&opts.data_dir).map_err(|e| e.to_string())?, session: session.clone() };
 
     let approval = approval::start(opts.data_dir.clone(), session.clone(), token.clone()).map_err(io)?;
@@ -173,9 +194,9 @@ pub fn run(opts: &RunOpts) -> Result<i32, String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
-    // Same job-object backend as the worker: if the supervisor dies or
+    // Same job-object backend for the CLI: if the supervisor dies or
     // aborts, the CLI and everything it started die with it.
-    let mut proc = JobObjectSandbox.spawn(command).map_err(|e| format!("could not start the CLI: {e}"))?;
+    let mut proc = JobObjectSandbox.spawn_command(command).map_err(|e| format!("could not start the CLI: {e}"))?;
     let stdout = proc.child().stdout.take().ok_or("the CLI has no stdout pipe")?;
 
     let mut init_ok = false;
@@ -226,12 +247,18 @@ pub fn run(opts: &RunOpts) -> Result<i32, String> {
 
     if let Some(reason) = abort {
         proc.kill_tree();
+        let _ = std::fs::remove_file(&active_lock);
+        #[cfg(windows)]
+        worker::appcontainer::delete_session_profile(&session);
         eprintln!("[supervisor] ABORTED: {reason}");
         rec.emit("session.abort", json!({ "reason": reason }), None)?;
         return Ok(EXIT_ABORTED);
     }
     let status = proc.child().wait().map_err(io)?;
     proc.kill_tree(); // nothing the CLI started may outlive the session
+    let _ = std::fs::remove_file(&active_lock);
+    #[cfg(windows)]
+    worker::appcontainer::delete_session_profile(&session);
     rec.emit("session.end", json!({ "cli_exit_code": status.code(), "init_verified": init_ok }), None)?;
     eprintln!(
         "[supervisor] session {session} ended; see it with: re-search show {session} --data-dir \"{}\"",

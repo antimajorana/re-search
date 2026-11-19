@@ -1,13 +1,15 @@
 //! Platform containment for the worker process.
 //!
-//! v0 has one backend, [`JobObjectSandbox`], which contains nothing except
-//! the lifetime of the process tree: when the job handle is closed (the core
-//! exits or drops the worker) every process in the tree is killed. It does
-//! not restrict files or the network. Stronger Windows backends
-//! (AppContainer, MXC) are meant to implement the same trait later.
+//! [`JobObjectSandbox`] enforces process-tree lifetime via a Windows Job Object
+//! (`KILL_ON_JOB_CLOSE`) and scopes handle inheritance via
+//! `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, without restricting files or network.
+//! [`crate::appcontainer::AppContainerSandbox`] additionally confines the
+//! worker inside a zero-capability Windows AppContainer profile.
 
+use std::collections::BTreeMap;
 use std::io;
-use std::process::{Child, Command};
+use std::path::PathBuf;
+use std::process::Command;
 
 /// What a backend does and does not contain. Shown to the user when they are
 /// asked to approve code execution.
@@ -36,21 +38,63 @@ impl Containment {
     }
 }
 
-/// A spawned process together with whatever keeps it contained.
+/// Parameters for launching a worker process with explicit handle scoping and
+/// environment isolation.
+#[derive(Debug, Clone)]
+pub struct WorkerLaunch {
+    pub exe: PathBuf,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+    pub env: BTreeMap<String, String>,
+    /// Raw inheritable HANDLE values (cast to `usize`) explicitly allowed via
+    /// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`.
+    pub inherit_handles: Vec<usize>,
+}
+
+/// A spawned worker process together with whatever keeps it contained.
 pub trait Contained: Send {
-    fn child(&mut self) -> &mut Child;
+    /// OS process ID of the root worker process.
+    fn pid(&self) -> u32;
+    /// Non-blocking exit check (`Ok(Some(code))` if exited, `Ok(None)` if running).
+    fn try_wait(&mut self) -> io::Result<Option<u32>>;
     /// Kill the whole process tree now.
     fn kill_tree(&mut self);
 }
 
 pub trait Sandbox: Send + Sync {
     fn containment(&self) -> Containment;
-    /// Start `command` contained. The command's inheritable handles are
-    /// passed to the child.
-    fn spawn(&self, command: Command) -> io::Result<Box<dyn Contained>>;
+    /// Optionally rewrite `WorkerLaunch` (for example staged python/worker paths
+    /// and AppContainer environment) and spawn the worker.
+    fn spawn_worker(&self, launch: WorkerLaunch) -> io::Result<Box<dyn Contained>>;
 }
 
 pub struct JobObjectSandbox;
+
+#[cfg(not(windows))]
+pub struct StubJobChild;
+
+#[cfg(not(windows))]
+impl StubJobChild {
+    pub fn child(&mut self) -> &mut std::process::Child {
+        unreachable!("StubJobChild cannot be constructed on non-Windows")
+    }
+
+    pub fn kill_tree(&mut self) {}
+}
+
+impl JobObjectSandbox {
+    /// Start an arbitrary `Command` inside a fresh kill-on-close Job Object
+    /// (used by the supervisor for `claude.exe`).
+    #[cfg(windows)]
+    pub fn spawn_command(&self, command: Command) -> io::Result<crate::win::JobChild> {
+        crate::win::spawn_in_job(command)
+    }
+
+    #[cfg(not(windows))]
+    pub fn spawn_command(&self, _command: Command) -> io::Result<StubJobChild> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "the worker runs on Windows only"))
+    }
+}
 
 impl Sandbox for JobObjectSandbox {
     fn containment(&self) -> Containment {
@@ -63,13 +107,13 @@ impl Sandbox for JobObjectSandbox {
     }
 
     #[cfg(windows)]
-    fn spawn(&self, command: Command) -> io::Result<Box<dyn Contained>> {
-        Ok(Box::new(crate::win::spawn_in_job(command)?))
+    fn spawn_worker(&self, launch: WorkerLaunch) -> io::Result<Box<dyn Contained>> {
+        Ok(Box::new(crate::win::spawn_extended(&launch, None)?))
     }
 
     #[cfg(not(windows))]
-    fn spawn(&self, _command: Command) -> io::Result<Box<dyn Contained>> {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "the v0 worker runs on Windows only"))
+    fn spawn_worker(&self, _launch: WorkerLaunch) -> io::Result<Box<dyn Contained>> {
+        Err(io::Error::new(io::ErrorKind::Unsupported, "the worker runs on Windows only"))
     }
 }
 
