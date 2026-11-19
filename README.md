@@ -12,7 +12,7 @@ AppContainer sandbox; everything is written to an append-only SQLite ledger.
 | Crate | What it is |
 | --- | --- |
 | `crates/policy` | Pure allow / ask / deny engine. No I/O; depends on `serde` only. |
-| `crates/ledger` | Append-only SQLite event store and SHA-256 blob directory. |
+| `crates/ledger` | Append-only, SHA-256 hash-chained SQLite event store and SHA-256 blob directory. |
 | `crates/tools` | Tool registry, router (policy, approval, ledger), digest-bound and epoch-bound approvals. |
 | `crates/worker` | Python worker under Windows `AppContainerSandbox` / `JobObjectSandbox`, `STARTUPINFOEXW` handle scoping, fingerprinted runtime staging, JSON lines on two pipes. |
 | `crates/mcp-server` | `core.exe`, the stdio MCP server (the only crate that uses `rmcp`). |
@@ -58,7 +58,16 @@ the grant until that worker epoch exits or times out). Afterwards:
 ```powershell
 .\target\debug\re-search.exe sessions
 .\target\debug\re-search.exe show s-<id>
+.\target\debug\re-search.exe verify
+.\target\debug\re-search.exe verify s-<id>
 ```
+
+`re-search verify [SESSION] [--data-dir DIR]` verifies SHA-256 hash chains,
+canonical JSON payloads, schema triggers, and blob integrity offline without
+creating missing files or modifying schema metadata (exit `0` = valid, `1` =
+tampered, corrupt, or unknown session, `2` = usage or missing database, `4` =
+legacy unchained v0 schema — pass a fresh `--data-dir` when starting new
+hash-chained sessions if an older Stage 1/2 directory exists).
 
 Data (ledger, blobs, staged runtimes, per-session folders, and bytecode caches)
 lives in `%LOCALAPPDATA%\re-search` unless you pass `--data-dir`. The model

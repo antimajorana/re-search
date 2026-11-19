@@ -1,4 +1,4 @@
-# Threat model (Stage 2: AppContainer worker isolation)
+# Threat model (Stage 3: AppContainer isolation & hash-chained ledger)
 
 This file says plainly what re:Search currently protects against and what it
 does not. Read the remaining limits before approving anything.
@@ -83,7 +83,38 @@ result.
 - **Failing closed.** If staging, AppContainer initialization, or ledger
   recording fails, the call or startup is refused.
 
-## What Stage 2 does NOT contain (remaining limits & gaps)
+## What Stage 3 adds (hash-chained ledger & verification)
+
+- **Per-session SHA-256 hash chaining.** Every event links `prev_hash` to the
+  prior event's `event_hash` (anchored at 64-zero `GENESIS_HASH` for `seq = 1`).
+  `event_hash` is a SHA-256 digest over 8-byte little-endian length-prefixed
+  UTF-8 fields (`"re-search.event.v1"`, `session`, `seq`, `ts_ms`, `kind`,
+  `schema_version`, canonical JSON `payload`, and `prev_hash`).
+- **Canonical JSON with float roundtrip.** Payloads are serialized with UTF-8
+  byte-sorted keys and `serde_json`'s `float_roundtrip` feature so re-parsing
+  during verification preserves exact floating-point representation.
+- **Database schema guards (`PRAGMA user_version = 3`).** SQLite `CHECK`
+  constraints require 64-character lowercase hex digests, `event_no_update` and
+  `event_no_delete` reject edits/deletes, and `event_insert_guard` enforces
+  `seq = max(seq)+1` before checking `prev_hash` continuity on `INSERT`.
+- **NDJSON chain receipts (`Recorder::emit`).** Supervisor stdout NDJSON lines
+  include `ts_ms`, `prev_hash`, and `event_hash` so callers can capture an
+  external head anchor.
+- **Offline verification (`re-search verify [SESSION] [--data-dir DIR]`).**
+  Opens via `Ledger::open_existing` inside a SQLite `BEGIN DEFERRED` read
+  snapshot and checks Genesis continuity, contiguous `seq = 1..N`, canonical
+  JSON roundtrip, `event_hash` recomputation, and fixed ledger-controlled blob
+  slots (`raw_blob`; `tool.request.args`; `tool.result.result` and
+  `tool.result.error`) without scanning arbitrary `model.tool_use.input`. Whole-ledger
+  verification also walks `blobs/<prefix>/<file>`, verifying every blob's
+  SHA-256 filename and content (allowing valid unreferenced orphan blobs, e.g.
+  from skipped CLI `user` lines).
+- **Fail-closed legacy handling.** Legacy v0 databases lacking `prev_hash` /
+  `event_hash` remain readable via `show` / `sessions` (`read_session` /
+  `sessions`), while `append*` and `verify*` refuse them
+  (`Error::LegacyUnchainedSchema`, CLI exit code `4`).
+
+## Remaining limits & gaps
 
 - **Windows system and `ALL APPLICATION PACKAGES` files remain readable.**
   Standard Windows OS libraries and directories readable by `S-1-15-2-1`
@@ -109,11 +140,15 @@ result.
   that epoch execute inside the AppContainer without re-prompting. Read the
   initial code and remember that approved computations share Python state in
   that epoch.
-- **The ledger is append-only, not tamper-proof yet (Stage 3).** SQLite
-  triggers reject UPDATE, DELETE, REPLACE, and out-of-order sequence numbers,
-  and the AppContainer worker cannot write `ledger.db`. Any uncontained local
-  program running as you can still modify `ledger.db`; there is no hash chain
-  until Stage 3.
+- **Tamper-evident, not tamper-proof without an external anchor.** Stage 3
+  detects post-hoc row edits, non-canonical rewrites, deleted prefix or interior
+  events, broken hash links, and corrupted or missing blobs (while the
+  AppContainer worker still cannot write `ledger.db`). However, without an
+  external anchor hash (such as a saved head digest from stdout NDJSON or
+  `re-search verify SESSION`), an uncontained local process running as you can
+  drop triggers and truncate the latest tail events of a session, delete an
+  entire session, or rewrite history and recompute the full hash chain from
+  Genesis to head.
 - **The agent loop is outside the core (Stage 4).** `claude.exe` runs
   uncontained as you (inside a kill-on-close Job Object) and controls what the
   model sees and when it calls tools; sessions are recorded as `"external loop,

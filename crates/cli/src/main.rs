@@ -5,6 +5,7 @@
 //!                 [--worker-script PY]
 //!   re-search show <session> [--data-dir DIR]
 //!   re-search sessions [--data-dir DIR]
+//!   re-search verify [SESSION] [--data-dir DIR]
 //!
 //! `run` prints the session as versioned NDJSON on stdout and a readable
 //! trace on stderr. Approval prompts appear on stderr and are answered on
@@ -21,6 +22,7 @@ const USAGE: &str = "usage:
                 [--core-exe EXE] [--data-dir DIR] [--worker-script PY]
   re-search show SESSION [--data-dir DIR]
   re-search sessions [--data-dir DIR]
+  re-search verify [SESSION] [--data-dir DIR]
 
 environment (RE_SEARCH_* preferred, RESEARCH_CORE_* fallback):
   RE_SEARCH_PYTHON, RE_SEARCH_CLAUDE, RE_SEARCH_DATA,
@@ -103,8 +105,10 @@ fn find_core_exe(flag: Option<String>, exe_dir: &std::path::Path) -> Result<Path
     Ok(core_exe)
 }
 
-fn real_main() -> Result<i32, String> {
-    let mut args = std::env::args().skip(1);
+fn run_args<I>(mut args: I) -> Result<i32, String>
+where
+    I: Iterator<Item = String>,
+{
     let command = args.next().ok_or(USAGE)?;
     let mut flags = std::collections::HashMap::new();
     let mut positional = Vec::new();
@@ -158,16 +162,101 @@ fn real_main() -> Result<i32, String> {
             session::show(&data_dir, session).map(|_| 0)
         }
         "sessions" => session::list(&data_dir).map(|_| 0),
+        "verify" => {
+            if let Some(unknown) = flags.keys().next() {
+                return Err(format!("unknown flag --{unknown}\n{USAGE}"));
+            }
+            if positional.len() > 1 {
+                return Err(format!("verify accepts at most one session id\n{USAGE}"));
+            }
+            session::verify(&data_dir, positional.first().map(String::as_str))
+        }
         _ => Err(USAGE.to_string()),
     }
 }
 
-fn main() {
-    match real_main() {
-        Ok(code) => std::process::exit(code),
+fn exit_code_for_args<I>(args: I) -> i32
+where
+    I: Iterator<Item = String>,
+{
+    match run_args(args) {
+        Ok(code) => code,
         Err(e) => {
             eprintln!("re-search: {e}");
-            std::process::exit(2);
+            2
         }
+    }
+}
+
+fn main() {
+    std::process::exit(exit_code_for_args(std::env::args().skip(1)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ledger::Ledger;
+    use serde_json::json;
+
+    fn cli_exit(args: &[&str]) -> i32 {
+        exit_code_for_args(args.iter().map(|s| (*s).to_string()))
+    }
+
+    fn write_minimal_legacy_v0_db(path: &std::path::Path) {
+        let mut buf = vec![0u8; 1536];
+        let patches: &[(usize, &[u8])] = &[
+            (0, b"SQLite format 3\x00\x02\x00\x01\x01\x00@  \x00\x00\x00\x02\x00\x00\x00\x03"),
+            (43, b"\x01\x00\x00\x00\x04"),
+            (59, b"\x01"),
+            (95, b"\x02\x00.\x95\xc9\r\x01\xf8\x00\x02\x00\xf3\x00\x00\xf3\x01\xcd"),
+            (243, b"\x81W\x01\x07\x17\x17\x17\x01\x83\rtableeventevent\x02CREATE TABLE event (session TEXT NOT NULL, seq INTEGER NOT NULL, ts_ms INTEGER NOT NULL, kind TEXT NOT NULL, schema_version INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (session, seq)))\x02\x06\x17=\x17\x01\x00indexsqlite_autoindex_event_1event\x03\x00\x00\x00\x08"),
+            (512, b"\r\x00\x00\x00\x01\x01\xef\x00\x01\xef"),
+            (1007, b"\x0f\x01\x07\x11\t\x08\x15\t\x11s0note{}\n\x00\x00\x00\x01\x01\xf9\x00\x01\xf9"),
+            (1529, b"\x06\x04\x11\t\ts0"),
+        ];
+        for (off, bytes) in patches {
+            buf[*off..*off + bytes.len()].copy_from_slice(bytes);
+        }
+        std::fs::write(path, buf).unwrap();
+    }
+
+    #[test]
+    fn verify_cli_exit_codes() {
+        let base = std::env::temp_dir().join(format!("cli-verify-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Missing data-dir -> exit 2 and does not create directory.
+        let missing = base.join("missing-dir");
+        let missing_s = missing.to_string_lossy().into_owned();
+        assert_eq!(cli_exit(&["verify", "--data-dir", &missing_s]), 2);
+        assert!(!missing.exists());
+
+        // Valid ledger with referenced blob -> exit 0.
+        let valid = base.join("valid");
+        let valid_s = valid.to_string_lossy().into_owned();
+        let ledger = Ledger::open(&valid).unwrap();
+        let h = ledger.put_blob(b"raw").unwrap();
+        ledger.append("s1", "model.text", 1, &json!({ "text": "ok", "raw_blob": h })).unwrap();
+        assert_eq!(cli_exit(&["verify", "--data-dir", &valid_s]), 0);
+        assert_eq!(cli_exit(&["verify", "s1", "--data-dir", &valid_s]), 0);
+        assert_eq!(cli_exit(&["verify", "unknown", "--data-dir", &valid_s]), 1);
+        assert_eq!(cli_exit(&["verify", "--bogus", "1", "--data-dir", &valid_s]), 2);
+        assert_eq!(cli_exit(&["verify", "s1", "s2", "--data-dir", &valid_s]), 2);
+
+        // Corrupt referenced blob -> tampered exit 1.
+        std::fs::write(valid.join("blobs").join(&h[..2]).join(&h), b"tampered").unwrap();
+        assert_eq!(cli_exit(&["verify", "--data-dir", &valid_s]), 1);
+        assert_eq!(cli_exit(&["verify", "s1", "--data-dir", &valid_s]), 1);
+
+        // Legacy v0 unchained schema -> exit 4.
+        let legacy = base.join("legacy");
+        std::fs::create_dir_all(&legacy).unwrap();
+        write_minimal_legacy_v0_db(&legacy.join("ledger.db"));
+        let legacy_s = legacy.to_string_lossy().into_owned();
+        assert_eq!(cli_exit(&["verify", "--data-dir", &legacy_s]), 4);
+        assert_eq!(cli_exit(&["verify", "s0", "--data-dir", &legacy_s]), 4);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
