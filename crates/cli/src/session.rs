@@ -83,10 +83,10 @@ pub fn run(opts: &RunOpts) -> Result<i32, String> {
     std::fs::create_dir_all(&work).map_err(io)?;
     std::fs::create_dir_all(&scratch).map_err(io)?;
     std::fs::create_dir_all(&pycache).map_err(io)?;
-    #[cfg(windows)]
-    worker::appcontainer::sweep_stale_profiles(&opts.data_dir);
     let active_lock = dir.join(".active.lock");
     std::fs::write(&active_lock, std::process::id().to_string()).map_err(io)?;
+    #[cfg(windows)]
+    worker::appcontainer::sweep_stale_profiles(&opts.data_dir);
     struct SessionGuard {
         #[cfg(windows)]
         session: String,

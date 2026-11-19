@@ -215,7 +215,7 @@ fn handle_stream(
         (false, "supervisor: request is for another session")
     } else if !valid_scope {
         (false, "supervisor: unknown or missing approval scope")
-    } else if scope == "worker-session" && message.get("contained").is_some_and(|v| v != &json!(true)) {
+    } else if scope == "worker-session" && !contained {
         (false, "supervisor: worker-session requires a contained sandbox")
     } else if !terminal.is_interactive() {
         eprintln!("[supervisor] approval requested but no terminal is attached: answering NO");

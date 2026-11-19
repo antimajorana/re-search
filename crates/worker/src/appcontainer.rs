@@ -132,6 +132,31 @@ pub fn delete_session_profile(session: &str) {
     }
 }
 
+fn has_live_pid_lock(lock_file: &Path) -> bool {
+    fs::read_to_string(lock_file)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .is_some_and(|pid| !crate::win::process_is_gone(pid, 0))
+}
+
+fn file_age(path: &Path) -> Option<Duration> {
+    fs::metadata(path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok())
+}
+
+fn is_session_profile_stale(sess_dir: &Path, pkg_age: Option<Duration>) -> bool {
+    if !sess_dir.is_dir() {
+        return pkg_age.is_some_and(|age| age > ORPHAN_PROFILE_AGE);
+    }
+    let active_lock = sess_dir.join(".active.lock");
+    let worker_lock = sess_dir.join(".worker.lock");
+    if has_live_pid_lock(&active_lock) || has_live_pid_lock(&worker_lock) {
+        return false;
+    }
+    file_age(&active_lock).is_some_and(|age| age > STALE_PROFILE_AGE)
+        || file_age(&worker_lock).is_some_and(|age| age > STALE_PROFILE_AGE)
+        || pkg_age.is_some_and(|age| age > STALE_PROFILE_AGE)
+}
+
 /// Sweep orphaned `%LOCALAPPDATA%\Packages\re-search.worker.*` profiles.
 pub fn sweep_stale_profiles(data_dir: &Path) {
     let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) else {
@@ -155,30 +180,7 @@ pub fn sweep_stale_profiles(data_dir: &Path) {
         }
         let pkg_age = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok());
         let sess_dir = sessions_root.join(sess_part);
-        let stale = if sess_dir.is_dir() {
-            let lock_file = sess_dir.join(".active.lock");
-            if !lock_file.is_file() {
-                true
-            } else {
-                let live_owner = fs::read_to_string(&lock_file)
-                    .ok()
-                    .and_then(|s| s.trim().parse::<u32>().ok())
-                    .is_some_and(|pid| !crate::win::process_is_gone(pid, 0));
-                if live_owner {
-                    false
-                } else {
-                    fs::metadata(&lock_file)
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| t.elapsed().ok())
-                        .is_some_and(|age| age > STALE_PROFILE_AGE)
-                        || pkg_age.is_some_and(|age| age > STALE_PROFILE_AGE)
-                }
-            }
-        } else {
-            pkg_age.is_some_and(|age| age > ORPHAN_PROFILE_AGE)
-        };
-        if stale {
+        if is_session_profile_stale(&sess_dir, pkg_age) {
             if let Ok(name_w) = encode_wide_z(OsStr::new(name_str)) {
                 // SAFETY: `name_str` starts with `"re-search.worker."` and is NUL-terminated.
                 unsafe { DeleteAppContainerProfile(name_w.as_ptr()) };
@@ -210,6 +212,16 @@ pub struct AppContainerSandbox {
     profile: AppContainerProfile,
     scratch: PathBuf,
     pycache: PathBuf,
+    worker_lock: PathBuf,
+}
+
+impl Drop for AppContainerSandbox {
+    fn drop(&mut self) {
+        let my_pid = std::process::id().to_string();
+        if fs::read_to_string(&self.worker_lock).ok().is_some_and(|s| s.trim() == my_pid) {
+            let _ = fs::remove_file(&self.worker_lock);
+        }
+    }
 }
 
 impl AppContainerSandbox {
@@ -257,6 +269,8 @@ impl AppContainerSandbox {
         }
 
         let staged = ensure_staged_runtime(&data_dir, &source_python, &worker_script)?;
+        let worker_lock = session_dir.join(".worker.lock");
+        fs::write(&worker_lock, std::process::id().to_string())?;
         let profile = AppContainerProfile::create(session)?;
         let sid_grant = format!("*{}:(OI)(CI)M", profile.sid_str());
         grant_icacls_inside(&data_dir, &scratch, &sid_grant)?;
@@ -267,6 +281,7 @@ impl AppContainerSandbox {
             profile,
             scratch: strip_verbatim(&fs::canonicalize(&scratch)?),
             pycache: strip_verbatim(&fs::canonicalize(&pycache)?),
+            worker_lock,
         })
     }
 
@@ -339,5 +354,24 @@ mod tests {
         assert!(try_profile_name_for_session("s/slash").is_err());
         assert!(try_profile_name_for_session("trailing.").is_err());
         assert!(try_profile_name_for_session("..").is_err());
+    }
+
+    #[test]
+    fn stale_sweep_preserves_live_worker_or_fresh_session_without_active_lock() {
+        let dir = std::env::temp_dir().join(format!("ac-sweep-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let sess_dir = dir.join("sessions").join("s-standalone");
+        fs::create_dir_all(&sess_dir).unwrap();
+
+        // Brand-new session directory without `.active.lock` (e.g. standalone `core` starting) is NOT stale.
+        assert!(!is_session_profile_stale(&sess_dir, Some(Duration::from_secs(5))));
+        // Old package age WITH a live `.worker.lock` PID is STILL not stale.
+        fs::write(sess_dir.join(".worker.lock"), std::process::id().to_string()).unwrap();
+        assert!(!is_session_profile_stale(&sess_dir, Some(STALE_PROFILE_AGE + Duration::from_secs(60))));
+        // Dead PID + aged package IS stale.
+        fs::write(sess_dir.join(".worker.lock"), u32::MAX.to_string()).unwrap();
+        assert!(is_session_profile_stale(&sess_dir, Some(STALE_PROFILE_AGE + Duration::from_secs(60))));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -61,7 +61,7 @@ result.
   reuse that grant only while that exact OS worker epoch stays alive. Timeout,
   crash, or restart ends the epoch and forces a fresh prompt. Any uncontained
   fallback or `once` tool remains pinned to per-call `once`, and the supervisor
-  rejects `worker-session` requests that declare `contained: false`.
+  rejects `worker-session` requests unless they declare `contained: true`.
 - **The model gets only our tools.** The supervisor starts the CLI with
   built-in tools off, user and project settings off, and only our MCP config,
   and verifies `system/init` (`mcp__core__ledger_note`, `mcp__core__sympy_eval`,

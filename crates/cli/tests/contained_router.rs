@@ -31,7 +31,7 @@ struct RouterFixture {
 
 impl RouterFixture {
     fn new(tag: &str) -> Self {
-        let root = std::env::temp_dir().join(format!("cli-router-ac-{tag}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("cli router ac {tag} {}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let data_dir = root.join("data");
         fs::create_dir_all(&data_dir).unwrap();

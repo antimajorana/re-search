@@ -82,45 +82,57 @@ for i in range(2500):
     assert_eq!(r2["value"], "2", "{label}: protocol corrupted after noise: {r2}");
 }
 
-fn probe_handle_non_inheritance(ctrl: &mut Worker, cont: &mut Worker, extra_handle: usize) {
-    // Query via raw Win32 `GetHandleInformation` + `WriteFile` rather than `msvcrt.open_osfhandle`,
-    // because UCRT's invalid-parameter handler aborts (`0xC0000417`) on an uninherited HANDLE, and
-    // AppContainer strict-handle checks raise SEH `0xC0000008` (`STATUS_INVALID_HANDLE`), surfaced by
-    // `ctypes` as `OSError`.
+fn probe_handle_non_inheritance(
+    ctrl: &mut Worker,
+    cont: &mut Worker,
+    extra_pipe: PipePair,
+    high_handle: usize,
+) {
+    // Part A: Child-side `GetHandleInformation` on `high_handle` (above fresh CPython's low handle slots,
+    // queried before `numpy`/OpenBLAS allocates hundreds of internal handles). UCRT's `open_osfhandle` is
+    // avoided because its invalid-parameter handler aborts (`0xC0000417`), and AppContainer strict-handle
+    // checks raise SEH `0xC0000008` (`STATUS_INVALID_HANDLE`), surfaced by `ctypes` as `OSError`.
     let code = format!(
         r#"import ctypes, ctypes.wintypes as W, json, msvcrt
 k32 = ctypes.WinDLL('kernel32', use_last_error=True)
 k32.GetHandleInformation.argtypes = [W.HANDLE, ctypes.POINTER(W.DWORD)]
 k32.GetHandleInformation.restype = W.BOOL
-k32.WriteFile.argtypes = [W.HANDLE, ctypes.c_char_p, W.DWORD, ctypes.POINTER(W.DWORD), ctypes.c_void_p]
-k32.WriteFile.restype = W.BOOL
 flags = W.DWORD(0)
 self_ok = bool(k32.GetHandleInformation(msvcrt.get_osfhandle(0), ctypes.byref(flags)))
 ctypes.set_last_error(0)
 try:
-    extra_ok = bool(k32.GetHandleInformation(W.HANDLE({extra_handle}), ctypes.byref(flags)))
+    extra_ok = bool(k32.GetHandleInformation(W.HANDLE({high_handle}), ctypes.byref(flags)))
     err_info = ctypes.get_last_error()
 except OSError as e:
     extra_ok = False
     err_info = e.winerror
-wrote = W.DWORD(0)
-try:
-    write_ok = bool(k32.WriteFile(W.HANDLE({extra_handle}), b'leak', 4, ctypes.byref(wrote), None))
-except OSError:
-    write_ok = False
-print(json.dumps({{'self_ok': self_ok, 'ok': extra_ok or write_ok, 'winerror': err_info}}))"#
+print(json.dumps({{'self_ok': self_ok, 'ok': extra_ok, 'winerror': err_info}}))"#
     );
-    for (label, w) in [("control", ctrl), ("contained", cont)] {
+    for (label, w) in [("control", &mut *ctrl), ("contained", &mut *cont)] {
         let res = py_json(w, &code, Duration::from_secs(15));
         assert_eq!(res["self_ok"], json!(true), "{label} sanity handle check failed: {res}");
-        assert_eq!(res["ok"], json!(false), "{label} inherited extra handle {extra_handle}: {res}");
+        assert_eq!(res["ok"], json!(false), "{label} inherited extra handle {high_handle}: {res}");
         let code_num = res["winerror"].as_i64().unwrap_or(0);
-        // 6 = ERROR_INVALID_HANDLE; -1073741816 = 0xC0000008 (STATUS_INVALID_HANDLE under AppContainer strict checks).
         assert!(
             code_num == 6 || (code_num as u32) == 0xC000_0008,
             "{label} unexpected winerror for uninherited handle: {res}"
         );
     }
+
+    // Part B: Kernel reference-count proof. Close the parent's write end while BOTH workers remain alive;
+    // `read` on the parent's read end returns `Ok(0)` (EOF / `ERROR_BROKEN_PIPE`) immediately iff zero
+    // child processes inherited the write handle.
+    let mut reader = extra_pipe.into_ours();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = [0u8; 16];
+        let _ = tx.send(reader.read(&mut buf));
+    });
+    let eof = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("extra_pipe read blocked: inheritable write handle leaked into a live worker!");
+    assert_eq!(eof.unwrap(), 0, "unexpected bytes on uninherited extra_pipe");
 }
 
 fn probe_udp_egress(ctrl: &mut Worker, cont: &mut Worker) {
@@ -343,9 +355,13 @@ fn control_vs_contained_probes() {
     let staged_py = alpha_sb.staged().root.join("py");
     let staged_site = alpha_sb.staged().site_dir.clone();
 
-    // Keep an unrelated inheritable pipe open in parent across both worker spawns.
+    // Pad low handle slots in the parent so `high_pipe`'s inheritable handle value sits well above
+    // fresh CPython's ~60 startup handles, and keep `extra_pipe` open across both spawns for the
+    // kernel pipe-EOF refcount proof.
+    let pad_pipes: Vec<PipePair> = (0..256).map(|_| PipePair::new(Direction::FromChild).unwrap()).collect();
     let extra_pipe = PipePair::new(Direction::FromChild).unwrap();
-    let extra_handle = extra_pipe.their_handle_value();
+    let high_pipe = PipePair::new(Direction::FromChild).unwrap();
+    let high_handle = high_pipe.their_handle_value();
 
     let mut ctrl = Worker::new(
         WorkerConfig {
@@ -368,15 +384,20 @@ fn control_vs_contained_probes() {
         Box::new(alpha_sb),
     );
 
-    // Probe 2 warms up both workers (and triggers first-evaluate spawn).
+    // Spawn both workers via a minimal `1 + 1` call and run Probe 3 BEFORE `numpy`/OpenBLAS allocates
+    // hundreds of child handles, while keeping `extra_pipe`/`high_pipe` alive across spawn.
+    assert_eq!(ctrl.evaluate("1 + 1", Duration::from_secs(30)).unwrap()["value"], "2");
+    assert_eq!(cont.evaluate("1 + 1", Duration::from_secs(30)).unwrap()["value"], "2");
+    probe_handle_non_inheritance(&mut ctrl, &mut cont, extra_pipe, high_handle);
+    drop(high_pipe);
+    drop(pad_pipes);
+
+    // Probe 2: SymPy, NumPy `eigh`, and 2500-line stdout/stderr noise.
     probe_sympy_numpy_and_noise(&mut ctrl, "control");
     probe_sympy_numpy_and_noise(&mut cont, "contained");
     // Probe 1
     probe_token_and_job(&ctrl, &cont, &alpha_sid);
     probe_job_ui_restrictions(&mut cont);
-    // Probe 3 (keep `extra_pipe` alive until after check)
-    probe_handle_non_inheritance(&mut ctrl, &mut cont, extra_handle);
-    drop(extra_pipe);
     // Probe 4
     probe_udp_egress(&mut ctrl, &mut cont);
     // Probe 5

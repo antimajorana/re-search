@@ -143,21 +143,33 @@ impl Drop for TempDirGuard {
     }
 }
 
+fn is_stage_lock_stale(lock_path: &Path) -> bool {
+    let age = fs::metadata(lock_path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .unwrap_or(Duration::ZERO);
+    let pid_opt = fs::read_to_string(lock_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok());
+    match pid_opt {
+        Some(pid) if !crate::win::process_is_gone(pid, 0) => false,
+        Some(_) => age >= Duration::from_secs(2),
+        None => age > STALE_LOCK_AGE,
+    }
+}
+
 fn acquire_stage_lock(lock_path: &Path) -> io::Result<LockGuard> {
     let start = Instant::now();
     loop {
         match OpenOptions::new().write(true).create_new(true).open(lock_path) {
             Ok(mut f) => {
                 let _ = writeln!(f, "{}", std::process::id());
+                let _ = f.flush();
                 return Ok(LockGuard(lock_path.to_path_buf()));
             }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                let stale = fs::metadata(lock_path)
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| t.elapsed().ok())
-                    .is_some_and(|age| age > STALE_LOCK_AGE);
-                if stale {
+                if is_stage_lock_stale(lock_path) {
                     let _ = fs::remove_file(lock_path);
                     continue;
                 }
@@ -284,7 +296,11 @@ fn copy_dir_recursive(src: &Path, dst: &Path, skip_lib_site: bool, depth: usize)
         let name_low = name.to_string_lossy().to_ascii_lowercase();
         let src_path = entry.path();
         let dst_path = dst.join(&name);
-        let meta = fs::metadata(&src_path)?;
+        let meta = match fs::metadata(&src_path) {
+            Ok(m) => m,
+            Err(_) if fs::symlink_metadata(&src_path).is_ok() => continue,
+            Err(e) => return Err(e),
+        };
         if meta.is_dir() {
             if skip_lib_site && depth == 0 && matches!(name_low.as_str(), "envs" | "pkgs" | "conda-meta") {
                 continue;
@@ -415,5 +431,31 @@ mod tests {
         assert!(grant_icacls_inside(&root, &sibling, "*S-1-15-2-1:(OI)(CI)RX").is_err());
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn stage_lock_reclaims_dead_pid_and_preserves_live_pid() {
+        let dir = std::env::temp_dir().join(format!("stage-lock-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let lock_path = dir.join(".stage.lock");
+
+        // Dead PID with 5s age -> reclaimed immediately without waiting 15 minutes.
+        fs::write(&lock_path, format!("{}\n", u32::MAX)).unwrap();
+        let past_5s = std::time::SystemTime::now() - Duration::from_secs(5);
+        File::options().write(true).open(&lock_path).unwrap().set_modified(past_5s).unwrap();
+        assert!(is_stage_lock_stale(&lock_path));
+        {
+            let _guard = acquire_stage_lock(&lock_path).unwrap();
+            let content = fs::read_to_string(&lock_path).unwrap();
+            assert_eq!(content.trim().parse::<u32>().unwrap(), std::process::id());
+
+            // Live PID even if > STALE_LOCK_AGE -> never stolen.
+            let past_20m = std::time::SystemTime::now() - (STALE_LOCK_AGE + Duration::from_secs(300));
+            File::options().write(true).open(&lock_path).unwrap().set_modified(past_20m).unwrap();
+            assert!(!is_stage_lock_stale(&lock_path));
+        }
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -45,7 +45,8 @@ fn peer_disconnect_mid_prompt_records_expired_only() {
         "v": APPROVAL_CHANNEL_VERSION,
         "token": "tok",
         "request": sample_request("s1", "worker-session"),
-        "containment": "none",
+        "containment": "appcontainer",
+        "contained": true,
     });
     writeln!(client, "{msg}").unwrap();
     client.flush().unwrap();
@@ -78,7 +79,8 @@ fn acked_approval_records_answered_and_delivered() {
         "v": APPROVAL_CHANNEL_VERSION,
         "token": "tok",
         "request": sample_request("s1", "worker-session"),
-        "containment": "none",
+        "containment": "appcontainer",
+        "contained": true,
     });
     writeln!(client, "{msg}").unwrap();
     client.flush().unwrap();
@@ -251,47 +253,57 @@ fn banner_escapes_ansi_and_control_sequences_in_code() {
 
 #[test]
 fn uncontained_worker_session_request_is_denied_by_supervisor() {
-    let dir = temp_dir("uncontained-ws");
-    let ledger = Ledger::open(&dir).unwrap();
-    let (mut client, server) = tcp_pair();
-    let msg = json!({
-        "v": APPROVAL_CHANNEL_VERSION,
-        "token": "tok",
-        "request": sample_request("s1", "worker-session"),
-        "containment": "job-object",
-        "contained": false,
-    });
-    writeln!(client, "{msg}").unwrap();
-    client.flush().unwrap();
+    let cases = [
+        json!({
+            "v": APPROVAL_CHANNEL_VERSION,
+            "token": "tok",
+            "request": sample_request("s1", "worker-session"),
+            "containment": "job-object",
+            "contained": false,
+        }),
+        json!({
+            "v": APPROVAL_CHANNEL_VERSION,
+            "token": "tok",
+            "request": sample_request("s1", "worker-session"),
+            "containment": "none",
+        }),
+    ];
+    for (idx, msg) in cases.into_iter().enumerate() {
+        let dir = temp_dir(&format!("uncontained-ws-{idx}"));
+        let ledger = Ledger::open(&dir).unwrap();
+        let (mut client, server) = tcp_pair();
+        writeln!(client, "{msg}").unwrap();
+        client.flush().unwrap();
 
-    let (tx, rx) = mpsc::channel();
-    tx.send(StdinEvent::Line("y\n".into())).unwrap();
-    let h = std::thread::spawn(move || {
-        handle_stream(
-            server,
-            "tok",
-            "s1",
-            &ledger,
-            TerminalInput::Test { rx, anti_buffer: Duration::ZERO },
-        )
-        .unwrap();
-    });
+        let (tx, rx) = mpsc::channel();
+        tx.send(StdinEvent::Line("y\n".into())).unwrap();
+        let h = std::thread::spawn(move || {
+            handle_stream(
+                server,
+                "tok",
+                "s1",
+                &ledger,
+                TerminalInput::Test { rx, anti_buffer: Duration::ZERO },
+            )
+            .unwrap();
+        });
 
-    let mut reply_line = String::new();
-    BufReader::new(&mut client).read_line(&mut reply_line).unwrap();
-    let reply: Value = serde_json::from_str(&reply_line).unwrap();
-    assert_eq!(reply["approved"], false);
-    assert_eq!(reply["by"], "supervisor: worker-session requires a contained sandbox");
-    writeln!(client, "{}", json!({ "v": APPROVAL_CHANNEL_VERSION, "ack": true })).unwrap();
-    client.flush().unwrap();
-    h.join().unwrap();
+        let mut reply_line = String::new();
+        BufReader::new(&mut client).read_line(&mut reply_line).unwrap();
+        let reply: Value = serde_json::from_str(&reply_line).unwrap();
+        assert_eq!(reply["approved"], false, "case {idx}");
+        assert_eq!(reply["by"], "supervisor: worker-session requires a contained sandbox", "case {idx}");
+        writeln!(client, "{}", json!({ "v": APPROVAL_CHANNEL_VERSION, "ack": true })).unwrap();
+        client.flush().unwrap();
+        h.join().unwrap();
 
-    let ledger = Ledger::open(&dir).unwrap();
-    let events = ledger.read_session("s1").unwrap();
-    assert_eq!(events.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), ["approval.answered", "approval.delivered"]);
-    assert_eq!(events[0].payload["approved"], false);
-    assert_eq!(events[0].payload["scope"], "worker-session");
-    let _ = std::fs::remove_dir_all(&dir);
+        let ledger = Ledger::open(&dir).unwrap();
+        let events = ledger.read_session("s1").unwrap();
+        assert_eq!(events.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), ["approval.answered", "approval.delivered"]);
+        assert_eq!(events[0].payload["approved"], false);
+        assert_eq!(events[0].payload["scope"], "worker-session");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[test]
