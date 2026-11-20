@@ -1,4 +1,4 @@
-# Threat model (Stage 4: AppContainer isolation, hash-chained ledger & in-core agent loop)
+# Threat model (Stage 5: AppContainer isolation, hash-chained ledger, multi-provider loop & verified resume)
 
 This file says plainly what re:Search currently protects against and what it
 does not. Read the remaining limits before approving anything.
@@ -13,15 +13,16 @@ The `re-search` supervisor supports two execution routes:
   served over stdio by our MCP server `core.exe` (via `sessions/<id>/mcp.json`
   carrying `CORE_SESSION_TOKEN`): `sympy_eval` (Python/SymPy in a
   zero-capability Windows `AppContainerSandbox`) and `ledger_note`.
-- **`--route api` (Stage 4, `"in-core loop, full provenance"`).** Runs the
+- **`--route api` (Stage 4–5, `"in-core loop, full provenance"`).** Runs the
   in-core agent loop (`crates/agent`) directly inside `re-search` over the
-  `Transport` trait (`AnthropicTransport`, `POST /v1/messages`). Tool calls are
-  dispatched in-process through `tools::Router::try_call` and `ConsoleApprover`
-  with no `claude.exe`, `core.exe`, or `sessions/<id>/mcp.json`. When
-  `--python` is configured on Windows, `sympy_eval` runs inside the same
-  `AppContainerSandbox`; when omitted, `ledger_note` remains available and
-  `sympy_eval` stays registered as `Once`-scoped (returning an error if invoked
-  after approval).
+  `Transport` trait (`AnthropicTransport`, `OpenAiTransport` for OpenAI/Ollama,
+  or `GeminiTransport`), and supports continuing verified sessions via
+  `re-search resume`. Tool calls are dispatched in-process through
+  `tools::Router::try_call` and `ConsoleApprover` with no `claude.exe`,
+  `core.exe`, or `sessions/<id>/mcp.json`. When `--python` is configured on
+  Windows, `sympy_eval` runs inside `AppContainerSandbox`; when omitted,
+  `ledger_note` remains available and `sympy_eval` stays registered as
+  `Once`-scoped (returning an error if invoked after approval).
 
 Every tool call passes through one router: record the request, ask the policy,
 ask the human if the policy says "ask" (reusing an active `worker-session`
@@ -161,6 +162,36 @@ result.
   `max_turns` exhaustion dispatch zero offending tools, record `session.abort`,
   and exit `3`.
 
+## What Stage 5 adds (multi-provider transports & verified session resume)
+
+- **Multi-provider auth and endpoint rules (`OpenAiTransport`, `GeminiTransport`).**
+  `--provider openai` sends `Authorization: Bearer` using `RE_SEARCH_API_KEY` ->
+  `RESEARCH_CORE_API_KEY` -> `OPENAI_API_KEY`; `--provider ollama` reads
+  `RE_SEARCH_API_KEY` -> `RESEARCH_CORE_API_KEY` -> `OLLAMA_API_KEY` and
+  permits keyless (`api_key_env: "none"`) operation *only* for `--provider
+  ollama` on plaintext loopback (`127.0.0.1`, `[::1]`, `localhost`);
+  `--provider gemini` sends the key strictly in the `x-goog-api-key` header
+  (never in `?key=` query parameters, using `GEMINI_API_KEY` / `GOOGLE_API_KEY`
+  after `RE_SEARCH_API_KEY` / `RESEARCH_CORE_API_KEY`). All providers enforce
+  `https://` off loopback, `max_redirects(0)`, bounded payloads, and `SecretKey`
+  scrubbing.
+- **Pre-resume integrity, drift, and lock gates.** `re-search resume` opens the
+  ledger with `Ledger::open_existing`, verifies the entire session hash chain
+  and every referenced blob via `verify_session` (rejecting tamper with exit
+  `1`, legacy v0 schemas with exit `4`, and `--route cli` or
+  `policy_version`/`tool_defs` drift with exit `2` before writing any event),
+  and acquires an atomic `create_new` `.active.lock` per session (reclaiming a
+  stale lock at most once only when the recorded PID is verified dead).
+- **Lossless history reconstruction and cross-provider sanitization.** Resume
+  replays verbatim turns directly from verified `model.request` / `model.response`
+  blobs and `model.tool_result` events while stripping provider-specific blocks
+  (such as `thinking` and `redacted_thinking`) when switching providers,
+  appending `session.resume` contiguously onto the existing hash chain.
+- **Fresh worker epoch and empty `ApprovalStore` on resume.** Resuming creates
+  a brand-new `Router` with an empty `ApprovalStore` and a fresh
+  `Worker`/`AppContainerSandbox` epoch, so prior `worker-session` grants never
+  carry across process boundaries and `sympy_eval` always re-prompts.
+
 ## Remaining limits & gaps
 
 - **Windows system and `ALL APPLICATION PACKAGES` files remain readable.**
@@ -197,9 +228,10 @@ result.
   entire session, or rewrite history and recompute the full hash chain from
   Genesis to head.
 - **Prompts and tool outputs still leave the machine to the model provider.**
-  Model inference happens off-box (`Anthropic` over HTTPS on `--route api`, or
-  through `claude.exe` on `--route cli`), and the remote provider's weights and
-  sampling remain untrusted external computation.
+  Model inference happens off-box (over HTTPS to Anthropic, OpenAI, or Gemini
+  on `--route api`, through a local Ollama server, or through `claude.exe` on
+  `--route cli`), and the remote provider's weights and sampling remain
+  untrusted external computation.
 - **External CLI route (`--route cli`) retains partial provenance and
   `mcp.json` token exposure.** On `--route cli`, `claude.exe` runs uncontained
   in a kill-on-close Job Object, controls the external loop, and reads
@@ -209,6 +241,6 @@ result.
   `--python` is configured on Windows) and cannot read `re-search` memory or
   environment variables, any uncontained local process running as the same
   Windows user has OS privileges equal to `re-search` itself
-  (`RE_SEARCH_API_KEY` / `ANTHROPIC_API_KEY` in environment/process memory).
+  (provider API keys in environment/process memory).
 - **Nothing is verified.** `sympy_eval` returns computations, and `ledger_note`
   records `unverified` notes.

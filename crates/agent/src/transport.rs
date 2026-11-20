@@ -4,12 +4,89 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
 
+pub const DEFAULT_OPENAI_BASE: &str = "https://api.openai.com";
+pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1-mini";
+pub const DEFAULT_OLLAMA_BASE: &str = "http://127.0.0.1:11434/v1";
+pub const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5-coder:7b";
+pub const DEFAULT_GEMINI_BASE: &str = "https://generativelanguage.googleapis.com";
+pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderKind {
+    Anthropic,
+    OpenAi,
+    Ollama,
+    Gemini,
+}
+
+impl ProviderKind {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "anthropic" | "anthropic-messages" => Ok(ProviderKind::Anthropic),
+            "openai" | "openai-chat" => Ok(ProviderKind::OpenAi),
+            "ollama" | "ollama-chat" => Ok(ProviderKind::Ollama),
+            "gemini" | "gemini-generate-content" => Ok(ProviderKind::Gemini),
+            other => Err(format!(
+                "unknown provider `{other}` (expected `anthropic`, `openai`, `ollama`, or `gemini`)"
+            )),
+        }
+    }
+
+    pub fn cli_name(self) -> &'static str {
+        match self {
+            ProviderKind::Anthropic => "anthropic",
+            ProviderKind::OpenAi => "openai",
+            ProviderKind::Ollama => "ollama",
+            ProviderKind::Gemini => "gemini",
+        }
+    }
+
+    pub fn wire_id(self) -> &'static str {
+        match self {
+            ProviderKind::Anthropic => "anthropic-messages",
+            ProviderKind::OpenAi => "openai-chat",
+            ProviderKind::Ollama => "ollama-chat",
+            ProviderKind::Gemini => "gemini-generate-content",
+        }
+    }
+
+    pub fn default_base_url(self) -> &'static str {
+        match self {
+            ProviderKind::Anthropic => crate::anthropic::DEFAULT_API_BASE,
+            ProviderKind::OpenAi => DEFAULT_OPENAI_BASE,
+            ProviderKind::Ollama => DEFAULT_OLLAMA_BASE,
+            ProviderKind::Gemini => DEFAULT_GEMINI_BASE,
+        }
+    }
+
+    pub fn default_model(self) -> &'static str {
+        match self {
+            ProviderKind::Anthropic => crate::anthropic::DEFAULT_API_MODEL,
+            ProviderKind::OpenAi => DEFAULT_OPENAI_MODEL,
+            ProviderKind::Ollama => DEFAULT_OLLAMA_MODEL,
+            ProviderKind::Gemini => DEFAULT_GEMINI_MODEL,
+        }
+    }
+
+    pub fn resolve_model(self, requested: &str) -> String {
+        let trimmed = requested.trim();
+        if trimmed.is_empty() {
+            return self.default_model().to_string();
+        }
+        if self == ProviderKind::Anthropic && trimmed == "haiku" {
+            return crate::anthropic::DEFAULT_API_MODEL.to_string();
+        }
+        trimmed.to_string()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportInfo {
     pub provider: &'static str,
     /// Sanitized `scheme://host[:port]/path` (no userinfo, query, fragment, or secret).
     pub endpoint: String,
-    /// Name of the environment variable from which the API key was read, never its value.
+    /// Name of the environment variable from which the API key was read, or `"none"` on keyless loopback.
     pub api_key_env: String,
 }
 

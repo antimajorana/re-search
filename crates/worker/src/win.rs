@@ -255,12 +255,19 @@ fn resume_threads(pid: u32) -> io::Result<()> {
 }
 
 /// True if process `pid` no longer exists, or exits within `wait_ms`.
+/// Fails closed (`false`) if `pid == 0` or if `OpenProcess` fails for any
+/// reason other than `ERROR_INVALID_PARAMETER` (87, nonexistent PID) — e.g.,
+/// `ERROR_ACCESS_DENIED` (5) on an elevated or other-user live process.
 pub fn process_is_gone(pid: u32, wait_ms: u32) -> bool {
+    const WIN32_ERROR_INVALID_PARAMETER: i32 = 87;
+    if pid == 0 {
+        return false;
+    }
     // SAFETY: handle is checked and closed.
     unsafe {
         let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
         if handle.is_null() {
-            return true;
+            return io::Error::last_os_error().raw_os_error() == Some(WIN32_ERROR_INVALID_PARAMETER);
         }
         let gone = WaitForSingleObject(handle, wait_ms) == WAIT_OBJECT_0;
         CloseHandle(handle);

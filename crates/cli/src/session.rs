@@ -39,9 +39,16 @@ pub(crate) struct SessionGuard {
 
 impl Drop for SessionGuard {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.lock_path);
-        #[cfg(windows)]
-        worker::appcontainer::delete_session_profile(&self.session);
+        let owned = match std::fs::read_to_string(&self.lock_path) {
+            Ok(raw) => raw.trim().parse::<u32>().ok() == Some(std::process::id()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+            Err(_) => false,
+        };
+        if owned {
+            let _ = std::fs::remove_file(&self.lock_path);
+            #[cfg(windows)]
+            worker::appcontainer::delete_session_profile(&self.session);
+        }
     }
 }
 

@@ -49,15 +49,15 @@ impl EventSink for NoopSink {
     }
 }
 
-struct Audit<'a> {
-    ledger: &'a Ledger,
-    session: &'a str,
-    sink: &'a mut dyn EventSink,
-    last_seq: u64,
+pub(crate) struct Audit<'a> {
+    pub(crate) ledger: &'a Ledger,
+    pub(crate) session: &'a str,
+    pub(crate) sink: &'a mut dyn EventSink,
+    pub(crate) last_seq: u64,
 }
 
 impl<'a> Audit<'a> {
-    fn emit(&mut self, kind: &str, data: Value) -> Result<AppendedEvent, String> {
+    pub(crate) fn emit(&mut self, kind: &str, data: Value) -> Result<AppendedEvent, String> {
         let receipt = self
             .ledger
             .append_with_hash(self.session, kind, EVENT_VERSION, &data)
@@ -93,6 +93,28 @@ impl<'a> Audit<'a> {
     }
 }
 
+pub(crate) struct LoopParams<'a> {
+    pub(crate) model: &'a str,
+    pub(crate) system_prompt: &'a str,
+    pub(crate) max_turns: u32,
+    pub(crate) max_tokens: u32,
+    pub(crate) start_turn: u32,
+    pub(crate) initial_messages: Vec<Message>,
+}
+
+pub(crate) fn tool_defs_json(defs: &[&tools::ToolDef]) -> Vec<Value> {
+    defs.iter()
+        .map(|d| {
+            json!({
+                "id": d.id,
+                "effect": d.effect.as_str(),
+                "approval_scope": d.approval_scope.as_str(),
+                "def_hash": d.def_hash(),
+            })
+        })
+        .collect()
+}
+
 pub fn run_agent_loop(
     transport: &dyn Transport,
     router: &Router,
@@ -111,19 +133,8 @@ pub fn run_agent_loop(
     }
     let session = router.session();
     let info = transport.info();
-    let caller = format!("agent:{}:{session}", info.provider);
     let defs = router.registry().defs();
-    let tool_specs: Vec<ToolSpec> = defs
-        .iter()
-        .map(|d| ToolSpec {
-            name: d.id.clone(),
-            description: d.description.clone(),
-            input_schema: d.input_schema.clone(),
-        })
-        .collect();
-
     let mut audit = Audit { ledger, session, sink, last_seq: 0 };
-    let started = Instant::now();
     audit.emit(
         "session.start",
         json!({
@@ -141,40 +152,72 @@ pub fn run_agent_loop(
             "policy_version": builtin::POLICY_VERSION,
             "containment": cfg.containment,
             "contained": cfg.contained,
-            "tool_defs": defs.iter().map(|d| json!({
-                "id": d.id,
-                "effect": d.effect.as_str(),
-                "approval_scope": d.approval_scope.as_str(),
-                "def_hash": d.def_hash(),
-            })).collect::<Vec<_>>(),
+            "tool_defs": tool_defs_json(&defs),
         }),
     )?;
 
-    let mut messages = vec![Message {
+    let initial_messages = vec![Message {
         role: Role::User,
         content: vec![ContentBlock::Text { text: cfg.prompt.clone() }],
     }];
+    run_turn_loop(
+        transport,
+        router,
+        &mut audit,
+        LoopParams {
+            model: &cfg.model,
+            system_prompt: &cfg.system_prompt,
+            max_turns: cfg.max_turns,
+            max_tokens: cfg.max_tokens,
+            start_turn: 1,
+            initial_messages,
+        },
+    )
+}
 
-    for turn in 1..=cfg.max_turns {
+pub(crate) fn run_turn_loop(
+    transport: &dyn Transport,
+    router: &Router,
+    audit: &mut Audit<'_>,
+    params: LoopParams<'_>,
+) -> Result<SessionOutcome, String> {
+    let info = transport.info();
+    let caller = format!("agent:{}:{}", info.provider, audit.session);
+    let tool_specs: Vec<ToolSpec> = router
+        .registry()
+        .defs()
+        .iter()
+        .map(|d| ToolSpec {
+            name: d.id.clone(),
+            description: d.description.clone(),
+            input_schema: d.input_schema.clone(),
+        })
+        .collect();
+    let started = Instant::now();
+    let mut messages = params.initial_messages;
+
+    for offset in 0..params.max_turns {
+        let leg_turns = offset + 1;
+        let turn = params.start_turn + offset;
         let req = ModelRequest {
-            model: cfg.model.clone(),
-            system: Some(cfg.system_prompt.clone()),
+            model: params.model.to_string(),
+            system: Some(params.system_prompt.to_string()),
             messages: messages.clone(),
             tools: tool_specs.clone(),
-            max_tokens: cfg.max_tokens,
+            max_tokens: params.max_tokens,
         };
         let prepared = match transport.prepare_request(&req) {
             Ok(p) => p,
-            Err(err) => return abort_on_transport(&mut audit, turn, err),
+            Err(err) => return abort_on_transport(audit, leg_turns, turn, err),
         };
         let req_blob = audit.put_blob(&prepared.body)?;
         audit.emit(
             "model.request",
             json!({
                 "turn": turn,
-                "model": cfg.model,
+                "model": params.model,
                 "message_count": req.messages.len(),
-                "max_tokens": cfg.max_tokens,
+                "max_tokens": params.max_tokens,
                 "raw_blob": req_blob,
             }),
         )?;
@@ -182,7 +225,7 @@ pub fn run_agent_loop(
         let turn_start = Instant::now();
         let resp = match transport.send_prepared(&prepared) {
             Ok(r) => r,
-            Err(err) => return abort_on_transport(&mut audit, turn, err),
+            Err(err) => return abort_on_transport(audit, leg_turns, turn, err),
         };
         let duration_ms = turn_start.elapsed().as_millis() as u64;
 
@@ -199,7 +242,7 @@ pub fn run_agent_loop(
                 "raw_blob": resp_blob,
             }),
         )?;
-        record_content_blocks(&mut audit, &resp.content)?;
+        record_content_blocks(audit, &resp.content)?;
 
         if resp.stop_reason == StopReason::Refusal {
             let text = collect_text(&resp.content);
@@ -212,15 +255,16 @@ pub fn run_agent_loop(
                 json!({
                     "outcome": "refusal",
                     "stop_reason": "refusal",
-                    "num_turns": turn,
+                    "num_turns": leg_turns,
+                    "last_turn": turn,
                     "duration_ms": started.elapsed().as_millis() as u64,
                 }),
             )?;
-            return Ok(SessionOutcome::Refusal { turns: turn, text });
+            return Ok(SessionOutcome::Refusal { turns: leg_turns, text });
         }
 
         if let Some(reason) = validate_turn(&resp) {
-            return abort_session(&mut audit, turn, reason);
+            return abort_session(audit, leg_turns, reason);
         }
 
         match resp.stop_reason {
@@ -231,22 +275,23 @@ pub fn run_agent_loop(
                     json!({
                         "outcome": "completed",
                         "stop_reason": stop_str,
-                        "num_turns": turn,
+                        "num_turns": leg_turns,
+                        "last_turn": turn,
                         "duration_ms": started.elapsed().as_millis() as u64,
                     }),
                 )?;
-                return Ok(SessionOutcome::Completed { turns: turn, stop_reason: stop_str });
+                return Ok(SessionOutcome::Completed { turns: leg_turns, stop_reason: stop_str });
             }
             StopReason::ToolUse => {
-                if turn == cfg.max_turns {
+                if leg_turns == params.max_turns {
                     return abort_session(
-                        &mut audit,
-                        turn,
-                        format!("reached max_turns ({}) before model completed", cfg.max_turns),
+                        audit,
+                        leg_turns,
+                        format!("reached max_turns ({}) before model completed", params.max_turns),
                     );
                 }
                 messages.push(Message { role: Role::Assistant, content: resp.content.clone() });
-                let results = dispatch_tool_calls(&mut audit, router, &caller, turn, &resp.content)?;
+                let results = dispatch_tool_calls(audit, router, &caller, turn, &resp.content)?;
                 messages.push(Message { role: Role::User, content: results });
             }
             StopReason::Refusal | StopReason::MaxTokens | StopReason::PauseTurn | StopReason::Other(_) => {
@@ -255,10 +300,15 @@ pub fn run_agent_loop(
         }
     }
 
-    abort_session(&mut audit, cfg.max_turns, "agent loop exited unexpectedly".into())
+    abort_session(audit, params.max_turns, "agent loop exited unexpectedly".into())
 }
 
-fn abort_on_transport(audit: &mut Audit<'_>, turn: u32, err: TransportError) -> Result<SessionOutcome, String> {
+fn abort_on_transport(
+    audit: &mut Audit<'_>,
+    leg_turns: u32,
+    turn: u32,
+    err: TransportError,
+) -> Result<SessionOutcome, String> {
     let raw_blob = match &err.raw_body {
         Some(bytes) if !bytes.is_empty() => Some(audit.put_blob(bytes)?),
         _ => None,
@@ -273,7 +323,7 @@ fn abort_on_transport(audit: &mut Audit<'_>, turn: u32, err: TransportError) -> 
         obj.insert("raw_blob".into(), json!(h));
     }
     audit.emit("model.error", err_payload)?;
-    abort_session(audit, turn, err.to_string())
+    abort_session(audit, leg_turns, err.to_string())
 }
 
 fn abort_session(audit: &mut Audit<'_>, turn: u32, reason: String) -> Result<SessionOutcome, String> {
@@ -307,7 +357,7 @@ fn record_content_blocks(audit: &mut Audit<'_>, content: &[ContentBlock]) -> Res
     Ok(())
 }
 
-fn validate_turn(resp: &ModelResponse) -> Option<String> {
+pub(crate) fn validate_turn(resp: &ModelResponse) -> Option<String> {
     match &resp.stop_reason {
         StopReason::MaxTokens => return Some("model response truncated at max_tokens".into()),
         StopReason::PauseTurn => return Some("model returned unsupported stop_reason `pause_turn`".into()),
@@ -366,7 +416,7 @@ fn dispatch_tool_calls(
         let outcome = router.try_call(caller, name, input)?;
         audit.flush_interleaved()?;
         let (is_error, content_text) = match outcome {
-            CallOutcome::Ok(val) => (false, serde_json::to_string(&val).map_err(|e| e.to_string())?),
+            CallOutcome::Ok(val) => (false, tools::canon::canonical_json(&val)),
             CallOutcome::Denied(why) => (true, format!("DENIED: {why}")),
             CallOutcome::Error(why) => (true, format!("ERROR: {why}")),
         };
@@ -401,7 +451,7 @@ fn collect_text(content: &[ContentBlock]) -> String {
         .join("\n")
 }
 
-fn clip_text(text: &str) -> (String, bool) {
+pub(crate) fn clip_text(text: &str) -> (String, bool) {
     if text.chars().count() <= RESULT_TEXT_LIMIT {
         (text.to_string(), false)
     } else {

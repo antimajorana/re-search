@@ -109,8 +109,14 @@ fn write_http_json(stream: &mut TcpStream, status: u16, body: &Value) {
 fn base_cmd() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_re-search"));
     for (k, _) in std::env::vars_os() {
-        let name = k.to_string_lossy();
-        if name.starts_with("RE_SEARCH_") || name.starts_with("RESEARCH_CORE_") || name == "ANTHROPIC_API_KEY" {
+        let upper = k.to_string_lossy().to_ascii_uppercase();
+        if upper.starts_with("RE_SEARCH_")
+            || upper.starts_with("RESEARCH_CORE_")
+            || matches!(
+                upper.as_str(),
+                "ANTHROPIC_API_KEY" | "OPENAI_API_KEY" | "OLLAMA_API_KEY" | "GEMINI_API_KEY" | "GOOGLE_API_KEY"
+            )
+        {
             cmd.env_remove(k);
         }
     }
