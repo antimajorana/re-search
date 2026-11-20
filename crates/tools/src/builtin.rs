@@ -3,9 +3,11 @@
 //! these definitions to know which tools it expects the model to see.
 
 use crate::approval::ApprovalScope;
-use crate::registry::ToolDef;
+use crate::registry::{CallCtx, ToolDef, ToolHandler};
+use crate::{ClaimStatus, EVENT_SCHEMA_VERSION};
 use policy::{Decision, EffectClass, Match, Policy, Rule};
-use serde_json::json;
+use serde_json::{json, Value};
+use std::sync::Arc;
 
 pub const POLICY_VERSION: &str = "v0.2";
 pub const SYMPY_EVAL: &str = "sympy_eval";
@@ -51,6 +53,25 @@ pub fn ledger_note_def() -> ToolDef {
         effect: EffectClass::ObserveLocal,
         approval_scope: ApprovalScope::Once,
     }
+}
+
+/// Shared `ledger_note` handler: records an `unverified` note in the session ledger.
+pub fn ledger_note_handler() -> Arc<dyn ToolHandler> {
+    Arc::new(|ctx: &CallCtx<'_>, args: &Value| {
+        let text = args["text"].as_str().ok_or("`text` must be a string")?;
+        let payload = json!({
+            "call_id": ctx.call_id,
+            "author": ctx.caller,
+            "text": text,
+            // Fixed here: a model cannot choose the status of its own note.
+            "status": ClaimStatus::Unverified,
+        });
+        let ledger = ctx.ledger.lock().map_err(|_| "ledger lock poisoned".to_string())?;
+        let seq = ledger
+            .append(ctx.session, "note", EVENT_SCHEMA_VERSION, &payload)
+            .map_err(|e| e.to_string())?;
+        Ok(json!({ "recorded": true, "seq": seq, "status": "unverified" }))
+    })
 }
 
 pub fn defs() -> Vec<ToolDef> {

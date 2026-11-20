@@ -1,6 +1,14 @@
-﻿[workspace]
+[workspace]
 resolver = "2"
-members = ["crates/policy", "crates/ledger", "crates/tools", "crates/worker", "crates/mcp-server", "crates/cli"]
+members = [
+    "crates/policy",
+    "crates/ledger",
+    "crates/tools",
+    "crates/worker",
+    "crates/agent",
+    "crates/mcp-server",
+    "crates/cli",
+]
 
 [workspace.package]
 version = "0.0.1"
@@ -13,3 +21,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"
 getrandom = "0.2"
+ureq = { version = "3.5.2", default-features = false, features = ["rustls", "gzip"] }
+zeroize = "1.9"

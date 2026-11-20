@@ -423,3 +423,26 @@ fn large_arguments_go_to_a_blob() {
     let stored = String::from_utf8(ledger.get_blob(hash).unwrap()).unwrap();
     assert_eq!(stored, canonical_json(&json!({ "big": big })));
 }
+
+#[test]
+fn try_call_distinguishes_ledger_failure_from_handler_and_arg_errors() {
+    let f = fixture("try-call", Mode::Approve);
+
+    // Recorded argument validation failure -> Ok(CallOutcome::Error).
+    assert!(matches!(f.router.try_call("c", "read", &json!({"x": "bad"})), Ok(CallOutcome::Error(_))));
+    // Recorded handler runtime failure -> Ok(CallOutcome::Error).
+    assert_eq!(f.router.try_call("c", "fails", &json!({"x": 1})), Ok(CallOutcome::Error("handler broke".into())));
+    assert_eq!(f.runs.load(Ordering::SeqCst), 1);
+
+    // Make blob storage unwritable mid-session so recording a >4 KiB request fails closed.
+    let blobs = f.dir.join("blobs");
+    let _ = std::fs::remove_dir_all(&blobs);
+    std::fs::write(&blobs, b"not-a-directory").unwrap();
+
+    let big_args = json!({ "big": "z".repeat(6000) });
+    let res = f.router.try_call("c", "read", &big_args);
+    assert!(res.is_err(), "expected ledger/blob failure Err, got {res:?}");
+    assert_eq!(f.runs.load(Ordering::SeqCst), 1, "handler must not execute when request recording fails");
+    assert!(matches!(f.router.call("c", "read", &big_args), CallOutcome::Error(_)));
+    let _ = std::fs::remove_dir_all(&f.dir);
+}

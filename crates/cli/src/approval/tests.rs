@@ -1,6 +1,10 @@
 use super::*;
+use ledger::Ledger;
+use serde_json::json;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use tools::APPROVAL_CHANNEL_VERSION;
 
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("cli-approval-test-{}-{}", name, std::process::id()));
@@ -323,3 +327,153 @@ fn contained_banner_states_contained_limits_and_escapes_controls() {
     assert!(!banner.contains('\u{009b}'), "raw CSI leaked: {banner:?}");
     assert!(banner.contains("(appcontainer\\u{1b}[0m)"), "{banner}");
 }
+
+fn console_request(session: &str, call_id: &str, scope: tools::ApprovalScope) -> tools::ApprovalRequest {
+    tools::ApprovalRequest {
+        schema_version: tools::APPROVAL_SCHEMA_VERSION,
+        session: session.to_string(),
+        call_id: call_id.to_string(),
+        digest: "d".repeat(64),
+        caller: format!("agent:anthropic-messages:{session}"),
+        tool_id: "sympy_eval".to_string(),
+        scope,
+        effect: tools::builtin::sympy_eval_def().effect,
+        canonical_args: r#"{"code":"1+1"}"#.to_string(),
+        policy_reason: "matched rule".to_string(),
+    }
+}
+
+fn write_minimal_legacy_v0_db(path: &std::path::Path) {
+    let mut buf = vec![0u8; 1536];
+    let patches: &[(usize, &[u8])] = &[
+        (0, b"SQLite format 3\x00\x02\x00\x01\x01\x00@  \x00\x00\x00\x02\x00\x00\x00\x03"),
+        (43, b"\x01\x00\x00\x00\x04"),
+        (59, b"\x01"),
+        (95, b"\x02\x00.\x95\xc9\r\x01\xf8\x00\x02\x00\xf3\x00\x00\xf3\x01\xcd"),
+        (243, b"\x81W\x01\x07\x17\x17\x17\x01\x83\rtableeventevent\x02CREATE TABLE event (session TEXT NOT NULL, seq INTEGER NOT NULL, ts_ms INTEGER NOT NULL, kind TEXT NOT NULL, schema_version INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (session, seq)))\x02\x06\x17=\x17\x01\x00indexsqlite_autoindex_event_1event\x03\x00\x00\x00\x08"),
+        (512, b"\r\x00\x00\x00\x01\x01\xef\x00\x01\xef"),
+        (1007, b"\x0f\x01\x07\x11\t\x08\x15\t\x11s0note{}\n\x00\x00\x00\x01\x01\xf9\x00\x01\xf9"),
+        (1529, b"\x06\x04\x11\t\ts0"),
+    ];
+    for (off, bytes) in patches {
+        buf[*off..*off + bytes.len()].copy_from_slice(bytes);
+    }
+    std::fs::write(path, buf).unwrap();
+}
+
+#[test]
+fn console_approver_records_sequential_yes_and_no_decisions() {
+    let dir = temp_dir("console-seq");
+    let (tx, rx) = mpsc::channel();
+    tx.send(StdinEvent::Line("y\n".into())).unwrap();
+    tx.send(StdinEvent::Line("n\n".into())).unwrap();
+    let approver = ConsoleApprover::with_terminal(
+        Ledger::open(&dir).unwrap(),
+        "s1".into(),
+        "none".into(),
+        false,
+        TerminalInput::Test { rx, anti_buffer: Duration::ZERO },
+    );
+
+    let req1 = console_request("s1", "c1", tools::ApprovalScope::Once);
+    let r1 = tools::Approver::decide(&approver, &req1);
+    assert!((r1.approved, r1.by.as_str(), &r1.digest) == (true, "console", &req1.digest));
+
+    let req2 = console_request("s1", "c2", tools::ApprovalScope::Once);
+    let r2 = tools::Approver::decide(&approver, &req2);
+    assert!((r2.approved, r2.by.as_str(), &r2.digest) == (false, "console", &req2.digest));
+
+    let events = Ledger::open(&dir).unwrap().read_session("s1").unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!((events[0].kind.as_str(), &events[0].payload["call_id"], &events[0].payload["approved"]), ("approval.answered", &json!("c1"), &json!(true)));
+    assert_eq!((events[1].kind.as_str(), &events[1].payload["call_id"], &events[1].payload["approved"]), ("approval.answered", &json!("c2"), &json!(false)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn console_approver_denies_uncontained_worker_session_without_consuming_input() {
+    let dir = temp_dir("console-uncontained");
+    let (tx, rx) = mpsc::channel();
+    tx.send(StdinEvent::Line("y\n".into())).unwrap();
+    let approver = ConsoleApprover::with_terminal(
+        Ledger::open(&dir).unwrap(),
+        "s1".into(),
+        "none".into(),
+        false,
+        TerminalInput::Test { rx, anti_buffer: Duration::ZERO },
+    );
+
+    let r1 = tools::Approver::decide(&approver, &console_request("s1", "c1", tools::ApprovalScope::WorkerSession));
+    assert!((!r1.approved && r1.by == "supervisor: worker-session requires a contained sandbox"));
+    // The queued "y\n" must still be untouched for a subsequent valid `Once` prompt.
+    let r2 = tools::Approver::decide(&approver, &console_request("s1", "c2", tools::ApprovalScope::Once));
+    assert!((r2.approved && r2.by == "console"));
+
+    let events = Ledger::open(&dir).unwrap().read_session("s1").unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].payload["approved"], false);
+    assert_eq!(events[0].payload["by"], "supervisor: worker-session requires a contained sandbox");
+    assert_eq!(events[1].payload["approved"], true);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn console_approver_denies_non_interactive_terminal() {
+    let dir = temp_dir("console-nontty");
+    let approver = ConsoleApprover::with_terminal(
+        Ledger::open(&dir).unwrap(),
+        "s1".into(),
+        "none".into(),
+        false,
+        TerminalInput::NonInteractive,
+    );
+    let reply = tools::Approver::decide(&approver, &console_request("s1", "c1", tools::ApprovalScope::Once));
+    assert!(!reply.approved && reply.by == "supervisor: no terminal to ask on");
+
+    let events = Ledger::open(&dir).unwrap().read_session("s1").unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!((events[0].kind.as_str(), &events[0].payload["approved"], &events[0].payload["by"]), ("approval.answered", &json!(false), &json!("supervisor: no terminal to ask on")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn console_approver_denies_on_stdin_hub_eof() {
+    let dir = temp_dir("console-eof");
+    let hub = std::sync::Arc::new(StdinHub::new());
+    hub.mark_eof();
+    let approver = ConsoleApprover::with_terminal(
+        Ledger::open(&dir).unwrap(),
+        "s1".into(),
+        "none".into(),
+        false,
+        TerminalInput::Hub(hub),
+    );
+    let start = Instant::now();
+    let reply = tools::Approver::decide(&approver, &console_request("s1", "c1", tools::ApprovalScope::Once));
+    assert!(!reply.approved && reply.by == "supervisor: terminal EOF" && start.elapsed() < Duration::from_secs(2));
+
+    let events = Ledger::open(&dir).unwrap().read_session("s1").unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!((&events[0].payload["approved"], &events[0].payload["by"]), (&json!(false), &json!("supervisor: terminal EOF")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn console_approver_fails_closed_on_ledger_error() {
+    let dir = temp_dir("console-ledger-err");
+    write_minimal_legacy_v0_db(&dir.join("ledger.db"));
+    let (tx, rx) = mpsc::channel();
+    tx.send(StdinEvent::Line("y\n".into())).unwrap();
+    let approver = ConsoleApprover::with_terminal(
+        Ledger::open(&dir).unwrap(),
+        "s1".into(),
+        "none".into(),
+        false,
+        TerminalInput::Test { rx, anti_buffer: Duration::ZERO },
+    );
+    let req = console_request("s1", "c1", tools::ApprovalScope::Once);
+    let reply = tools::Approver::decide(&approver, &req);
+    assert!(!reply.approved && reply.by == "supervisor: ledger error" && reply.digest == req.digest);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+

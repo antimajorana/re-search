@@ -28,23 +28,36 @@ pub struct RunOpts {
 /// Exit code used when the session is aborted by the supervisor.
 pub const EXIT_ABORTED: i32 = 3;
 
-struct Recorder {
-    ledger: Ledger,
-    session: String,
+/// Exit code used when the model ends a turn with `stop_reason == "refusal"`.
+pub const EXIT_REFUSAL: i32 = 5;
+
+pub(crate) struct SessionGuard {
+    #[cfg(windows)]
+    pub session: String,
+    pub lock_path: PathBuf,
+}
+
+impl Drop for SessionGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.lock_path);
+        #[cfg(windows)]
+        worker::appcontainer::delete_session_profile(&self.session);
+    }
+}
+
+pub(crate) struct Recorder {
+    pub(crate) ledger: Ledger,
+    pub(crate) session: String,
 }
 
 impl Recorder {
-    /// Append to the ledger and print the same event as one NDJSON line.
-    fn emit(&self, kind: &str, data: Value, raw: Option<&str>) -> Result<(), String> {
-        self.emit_to(&mut std::io::stdout().lock(), kind, data, raw)
-    }
-
-    fn emit_to(&self, out: &mut impl Write, kind: &str, data: Value, raw: Option<&str>) -> Result<(), String> {
-        let mut payload = data;
-        if let (Some(hash), Some(map)) = (raw, payload.as_object_mut()) {
-            map.insert("raw_blob".into(), json!(hash));
-        }
-        let ev = self.ledger.append_with_hash(&self.session, kind, EVENT_VERSION, &payload).map_err(|e| e.to_string())?;
+    pub(crate) fn write_ndjson_line(
+        &self,
+        out: &mut impl Write,
+        ev: &ledger::AppendedEvent,
+        kind: &str,
+        payload: &Value,
+    ) -> Result<(), String> {
         let line = json!({
             "v": EVENT_VERSION,
             "session": self.session,
@@ -56,6 +69,20 @@ impl Recorder {
             "data": payload,
         });
         writeln!(out, "{line}").and_then(|_| out.flush()).map_err(|e| e.to_string())
+    }
+
+    /// Append to the ledger and print the same event as one NDJSON line.
+    pub(crate) fn emit(&self, kind: &str, data: Value, raw: Option<&str>) -> Result<(), String> {
+        self.emit_to(&mut std::io::stdout().lock(), kind, data, raw)
+    }
+
+    fn emit_to(&self, out: &mut impl Write, kind: &str, data: Value, raw: Option<&str>) -> Result<(), String> {
+        let mut payload = data;
+        if let (Some(hash), Some(map)) = (raw, payload.as_object_mut()) {
+            map.insert("raw_blob".into(), json!(hash));
+        }
+        let ev = self.ledger.append_with_hash(&self.session, kind, EVENT_VERSION, &payload).map_err(|e| e.to_string())?;
+        self.write_ndjson_line(out, &ev, kind, &payload)
     }
 }
 
@@ -99,18 +126,6 @@ pub fn run(opts: &RunOpts) -> Result<i32, String> {
     std::fs::write(&active_lock, std::process::id().to_string()).map_err(io)?;
     #[cfg(windows)]
     worker::appcontainer::sweep_stale_profiles(&opts.data_dir);
-    struct SessionGuard {
-        #[cfg(windows)]
-        session: String,
-        lock_path: PathBuf,
-    }
-    impl Drop for SessionGuard {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.lock_path);
-            #[cfg(windows)]
-            worker::appcontainer::delete_session_profile(&self.session);
-        }
-    }
     let _session_guard = SessionGuard {
         #[cfg(windows)]
         session: session.clone(),

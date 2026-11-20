@@ -1,17 +1,27 @@
-# Threat model (Stage 3: AppContainer isolation & hash-chained ledger)
+# Threat model (Stage 4: AppContainer isolation, hash-chained ledger & in-core agent loop)
 
 This file says plainly what re:Search currently protects against and what it
 does not. Read the remaining limits before approving anything.
 
 ## Architecture overview
 
-A supervisor (`re-search`) starts the Claude Code CLI headless inside a
-Windows Job Object. The CLI runs the model's agent loop and is given exactly
-two tools, both served by our MCP server `core`:
+The `re-search` supervisor supports two execution routes:
 
-- `sympy_eval` runs Python code in a local worker process confined inside a
-  zero-capability Windows `AppContainerSandbox`.
-- `ledger_note` appends a note to the session ledger.
+- **`--route cli` (default, `"external loop, partial provenance"`).**
+  Starts the Claude Code CLI (`claude.exe`) headless inside a Windows Job
+  Object. The CLI runs the model's agent loop and is given exactly two tools
+  served over stdio by our MCP server `core.exe` (via `sessions/<id>/mcp.json`
+  carrying `CORE_SESSION_TOKEN`): `sympy_eval` (Python/SymPy in a
+  zero-capability Windows `AppContainerSandbox`) and `ledger_note`.
+- **`--route api` (Stage 4, `"in-core loop, full provenance"`).** Runs the
+  in-core agent loop (`crates/agent`) directly inside `re-search` over the
+  `Transport` trait (`AnthropicTransport`, `POST /v1/messages`). Tool calls are
+  dispatched in-process through `tools::Router::try_call` and `ConsoleApprover`
+  with no `claude.exe`, `core.exe`, or `sessions/<id>/mcp.json`. When
+  `--python` is configured on Windows, `sympy_eval` runs inside the same
+  `AppContainerSandbox`; when omitted, `ledger_note` remains available and
+  `sympy_eval` stays registered as `Once`-scoped (returning an error if invoked
+  after approval).
 
 Every tool call passes through one router: record the request, ask the policy,
 ask the human if the policy says "ask" (reusing an active `worker-session`
@@ -21,21 +31,22 @@ result.
 ## What Stage 2 contains
 
 - **Zero-capability Windows AppContainer for the Python worker.** When
-  `CORE_PYTHON` and `CORE_WORKER_SCRIPT` are configured, `core` fails closed
-  unless `AppContainerSandbox` initializes cleanly (requiring per-session
-  `CORE_SCRATCH` and `CORE_PYCACHE`). The worker runs with `TokenIsAppContainer
-  == 1`, Low integrity (`S-1-16-4096`), and `CapabilityCount = 0` (no LPAC).
-  Network egress (loopback TCP/UDP, local-NIC UDP, DNS resolution, external
-  datagrams) and named pipes to the host are blocked by the AppContainer/WFP
-  boundary, and `JobObjectBasicUIRestrictions` blocks clipboard read/write,
-  external USER handles, desktop creation/switching, global atoms, display or
-  system parameter changes, and `ExitWindows`.
+  `--python` and `worker.py` are configured (`CORE_PYTHON` /
+  `CORE_WORKER_SCRIPT` on `--route cli`), startup fails closed unless
+  `AppContainerSandbox` initializes cleanly (requiring per-session `scratch`
+  and `pycache` directories). The worker runs with `TokenIsAppContainer == 1`,
+  Low integrity (`S-1-16-4096`), and `CapabilityCount = 0` (no LPAC). Network
+  egress (loopback TCP/UDP, local-NIC UDP, DNS resolution, external datagrams)
+  and named pipes to the host are blocked by the AppContainer/WFP boundary, and
+  `JobObjectBasicUIRestrictions` blocks clipboard read/write, external USER
+  handles, desktop creation/switching, global atoms, display or system parameter
+  changes, and `ExitWindows`.
 - **Scoped worker handle inheritance (`STARTUPINFOEXW`).** Both
   `AppContainerSandbox` and `JobObjectSandbox` launch workers via
   `CreateProcessW` with `STARTUPINFOEXW` + `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`
-  (`core` spawns no other child processes). Only the worker's two dedicated
-  pipe handles and parent-opened `\\.\NUL` stdio handles are inherited by the
-  worker.
+  (no other child processes are spawned by the worker layer). Only the worker's
+  two dedicated pipe handles and parent-opened `\\.\NUL` stdio handles are
+  inherited by the worker.
 - **Clean minimal child environment.** Host environment variables are not
   inherited; the worker receives only `SystemRoot`, `LOCALAPPDATA`, `APPDATA`,
   `USERPROFILE`, `HOME`, `TEMP`, `TMP`, `MPLCONFIGDIR`, `PYTHONPYCACHEPREFIX`,
@@ -48,9 +59,9 @@ result.
   an ephemeral AppContainer profile (`re-search.worker.<session>`) granted
   Modify (`(OI)(CI)M`) strictly on `sessions/<id>/scratch` and
   `sessions/<id>/pycache`. `sessions/<id>/work`, `sessions/<id>/mcp.json`
-  (`CORE_SESSION_TOKEN`), `ledger.db`, other sessions' scratch directories, and
-  user files outside `scratch`/`pycache` are denied (`ERROR_ACCESS_DENIED` /
-  `EACCES`).
+  (`CORE_SESSION_TOKEN` on `--route cli`), `ledger.db`, other sessions' scratch
+  directories, and user files outside `scratch`/`pycache` are denied
+  (`ERROR_ACCESS_DENIED` / `EACCES`).
 - **Containment-gated `worker-session` approval reuse and epoch binding.**
   Every human approval is bound by SHA-256 digest over the effective scope,
   caller, tool id, tool-definition hash, canonical arguments, policy version,
@@ -60,21 +71,23 @@ result.
   calls by the same caller with the same tool-definition hash and policy version
   reuse that grant only while that exact OS worker epoch stays alive. Timeout,
   crash, or restart ends the epoch and forces a fresh prompt. Any uncontained
-  fallback or `once` tool remains pinned to per-call `once`, and the supervisor
-  rejects `worker-session` requests unless they declare `contained: true`.
-- **The model gets only our tools.** The supervisor starts the CLI with
-  built-in tools off, user and project settings off, and only our MCP config,
-  and verifies `system/init` (`mcp__core__ledger_note`, `mcp__core__sympy_eval`,
-  and only `core` connected) before the model acts.
+  fallback or `once` tool remains pinned to per-call `once`, and both approval
+  backends reject `worker-session` requests unless `contained: true`.
+- **The model gets only our tools.** On `--route cli`, the supervisor starts the
+  CLI with built-in tools off, user and project settings off, and only our MCP
+  config, and verifies `system/init` (`mcp__core__ledger_note`,
+  `mcp__core__sympy_eval`, and only `core` connected) before the model acts. On
+  `--route api`, `AgentLoop` advertises only `router.registry().defs()`.
 - **Code execution always asks.** `execute-code` tools can never be configured
   to `allow`: the policy engine clamps `allow` to `ask`.
 - **No approval without a person.** If stdin or stderr is not a terminal, or
   the token, channel version, session, scope, or containment check fails, the
   answer is "no". There is no auto-approve switch. Stray console input outside
   an active prompt is drained and discarded.
-- **Approval channel timeout & ACK.** Disconnecting before a decision closes
-  the prompt and records `approval.expired`; valid answers require an explicit
-  ACK from `core` (`approval.delivered` / `approval.undelivered`).
+- **Approval channel timeout & ACK.** On `--route cli`, disconnecting before a
+  decision closes the prompt and records `approval.expired`; valid answers
+  require an explicit ACK from `core` (`approval.delivered` /
+  `approval.undelivered`).
 - **Process lifetime and profile cleanup.** Both the CLI (`JobObjectSandbox`)
   and worker (`WinChild`) run in `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` Job
   Objects. On abort or exit, the supervisor kills the tree and deletes the
@@ -114,6 +127,40 @@ result.
   `sessions`), while `append*` and `verify*` refuse them
   (`Error::LegacyUnchainedSchema`, CLI exit code `4`).
 
+## What Stage 4 adds (transport trait & in-core agent loop)
+
+- **In-core conversation loop and wire-level provenance (`crates/agent`).**
+  `prepare_request` serializes the exact outgoing JSON body, stores it in
+  `blobs/`, and records `model.request` (`raw_blob`) *before* any network call;
+  `model.response` (`raw_blob` of the exact incoming JSON body) and content
+  block events are recorded *before* any tool call runs. `verify_session` and
+  `verify_all` check all `raw_blob` digests with zero unreferenced blobs.
+- **Router-only tool path and fail-closed ledger checks.** `crates/agent` does
+  not depend on `worker`; tool definitions come from `router.registry().defs()`,
+  and every `tool_use` block calls `Router::try_call` with a core-assigned
+  caller (`agent:<provider>:<session>`). Any ledger or blob recording failure
+  halts the loop immediately before network egress or tool dispatch.
+- **In-process terminal approvals (`ConsoleApprover`).** Shares `StdinHub`, TTY
+  checks, the 150 ms anti-buffer window, control-char escaping, containment
+  scope enforcement (`worker-session` requires `contained == true`), and
+  fail-closed `approval.answered` ledger recording before returning
+  `ApprovalReply` (answering `approved: false` if the ledger write fails).
+- **API key hygiene and transport hardening (`AnthropicTransport`).** Reads
+  `RE_SEARCH_API_KEY` -> `RESEARCH_CORE_API_KEY` -> `ANTHROPIC_API_KEY` at
+  runtime into `SecretKey` (zeroized on drop, `[REDACTED]` `Debug`, control
+  characters rejected); records only the env var *name* (`api_key_env`) and
+  sanitized endpoint (`scheme://host[:port]/v1/messages`). Enforces `https://`
+  outside loopback (`127.0.0.1`, `[::1]`, `localhost`), disables HTTP
+  redirects (`max_redirects(0)`), bounds response sizes (`16 MiB` response /
+  `1 MiB` error body), and scrubs any accidental reflection of raw key bytes
+  from error strings and HTTP bodies before returning or storing blobs.
+- **Explicit refusal and truncation handling.** Model `stop_reason: "refusal"`
+  dispatches zero tools, records `model.refusal` + `session.end`
+  (`outcome: "refusal"`), and exits `5`; `max_tokens` truncation,
+  malformed/unexpected `tool_use` blocks, transport errors (`model.error`), and
+  `max_turns` exhaustion dispatch zero offending tools, record `session.abort`,
+  and exit `3`.
+
 ## Remaining limits & gaps
 
 - **Windows system and `ALL APPLICATION PACKAGES` files remain readable.**
@@ -149,11 +196,19 @@ result.
   drop triggers and truncate the latest tail events of a session, delete an
   entire session, or rewrite history and recompute the full hash chain from
   Genesis to head.
-- **The agent loop is outside the core (Stage 4).** `claude.exe` runs
-  uncontained as you (inside a kill-on-close Job Object) and controls what the
-  model sees and when it calls tools; sessions are recorded as `"external loop,
-  partial provenance"`. Prompts and tool results leave the machine to Anthropic
-  through the CLI. Any unrelated program running as you can also read
+- **Prompts and tool outputs still leave the machine to the model provider.**
+  Model inference happens off-box (`Anthropic` over HTTPS on `--route api`, or
+  through `claude.exe` on `--route cli`), and the remote provider's weights and
+  sampling remain untrusted external computation.
+- **External CLI route (`--route cli`) retains partial provenance and
+  `mcp.json` token exposure.** On `--route cli`, `claude.exe` runs uncontained
+  in a kill-on-close Job Object, controls the external loop, and reads
   `sessions/<id>/mcp.json` (`CORE_SESSION_TOKEN`).
+- **Supervisor memory shares the user's logon context (`--route api`).** While
+  the Python worker runs inside the zero-capability AppContainer (when
+  `--python` is configured on Windows) and cannot read `re-search` memory or
+  environment variables, any uncontained local process running as the same
+  Windows user has OS privileges equal to `re-search` itself
+  (`RE_SEARCH_API_KEY` / `ANTHROPIC_API_KEY` in environment/process memory).
 - **Nothing is verified.** `sympy_eval` returns computations, and `ledger_note`
   records `unverified` notes.

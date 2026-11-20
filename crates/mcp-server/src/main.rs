@@ -20,15 +20,18 @@ use rmcp::model::{
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, ServiceExt};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tools::{builtin, CallCtx, CallOutcome, ClaimStatus, Registry, Router};
+use tools::{builtin, CallCtx, CallOutcome, Registry, Router};
 #[cfg(windows)]
 use worker::appcontainer::AppContainerSandbox;
+#[cfg(windows)]
 use worker::sandbox::Sandbox;
-use worker::{EpochHandle, Worker, WorkerConfig};
+#[cfg(windows)]
+use worker::WorkerConfig;
+use worker::{EpochHandle, Worker};
 
 struct WorkerEpochAdapter {
     epoch: Option<EpochHandle>,
@@ -108,6 +111,42 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
+#[cfg(windows)]
+fn build_worker(data_dir: &std::path::Path, session: &str, python: String, script: String) -> Result<Worker, String> {
+    let scratch =
+        PathBuf::from(env("CORE_SCRATCH").ok_or("CORE_SCRATCH must be set when CORE_PYTHON is configured")?);
+    let pycache =
+        PathBuf::from(env("CORE_PYCACHE").ok_or("CORE_PYCACHE must be set when CORE_PYTHON is configured")?);
+    let sandbox: Box<dyn Sandbox> = Box::new(
+        AppContainerSandbox::new(
+            data_dir.to_path_buf(),
+            session,
+            PathBuf::from(&python),
+            PathBuf::from(&script),
+            scratch.clone(),
+            pycache.clone(),
+        )
+        .map_err(|e| format!("AppContainer sandbox setup failed: {e}"))?,
+    );
+    Ok(Worker::new(
+        WorkerConfig {
+            python: PathBuf::from(python),
+            script: PathBuf::from(script),
+            scratch,
+            pycache,
+            startup_timeout: Duration::from_secs(90),
+        },
+        sandbox,
+    ))
+}
+
+#[cfg(not(windows))]
+fn build_worker(_data_dir: &std::path::Path, _session: &str, _python: String, _script: String) -> Result<Worker, String> {
+    let _ = env("CORE_SCRATCH").ok_or("CORE_SCRATCH must be set when CORE_PYTHON is configured")?;
+    let _ = env("CORE_PYCACHE").ok_or("CORE_PYCACHE must be set when CORE_PYTHON is configured")?;
+    Err("AppContainer sandbox requires Windows".to_string())
+}
+
 fn build_router() -> Result<Router, String> {
     let session = env("CORE_SESSION").ok_or("CORE_SESSION is not set")?;
     let data_dir = PathBuf::from(env("CORE_DATA_DIR").ok_or("CORE_DATA_DIR is not set")?);
@@ -115,38 +154,7 @@ fn build_router() -> Result<Router, String> {
 
     let timeout = Duration::from_secs(env("CORE_EVAL_TIMEOUT_S").and_then(|s| s.parse().ok()).unwrap_or(120));
     let worker = match (env("CORE_PYTHON"), env("CORE_WORKER_SCRIPT")) {
-        (Some(python), Some(script)) => {
-            let scratch =
-                PathBuf::from(env("CORE_SCRATCH").ok_or("CORE_SCRATCH must be set when CORE_PYTHON is configured")?);
-            let pycache =
-                PathBuf::from(env("CORE_PYCACHE").ok_or("CORE_PYCACHE must be set when CORE_PYTHON is configured")?);
-            #[cfg(windows)]
-            let sandbox: Box<dyn Sandbox> = Box::new(
-                AppContainerSandbox::new(
-                    data_dir.clone(),
-                    &session,
-                    PathBuf::from(&python),
-                    PathBuf::from(&script),
-                    scratch.clone(),
-                    pycache.clone(),
-                )
-                .map_err(|e| format!("AppContainer sandbox setup failed: {e}"))?,
-            );
-            #[cfg(not(windows))]
-            let sandbox: Box<dyn Sandbox> = {
-                return Err("AppContainer sandbox requires Windows".to_string());
-            };
-            Some(Worker::new(
-                WorkerConfig {
-                    python: PathBuf::from(python),
-                    script: PathBuf::from(script),
-                    scratch,
-                    pycache,
-                    startup_timeout: Duration::from_secs(90),
-                },
-                sandbox,
-            ))
-        }
+        (Some(python), Some(script)) => Some(build_worker(&data_dir, &session, python, script)?),
         _ => None,
     };
     let epoch_handle = worker.as_ref().map(Worker::epoch_handle);
@@ -171,24 +179,7 @@ fn build_router() -> Result<Router, String> {
             Ok(result)
         }),
     );
-    registry.register(
-        builtin::ledger_note_def(),
-        Arc::new(|ctx: &CallCtx<'_>, args: &Value| {
-            let text = args["text"].as_str().ok_or("`text` must be a string")?;
-            let payload = json!({
-                "call_id": ctx.call_id,
-                "author": ctx.caller,
-                "text": text,
-                // Fixed here: a model cannot choose the status of its own note.
-                "status": ClaimStatus::Unverified,
-            });
-            let ledger = ctx.ledger.lock().map_err(|_| "ledger lock poisoned".to_string())?;
-            let seq = ledger
-                .append(ctx.session, "note", tools::EVENT_SCHEMA_VERSION, &payload)
-                .map_err(|e| e.to_string())?;
-            Ok(json!({ "recorded": true, "seq": seq, "status": "unverified" }))
-        }),
-    );
+    registry.register(builtin::ledger_note_def(), builtin::ledger_note_handler());
 
     let approver: Arc<dyn tools::Approver> = match (env("CORE_APPROVAL_ADDR"), env("CORE_SESSION_TOKEN")) {
         (Some(addr), Some(token)) => {

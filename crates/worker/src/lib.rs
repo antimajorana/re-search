@@ -21,10 +21,10 @@ use sandbox::{Contained, Containment, Sandbox};
 use serde_json::{json, Value};
 use std::fmt;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -92,6 +92,7 @@ struct Running {
 }
 
 pub struct Worker {
+    #[cfg_attr(not(windows), allow(dead_code))]
     config: WorkerConfig,
     sandbox: Box<dyn Sandbox>,
     running: Option<Running>,
@@ -148,6 +149,8 @@ impl Worker {
         use sandbox::WorkerLaunch;
         use stage::strip_verbatim;
         use std::collections::BTreeMap;
+        use std::io::{BufRead, BufReader};
+        use std::sync::mpsc;
         use win::{Direction, PipePair};
 
         let err = |e: std::io::Error| WorkerError::Spawn(e.to_string());

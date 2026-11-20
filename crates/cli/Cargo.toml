@@ -11,6 +11,7 @@ name = "re-search"
 path = "src/main.rs"
 
 [dependencies]
+agent = { path = "../agent" }
 ledger = { path = "../ledger" }
 tools = { path = "../tools" }
 worker = { path = "../worker" }

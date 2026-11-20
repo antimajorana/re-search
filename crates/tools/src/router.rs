@@ -89,15 +89,20 @@ impl Router {
         Ok(json!({ "blob": hash, "bytes": text.len() }))
     }
 
-    /// Handle one tool call from `caller`. The caller string must come from
-    /// the channel (who is connected), never from the call's arguments.
-    pub fn call(&self, caller: &str, tool_id: &str, args: &Value) -> CallOutcome {
+    /// Handle one tool call from `caller`, returning `Err` if and only if the
+    /// ledger or blob store could not record a required audit step.
+    ///
+    /// The caller string must come from the channel (who is connected), never
+    /// from the call's arguments.
+    pub fn try_call(&self, caller: &str, tool_id: &str, args: &Value) -> Result<CallOutcome, String> {
         let call_id = random_hex(8);
-        match self.call_inner(caller, tool_id, args, &call_id) {
-            Ok(outcome) => outcome,
-            // Recording failed somewhere: fail closed.
-            Err(e) => CallOutcome::Error(e),
-        }
+        self.call_inner(caller, tool_id, args, &call_id)
+    }
+
+    /// Handle one tool call from `caller`, collapsing ledger failures into
+    /// [`CallOutcome::Error`] for single-call RPC servers.
+    pub fn call(&self, caller: &str, tool_id: &str, args: &Value) -> CallOutcome {
+        self.try_call(caller, tool_id, args).unwrap_or_else(CallOutcome::Error)
     }
 
     fn call_inner(&self, caller: &str, tool_id: &str, args: &Value, call_id: &str) -> Result<CallOutcome, String> {
