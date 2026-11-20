@@ -296,7 +296,9 @@ fn sessions_sse_approval_card_tools_fork_export_and_settings() {
     let created: Value = serde_json::from_slice(&body_c).unwrap();
     let sid = created["id"].as_str().unwrap().to_string();
 
-    let (st_l, _, body_l) = raw_http(port, "GET", "/api/sessions", &[], b"");
+    let cookie_hdr = format!("__research_token={tok}");
+    let cookie = [("Cookie", cookie_hdr.as_str())];
+    let (st_l, _, body_l) = raw_http(port, "GET", "/api/sessions", &cookie, b"");
     assert_eq!(st_l, 200);
     let list: Value = serde_json::from_slice(&body_l).unwrap();
     assert!(list["sessions"].as_array().unwrap().iter().any(|s| s["id"] == sid));
@@ -400,7 +402,7 @@ fn sessions_sse_approval_card_tools_fork_export_and_settings() {
     assert_eq!(up_v["ingested"].as_array().unwrap().len(), 1);
 
     // Workspace list & file read + tex-audit + literature + dag + verify + settings redaction.
-    let (st_ws, _, ws_b) = raw_http(port, "GET", &format!("/api/sessions/{sid}/workspace"), &[], b"");
+    let (st_ws, _, ws_b) = raw_http(port, "GET", &format!("/api/sessions/{sid}/workspace"), &cookie, b"");
     assert_eq!(st_ws, 200);
     let ws_v: Value = serde_json::from_slice(&ws_b).unwrap();
     assert!(ws_v["files"].as_array().unwrap().iter().any(|f| f["path"] == "notes.tex"));
@@ -440,7 +442,7 @@ fn sessions_sse_approval_card_tools_fork_export_and_settings() {
     );
     assert_eq!(st_put, 200);
     assert!(!String::from_utf8_lossy(&put_b).contains(secret_key));
-    let (st_get_set, _, get_set_b) = raw_http(port, "GET", "/api/settings/providers", &[], b"");
+    let (st_get_set, _, get_set_b) = raw_http(port, "GET", "/api/settings/providers", &cookie, b"");
     assert_eq!(st_get_set, 200);
     let set_str = String::from_utf8_lossy(&get_set_b);
     assert!(!set_str.contains(secret_key));
@@ -460,4 +462,96 @@ fn sessions_sse_approval_card_tools_fork_export_and_settings() {
     drop(sse_thread);
     llm.finish();
     lit.finish();
+}
+
+/// Every `/api/` route except `/api/health` refuses a request without the launch credential,
+/// a GET with the cookie (or header token) succeeds, and a mutation with only the cookie is refused.
+#[test]
+fn every_api_route_except_health_requires_credentials() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let ws_dir = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws_dir).unwrap();
+    std::fs::write(ws_dir.join("main.tex"), "\\documentclass{article}\n").unwrap();
+    let srv = start_desktop_server(test_cfg(&data_dir, Some(ws_dir.clone()), None, None)).unwrap();
+    let port = srv.addr.port();
+    let tok = srv.info.token.clone();
+    let cookie_hdr = format!("__research_token={tok}");
+    let cookie = [("Cookie", cookie_hdr.as_str())];
+    let token = [("X-ReSearch-Token", tok.as_str())];
+    let body = serde_json::to_vec(&json!({ "title": "auth", "workspace_root": ws_dir })).unwrap();
+    let (st, _, created) = raw_http(port, "POST", "/api/sessions", &token, &body);
+    assert_eq!(st, 200);
+    let sid = serde_json::from_slice::<Value>(&created).unwrap()["id"].as_str().unwrap().to_string();
+
+    let s = format!("/api/sessions/{sid}");
+    let gets = [
+        "/api/bootstrap".to_string(),
+        "/api/sessions".to_string(),
+        s.clone(),
+        format!("{s}/events"),
+        format!("{s}/workspace"),
+        format!("{s}/workspace/file?path=main.tex"),
+        format!("{s}/dag"),
+        format!("{s}/diff/{sid}"),
+        format!("{s}/sidetalk"),
+        format!("{s}/export?format=tex"),
+        "/api/settings/providers".to_string(),
+        "/api/no-such-route".to_string(),
+    ];
+    let mutations = [
+        ("POST", "/api/sessions".to_string()),
+        ("POST", format!("{s}/messages")),
+        ("POST", format!("{s}/approvals/c-1")),
+        ("POST", format!("{s}/upload")),
+        ("POST", format!("{s}/latex/patch")),
+        ("POST", format!("{s}/tex-audit")),
+        ("POST", format!("{s}/literature")),
+        ("POST", format!("{s}/verify")),
+        ("POST", format!("{s}/fork")),
+        ("POST", format!("{s}/narrate")),
+        ("POST", format!("{s}/sidetalk")),
+        ("PUT", "/api/settings/providers".to_string()),
+        ("DELETE", s.clone()),
+    ];
+    let bad_cookie = [("Cookie", "__research_token=0000")];
+    let bad_token = [("X-ReSearch-Token", "0000")];
+    let cross_site = [("Origin", "http://evil.invalid")];
+    let no_creds: [&[(&str, &str)]; 4] = [&[], &bad_cookie, &bad_token, &cross_site];
+    for path in &gets {
+        for hdrs in no_creds {
+            let (st, _, _) = raw_http(port, "GET", path, hdrs, b"");
+            assert_eq!(st, 401, "GET {path} with {hdrs:?} must be 401");
+        }
+    }
+    for (method, path) in &mutations {
+        for hdrs in no_creds.iter().copied().chain([&cookie[..]]) {
+            let (st, _, _) = raw_http(port, method, path, hdrs, b"{}");
+            assert_eq!(st, 401, "{method} {path} with {hdrs:?} must be 401");
+        }
+    }
+    // Refused mutations had no effect: still one session, no provider file written.
+    let (st, _, list) = raw_http(port, "GET", "/api/sessions", &cookie, b"");
+    assert_eq!(st, 200);
+    assert_eq!(serde_json::from_slice::<Value>(&list).unwrap()["sessions"].as_array().unwrap().len(), 1);
+    assert!(!data_dir.join("providers.json").exists());
+
+    // Health stays open; credentialed reads work with the cookie or the header token.
+    assert_eq!(raw_http(port, "GET", "/api/health", &[], b"").0, 200);
+    for path in gets.iter().filter(|p| !p.ends_with("/events")) {
+        let (st, _, b) = raw_http(port, "GET", path, &cookie, b"");
+        assert!(!matches!(st, 401 | 403), "GET {path} with cookie got {st}: {}", String::from_utf8_lossy(&b));
+    }
+    for path in ["/api/sessions", s.as_str(), "/api/settings/providers"] {
+        assert_eq!(raw_http(port, "GET", path, &token, b"").0, 200, "GET {path} with header token");
+    }
+    // The SSE stream opens with the cookie (read only its status line).
+    let mut sse = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    sse.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    write!(sse, "GET {s}/events HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {cookie_hdr}\r\n\r\n").unwrap();
+    let mut status_line = String::new();
+    BufReader::new(&sse).read_line(&mut status_line).unwrap();
+    assert!(status_line.starts_with("HTTP/1.1 200"), "SSE status: {status_line}");
+    drop(sse);
+    srv.shutdown();
 }

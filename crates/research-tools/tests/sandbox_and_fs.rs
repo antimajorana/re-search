@@ -5,8 +5,10 @@ use ledger::Ledger;
 use research_tools::{
     register_research_tools, research_policy, research_tool_defs, resolve_sources_session_id,
     strip_verbatim_prefix, strip_verbatim_str, validate_session_id, LiteratureEndpoints,
-    ResearchEnv, SandboxError, SandboxRoot, FS_LIST, FS_READ, RESEARCH_POLICY_VERSION,
+    ResearchEnv, SandboxRoot, FS_LIST, FS_READ, RESEARCH_POLICY_VERSION,
 };
+#[cfg(unix)]
+use research_tools::SandboxError;
 use serde_json::json;
 use std::fs;
 use std::path::Path;

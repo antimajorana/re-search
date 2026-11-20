@@ -11,6 +11,7 @@ use serde_json::json;
 use std::fs;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(unix)]
 use std::time::Duration;
 use tempfile::TempDir;
 use tools::approval::{ApprovalReply, ApprovalRequest, Approver};

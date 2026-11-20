@@ -309,8 +309,22 @@ fn export_tex_html_and_reproducible_zip_and_replay_checks() {
     let ledger_doc: Value = serde_json::from_slice(&std::fs::read(extract_dir.join("ledger.json")).unwrap()).unwrap();
     assert_eq!(ledger_doc["head_hash"], head_hash);
 
-    // Run extracted run_all_checks.py if python3 is installed.
-    if let Ok(out) = Command::new("python3").arg("run_all_checks.py").current_dir(&extract_dir).output() {
+    // Replay the extracted run_all_checks.py with the same interpreter the rest of the suite uses
+    // (`RE_SEARCH_PYTHON`, then `RESEARCH_CORE_PYTHON`). A bare `python3` from PATH is not used:
+    // on Windows it can be the Microsoft Store placeholder, which "runs" and then fails.
+    let python = ["RE_SEARCH_PYTHON", "RESEARCH_CORE_PYTHON"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
+    let Some(python) = python else {
+        eprintln!("SKIPPED replay of run_all_checks.py: set RE_SEARCH_PYTHON to run it");
+        return;
+    };
+    let out = Command::new(&python)
+        .arg("run_all_checks.py")
+        .current_dir(&extract_dir)
+        .output()
+        .unwrap_or_else(|e| panic!("failed to start `{python}`: {e}"));
+    {
         assert!(
             out.status.success(),
             "run_all_checks.py failed: stdout={}, stderr={}",

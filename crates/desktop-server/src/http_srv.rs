@@ -123,21 +123,26 @@ fn handle_connection(mut stream: TcpStream, state: Arc<DesktopState>, shutdown: 
         return;
     }
 
-    if method == "GET" && path == "/api/bootstrap" {
-        let ok = state.auth.has_valid_cookie(req.header("cookie"))
+    if path.starts_with("/api/") {
+        // Every API route except `/api/health` needs the launch credential: the
+        // `SameSite=Strict` cookie (what EventSource and download links carry) or the
+        // header token. A cross-site page cannot send either, and another local process
+        // does not have the token, so neither can read sessions or workspace files.
+        let credentialed = state.auth.has_valid_cookie(req.header("cookie"))
             || state
                 .auth
                 .has_valid_header_token(req.header("x-research-token"), req.header("authorization"));
-        if !ok {
+        if !credentialed {
             write_json(&mut stream, 401, json!({ "error": "authentication required" }), &[]);
             return;
         }
-        write_api_res(&mut stream, handle_bootstrap(&state));
-        return;
-    }
-
-    if path.starts_with("/api/") {
-        if matches!(method, "POST" | "PUT" | "DELETE" | "PATCH") {
+        if method == "GET" && path == "/api/bootstrap" {
+            write_api_res(&mut stream, handle_bootstrap(&state));
+            return;
+        }
+        // Mutations additionally need the header token (a cookie alone is not enough)
+        // and, when present, a loopback Origin.
+        if !matches!(method, "GET" | "HEAD") {
             if let Err((st, msg)) = state.auth.authorize_mutation(
                 req.header("origin"),
                 req.header("x-research-token"),

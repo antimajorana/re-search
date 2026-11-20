@@ -8,7 +8,8 @@
 //! the policy's default applies (deny unless stated otherwise).
 //!
 //! Built-in invariants that cannot be configured away: tools of effect class
-//! `execute-code` or `write-workspace` are never allowed without asking a human.
+//! `execute-code`, `write-workspace` or `network-read` are never allowed without
+//! asking a human.
 
 use serde::{Deserialize, Serialize};
 
@@ -174,6 +175,10 @@ pub fn evaluate(policy: &Policy, req: &Request) -> Response {
                 decision = Decision::Ask;
                 reason = "write-workspace is never allowed without human approval";
             }
+            EffectClass::NetworkRead => {
+                decision = Decision::Ask;
+                reason = "network-read is never allowed without asking: the model chooses the query text";
+            }
             _ => {}
         }
     }
@@ -299,7 +304,7 @@ mod tests {
     }
 
     #[test]
-    fn stage6_effect_classes_allow_read_and_network_read_when_configured() {
+    fn stage6_effect_classes_allow_read_but_clamp_network_read_to_ask() {
         assert_eq!(EffectClass::ReadWorkspace.as_str(), "read-workspace");
         assert_eq!(EffectClass::WriteWorkspace.as_str(), "write-workspace");
         assert_eq!(EffectClass::NetworkRead.as_str(), "network-read");
@@ -311,7 +316,13 @@ mod tests {
         let p = policy(vec![r_read, r_net]);
 
         assert_eq!(evaluate(&p, &req("fs_read", EffectClass::ReadWorkspace)).decision, Decision::Allow);
-        assert_eq!(evaluate(&p, &req("arxiv_search", EffectClass::NetworkRead)).decision, Decision::Allow);
+        // An allow rule for network-read is clamped to ask (user decision 2026-11-20: the
+        // model-chosen query text can carry workspace content off the machine).
+        let r = evaluate(&p, &req("arxiv_search", EffectClass::NetworkRead));
+        assert_eq!((r.decision, r.matched_rule.as_deref()), (Decision::Ask, Some("nr")));
         assert_eq!(evaluate(&p, &req("other_net", EffectClass::NetworkEgress)).decision, Decision::Deny);
+        // A deny rule is not weakened by the clamp.
+        let p_deny = policy(vec![rule("d", Match::Any, Decision::Deny)]);
+        assert_eq!(evaluate(&p_deny, &req("arxiv_search", EffectClass::NetworkRead)).decision, Decision::Deny);
     }
 }

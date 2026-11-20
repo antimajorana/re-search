@@ -45,11 +45,13 @@ re-search ui --workspace ./paper --data-dir ./data
 re-search desktop --workspace ./paper --data-dir ./data
 ```
 
+The server listens on `127.0.0.1` only. Every `/api/` route except `/api/health` needs the per-launch token (the cookie set by the launch URL, or the `X-ReSearch-Token` header); mutations need the header. See [THREAT-MODEL.md](THREAT-MODEL.md).
+
 Useful headless/automation flags: `--port PORT`, `--no-open true`, `--print-url-json true`, `--api-base URL`, `--arxiv-base URL`, `--inspire-base URL`, `--crossref-base URL`.
 
 ## CLI Research Mode, Fork, Diff, Export & Verify
 
-Attach `--workspace DIR` (or `--enable-research-tools true`) on `--route api` / `resume` to enable the Stage 6-7 research policy (`v0.3-research`), console unified-diff approvals for `fs_write`/`latex_patch`, pinned conventions, and verifier/calculation guardrails:
+Attach `--workspace DIR` (or `--enable-research-tools true`) on `--route api` / `resume` to enable the Stage 6-7 research policy (`v0.3-research`), console unified-diff approvals for `fs_write`/`latex_patch`, a per-call approval for every model-initiated `arxiv_search`/`literature_search` (showing the query), pinned conventions, and verifier/calculation guardrails:
 
 ```bash
 re-search run --route api --provider anthropic --workspace ./paper --data-dir ./data \

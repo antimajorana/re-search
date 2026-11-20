@@ -16,8 +16,8 @@ fn effect_rule(id: &str, effect: EffectClass, decision: Decision) -> Rule {
 }
 
 /// Policy preset for Stage 6+ research sessions:
-/// - `ObserveLocal`, `ReadWorkspace`, `NetworkRead` => `Allow`
-/// - `WriteWorkspace`, `ExecuteCode` => `Ask` (also hard-clamped in `policy::evaluate`)
+/// - `ObserveLocal`, `ReadWorkspace` => `Allow`
+/// - `WriteWorkspace`, `ExecuteCode`, `NetworkRead` => `Ask` (also hard-clamped in `policy::evaluate`)
 /// - Everything else (`NetworkEgress`, `MutateReversible`, `MutateIrreversible`) => `Deny`
 pub fn research_policy() -> Policy {
     Policy {
@@ -25,7 +25,9 @@ pub fn research_policy() -> Policy {
         rules: vec![
             effect_rule("observe-local-allow", EffectClass::ObserveLocal, Decision::Allow),
             effect_rule("read-workspace-allow", EffectClass::ReadWorkspace, Decision::Allow),
-            effect_rule("network-read-allow", EffectClass::NetworkRead, Decision::Allow),
+            // The engine clamps `network-read` to ask anyway (query text is model-chosen and could
+            // carry workspace content off the machine); the rule states that intent explicitly.
+            effect_rule("network-read-ask", EffectClass::NetworkRead, Decision::Ask),
             effect_rule("write-workspace-ask", EffectClass::WriteWorkspace, Decision::Ask),
             effect_rule("execute-code-ask", EffectClass::ExecuteCode, Decision::Ask),
         ],
@@ -56,7 +58,7 @@ mod tests {
         assert_eq!(p.version, "v0.3-research");
         assert_eq!(evaluate(&p, &req("ledger_note", EffectClass::ObserveLocal)).decision, Decision::Allow);
         assert_eq!(evaluate(&p, &req("fs_read", EffectClass::ReadWorkspace)).decision, Decision::Allow);
-        assert_eq!(evaluate(&p, &req("arxiv_search", EffectClass::NetworkRead)).decision, Decision::Allow);
+        assert_eq!(evaluate(&p, &req("arxiv_search", EffectClass::NetworkRead)).decision, Decision::Ask);
         assert_eq!(evaluate(&p, &req("fs_write", EffectClass::WriteWorkspace)).decision, Decision::Ask);
         assert_eq!(evaluate(&p, &req("sympy_eval", EffectClass::ExecuteCode)).decision, Decision::Ask);
         assert_eq!(evaluate(&p, &req("raw_post", EffectClass::NetworkEgress)).decision, Decision::Deny);

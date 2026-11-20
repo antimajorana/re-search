@@ -1,4 +1,4 @@
-# Threat model (Stage 5: AppContainer isolation, hash-chained ledger, multi-provider loop & verified resume)
+# Threat model (Stages 1–8: AppContainer isolation, hash-chained ledger, multi-provider loop, research tools & loopback desktop UI)
 
 This file says plainly what re:Search currently protects against and what it
 does not. Read the remaining limits before approving anything.
@@ -201,13 +201,31 @@ result.
   `ledger.db`, `blobs/`, or `providers.json`. Archive (`tar.gz`/`zip`) and PDF
   ingestion enforce anti-bomb byte/file/page caps, reject archive symlinks, and
   record `"source.ingested"` `"raw_blob"` digests.
-- **Unconfigurable `write-workspace` unified-diff human approvals.** Both
-  `ExecuteCode` (`sympy_eval`, `latex_compile`) and `WriteWorkspace` (`fs_write`,
-  `latex_patch`) are hard-clamped from `allow` to `ask` in `policy::evaluate`.
+- **Three new effect classes and how the policy treats them.** Stage 6 adds
+  `read-workspace` (`fs_list`, `fs_read`, `doc_ingest`, `tex_audit`),
+  `write-workspace` (`fs_write`, `latex_patch`) and `network-read`
+  (`arxiv_search`, `literature_search`). The research policy `v0.3-research`
+  allows `read-workspace` and `observe-local` without asking, asks for
+  `write-workspace`, `execute-code` (`sympy_eval`, `latex_compile`) and
+  `network-read`, and denies everything else (including `network-egress`).
+- **Unconfigurable human approvals for writes, code and literature queries.**
+  `policy::evaluate` hard-clamps `allow` to `ask` for `execute-code`,
+  `write-workspace` and `network-read`, so no rule or preset can switch these
+  prompts off; a `deny` rule stays `deny`. For `write-workspace`,
   `ConsoleApprover` and `UiApprover` display a unified diff preview
   (`preview_workspace_edit`) and SHA-256 request digest, store pre-write file
   backups in `blobs/` (`"workspace.backup"`), and record `"approval.answered"`
   before modifying any workspace file.
+- **Literature queries ask every time (user decision, 2026-11-20).** The query
+  text of `arxiv_search` / `literature_search` is chosen by the model, so it is
+  a channel by which a manipulated model could carry workspace content to a
+  search host. Every model-initiated call is therefore approved per call
+  (`once` scope; there is no per-session reuse), and the console banner and the
+  desktop approval card show the full arguments, including the query, before
+  anything is sent. A refused call makes no network request (tested). Searches
+  the person types into the desktop UI's literature drawer
+  (`POST /api/sessions/{id}/literature`, token-protected) are human-authored and
+  run without a second prompt.
 - **Allowlisted literature egress & deterministic `tex_audit`.** `arxiv_search`
   and `literature_search` restrict remote hosts to allowlisted HTTPS science
   endpoints (`arxiv.org`, `export.arxiv.org`, `inspirehep.net`,
@@ -222,13 +240,46 @@ result.
   `sidetalk:<id>` without mutating the solver chain; `fork` and `export` verify
   session hash chains before cloning prefixes or writing `.tex`/`.html`/`.zip`
   bundles.
-- **Loopback `127.0.0.1` desktop server & CSRF protection
-  (`crates/desktop-server`).** Binds exclusively to `127.0.0.1` (`std::net` +
-  `httparse`, zero `tokio`), checks `Host` and `Origin` headers, issues a
-  per-launch 256-bit `getrandom` token (`HttpOnly; SameSite=Strict` cookie +
-  `X-ReSearch-Token` header on mutating routes), serves KaTeX `0.19.1` offline,
-  and stores `<data_dir>/providers.json` outside git (`0600` on Unix, redacted on
-  `GET`/`PUT /api/settings/providers`).
+- **Loopback `127.0.0.1` desktop server (`crates/desktop-server`).** `re-search
+  ui` / `desktop` binds exclusively to `127.0.0.1` (`std::net` + `httparse`,
+  zero `tokio`) and serves the UI, an HTTP/JSON API and an SSE event stream.
+  Credentials and checks, per request:
+  - *Host.* Every request must carry a loopback `Host` (`127.0.0.1[:port]` or
+    `localhost[:port]`), which defeats DNS-rebinding pages.
+  - *Launch token.* A per-launch 256-bit `getrandom` token is handed to the
+    browser it opens as `/?token=…`; that page load sets an `HttpOnly;
+    SameSite=Strict` cookie and injects the token into a `<meta>` tag. Without
+    the token (or the cookie) `/` answers 403.
+  - *Reads.* Every `/api/` route except `GET /api/health` (which returns only
+    `ok` and the version) requires the cookie or the `X-ReSearch-Token` /
+    `Authorization: Bearer` header, compared in constant time; otherwise 401.
+    This covers listing sessions, session events and SSE, workspace listings
+    and file contents, the proof DAG, diffs, Side-Talk, exports and provider
+    settings. A cross-site page cannot send the `SameSite=Strict` cookie and
+    has no token, and no CORS headers are sent, so it can neither read these
+    routes nor trigger them blindly; another local process without the token
+    gets 401 as well. A test checks every route without credentials, with a
+    wrong cookie, with a wrong token and with a foreign `Origin`.
+  - *Mutations.* Every non-GET `/api/` request additionally needs the header
+    token (the cookie alone is refused) and, when an `Origin` is present, a
+    loopback `Origin`.
+  - *Side effects of reads.* GET handlers only read: `export` renders
+    `.tex`/`.html`/`.zip` in memory and writes nothing to disk (the CLI
+    `re-search export --out` is what writes files). Opening the ledger can
+    create an empty `ledger.db` in the data directory if none exists.
+  - *Approvals.* Model tool calls that need approval appear as cards in the UI
+    (`UiApprover`), bound to the request digest and recorded in the ledger
+    (fail-closed) before the tool runs; answering needs the header token.
+  - *Provider keys.* Keys are stored in `<data_dir>/providers.json` outside git
+    (`0600` on Unix; on Windows no ACL is set, so the file inherits the data
+    directory's permissions: private under the default
+    `%LOCALAPPDATA%\re-search`, but not if `--data-dir` points at a shared
+    folder). The key is plaintext on disk. `GET`/`PUT
+    /api/settings/providers` return only a redacted view (`configured`,
+    `base_url`, `default_model` per provider, plus UI settings); its type has
+    no key field.
+  - KaTeX `0.19.1` is served offline from the binary; the UI loads nothing
+    from the network.
 
 ## Remaining limits & gaps
 
@@ -281,6 +332,19 @@ result.
   allowlisted literature HTTP calls) execute as the `re-search` user, and any
   uncontained local process running as the same OS user shares access to
   `providers.json`, loopback ports, and environment memory.
+- **Desktop server limits.** The launch token appears once in the URL the
+  browser is opened with (so in that browser's history) and in the page's
+  `<meta>` tag; any program running as you that can read the browser profile
+  or the process memory can obtain it. The server speaks plain HTTP on
+  loopback. A `base_url` typed into provider settings is echoed back
+  unredacted, so do not put credentials in it.
+- **Literature queries go to third parties once approved.** After you approve
+  a query, its text is sent to the search host and recorded in the ledger;
+  read the query before approving.
+- **Symlink escapes are tested on Unix only.** The workspace sandbox's
+  symlink-escape tests are `#[cfg(unix)]`; on Windows the `..`, absolute-path,
+  drive, alternate-data-stream and reserved-name rejections are tested, but
+  symlink and junction escapes are not.
 - **Heuristic & LLM checks are not formal kernel proofs.** `sympy_eval`,
   `check_expression_sanity`, `tex_audit`, and LLM Step/Full Verifiers catch many
   algebraic and citation errors, not formal theorem-prover guarantees.

@@ -23,11 +23,36 @@ use tools::approval::{ApprovalReply, ApprovalRequest, Approver};
 use tools::router::{CallOutcome, Router};
 use tools::Registry;
 
-struct NoAskApprover;
-impl Approver for NoAskApprover {
+/// `(session, tool_id, canonical_args)` of every approval the router asked for.
+static ASKED: Mutex<Vec<(String, String, String)>> = Mutex::new(Vec::new());
+
+/// Approves only `network-read` calls (which the policy always clamps to ask) and records them;
+/// any other approval request means an allow-class tool prompted, which is a bug.
+struct NetworkReadOnlyApprover;
+impl Approver for NetworkReadOnlyApprover {
     fn decide(&self, req: &ApprovalRequest) -> ApprovalReply {
-        panic!("Allow tools must not trigger approval prompt: {}", req.tool_id);
+        assert_eq!(
+            req.effect,
+            policy::EffectClass::NetworkRead,
+            "only network-read tools may trigger an approval prompt here: {}",
+            req.tool_id
+        );
+        ASKED
+            .lock()
+            .unwrap()
+            .push((req.session.clone(), req.tool_id.clone(), req.canonical_args.clone()));
+        ApprovalReply { approved: true, digest: req.digest.clone(), by: "test".into() }
     }
+}
+
+fn asked_for(session: &str) -> Vec<(String, String)> {
+    ASKED
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(s, _, _)| s == session)
+        .map(|(_, t, a)| (t.clone(), a.clone()))
+        .collect()
 }
 
 #[derive(Clone)]
@@ -127,7 +152,7 @@ fn build_targz(files: &[(&str, &[u8])]) -> Vec<u8> {
 fn build_router(env: Arc<ResearchEnv>, session: &str) -> Router {
     let mut reg = Registry::new();
     register_research_tools(&mut reg, env.clone());
-    Router::new(reg, research_policy(), Ledger::open(&env.data_dir).unwrap(), session, Arc::new(NoAskApprover))
+    Router::new(reg, research_policy(), Ledger::open(&env.data_dir).unwrap(), session, Arc::new(NetworkReadOnlyApprover))
 }
 
 #[test]
@@ -225,6 +250,11 @@ fn f7_arxiv_atom_xxe_withdrawn_and_eprint_ingestion() {
         other => panic!("unexpected outcome: {other:?}"),
     };
     assert_eq!(papers.len(), 3);
+    // network-read is clamped to ask: the call prompted once, and the prompt carried the query.
+    let asks = asked_for(session);
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    assert_eq!(asks[0].0, ARXIV_SEARCH);
+    assert!(asks[0].1.contains("Chern-Simons"), "{asks:?}");
     assert_eq!(papers[0]["id"], "2403.09876v3");
     assert_eq!(papers[0]["base_id"], "2403.09876");
     assert_eq!(papers[0]["withdrawn"], false);
@@ -315,6 +345,10 @@ fn f8_literature_search_inspire_crossref_and_s2() {
         }
         other => panic!("unexpected {other:?}"),
     }
+    let asks = asked_for(session);
+    assert_eq!(asks.len(), 2, "each literature_search call asks: {asks:?}");
+    assert!(asks.iter().all(|(t, _)| t == LITERATURE_SEARCH));
+    assert!(asks[0].1.contains("Maldacena") && asks[1].1.contains("hydride"), "{asks:?}");
 
     let ldg = Ledger::open(&data_dir).unwrap();
     let s2 = run_literature_search(
@@ -446,4 +480,30 @@ fn f10_check_expression_sanity_pure_rust_and_python_module_syntax() {
         "lhs": r"\frac{x}{y", "rhs": "x/y"
     })).unwrap();
     assert!(matches!(bad_delims, CallOutcome::Ok(ref v) if v["ok"] == false && v["delimiter_balanced"] == false));
+}
+
+/// Negative control for the network-read clamp: a refused search never reaches the network.
+#[test]
+fn network_read_refused_by_human_makes_no_request() {
+    struct RefuseAll;
+    impl Approver for RefuseAll {
+        fn decide(&self, req: &ApprovalRequest) -> ApprovalReply {
+            ApprovalReply { approved: false, digest: req.digest.clone(), by: "test".into() }
+        }
+    }
+    let srv = MockHttpServer::start(|_, _| MockResp::not_found());
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let env = Arc::new(ResearchEnv::new(&data_dir).with_endpoints(LiteratureEndpoints::loopback_mock(&srv.base_url).unwrap()));
+    let mut reg = Registry::new();
+    register_research_tools(&mut reg, env.clone());
+    let router = Router::new(reg, research_policy(), Ledger::open(&data_dir).unwrap(), "s-refuse01", Arc::new(RefuseAll));
+    for (tool, args) in [
+        (ARXIV_SEARCH, json!({"query": "secret workspace text"})),
+        (LITERATURE_SEARCH, json!({"source": "crossref", "query": "secret workspace text"})),
+    ] {
+        let out = router.try_call("agent:test", tool, &args).unwrap();
+        assert!(matches!(out, CallOutcome::Denied(_)), "{tool}: {out:?}");
+    }
+    assert!(srv.seen_paths.lock().unwrap().is_empty(), "a refused search must not touch the network");
 }
