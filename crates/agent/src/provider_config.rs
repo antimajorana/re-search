@@ -148,6 +148,9 @@ impl ProviderKeyStore {
 
     pub fn set_base_url(&mut self, provider: ProviderKind, url: Option<String>) -> Result<(), String> {
         let cleaned = url.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        if let Some(u) = &cleaned {
+            base_url_is_safe(u)?;
+        }
         let entry = self
             .providers
             .entry(provider.cli_name().to_string())
@@ -177,7 +180,8 @@ impl ProviderKeyStore {
                 name.to_string(),
                 RedactedProviderEntry {
                     configured: entry.and_then(|e| e.api_key.as_deref()).is_some_and(|k| !k.is_empty()),
-                    base_url: entry.and_then(|e| e.base_url.clone()),
+                    // A value that predates the check (or was edited by hand) is not echoed.
+                    base_url: entry.and_then(|e| e.base_url.clone()).filter(|u| base_url_is_safe(u).is_ok()),
                     default_model: entry.and_then(|e| e.default_model.clone()),
                 },
             );
@@ -186,5 +190,65 @@ impl ProviderKeyStore {
             providers,
             roles: self.roles.clone(),
         }
+    }
+}
+
+/// The base URL is shown back unredacted by the settings API, so it must not be able to carry
+/// a secret: an explicit `http://` or `https://` scheme, no `user:pass@` part, no query string,
+/// no fragment, no backslashes, whitespace or control characters. The message never echoes it.
+fn base_url_is_safe(u: &str) -> Result<(), String> {
+    let rest = u
+        .strip_prefix("https://")
+        .or_else(|| u.strip_prefix("http://"))
+        .ok_or("base URL must start with `https://` or `http://`")?;
+    if rest.split('/').next().unwrap_or("").is_empty() {
+        return Err("base URL has no host".into());
+    }
+    if u.contains('@') || u.contains('?') || u.contains('#') || u.contains('\\') {
+        return Err(
+            "base URL must not contain credentials (`user@`), a query string, a fragment or backslashes; put the key in the API key field"
+                .into(),
+        );
+    }
+    if u.bytes().any(|b| b <= 0x20 || b == 0x7f) {
+        return Err("base URL contains whitespace or control characters".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_url_must_not_carry_secrets_on_write_or_read() {
+        let mut store = ProviderKeyStore::default();
+        for bad in [
+            "https://user:secret@example.org/v1",
+            "https:/user:secret@example.org/v1",
+            "//user:secret@example.org/v1",
+            "https:\\/user:secret@example.org",
+            "https://example.org/v1?key=secret",
+            "https://example.org/v1#secret",
+            "https://example.org/a@b",
+            "example.org/v1",
+            "https:///v1",
+            "https://example.org/v 1",
+        ] {
+            let err = store.set_base_url(ProviderKind::OpenAi, Some(bad.to_string())).unwrap_err();
+            assert!(!err.contains("secret"), "error must not echo the URL: {err}");
+        }
+        for good in ["https://example.org/v1", "http://127.0.0.1:11434/v1", "https://[::1]:8443"] {
+            store.set_base_url(ProviderKind::OpenAi, Some(good.to_string())).unwrap();
+        }
+        store.set_base_url(ProviderKind::OpenAi, None).unwrap();
+
+        // A bad value already on disk is not echoed by the redacted view.
+        let stored: ProviderKeyStore = serde_json::from_str(
+            r#"{"providers":{"openai":{"base_url":"https://user:secret@example.org/v1"}}}"#,
+        )
+        .unwrap();
+        let view = serde_json::to_string(&stored.redacted_view()).unwrap();
+        assert!(!view.contains("secret"), "{view}");
     }
 }

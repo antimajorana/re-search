@@ -1,6 +1,6 @@
 //! Tests-first suite for Stage 7 research guardrails (F11), stateless verifiers (F12),
 //! strategist/narrator/sidetalk (F13), role presets & 0600 provider config, and
-//! router-policy-aware runner/resume (`v0.2` and `v0.3-research`).
+//! router-policy-aware runner/resume (`v0.2` and `v0.4-research`).
 
 mod support;
 

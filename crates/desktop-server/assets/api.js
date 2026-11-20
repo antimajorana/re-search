@@ -1,5 +1,6 @@
 // Loopback REST + CSRF auth client & SSE EventSource plumbing for re:Search desktop server.
 let csrfToken = '';
+const TOKEN_STORAGE_KEY = 're-search-token';
 
 export function getCsrfToken() {
   return csrfToken;
@@ -11,11 +12,9 @@ export async function initAuth() {
   const params = new URLSearchParams(window.location.search);
   const queryToken = (params.get('token') || '').trim();
 
-  if (metaToken) {
-    csrfToken = metaToken;
-  } else if (queryToken) {
-    csrfToken = queryToken;
-  }
+  // Only the server-validated value from the <meta> tag is trusted; the raw query value is
+  // never used as a credential (it is only stripped from the address bar below).
+  csrfToken = metaToken;
 
   if (queryToken) {
     params.delete('token');
@@ -24,15 +23,16 @@ export async function initAuth() {
     window.history.replaceState(null, '', nextUrl);
   }
 
-  if (!csrfToken) {
-    try {
-      const boot = await rawJson('GET', '/api/bootstrap');
-      if (boot && typeof boot.token === 'string' && boot.token.trim()) {
-        csrfToken = boot.token.trim();
-      }
-    } catch {
-      // Cookie-only or unbootstrapped health probe fallback
+  // The server writes the token into the page only for the launch URL. Keep it in
+  // sessionStorage (scoped to this origin, port included, and to this tab) so a reload works.
+  try {
+    if (csrfToken) {
+      window.sessionStorage.setItem(TOKEN_STORAGE_KEY, csrfToken);
+    } else {
+      csrfToken = (window.sessionStorage.getItem(TOKEN_STORAGE_KEY) || '').trim();
     }
+  } catch {
+    // sessionStorage unavailable: the token lives only for this page load.
   }
   return csrfToken;
 }

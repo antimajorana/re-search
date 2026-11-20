@@ -269,14 +269,14 @@ impl DesktopState {
         &self,
         provider: ProviderKind,
         model: &str,
-        api_base_override: Option<&str>,
     ) -> Result<Box<dyn Transport>, String> {
         let store = ProviderKeyStore::load_from_data_dir(&self.cfg.data_dir).unwrap_or_default();
-        let base_url = api_base_override
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .or_else(|| self.cfg.api_base_override.clone())
+        // The base URL comes only from launch configuration or saved settings, never from a
+        // request body: the stored provider key is sent to whatever host this names.
+        let base_url = self
+            .cfg
+            .api_base_override
+            .clone()
             .or_else(|| {
                 store
                     .providers

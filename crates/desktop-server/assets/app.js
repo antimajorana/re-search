@@ -80,7 +80,17 @@ async function boot() {
     },
   });
 
-  await api.initAuth();
+  const launchToken = await api.initAuth();
+  if (!launchToken) {
+    // Opened without the launch token (new tab, bookmark, typed URL): every API call would be
+    // refused. Say so instead of showing an app that looks empty.
+    document.body.innerHTML =
+      '<div style="max-width:34rem;margin:18vh auto;padding:0 1.5rem;font:16px/1.5 system-ui,sans-serif">' +
+      '<h1 style="font-size:1.4rem">This tab has no launch token</h1>' +
+      '<p>re:Search only talks to the tab it opened. Close this tab and start re:Search again ' +
+      '(<code>re-search desktop</code> or the Start menu shortcut), or switch back to the window it opened.</p></div>';
+    return;
+  }
   await checkHealthAndSettings();
   await refreshSessionList();
 

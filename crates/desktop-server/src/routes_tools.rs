@@ -383,7 +383,7 @@ pub fn handle_narrate(state: &DesktopState, session_id: &str, body: &[u8]) -> Ap
         .map(|m| provider.resolve_model(m))
         .unwrap_or_else(|| provider.default_model().to_string());
     let transport = state
-        .build_transport(provider, &model, val.get("api_base").and_then(Value::as_str))
+        .build_transport(provider, &model)
         .map_err(bad)?;
     let ledger = state.open_ledger().map_err(internal)?;
     let report = narrate_session(&*transport, &ledger, session_id, &model).map_err(bad)?;
@@ -436,7 +436,7 @@ pub fn handle_post_sidetalk(state: &DesktopState, session_id: &str, body: &[u8])
         .map(|m| provider.resolve_model(m))
         .unwrap_or_else(|| provider.default_model().to_string());
     let transport = state
-        .build_transport(provider, &model, val.get("api_base").and_then(Value::as_str))
+        .build_transport(provider, &model)
         .map_err(bad)?;
     let env = state.research_env_for_session(session_id).map_err(bad)?;
     let ledger = state.open_ledger().map_err(internal)?;

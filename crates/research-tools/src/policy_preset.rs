@@ -1,8 +1,8 @@
-//! Research policy preset (`v0.3-research`) for workspace, LaTeX, and literature tools.
+//! Research policy preset (`v0.4-research`) for workspace, LaTeX, and literature tools.
 
 use policy::{Decision, EffectClass, Match, Policy, Rule};
 
-pub const RESEARCH_POLICY_VERSION: &str = "v0.3-research";
+pub const RESEARCH_POLICY_VERSION: &str = "v0.4-research";
 
 fn effect_rule(id: &str, effect: EffectClass, decision: Decision) -> Rule {
     Rule {
@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn research_policy_decisions_and_serde_kebab_case() {
         let p = research_policy();
-        assert_eq!(p.version, "v0.3-research");
+        assert_eq!(p.version, "v0.4-research");
         assert_eq!(evaluate(&p, &req("ledger_note", EffectClass::ObserveLocal)).decision, Decision::Allow);
         assert_eq!(evaluate(&p, &req("fs_read", EffectClass::ReadWorkspace)).decision, Decision::Allow);
         assert_eq!(evaluate(&p, &req("arxiv_search", EffectClass::NetworkRead)).decision, Decision::Ask);

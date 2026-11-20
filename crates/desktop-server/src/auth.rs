@@ -1,25 +1,44 @@
-//! Per-launch 256-bit loopback token, `Host`/`Origin` validation,
-//! `HttpOnly; SameSite=Strict` cookie, and CSRF token verification.
+//! Per-launch 256-bit loopback token, `Host`/`Origin` validation, and a separate
+//! `HttpOnly; SameSite=Strict` stream cookie.
+//!
+//! Two independent secrets are issued per launch:
+//! - the **token**, sent by the UI as `X-ReSearch-Token` (or `Authorization: Bearer`). It
+//!   authorizes every `/api/` route and is the only credential accepted for mutations.
+//! - the **stream cookie**, for the two things a browser cannot attach a header to: the
+//!   `EventSource` stream and export downloads. It is never valid as the token, and the
+//!   page is not re-issued the token for it. Browsers send a `127.0.0.1` cookie to every
+//!   port on that host, so a cookie captured by another local service must not be enough
+//!   to mutate anything or to list sessions.
 
 use std::fmt::Write as _;
 
-pub const COOKIE_NAME: &str = "__research_token";
+pub const COOKIE_PREFIX: &str = "__research_stream_";
 
 #[derive(Debug, Clone)]
 pub struct AuthGuard {
     token: String,
+    cookie_secret: String,
     port: u16,
+}
+
+fn random_hex_256() -> Result<String, String> {
+    let mut raw = [0u8; 32];
+    getrandom::getrandom(&mut raw).map_err(|e| format!("CSPRNG failed: {e}"))?;
+    let mut out = String::with_capacity(64);
+    for b in raw {
+        let _ = write!(out, "{b:02x}");
+    }
+    Ok(out)
 }
 
 impl AuthGuard {
     pub fn new(port: u16) -> Result<Self, String> {
-        let mut raw = [0u8; 32];
-        getrandom::getrandom(&mut raw).map_err(|e| format!("CSPRNG failed: {e}"))?;
-        let mut token = String::with_capacity(64);
-        for b in raw {
-            let _ = write!(token, "{b:02x}");
-        }
-        Ok(Self { token, port })
+        Ok(Self { token: random_hex_256()?, cookie_secret: random_hex_256()?, port })
+    }
+
+    /// Cookie name, unique per port so two running instances do not overwrite each other.
+    pub fn cookie_name(&self) -> String {
+        format!("{COOKIE_PREFIX}{}", self.port)
     }
 
     pub fn token(&self) -> &str {
@@ -31,7 +50,7 @@ impl AuthGuard {
     }
 
     pub fn set_cookie_header(&self) -> String {
-        format!("{COOKIE_NAME}={}; HttpOnly; SameSite=Strict; Path=/", self.token)
+        format!("{}={}; HttpOnly; SameSite=Strict; Path=/", self.cookie_name(), self.cookie_secret)
     }
 
     pub fn inject_csrf_meta(&self, html: &str) -> String {
@@ -78,9 +97,10 @@ impl AuthGuard {
         let Some(raw) = cookie_hdr else {
             return false;
         };
+        let name = self.cookie_name();
         for pair in raw.split(';') {
             if let Some((k, v)) = pair.trim().split_once('=') {
-                if k.trim() == COOKIE_NAME && ct_eq(v.trim(), &self.token) {
+                if k.trim() == name && ct_eq(v.trim(), &self.cookie_secret) {
                     return true;
                 }
             }
@@ -118,18 +138,49 @@ impl AuthGuard {
         false
     }
 
-    pub fn authorize_mutation(
-        &self,
-        origin_hdr: Option<&str>,
-        token_hdr: Option<&str>,
-        auth_hdr: Option<&str>,
-    ) -> Result<(), (u16, &'static str)> {
-        self.validate_origin(origin_hdr)?;
-        if !self.has_valid_header_token(token_hdr, auth_hdr) {
-            return Err((401, "missing or invalid X-ReSearch-Token"));
-        }
-        Ok(())
+    /// `GET /api/sessions/{id}/events` and `.../export`: the only routes the cookie opens.
+    fn is_cookie_route(path: &str) -> bool {
+        let segs: Vec<&str> = path.split('/').collect();
+        matches!(segs.as_slice(), ["", "api", "sessions", id, "events" | "export"] if !id.is_empty())
     }
+
+    /// The whole credential rule for `/api/` routes other than `/api/health`.
+    ///
+    /// - A valid header token authorizes any route; a non-GET/HEAD request must also carry a
+    ///   loopback `Origin` when it carries one at all.
+    /// - Without the token, only a `GET` of a cookie route with the valid stream cookie is
+    ///   accepted, and only if the browser does not mark it as coming from another origin
+    ///   (`Sec-Fetch-Site`, when present, must be `same-origin`; `Origin`, when present, ours).
+    pub fn authorize_api(&self, req: &ApiCredentials<'_>) -> Result<(), (u16, &'static str)> {
+        if self.has_valid_header_token(req.token_hdr, req.auth_hdr) {
+            if !matches!(req.method, "GET" | "HEAD") {
+                self.validate_origin(req.origin)?;
+            }
+            return Ok(());
+        }
+        let same_origin = req.sec_fetch_site.map(str::trim).is_none_or(|v| v.eq_ignore_ascii_case("same-origin"));
+        if req.method == "GET"
+            && Self::is_cookie_route(req.path)
+            && self.has_valid_cookie(req.cookie)
+            && same_origin
+            && self.validate_origin(req.origin).is_ok()
+        {
+            return Ok(());
+        }
+        Err((401, "authentication required: missing or invalid X-ReSearch-Token"))
+    }
+}
+
+/// What `authorize_api` looks at, taken from one request.
+#[derive(Debug, Clone, Copy)]
+pub struct ApiCredentials<'a> {
+    pub method: &'a str,
+    pub path: &'a str,
+    pub cookie: Option<&'a str>,
+    pub token_hdr: Option<&'a str>,
+    pub auth_hdr: Option<&'a str>,
+    pub origin: Option<&'a str>,
+    pub sec_fetch_site: Option<&'a str>,
 }
 
 fn ct_eq(a: &str, b: &str) -> bool {

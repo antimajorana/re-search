@@ -100,6 +100,26 @@ impl LiteratureEndpoints {
     }
 }
 
+/// Canonical form of a path that may not exist yet: canonicalize the deepest existing ancestor
+/// (resolving symlinks and junctions there) and re-append the missing tail.
+fn canonicalize_lenient(path: &Path) -> PathBuf {
+    let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut tail = Vec::new();
+    let mut cur = abs.as_path();
+    loop {
+        if let Ok(canon) = std::fs::canonicalize(cur) {
+            return tail.iter().rev().fold(canon, |acc, seg| acc.join(seg));
+        }
+        match (cur.parent(), cur.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_os_string());
+                cur = parent;
+            }
+            _ => return abs,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResearchEnv {
     pub data_dir: PathBuf,
@@ -125,8 +145,22 @@ impl ResearchEnv {
         workspace_root: impl AsRef<Path>,
     ) -> Result<Self, SandboxError> {
         let canonical = WorkspaceSandbox::canonicalize_existing_dir(workspace_root.as_ref())?;
+        let data_dir = data_dir.into();
+        // `read-workspace` tools run without asking, so the workspace must never give the model
+        // a path to `providers.json` (plaintext keys), `ledger.db` or `blobs/`: refuse a
+        // workspace that is the data directory, contains it, or lies inside it.
+        let canon_data = canonicalize_lenient(&data_dir);
+        if WorkspaceSandbox::is_same_or_inside(&canonical, &canon_data)
+            || WorkspaceSandbox::is_same_or_inside(&canon_data, &canonical)
+        {
+            return Err(SandboxError::EscapesRoot(format!(
+                "workspace `{}` overlaps the re:Search data directory `{}`; choose a workspace that neither contains it nor lies inside it",
+                strip_verbatim_prefix(&canonical).display(),
+                strip_verbatim_prefix(&canon_data).display()
+            )));
+        }
         Ok(Self {
-            data_dir: data_dir.into(),
+            data_dir,
             workspace_root: Some(canonical),
             network_endpoints: LiteratureEndpoints::default(),
             latex_compiler_override: None,

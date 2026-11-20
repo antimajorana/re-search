@@ -91,6 +91,8 @@ pub fn start_desktop_server(cfg: DesktopConfig) -> Result<RunningDesktopServer, 
                 ws.display()
             ));
         }
+        // Fail the launch, not each later request, if the workspace overlaps the data directory.
+        research_tools::ResearchEnv::with_workspace(cfg.data_dir.clone(), ws).map_err(|e| e.to_string())?;
     }
 
     let listener = TcpListener::bind(("127.0.0.1", cfg.port))

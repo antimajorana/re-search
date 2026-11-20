@@ -1,8 +1,9 @@
 //! Multi-threaded HTTP/1.1 loopback parser, auth dispatcher, and route table.
 
 use crate::assets::{lookup_asset, INDEX_HTML};
+use crate::auth::ApiCredentials;
 use crate::routes_session::{
-    handle_bootstrap, handle_create_session, handle_diff, handle_fork, handle_get_session,
+    handle_create_session, handle_diff, handle_fork, handle_get_session,
     handle_get_settings, handle_health, handle_list_sessions, handle_post_approval,
     handle_post_message, handle_put_settings, handle_sse_stream,
 };
@@ -68,7 +69,8 @@ fn handle_connection(mut stream: TcpStream, state: Arc<DesktopState>, shutdown: 
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(READ_TIMEOUT));
 
-    let req = match read_http_request(&mut stream) {
+    // Headers only: the body (up to 60 MiB) is read after the Host and credential checks.
+    let (mut req, content_length) = match read_http_head(&mut stream) {
         Ok(r) => r,
         Err((status, msg)) => {
             write_json(&mut stream, status, json!({ "error": msg }), &[]);
@@ -81,8 +83,10 @@ fn handle_connection(mut stream: TcpStream, state: Arc<DesktopState>, shutdown: 
         return;
     }
 
-    let path = req.path.as_str();
-    let method = req.method.as_str();
+    let path = req.path.clone();
+    let path = path.as_str();
+    let method = req.method.clone();
+    let method = method.as_str();
 
     if method == "GET" && (path == "/" || path == "/index.html") {
         let valid_query = state.auth.validate_query_token(req.raw_query.as_deref());
@@ -91,14 +95,24 @@ fn handle_connection(mut stream: TcpStream, state: Arc<DesktopState>, shutdown: 
             write_json(&mut stream, 403, json!({ "error": "invalid or missing launch token" }), &[]);
             return;
         }
-        let html = state.auth.inject_csrf_meta(INDEX_HTML);
+        // The token is written into the page only for a valid `?token=` launch URL. A
+        // reload carries just the stream cookie and gets the page without the token (the UI
+        // keeps it in per-origin sessionStorage), so the cookie can never be traded for it.
+        let html = if valid_query { state.auth.inject_csrf_meta(INDEX_HTML) } else { INDEX_HTML.to_string() };
         let set_cookie = state.auth.set_cookie_header();
         write_bytes(
             &mut stream,
             200,
             "text/html; charset=utf-8",
             html.as_bytes(),
-            &[("Set-Cookie", set_cookie.as_str()), ("Cache-Control", "no-store")],
+            &[
+                ("Set-Cookie", set_cookie.as_str()),
+                ("Cache-Control", "no-store"),
+                ("Referrer-Policy", "no-referrer"),
+                // Never render inside another page's frame (a page on another local port is same-site).
+                ("X-Frame-Options", "DENY"),
+                ("Content-Security-Policy", "frame-ancestors 'none'"),
+            ],
         );
         return;
     }
@@ -124,33 +138,25 @@ fn handle_connection(mut stream: TcpStream, state: Arc<DesktopState>, shutdown: 
     }
 
     if path.starts_with("/api/") {
-        // Every API route except `/api/health` needs the launch credential: the
-        // `SameSite=Strict` cookie (what EventSource and download links carry) or the
-        // header token. A cross-site page cannot send either, and another local process
-        // does not have the token, so neither can read sessions or workspace files.
-        let credentialed = state.auth.has_valid_cookie(req.header("cookie"))
-            || state
-                .auth
-                .has_valid_header_token(req.header("x-research-token"), req.header("authorization"));
-        if !credentialed {
-            write_json(&mut stream, 401, json!({ "error": "authentication required" }), &[]);
+        // Every API route except `/api/health` needs the launch token in a header; the stream
+        // cookie opens only the SSE stream and export downloads (see `AuthGuard::authorize_api`).
+        let creds = ApiCredentials {
+            method,
+            path,
+            cookie: req.header("cookie"),
+            token_hdr: req.header("x-research-token"),
+            auth_hdr: req.header("authorization"),
+            origin: req.header("origin"),
+            sec_fetch_site: req.header("sec-fetch-site"),
+        };
+        if let Err((st, msg)) = state.auth.authorize_api(&creds) {
+            write_json(&mut stream, st, json!({ "error": msg }), &[]);
+            drain_refused(&mut stream);
             return;
         }
-        if method == "GET" && path == "/api/bootstrap" {
-            write_api_res(&mut stream, handle_bootstrap(&state));
+        if let Err((st, msg)) = read_http_body(&mut stream, &mut req, content_length) {
+            write_json(&mut stream, st, json!({ "error": msg }), &[]);
             return;
-        }
-        // Mutations additionally need the header token (a cookie alone is not enough)
-        // and, when present, a loopback Origin.
-        if !matches!(method, "GET" | "HEAD") {
-            if let Err((st, msg)) = state.auth.authorize_mutation(
-                req.header("origin"),
-                req.header("x-research-token"),
-                req.header("authorization"),
-            ) {
-                write_json(&mut stream, st, json!({ "error": msg }), &[]);
-                return;
-            }
         }
         dispatch_api(stream, &state, &shutdown, &req);
         return;
@@ -259,7 +265,9 @@ fn dispatch_api(
     }
 }
 
-fn read_http_request(stream: &mut TcpStream) -> Result<ParsedRequest, (u16, String)> {
+/// Reads and parses the request line and headers. `body` holds whatever bytes of the body
+/// arrived with them; `read_http_body` fetches the rest once the request is authorized.
+fn read_http_head(stream: &mut TcpStream) -> Result<(ParsedRequest, usize), (u16, String)> {
     let mut buf = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
     let header_end = loop {
@@ -309,6 +317,26 @@ fn read_http_request(stream: &mut TcpStream) -> Result<ParsedRequest, (u16, Stri
     }
 
     let mut body = buf[hdr_len..].to_vec();
+    body.truncate(content_length);
+    Ok((
+        ParsedRequest {
+            method,
+            path,
+            raw_query,
+            query,
+            headers,
+            body,
+        },
+        content_length,
+    ))
+}
+
+fn read_http_body(
+    stream: &mut TcpStream,
+    req: &mut ParsedRequest,
+    content_length: usize,
+) -> Result<(), (u16, String)> {
+    let body = &mut req.body;
     while body.len() < content_length {
         let need = (content_length - body.len()).min(65_536);
         let mut tmp = vec![0u8; need];
@@ -319,15 +347,29 @@ fn read_http_request(stream: &mut TcpStream) -> Result<ParsedRequest, (u16, Stri
         body.extend_from_slice(&tmp[..n]);
     }
     body.truncate(content_length);
+    Ok(())
+}
 
-    Ok(ParsedRequest {
-        method,
-        path,
-        raw_query,
-        query,
-        headers,
-        body,
-    })
+/// After refusing a request whose body was not read: stop sending, then discard what the
+/// client is still writing so it can read the refusal instead of seeing a connection reset.
+/// Bounded in bytes (256 KiB) and in total time (3 s), so an unauthenticated peer cannot hold
+/// the thread by trickling; a larger refused upload ends in a reset.
+fn drain_refused(stream: &mut TcpStream) {
+    const BUDGET: Duration = Duration::from_secs(3);
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let started = std::time::Instant::now();
+    let mut sink = [0u8; 16 * 1024];
+    let mut left = 256 * 1024usize;
+    while left > 0 {
+        let Some(remaining) = BUDGET.checked_sub(started.elapsed()).filter(|d| !d.is_zero()) else {
+            break;
+        };
+        let _ = stream.set_read_timeout(Some(remaining));
+        match stream.read(&mut sink) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => left = left.saturating_sub(n),
+        }
+    }
 }
 
 fn find_header_end(buf: &[u8]) -> Option<usize> {

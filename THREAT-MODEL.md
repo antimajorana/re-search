@@ -197,14 +197,23 @@ result.
 - **Workspace path sandboxing & bounded ingestion (`crates/research-tools`).**
   `WorkspaceSandbox` canonicalizes paths strictly inside the attached
   `workspace_root` and `sessions/<id>/sources`, rejecting `..`, NUL bytes,
-  alternate data streams, symlinks escaping root, and writes targeting
-  `ledger.db`, `blobs/`, or `providers.json`. Archive (`tar.gz`/`zip`) and PDF
+  alternate data streams and symlinks escaping root. The sandbox has no
+  per-file deny-list; instead `ResearchEnv::with_workspace` refuses to attach a
+  workspace that is this launch's data directory, contains it, or lies inside
+  it, so that launch's `providers.json`, `ledger.db` and `blobs/` are not
+  under its workspace root. CLI `--workspace`, the MCP server and the desktop
+  server (at launch and on `POST /api/sessions`) all go through it; the check
+  itself and the desktop route are tested. It compares against the data
+  directory in use only: a workspace containing *another* re:Search data
+  directory (for example the default `%LOCALAPPDATA%\re-search` while
+  running with `--data-dir` elsewhere) is not refused. Archive
+  (`tar.gz`/`zip`) and PDF
   ingestion enforce anti-bomb byte/file/page caps, reject archive symlinks, and
   record `"source.ingested"` `"raw_blob"` digests.
 - **Three new effect classes and how the policy treats them.** Stage 6 adds
   `read-workspace` (`fs_list`, `fs_read`, `doc_ingest`, `tex_audit`),
   `write-workspace` (`fs_write`, `latex_patch`) and `network-read`
-  (`arxiv_search`, `literature_search`). The research policy `v0.3-research`
+  (`arxiv_search`, `literature_search`). The research policy `v0.4-research`
   allows `read-workspace` and `observe-local` without asking, asks for
   `write-workspace`, `execute-code` (`sympy_eval`, `latex_compile`) and
   `network-read`, and denies everything else (including `network-egress`).
@@ -246,23 +255,43 @@ result.
   Credentials and checks, per request:
   - *Host.* Every request must carry a loopback `Host` (`127.0.0.1[:port]` or
     `localhost[:port]`), which defeats DNS-rebinding pages.
-  - *Launch token.* A per-launch 256-bit `getrandom` token is handed to the
-    browser it opens as `/?token=…`; that page load sets an `HttpOnly;
-    SameSite=Strict` cookie and injects the token into a `<meta>` tag. Without
-    the token (or the cookie) `/` answers 403.
-  - *Reads.* Every `/api/` route except `GET /api/health` (which returns only
-    `ok` and the version) requires the cookie or the `X-ReSearch-Token` /
+  - *Two secrets per launch.* A 256-bit `getrandom` **token** and a separate
+    256-bit **stream cookie** value. The browser is opened at `/?token=…`;
+    only that load gets the token written into the page (`<meta>` tag), and it
+    sets the `HttpOnly; SameSite=Strict` cookie `__research_stream_<port>`.
+    The UI removes the token from the address bar and keeps it in
+    `sessionStorage` (per origin, port included, per tab). A reload carries
+    only the cookie and is served the page *without* the token, so the cookie
+    can never be exchanged for the token; `/` without either answers 403.
+  - *Every `/api/` route except `GET /api/health`* (which returns only `ok`
+    and the version) requires the token in the `X-ReSearch-Token` or
     `Authorization: Bearer` header, compared in constant time; otherwise 401.
-    This covers listing sessions, session events and SSE, workspace listings
-    and file contents, the proof DAG, diffs, Side-Talk, exports and provider
-    settings. A cross-site page cannot send the `SameSite=Strict` cookie and
-    has no token, and no CORS headers are sent, so it can neither read these
-    routes nor trigger them blindly; another local process without the token
-    gets 401 as well. A test checks every route without credentials, with a
-    wrong cookie, with a wrong token and with a foreign `Origin`.
-  - *Mutations.* Every non-GET `/api/` request additionally needs the header
-    token (the cookie alone is refused) and, when an `Origin` is present, a
-    loopback `Origin`.
+    This covers listing sessions, session contents, workspace listings and file
+    contents, the proof DAG, diffs, Side-Talk, provider settings and all
+    mutations. Credentials are checked from the request headers before any
+    body is read.
+  - *What the cookie opens.* Only `GET /api/sessions/{id}/events` (SSE) and
+    `GET /api/sessions/{id}/export`, the two requests a browser cannot attach
+    a header to, and only when the browser does not mark the request as coming
+    from elsewhere: `Sec-Fetch-Site`, when present, must be `same-origin`, and
+    `Origin`, when present, must be this server. Browsers send a `127.0.0.1`
+    cookie to *every* port on that host, so another local web service can
+    capture it; with it alone that service cannot list sessions, browse the
+    workspace, obtain the token or mutate anything. A non-browser client
+    replaying the cookie could read the event stream or an export of a
+    session whose id it already knows (ids created by re:Search carry 64
+    random bits); those carry what the session touched: prompts, tool
+    arguments and results, and diff previews of workspace files.
+  - *Framing.* The page is served with `X-Frame-Options: DENY` and
+    `frame-ancestors 'none'`. A tab opened without the launch token (new tab,
+    bookmark) shows a notice instead of the app.
+  - *Mutations.* Every non-GET request needs the header token and, when an
+    `Origin` is present, this server's own origin. No CORS headers are sent,
+    so a page on any other origin can neither set the header nor read a
+    response; a cross-site page cannot send the cookie either.
+  - *No request-supplied provider endpoint.* The base URL a provider call (and
+    with it the provider key) goes to comes only from launch configuration or
+    saved settings, never from a request body.
   - *Side effects of reads.* GET handlers only read: `export` renders
     `.tex`/`.html`/`.zip` in memory and writes nothing to disk (the CLI
     `re-search export --out` is what writes files). Opening the ledger can
@@ -277,7 +306,9 @@ result.
     folder). The key is plaintext on disk. `GET`/`PUT
     /api/settings/providers` return only a redacted view (`configured`,
     `base_url`, `default_model` per provider, plus UI settings); its type has
-    no key field.
+    no key field. Saving a `base_url` without an `http(s)://` scheme, or with
+    `user@`, a query string, a fragment or a backslash, is refused, and a
+    stored value that fails the same check is not echoed.
   - KaTeX `0.19.1` is served offline from the binary; the UI loads nothing
     from the network.
 
@@ -332,12 +363,42 @@ result.
   allowlisted literature HTTP calls) execute as the `re-search` user, and any
   uncontained local process running as the same OS user shares access to
   `providers.json`, loopback ports, and environment memory.
-- **Desktop server limits.** The launch token appears once in the URL the
-  browser is opened with (so in that browser's history) and in the page's
-  `<meta>` tag; any program running as you that can read the browser profile
-  or the process memory can obtain it. The server speaks plain HTTP on
-  loopback. A `base_url` typed into provider settings is echoed back
-  unredacted, so do not put credentials in it.
+- **The desktop token is as powerful as your provider keys.** Whoever holds
+  the token can change a provider's saved `base_url` and then start a turn,
+  which sends that provider's stored key to the new host; it can also attach
+  any directory outside the data directory as a workspace, which the model
+  then reads without asking. Treat the token like the keys.
+- **Where the desktop token is exposed.** It is in the launch URL, which
+  appears on the command line of the browser process that is started (and of
+  `cmd.exe` when the default browser is used), readable by other accounts on
+  Linux via `/proc` and by programs running as you on Windows, and possibly
+  in browser history, although the UI removes it from the address bar on
+  load. With `--print-url-json true` the URL and token are also written to
+  stdout. It then lives in the page's `sessionStorage`. Any program running
+  as you that can read the browser profile or process memory can obtain it.
+  The server speaks plain HTTP on loopback.
+- **An approved LaTeX compile can read files outside the workspace.**
+  `latex_compile` runs with `-no-shell-escape`, but TeX's own file-read
+  restrictions (`openin_any`) are left at the distribution's default, so a
+  `.tex` file can `\input` any file you can read, including a data
+  directory's `providers.json`, and place it in the PDF or log. Compiling
+  always asks first; read what will be compiled.
+- **Literature endpoints can be redirected to loopback.** The HTTPS host
+  allowlist is fixed, but `--arxiv-base` / `--inspire-base` /
+  `--crossref-base` and the matching `RE_SEARCH_*_BASE` environment variables
+  accept `http://127.0.0.1:<port>` (used by the tests); whoever controls the
+  launch environment can point searches at a local service.
+- **Desktop server resource use.** One thread per connection with no cap, and
+  an authenticated request may carry a 60 MiB body; a local process can tie up
+  threads by opening many connections (local denial of service only).
+- **MCP route without an approval relay.** When `core.exe` runs without the
+  supervisor's approval channel, every tool that must ask (code execution,
+  workspace writes, and now literature search) is denied; nothing falls back to
+  allow.
+- **Policy version.** The ask-every-time rule for `network-read` ships as
+  policy `v0.4-research`. A session recorded under an earlier research policy
+  string (CLI or desktop) cannot be resumed or continued under it (drift
+  check, exit `2`).
 - **Literature queries go to third parties once approved.** After you approve
   a query, its text is sent to the search host and recorded in the ledger;
   read the query before approving.

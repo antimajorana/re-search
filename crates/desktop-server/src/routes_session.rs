@@ -49,18 +49,6 @@ pub fn handle_health() -> ApiResult {
     ))
 }
 
-pub fn handle_bootstrap(state: &DesktopState) -> ApiResult {
-    let tok = state.auth.token();
-    Ok((
-        200,
-        json!({
-            "csrf_token": tok,
-            "token": tok,
-            "version": env!("CARGO_PKG_VERSION"),
-        }),
-    ))
-}
-
 pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
     let ledger = state.open_ledger().map_err(internal)?;
     let ledger_ids = ledger.sessions().map_err(|e| internal(e.to_string()))?;
@@ -159,6 +147,9 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
                 "workspace_root `{ws}` does not exist or is not a directory"
             )));
         }
+        // Refuse a workspace that overlaps the data directory (keys, ledger, blobs) up front.
+        research_tools::ResearchEnv::with_workspace(state.cfg.data_dir.clone(), &p)
+            .map_err(|e| bad(e.to_string()))?;
     }
 
     let ui = state.load_ui_settings();

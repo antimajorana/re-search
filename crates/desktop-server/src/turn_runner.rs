@@ -99,7 +99,6 @@ fn run_session_turn(
         .unwrap_or_else(|| provider.default_model())
         .to_string();
     let model = provider.resolve_model(&model_requested);
-    let api_base_override = req.get("api_base").and_then(Value::as_str);
 
     let max_turns = req
         .get("max_turns")
@@ -115,7 +114,7 @@ fn run_session_turn(
         .unwrap_or(DEFAULT_MAX_TOKENS);
 
     let env = state.research_env_for_session(session_id)?;
-    let transport = state.build_transport(provider, &model, api_base_override)?;
+    let transport = state.build_transport(provider, &model)?;
     let (router, containment, contained) =
         build_desktop_router(Arc::clone(state), Arc::new(env), session_id)?;
     let ledger = state.open_ledger()?;

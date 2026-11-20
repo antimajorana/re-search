@@ -171,7 +171,7 @@ fn cli_research_workspace_read_fork_diff_export_and_verify() {
     let stdout_str = String::from_utf8(out.stdout).unwrap();
     let first_ev: Value = serde_json::from_str(stdout_str.lines().next().unwrap()).unwrap();
     let sid = first_ev["session"].as_str().unwrap().to_string();
-    assert_eq!(first_ev["data"]["policy_version"], "v0.3-research");
+    assert_eq!(first_ev["data"]["policy_version"], "v0.4-research");
 
     // Verify original session passes.
     let v_out = Command::new(bin())

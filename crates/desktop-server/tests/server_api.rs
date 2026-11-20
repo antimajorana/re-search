@@ -1,153 +1,25 @@
 //! Tests-first integration tests for `desktop-server`:
 //! - Auth & CSRF (`GET /?token=`, `Set-Cookie`, `<meta name="re-search-csrf">`,
-//!   `GET /api/bootstrap`, `Host`/`Origin` enforcement, `401`/`403` rejections)
+//!   `Host`/`Origin` enforcement, `401`/`403` rejections)
 //! - Session CRUD, prompt execution + SSE event streaming
 //! - Live `UiApprover` diff preview (`fs_write`/`latex_patch`) + fail-closed ledger recording
 //! - File upload (`base64` JSON + `multipart/form-data`), workspace read/patch/audit,
 //!   literature search, proof DAG, verify, fork/diff, narrate, sidetalk, export,
 //!   and redacted `0600` provider settings.
 
-use desktop_server::{start_desktop_server, DesktopConfig};
+mod common;
+
+use common::{launch_cookie, raw_http, test_cfg, MockHttp, MockReply};
+use desktop_server::start_desktop_server;
 use ledger::Ledger;
-use research_tools::{preview_workspace_edit, LiteratureEndpoints, ResearchEnv};
+use research_tools::{preview_workspace_edit, ResearchEnv};
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use tempfile::TempDir;
-
-struct MockReply {
-    status: u16,
-    content_type: &'static str,
-    body: Vec<u8>,
-}
-
-struct MockHttp {
-    base_url: String,
-    handle: Option<thread::JoinHandle<()>>,
-}
-
-impl MockHttp {
-    fn start(replies: Vec<MockReply>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let handle = thread::spawn(move || {
-            for r in replies {
-                let (mut stream, _) = listener.accept().unwrap();
-                drain_http_request(&mut stream);
-                let hdr = format!(
-                    "HTTP/1.1 {} OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    r.status,
-                    r.content_type,
-                    r.body.len()
-                );
-                let _ = stream.write_all(hdr.as_bytes());
-                let _ = stream.write_all(&r.body);
-                let _ = stream.flush();
-            }
-        });
-        Self { base_url: format!("http://{addr}"), handle: Some(handle) }
-    }
-
-    fn finish(mut self) {
-        if let Some(h) = self.handle.take() {
-            let _ = h.join();
-        }
-    }
-}
-
-fn drain_http_request(stream: &mut TcpStream) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let mut reader = BufReader::new(stream);
-    let mut content_len = 0usize;
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).unwrap_or(0) == 0 {
-            break;
-        }
-        if line == "\r\n" || line == "\n" {
-            break;
-        }
-        if let Some((k, v)) = line.split_once(':') {
-            if k.eq_ignore_ascii_case("content-length") {
-                content_len = v.trim().parse().unwrap_or(0);
-            }
-        }
-    }
-    if content_len > 0 {
-        let mut buf = vec![0u8; content_len];
-        let _ = reader.read_exact(&mut buf);
-    }
-}
-
-fn raw_http(
-    port: u16,
-    method: &str,
-    path: &str,
-    headers: &[(&str, &str)],
-    body: &[u8],
-) -> (u16, Vec<(String, String)>, Vec<u8>) {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-    let mut req = format!("{method} {path} HTTP/1.1\r\nConnection: close\r\n");
-    let mut has_host = false;
-    for &(k, v) in headers {
-        if k.eq_ignore_ascii_case("host") {
-            has_host = true;
-        }
-        req.push_str(&format!("{k}: {v}\r\n"));
-    }
-    if !has_host {
-        req.push_str(&format!("Host: 127.0.0.1:{port}\r\n"));
-    }
-    if !body.is_empty() && !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-length")) {
-        req.push_str(&format!("Content-Length: {}\r\n", body.len()));
-    }
-    req.push_str("\r\n");
-    stream.write_all(req.as_bytes()).unwrap();
-    if !body.is_empty() {
-        stream.write_all(body).unwrap();
-    }
-    stream.flush().unwrap();
-
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).unwrap();
-    let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
-    let head = String::from_utf8_lossy(&raw[..split]);
-    let mut lines = head.lines();
-    let status_line = lines.next().unwrap();
-    let status: u16 = status_line.split_whitespace().nth(1).unwrap().parse().unwrap();
-    let mut out_hdrs = Vec::new();
-    for line in lines {
-        if let Some((k, v)) = line.split_once(':') {
-            out_hdrs.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
-        }
-    }
-    (status, out_hdrs, raw[split + 4..].to_vec())
-}
-
-fn test_cfg(data_dir: &Path, workspace: Option<PathBuf>, api_base: Option<String>, lit_base: Option<&str>) -> DesktopConfig {
-    let endpoints = match lit_base {
-        Some(u) => LiteratureEndpoints::loopback_mock(u).unwrap(),
-        None => LiteratureEndpoints::default(),
-    };
-    DesktopConfig {
-        port: 0,
-        data_dir: data_dir.to_path_buf(),
-        workspace_root: workspace,
-        python: None,
-        worker_script: None,
-        api_base_override: api_base,
-        literature_endpoints: endpoints,
-        open_window: false,
-        app_mode: false,
-        print_url_json: false,
-        eval_timeout_s: 30,
-    }
-}
 
 #[test]
 fn auth_bootstrap_assets_host_origin_and_csrf_enforced() {
@@ -180,19 +52,35 @@ fn auth_bootstrap_assets_host_origin_and_csrf_enforced() {
         .find(|(k, _)| k == "set-cookie")
         .map(|(_, v)| v.as_str())
         .unwrap();
-    assert!(set_cookie.contains(&format!("__research_token={tok}")));
+    // The stream cookie is per-port and is a different secret from the token.
+    assert!(set_cookie.starts_with(&format!("__research_stream_{port}=")));
+    assert!(!set_cookie.contains(&tok));
     assert!(set_cookie.contains("HttpOnly"));
     assert!(set_cookie.contains("SameSite=Strict"));
+    let cookie_hdr = launch_cookie(port, &tok);
 
-    // /api/bootstrap requires valid __research_token cookie (or header) and returns csrf_token.
-    let (st_boot_noauth, _, _) = raw_http(port, "GET", "/api/bootstrap", &[], b"");
-    assert_eq!(st_boot_noauth, 401);
-    let cookie_hdr = format!("__research_token={tok}");
-    let (st_boot_ok, _, boot_body) =
-        raw_http(port, "GET", "/api/bootstrap", &[("Cookie", &cookie_hdr)], b"");
-    assert_eq!(st_boot_ok, 200);
-    let boot: Value = serde_json::from_slice(&boot_body).unwrap();
-    assert_eq!(boot["csrf_token"], tok);
+    // A reload (cookie, no ?token=) gets the page WITHOUT the token: the cookie cannot be traded for it.
+    let (st_reload, _, reload_html) = raw_http(port, "GET", "/", &[("Cookie", &cookie_hdr)], b"");
+    assert_eq!(st_reload, 200);
+    assert!(!String::from_utf8_lossy(&reload_html).contains(&tok));
+
+    // The page refuses to be framed, and `/` with no credential at all is refused.
+    for (name, want) in [("x-frame-options", "DENY"), ("content-security-policy", "frame-ancestors 'none'")] {
+        assert!(hdrs.iter().any(|(k, v)| k == name && v == want), "missing {name}: {hdrs:?}");
+    }
+    assert_eq!(raw_http(port, "GET", "/", &[], b"").0, 403);
+    // The token-for-cookie exchange route is gone.
+    for hdrs in [vec![("Cookie", cookie_hdr.as_str())], vec![("X-ReSearch-Token", tok.as_str())]] {
+        let (st, _, body) = raw_http(port, "GET", "/api/bootstrap", &hdrs, b"");
+        assert!(matches!(st, 401 | 404), "{st}");
+        assert!(!String::from_utf8_lossy(&body).contains(&tok));
+    }
+    // Host must be this loopback server: other hosts and other ports are refused.
+    for host in ["evil.example", format!("127.0.0.1:{}", port.wrapping_add(1)).as_str(), "127.0.0.1.evil.example"] {
+        assert_eq!(raw_http(port, "GET", "/api/health", &[("Host", host)], b"").0, 403, "Host {host}");
+    }
+    let localhost = format!("localhost:{port}");
+    assert_eq!(raw_http(port, "GET", "/api/health", &[("Host", &localhost)], b"").0, 200);
 
     // Vendor KaTeX font & CSS served accurately, traversal blocked.
     let (st_kcss, kcss_hdrs, _) = raw_http(port, "GET", "/vendor/katex/katex.min.css", &[], b"");
@@ -296,9 +184,8 @@ fn sessions_sse_approval_card_tools_fork_export_and_settings() {
     let created: Value = serde_json::from_slice(&body_c).unwrap();
     let sid = created["id"].as_str().unwrap().to_string();
 
-    let cookie_hdr = format!("__research_token={tok}");
-    let cookie = [("Cookie", cookie_hdr.as_str())];
-    let (st_l, _, body_l) = raw_http(port, "GET", "/api/sessions", &cookie, b"");
+    let cookie_hdr = launch_cookie(port, &tok);
+    let (st_l, _, body_l) = raw_http(port, "GET", "/api/sessions", &auth_hdr, b"");
     assert_eq!(st_l, 200);
     let list: Value = serde_json::from_slice(&body_l).unwrap();
     assert!(list["sessions"].as_array().unwrap().iter().any(|s| s["id"] == sid));
@@ -306,7 +193,7 @@ fn sessions_sse_approval_card_tools_fork_export_and_settings() {
     // Open SSE stream before triggering message turn.
     let mut sse_stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     sse_stream.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
-    let sse_req = format!("GET /api/sessions/{sid}/events HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: __research_token={tok}\r\n\r\n");
+    let sse_req = format!("GET /api/sessions/{sid}/events HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {cookie_hdr}\r\n\r\n");
     sse_stream.write_all(sse_req.as_bytes()).unwrap();
     sse_stream.flush().unwrap();
 
@@ -402,7 +289,7 @@ fn sessions_sse_approval_card_tools_fork_export_and_settings() {
     assert_eq!(up_v["ingested"].as_array().unwrap().len(), 1);
 
     // Workspace list & file read + tex-audit + literature + dag + verify + settings redaction.
-    let (st_ws, _, ws_b) = raw_http(port, "GET", &format!("/api/sessions/{sid}/workspace"), &cookie, b"");
+    let (st_ws, _, ws_b) = raw_http(port, "GET", &format!("/api/sessions/{sid}/workspace"), &auth_hdr, b"");
     assert_eq!(st_ws, 200);
     let ws_v: Value = serde_json::from_slice(&ws_b).unwrap();
     assert!(ws_v["files"].as_array().unwrap().iter().any(|f| f["path"] == "notes.tex"));
@@ -442,7 +329,7 @@ fn sessions_sse_approval_card_tools_fork_export_and_settings() {
     );
     assert_eq!(st_put, 200);
     assert!(!String::from_utf8_lossy(&put_b).contains(secret_key));
-    let (st_get_set, _, get_set_b) = raw_http(port, "GET", "/api/settings/providers", &cookie, b"");
+    let (st_get_set, _, get_set_b) = raw_http(port, "GET", "/api/settings/providers", &auth_hdr, b"");
     assert_eq!(st_get_set, 200);
     let set_str = String::from_utf8_lossy(&get_set_b);
     assert!(!set_str.contains(secret_key));
@@ -462,96 +349,4 @@ fn sessions_sse_approval_card_tools_fork_export_and_settings() {
     drop(sse_thread);
     llm.finish();
     lit.finish();
-}
-
-/// Every `/api/` route except `/api/health` refuses a request without the launch credential,
-/// a GET with the cookie (or header token) succeeds, and a mutation with only the cookie is refused.
-#[test]
-fn every_api_route_except_health_requires_credentials() {
-    let tmp = TempDir::new().unwrap();
-    let data_dir = tmp.path().join("data");
-    let ws_dir = tmp.path().join("ws");
-    std::fs::create_dir_all(&ws_dir).unwrap();
-    std::fs::write(ws_dir.join("main.tex"), "\\documentclass{article}\n").unwrap();
-    let srv = start_desktop_server(test_cfg(&data_dir, Some(ws_dir.clone()), None, None)).unwrap();
-    let port = srv.addr.port();
-    let tok = srv.info.token.clone();
-    let cookie_hdr = format!("__research_token={tok}");
-    let cookie = [("Cookie", cookie_hdr.as_str())];
-    let token = [("X-ReSearch-Token", tok.as_str())];
-    let body = serde_json::to_vec(&json!({ "title": "auth", "workspace_root": ws_dir })).unwrap();
-    let (st, _, created) = raw_http(port, "POST", "/api/sessions", &token, &body);
-    assert_eq!(st, 200);
-    let sid = serde_json::from_slice::<Value>(&created).unwrap()["id"].as_str().unwrap().to_string();
-
-    let s = format!("/api/sessions/{sid}");
-    let gets = [
-        "/api/bootstrap".to_string(),
-        "/api/sessions".to_string(),
-        s.clone(),
-        format!("{s}/events"),
-        format!("{s}/workspace"),
-        format!("{s}/workspace/file?path=main.tex"),
-        format!("{s}/dag"),
-        format!("{s}/diff/{sid}"),
-        format!("{s}/sidetalk"),
-        format!("{s}/export?format=tex"),
-        "/api/settings/providers".to_string(),
-        "/api/no-such-route".to_string(),
-    ];
-    let mutations = [
-        ("POST", "/api/sessions".to_string()),
-        ("POST", format!("{s}/messages")),
-        ("POST", format!("{s}/approvals/c-1")),
-        ("POST", format!("{s}/upload")),
-        ("POST", format!("{s}/latex/patch")),
-        ("POST", format!("{s}/tex-audit")),
-        ("POST", format!("{s}/literature")),
-        ("POST", format!("{s}/verify")),
-        ("POST", format!("{s}/fork")),
-        ("POST", format!("{s}/narrate")),
-        ("POST", format!("{s}/sidetalk")),
-        ("PUT", "/api/settings/providers".to_string()),
-        ("DELETE", s.clone()),
-    ];
-    let bad_cookie = [("Cookie", "__research_token=0000")];
-    let bad_token = [("X-ReSearch-Token", "0000")];
-    let cross_site = [("Origin", "http://evil.invalid")];
-    let no_creds: [&[(&str, &str)]; 4] = [&[], &bad_cookie, &bad_token, &cross_site];
-    for path in &gets {
-        for hdrs in no_creds {
-            let (st, _, _) = raw_http(port, "GET", path, hdrs, b"");
-            assert_eq!(st, 401, "GET {path} with {hdrs:?} must be 401");
-        }
-    }
-    for (method, path) in &mutations {
-        for hdrs in no_creds.iter().copied().chain([&cookie[..]]) {
-            let (st, _, _) = raw_http(port, method, path, hdrs, b"{}");
-            assert_eq!(st, 401, "{method} {path} with {hdrs:?} must be 401");
-        }
-    }
-    // Refused mutations had no effect: still one session, no provider file written.
-    let (st, _, list) = raw_http(port, "GET", "/api/sessions", &cookie, b"");
-    assert_eq!(st, 200);
-    assert_eq!(serde_json::from_slice::<Value>(&list).unwrap()["sessions"].as_array().unwrap().len(), 1);
-    assert!(!data_dir.join("providers.json").exists());
-
-    // Health stays open; credentialed reads work with the cookie or the header token.
-    assert_eq!(raw_http(port, "GET", "/api/health", &[], b"").0, 200);
-    for path in gets.iter().filter(|p| !p.ends_with("/events")) {
-        let (st, _, b) = raw_http(port, "GET", path, &cookie, b"");
-        assert!(!matches!(st, 401 | 403), "GET {path} with cookie got {st}: {}", String::from_utf8_lossy(&b));
-    }
-    for path in ["/api/sessions", s.as_str(), "/api/settings/providers"] {
-        assert_eq!(raw_http(port, "GET", path, &token, b"").0, 200, "GET {path} with header token");
-    }
-    // The SSE stream opens with the cookie (read only its status line).
-    let mut sse = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    sse.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-    write!(sse, "GET {s}/events HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {cookie_hdr}\r\n\r\n").unwrap();
-    let mut status_line = String::new();
-    BufReader::new(&sse).read_line(&mut status_line).unwrap();
-    assert!(status_line.starts_with("HTTP/1.1 200"), "SSE status: {status_line}");
-    drop(sse);
-    srv.shutdown();
 }

@@ -319,3 +319,36 @@ fn f3_fs_read_astral_utf8_slicing_binary_guard_and_regex_query() {
     let verify = Ledger::open(&tmp.path().join("data")).unwrap().verify_all().unwrap();
     assert_eq!(verify.unreferenced_blobs, 0);
 }
+
+/// A workspace may not be, contain, or lie inside the data directory (keys, ledger, blobs),
+/// whether or not the data directory exists yet.
+#[test]
+fn workspace_overlapping_data_dir_is_refused() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let data = tmp.path().join("data");
+    let inside = data.join("sessions").join("s-1");
+    let sibling = tmp.path().join("paper");
+    fs::create_dir_all(&inside).unwrap();
+    fs::create_dir_all(&sibling).unwrap();
+
+    for ws in [data.as_path(), inside.as_path(), tmp.path()] {
+        let err = ResearchEnv::with_workspace(&data, ws).unwrap_err().to_string();
+        assert!(err.contains("overlaps"), "{}: {err}", ws.display());
+    }
+    // Positive control: a sibling directory is accepted.
+    ResearchEnv::with_workspace(&data, &sibling).unwrap();
+
+    // A data directory that does not exist yet is still compared (deepest existing ancestor).
+    let future_data = sibling.join("not-yet").join("data");
+    let err = ResearchEnv::with_workspace(&future_data, &sibling).unwrap_err().to_string();
+    assert!(err.contains("overlaps"), "{err}");
+    ResearchEnv::with_workspace(tmp.path().join("elsewhere").join("data"), &sibling).unwrap();
+
+    // Windows paths compare case-insensitively.
+    #[cfg(windows)]
+    {
+        let shouted = std::path::PathBuf::from(data.to_string_lossy().to_uppercase());
+        let err = ResearchEnv::with_workspace(&shouted, &data).unwrap_err().to_string();
+        assert!(err.contains("overlaps"), "{err}");
+    }
+}

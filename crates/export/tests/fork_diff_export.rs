@@ -42,7 +42,7 @@ fn seed_parent_session(dir: &std::path::Path, session: &str) -> u64 {
                 "route": "api",
                 "provider": "anthropic-messages",
                 "model": "claude-haiku-4-5",
-                "policy_version": "v0.3-research",
+                "policy_version": "v0.4-research",
                 "prompt": "Derive energy spectrum with α, ℏ, and ⊗."
             }),
         )
