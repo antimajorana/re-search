@@ -1,6 +1,7 @@
 /target
 /.research-core
 /.re-search
+/.agents
 *.db
 *.db-wal
 *.db-shm

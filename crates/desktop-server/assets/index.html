@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="re-search-csrf" content="">
+  <title>re:Search — Scientific Research Workstation</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%230b57d0'/%3E%3Ctext x='16' y='21' text-anchor='middle' font-family='sans-serif' font-size='15' font-weight='700' fill='%23ffffff'%3E%E2%88%91%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="/assets/tokens.css">
+  <link rel="stylesheet" href="/assets/layout.css">
+  <link rel="stylesheet" href="/assets/components.css">
+</head>
+<body>
+  <div id="app-shell" data-rail-open="true" data-canvas-open="true">
+    <!-- Left Collapsible Rail -->
+    <aside id="left-rail" aria-label="Research sessions and settings">
+      <div class="rail-header">
+        <span class="brand-lockup">
+          <span class="brand-dot" aria-hidden="true"></span>
+          <span>re:Search</span>
+        </span>
+        <span id="health-badge" class="badge">Local</span>
+      </div>
+      <div class="rail-new-wrap">
+        <button id="new-research-btn" type="button" class="pill-btn wide">
+          <span aria-hidden="true">+</span>
+          <span>New research</span>
+        </button>
+      </div>
+      <div class="rail-section-label">Sessions &amp; Forks</div>
+      <nav id="session-list" aria-label="Session threads"></nav>
+      <div class="rail-footer">
+        <button id="settings-btn" type="button" class="pill-btn sm">Settings &amp; Providers</button>
+        <button id="theme-toggle" type="button" class="icon-btn" title="Toggle light or dark theme" aria-label="Toggle theme">Theme</button>
+      </div>
+    </aside>
+
+    <!-- Center Conversational Stream & Floating Gemini Composer -->
+    <main id="center-stage">
+      <header class="stage-topbar">
+        <div class="topbar-left">
+          <button id="rail-toggle" type="button" class="icon-btn" title="Toggle session rail" aria-label="Toggle left rail">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          </button>
+          <h1 id="active-session-title" class="session-heading">New research</h1>
+          <span id="active-workspace-pill" class="badge" hidden></span>
+        </div>
+        <div class="topbar-right">
+          <span id="stream-status-pill" class="badge">Ready</span>
+          <button id="canvas-toggle" type="button" class="pill-btn sm" aria-expanded="true" aria-controls="canvas-drawer">Canvas</button>
+        </div>
+      </header>
+
+      <section id="message-stream" aria-live="polite" aria-label="Research conversation stream"></section>
+
+      <div class="composer-dock">
+        <form id="composer-pill" autocomplete="off">
+          <div id="composer-files" class="upload-chips" hidden></div>
+          <textarea id="composer-input" rows="1" placeholder="Ask a derivation, verify an identity, or attach .tex / .pdf sources..."></textarea>
+          <div class="composer-bar">
+            <div class="composer-left">
+              <label class="upload-label" title="Upload up to 5 files (max 10 MiB each)">
+                <input id="composer-upload-input" class="sr-only-input" type="file" multiple accept=".tex,.bib,.pdf,.md,.txt,.csv,.json,.py,.zip,.tgz,.gz">
+                <span>Attach files</span>
+              </label>
+              <button id="workspace-attach-btn" type="button" class="chip-toggle" title="Attach local workspace directory">Workspace</button>
+              <button id="verifier-chip" type="button" class="chip-toggle" aria-pressed="true" title="Toggle verification gate">Verifier</button>
+              <button id="strategist-chip" type="button" class="chip-toggle" aria-pressed="false" title="Toggle research strategist">Strategist</button>
+            </div>
+            <div class="composer-right">
+              <select id="composer-provider" class="compact-select" aria-label="Model provider">
+                <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
+                <option value="ollama">Ollama</option>
+                <option value="gemini">Gemini</option>
+              </select>
+              <input id="composer-model" class="compact-select" type="text" placeholder="Model ID" aria-label="Model identifier" style="width:146px">
+              <button id="composer-send" type="submit" title="Send prompt" aria-label="Send prompt">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+                  <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </main>
+
+    <!-- Right Slide-Over Gemini Canvas -->
+    <aside id="canvas-drawer" aria-label="Gemini research canvas">
+      <div class="canvas-header">
+        <div class="canvas-tabs" role="tablist" aria-label="Canvas views">
+          <button id="tab-latex" class="canvas-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="panel-latex">LaTeX</button>
+          <button id="tab-dag" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-dag">Proof DAG</button>
+          <button id="tab-sources" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-sources">Sources</button>
+          <button id="tab-sidetalk" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-sidetalk">Side-Talk</button>
+        </div>
+      </div>
+
+      <div class="canvas-body">
+        <!-- Tab 1: LaTeX Manuscript Canvas -->
+        <section id="panel-latex" class="canvas-panel is-active" role="tabpanel" aria-labelledby="tab-latex">
+          <div class="panel-toolbar">
+            <select id="latex-file-select" class="compact-select" aria-label="Select TeX or Bib file" style="max-width:150px"></select>
+            <button id="latex-save-btn" type="button" class="pill-btn sm">Save Patch</button>
+            <button id="tex-audit-btn" type="button" class="pill-btn sm">TeX Audit</button>
+            <button id="export-tex-btn" type="button" class="pill-btn sm">.tex</button>
+            <button id="export-html-btn" type="button" class="pill-btn sm">.html</button>
+            <button id="export-zip-btn" type="button" class="pill-btn sm primary">.zip</button>
+          </div>
+          <div class="latex-split">
+            <div class="tex-pane">
+              <div class="pane-caption"><span>Manuscript Editor</span><span id="latex-line-count">0 lines</span></div>
+              <textarea id="latex-editor" spellcheck="false" placeholder="Select a workspace .tex/.bib file or write LaTeX here..."></textarea>
+            </div>
+            <div class="tex-pane">
+              <div class="pane-caption"><span>Live KaTeX Preview</span></div>
+              <div id="latex-preview" class="rich-prose"></div>
+            </div>
+          </div>
+          <div id="tex-audit-results" class="audit-drawer" hidden></div>
+        </section>
+
+        <!-- Tab 2: Proof Graph & Ledger Canvas -->
+        <section id="panel-dag" class="canvas-panel" role="tabpanel" aria-labelledby="tab-dag">
+          <div class="panel-toolbar">
+            <button id="dag-verify-btn" type="button" class="pill-btn sm primary">Verify Chain</button>
+            <button id="dag-fork-btn" type="button" class="pill-btn sm">Fork Branch</button>
+            <button id="dag-narrate-btn" type="button" class="pill-btn sm">Narrate Proof</button>
+            <span id="dag-verify-badge" class="badge" hidden></span>
+          </div>
+          <div class="dag-layout">
+            <div id="dag-fork-bar" class="dag-detail-card" hidden>
+              <div class="form-row">
+                <label for="fork-assumption-input">Counterfactual assumption (forking at seq <span id="fork-seq-label">latest</span>)</label>
+                <input id="fork-assumption-input" class="text-input" type="text" placeholder="Optional modified assumption...">
+              </div>
+              <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end;">
+                <button id="fork-cancel-btn" type="button" class="pill-btn sm">Cancel</button>
+                <button id="fork-confirm-btn" type="button" class="pill-btn sm primary">Create Verified Fork</button>
+              </div>
+            </div>
+            <div class="dag-canvas-box">
+              <svg id="proof-dag-svg" viewBox="0 0 420 260" aria-label="Proof dependency graph"></svg>
+            </div>
+            <div id="dag-node-detail" class="dag-detail-card">Select a proof node to inspect LaTeX, dependencies, and verification status.</div>
+            <div id="dag-diff-panel" class="dag-detail-card" hidden></div>
+          </div>
+        </section>
+
+        <!-- Tab 3: Literature & Sources Canvas -->
+        <section id="panel-sources" class="canvas-panel" role="tabpanel" aria-labelledby="tab-sources">
+          <div class="sources-layout">
+            <form id="literature-search-form" class="dag-detail-card" autocomplete="off">
+              <div style="display:flex;gap:6px;margin-bottom:8px;">
+                <select id="lit-source-select" class="compact-select" aria-label="Literature database">
+                  <option value="arxiv">arXiv</option>
+                  <option value="inspire">INSPIRE-HEP</option>
+                  <option value="crossref">Crossref</option>
+                  <option value="semantic_scholar">Semantic Scholar</option>
+                </select>
+                <input id="lit-query-input" class="text-input" type="text" placeholder="Query papers, arXiv ID, or DOI...">
+                <button id="lit-search-btn" type="submit" class="pill-btn sm primary">Search</button>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;">
+                <select id="lit-field-select" class="compact-select" aria-label="arXiv search field">
+                  <option value="all">Field: All</option>
+                  <option value="title">Title</option>
+                  <option value="author">Author</option>
+                  <option value="abstract">Abstract</option>
+                  <option value="id">arXiv ID</option>
+                </select>
+                <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
+                  <input id="lit-include-source" type="checkbox"> Include .tar.gz TeX
+                </label>
+                <input id="lit-section-filter" class="text-input" type="text" placeholder="Section filter..." style="width:128px;height:28px;">
+              </div>
+            </form>
+            <div id="literature-results" style="display:flex;flex-direction:column;gap:8px;"></div>
+            <div class="rail-section-label" style="padding:2px 0;">Ingested Session Sources</div>
+            <div id="sources-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+          </div>
+        </section>
+
+        <!-- Tab 4: Isolated Side-Talk Canvas -->
+        <section id="panel-sidetalk" class="canvas-panel" role="tabpanel" aria-labelledby="tab-sidetalk">
+          <div class="sidetalk-layout">
+            <div style="padding:8px 12px;border-bottom:1px solid var(--border-subtle);font-size:12px;color:var(--ink-muted);">
+              Isolated side channel — questions here never mutate the main derivation ledger.
+            </div>
+            <div id="sidetalk-stream"></div>
+            <form id="sidetalk-form" class="sidetalk-composer" autocomplete="off">
+              <input id="sidetalk-input" class="text-input" type="text" placeholder="Ask about a step, convention, or equation...">
+              <button id="sidetalk-send" type="submit" class="pill-btn sm primary">Ask</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Settings & Provider Presets Modal -->
+  <div id="settings-dialog" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="settings-title">Providers, Keys &amp; Research Conventions</h2>
+        <button id="settings-close-btn" type="button" class="icon-btn" aria-label="Close settings">✕</button>
+      </div>
+      <form id="settings-form" class="form-grid" autocomplete="off">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="form-row">
+            <label for="set-provider">Default Provider</label>
+            <select id="set-provider" class="text-input">
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="ollama">Ollama</option>
+              <option value="gemini">Gemini</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="set-model">Default Model</label>
+            <input id="set-model" class="text-input" type="text" placeholder="claude-sonnet-4-5">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="form-row">
+            <label for="set-key-anthropic">Anthropic API Key</label>
+            <input id="set-key-anthropic" class="text-input" type="password" placeholder="Leave blank to keep existing">
+          </div>
+          <div class="form-row">
+            <label for="set-key-openai">OpenAI API Key</label>
+            <input id="set-key-openai" class="text-input" type="password" placeholder="Leave blank to keep existing">
+          </div>
+          <div class="form-row">
+            <label for="set-key-gemini">Gemini API Key</label>
+            <input id="set-key-gemini" class="text-input" type="password" placeholder="Leave blank to keep existing">
+          </div>
+          <div class="form-row">
+            <label for="set-key-ollama">Ollama Base / Key</label>
+            <input id="set-key-ollama" class="text-input" type="text" placeholder="http://127.0.0.1:11434">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="form-row">
+            <label for="set-role-verifier">Verifier Role Model</label>
+            <input id="set-role-verifier" class="text-input" type="text" placeholder="Optional preset">
+          </div>
+          <div class="form-row">
+            <label for="set-role-strategist">Strategist Role Model</label>
+            <input id="set-role-strategist" class="text-input" type="text" placeholder="Optional preset">
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="set-conventions">Pinned Conventions (max 2000 chars)</label>
+          <textarea id="set-conventions" class="text-input" rows="3" maxlength="2000" placeholder="Metric signature (-,+,+,+), natural units hbar = c = 1..."></textarea>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
+          <button id="settings-cancel-btn" type="button" class="pill-btn">Cancel</button>
+          <button id="settings-save-btn" type="submit" class="pill-btn primary">Save Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Non-blocking Workspace Attach Modal -->
+  <div id="workspace-dialog" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title" hidden>
+    <div class="modal-card" style="width:min(440px, 94vw);">
+      <div class="modal-header">
+        <h2 id="workspace-modal-title">Attach Workspace Directory</h2>
+        <button id="workspace-close-btn" type="button" class="icon-btn" aria-label="Close workspace dialog">✕</button>
+      </div>
+      <form id="workspace-form" class="form-grid" autocomplete="off">
+        <div class="form-row">
+          <label for="workspace-path-input">Local directory path</label>
+          <input id="workspace-path-input" class="text-input" type="text" placeholder="/path/to/paper-workspace">
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;">
+          <button id="workspace-cancel-btn" type="button" class="pill-btn">Cancel</button>
+          <button id="workspace-confirm-btn" type="submit" class="pill-btn primary">Attach</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+  <script src="/vendor/katex/katex.min.js"></script>
+  <script src="/vendor/katex/auto-render.min.js"></script>
+  <script type="module" src="/assets/app.js"></script>
+</body>
+</html>

@@ -19,6 +19,7 @@
 mod api_session;
 mod approval;
 mod cmd;
+mod cmd_ext;
 mod events;
 mod runtime;
 mod session;

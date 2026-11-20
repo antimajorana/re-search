@@ -446,3 +446,10 @@ fn try_call_distinguishes_ledger_failure_from_handler_and_arg_errors() {
     assert!(matches!(f.router.call("c", "read", &big_args), CallOutcome::Error(_)));
     let _ = std::fs::remove_dir_all(&f.dir);
 }
+
+#[test]
+fn policy_accessor_returns_configured_policy() {
+    let f = fixture("policy-getter", Mode::Decline);
+    assert_eq!((f.router.policy().version.as_str(), f.router.policy().default), ("test-1", Decision::Deny));
+    let _ = std::fs::remove_dir_all(&f.dir);
+}

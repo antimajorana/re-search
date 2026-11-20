@@ -312,3 +312,183 @@ pub fn resume(opts: &ApiResumeOpts) -> Result<i32, String> {
     );
     Ok(map_outcome(outcome))
 }
+
+pub struct ResearchOpts {
+    pub workspace_root: Option<PathBuf>,
+    pub enable_research_tools: bool,
+    pub literature_endpoints: research_tools::LiteratureEndpoints,
+    pub verification_mode: bool,
+    pub calculation_mode: bool,
+    pub pinned_conventions: Option<String>,
+}
+
+pub fn run_with_research(opts: &ApiRunOpts, res: &ResearchOpts) -> Result<i32, String> {
+    if !res.enable_research_tools
+        && res.workspace_root.is_none()
+        && !res.verification_mode
+        && !res.calculation_mode
+        && res.pinned_conventions.is_none()
+    {
+        return run(opts);
+    }
+    if let Some(ws) = &res.workspace_root {
+        if !ws.exists() || !ws.is_dir() {
+            return Err(format!("workspace `{}` does not exist or is not a directory", ws.display()));
+        }
+    }
+    let model = opts.provider.resolve_model(&opts.model_requested);
+    let transport = build_transport(opts.provider, &opts.api_base, &model)?;
+    let info = transport.info();
+
+    let session = format!("s-{}", random_hex(8));
+    let dir = opts.data_dir.join("sessions").join(&session);
+    let (scratch, pycache) = ensure_session_dirs(&dir)?;
+    let _session_guard = acquire_session_lock(&dir, &session)?;
+    #[cfg(windows)]
+    worker::appcontainer::sweep_stale_profiles(&opts.data_dir);
+
+    let setup = worker_setup(&opts.python, &opts.worker_script, scratch, pycache);
+    let built = crate::runtime::build_research_router(
+        &opts.data_dir,
+        &session,
+        setup,
+        opts.eval_timeout_s,
+        crate::runtime::ResearchRouterOpts {
+            workspace_root: res.workspace_root.clone(),
+            literature_endpoints: res.literature_endpoints.clone(),
+        },
+    )?;
+    let rec = Recorder {
+        ledger: Ledger::open(&opts.data_dir).map_err(|e| e.to_string())?,
+        session: session.clone(),
+    };
+    let mut sink = CliSink { rec: &rec };
+
+    eprintln!(
+        "[supervisor] session {session} (api research route: {} via {}, key env {}); data in {}",
+        info.provider,
+        info.endpoint,
+        info.api_key_env,
+        opts.data_dir.display()
+    );
+
+    let guardrails = agent::GuardrailConfig {
+        verification_mode: res.verification_mode,
+        calculation_mode: res.calculation_mode,
+        pinned_conventions: res.pinned_conventions.clone(),
+        ..agent::GuardrailConfig::default()
+    };
+    let cfg = AgentConfig {
+        prompt: opts.prompt.clone(),
+        model_requested: opts.model_requested.clone(),
+        model,
+        system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
+        max_turns: opts.max_turns,
+        max_tokens: opts.max_tokens,
+        containment: built.containment,
+        contained: built.contained,
+    };
+    let outcome = agent::run_research_loop(&*transport, &built.router, &rec.ledger, &cfg, &guardrails, &mut sink)?;
+    eprintln!(
+        "[supervisor] session {session} ended; see it with: re-search show {session} --data-dir \"{}\"",
+        opts.data_dir.display()
+    );
+    Ok(map_outcome(outcome))
+}
+
+pub fn resume_with_research(opts: &ApiResumeOpts, res: &ResearchOpts) -> Result<i32, String> {
+    if !res.enable_research_tools && res.workspace_root.is_none() {
+        return resume(opts);
+    }
+    if let Some(ws) = &res.workspace_root {
+        if !ws.exists() || !ws.is_dir() {
+            return Err(format!("workspace `{}` does not exist or is not a directory", ws.display()));
+        }
+    }
+    let ledger = match Ledger::open_existing(&opts.data_dir) {
+        Ok(l) => l,
+        Err(e @ ledger::Error::LegacyUnchainedSchema) => {
+            eprintln!("re-search resume: {e}");
+            return Ok(4);
+        }
+        Err(e @ (ledger::Error::Tamper(_) | ledger::Error::Sqlite(_) | ledger::Error::BadHash(_))) => {
+            eprintln!("re-search resume: {e}");
+            return Ok(1);
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+
+    let dir = opts.data_dir.join("sessions").join(&opts.session);
+    let (scratch, pycache) = ensure_session_dirs(&dir)?;
+    let _session_guard = acquire_session_lock(&dir, &opts.session)?;
+    #[cfg(windows)]
+    worker::appcontainer::sweep_stale_profiles(&opts.data_dir);
+
+    let setup = worker_setup(&opts.python, &opts.worker_script, scratch, pycache);
+    let built = crate::runtime::build_research_router(
+        &opts.data_dir,
+        &opts.session,
+        setup,
+        opts.eval_timeout_s,
+        crate::runtime::ResearchRouterOpts {
+            workspace_root: res.workspace_root.clone(),
+            literature_endpoints: res.literature_endpoints.clone(),
+        },
+    )?;
+    let defs: Vec<tools::ToolDef> = built.router.registry().defs().into_iter().cloned().collect();
+    let inspection = match inspect_session_for_resume(
+        &ledger,
+        &opts.session,
+        built.router.policy().version.as_str(),
+        &defs,
+    ) {
+        Ok(info) => info,
+        Err(r) => match r.kind {
+            ResumeRejectKind::LegacySchema => {
+                eprintln!("re-search resume: {r}");
+                return Ok(4);
+            }
+            ResumeRejectKind::TamperOrMissing | ResumeRejectKind::CorruptHistory => {
+                eprintln!("re-search resume: {r}");
+                return Ok(1);
+            }
+            ResumeRejectKind::UnsupportedRoute | ResumeRejectKind::Drift => return Err(r.to_string()),
+        },
+    };
+
+    let provider = opts.provider_override.unwrap_or(inspection.last_provider);
+    let model_requested = opts.model_override.clone().unwrap_or_else(|| {
+        if provider == inspection.last_provider {
+            inspection.last_model.clone()
+        } else {
+            provider.default_model().to_string()
+        }
+    });
+    let model = provider.resolve_model(&model_requested);
+    let api_base = opts
+        .api_base_override
+        .clone()
+        .unwrap_or_else(|| provider.default_base_url().to_string());
+    let transport = build_transport(provider, &api_base, &model)?;
+    let rec = Recorder { ledger, session: opts.session.clone() };
+    let mut sink = CliSink { rec: &rec };
+
+    let cfg = ResumeConfig {
+        prompt: opts.prompt.clone(),
+        model_requested,
+        model,
+        system_prompt: None,
+        max_turns: opts.max_turns,
+        max_tokens: opts.max_tokens,
+        containment: built.containment,
+        contained: built.contained,
+    };
+    let outcome = resume_agent_loop(&*transport, &built.router, &rec.ledger, &cfg, &mut sink)?;
+    eprintln!(
+        "[supervisor] session {} ended; see it with: re-search show {} --data-dir \"{}\"",
+        opts.session,
+        opts.session,
+        opts.data_dir.display()
+    );
+    Ok(map_outcome(outcome))
+}

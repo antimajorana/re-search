@@ -7,7 +7,7 @@ use ledger::{AppendedEvent, Ledger};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::time::Instant;
-use tools::{builtin, CallOutcome, Router};
+use tools::{CallOutcome, Router};
 
 pub const EVENT_VERSION: u32 = 1;
 pub const DEFAULT_MAX_TURNS: u32 = 16;
@@ -100,6 +100,7 @@ pub(crate) struct LoopParams<'a> {
     pub(crate) max_tokens: u32,
     pub(crate) start_turn: u32,
     pub(crate) initial_messages: Vec<Message>,
+    pub(crate) mask_keep_recent: Option<(usize, usize)>,
 }
 
 pub(crate) fn tool_defs_json(defs: &[&tools::ToolDef]) -> Vec<Value> {
@@ -149,7 +150,7 @@ pub fn run_agent_loop(
             "system_prompt": cfg.system_prompt,
             "max_turns": cfg.max_turns,
             "max_tokens": cfg.max_tokens,
-            "policy_version": builtin::POLICY_VERSION,
+            "policy_version": router.policy().version.as_str(),
             "containment": cfg.containment,
             "contained": cfg.contained,
             "tool_defs": tool_defs_json(&defs),
@@ -171,6 +172,7 @@ pub fn run_agent_loop(
             max_tokens: cfg.max_tokens,
             start_turn: 1,
             initial_messages,
+            mask_keep_recent: None,
         },
     )
 }
@@ -199,10 +201,14 @@ pub(crate) fn run_turn_loop(
     for offset in 0..params.max_turns {
         let leg_turns = offset + 1;
         let turn = params.start_turn + offset;
+        let outgoing_messages = match params.mask_keep_recent {
+            Some((keep, stride)) => crate::guardrails::mask_old_tool_outputs_stepped(&messages, keep, stride),
+            None => messages.clone(),
+        };
         let req = ModelRequest {
             model: params.model.to_string(),
             system: Some(params.system_prompt.to_string()),
-            messages: messages.clone(),
+            messages: outgoing_messages,
             tools: tool_specs.clone(),
             max_tokens: params.max_tokens,
         };

@@ -16,11 +16,26 @@ pub struct ConsoleApprover {
     containment: String,
     contained: bool,
     terminal: Mutex<TerminalInput>,
+    research_env: Option<research_tools::ResearchEnv>,
 }
 
 impl ConsoleApprover {
     pub fn new(ledger: Ledger, session: String, containment: String, contained: bool) -> Self {
         Self::with_terminal(ledger, session, containment, contained, TerminalInput::System)
+    }
+
+    pub fn with_research_env(
+        mut self,
+        data_dir: std::path::PathBuf,
+        workspace_root: Option<std::path::PathBuf>,
+    ) -> Result<Self, String> {
+        let env = match workspace_root {
+            Some(ws) => research_tools::ResearchEnv::with_workspace(data_dir, ws)
+                .map_err(|e| format!("invalid workspace: {e}"))?,
+            None => research_tools::ResearchEnv::new(data_dir),
+        };
+        self.research_env = Some(env);
+        Ok(self)
     }
 
     pub(super) fn with_terminal(
@@ -39,6 +54,24 @@ impl ConsoleApprover {
             containment,
             contained,
             terminal: Mutex::new(terminal),
+            research_env: None,
+        }
+    }
+
+    fn print_edit_preview(&self, request: &ApprovalRequest) {
+        if !matches!(request.tool_id.as_str(), "fs_write" | "latex_patch") {
+            return;
+        }
+        let Some(env) = &self.research_env else {
+            return;
+        };
+        if let Ok(preview) =
+            research_tools::preview_workspace_edit(env, &request.tool_id, &request.canonical_args)
+        {
+            eprintln!("--- workspace diff preview ({}) ---", super::sanitize_terminal_text(&preview.rel_path));
+            for line in preview.unified_diff.lines() {
+                eprintln!("    {}", super::sanitize_terminal_text(line));
+            }
         }
     }
 }
@@ -58,6 +91,7 @@ impl Approver for ConsoleApprover {
                 eprintln!("[supervisor] approval requested but no terminal is attached: answering NO");
                 (false, "supervisor: no terminal to ask on")
             } else {
+                self.print_edit_preview(request);
                 let req_json = serde_json::to_value(request).unwrap_or(Value::Null);
                 let banner = PromptBanner {
                     request: &req_json,

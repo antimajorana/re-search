@@ -10,7 +10,7 @@ use ledger::{Event, Ledger};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fmt;
-use tools::{builtin, Router, ToolDef};
+use tools::{Router, ToolDef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResumeRejectKind {
@@ -414,8 +414,9 @@ pub fn resume_agent_loop(
     let session = router.session();
     let defs = router.registry().defs();
     let expected_defs: Vec<ToolDef> = defs.iter().map(|d| (*d).clone()).collect();
+    let policy_version = router.policy().version.as_str();
     let (inspection, events) =
-        verify_and_read(ledger, session, builtin::POLICY_VERSION, &expected_defs).map_err(|e| e.to_string())?;
+        verify_and_read(ledger, session, policy_version, &expected_defs).map_err(|e| e.to_string())?;
 
     let info = transport.info();
     let target_provider = ProviderKind::parse(info.provider)?;
@@ -450,7 +451,7 @@ pub fn resume_agent_loop(
             "system_prompt": system_prompt,
             "max_turns": cfg.max_turns,
             "max_tokens": cfg.max_tokens,
-            "policy_version": builtin::POLICY_VERSION,
+            "policy_version": policy_version,
             "containment": cfg.containment,
             "contained": cfg.contained,
             "history_messages": messages.len(),
@@ -469,6 +470,7 @@ pub fn resume_agent_loop(
             max_tokens: cfg.max_tokens,
             start_turn: inspection.start_turn,
             initial_messages: messages,
+            mask_keep_recent: None,
         },
     )
 }

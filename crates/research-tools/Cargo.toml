@@ -1,0 +1,27 @@
+[package]
+name = "research-tools"
+description = "Sandboxed workspace, document ingestion, literature search, proof-graph, and LaTeX research tools."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+policy = { path = "../policy" }
+ledger = { path = "../ledger" }
+tools = { path = "../tools" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+ureq = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true }
+pdf-extract = { workspace = true }
+similar = { workspace = true }
+regex = { workspace = true }
+roxmltree = { workspace = true }
+percent-encoding = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

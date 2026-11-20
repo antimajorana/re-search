@@ -1,0 +1,110 @@
+/* Gemini-inspired design tokens: calm porcelain light + obsidian dark themes */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --bg-stage: #ffffff;
+  --bg-surface: #f8fafd;
+  --bg-rail: #eff3f9;
+  --bg-elevated: #ffffff;
+  --bg-subtle: #f1f4f9;
+  --bg-hover: #e5ebf4;
+  --bg-active: #d3e3fd;
+  --bg-code: #f5f7fb;
+  --ink-primary: #1f1f1f;
+  --ink-secondary: #444746;
+  --ink-muted: #747775;
+  --accent: #0b57d0;
+  --accent-hover: #0842a0;
+  --accent-ink: #ffffff;
+  --accent-soft: #d3e3fd;
+  --accent-soft-ink: #041e49;
+  --border-subtle: #dfe4ec;
+  --border-strong: #c4c7c5;
+  --status-ok: #137333;
+  --status-ok-bg: #e6f4ea;
+  --status-ok-border: #a8dab5;
+  --status-warn: #9a5b00;
+  --status-warn-bg: #fef7e0;
+  --status-warn-border: #f6d57a;
+  --status-err: #b3261e;
+  --status-err-bg: #fce8e6;
+  --status-err-border: #f2b8b5;
+  --status-muted: #5f6368;
+  --status-muted-bg: #eef1f5;
+  --diff-add-bg: #e6f4ea;
+  --diff-add-ink: #0d5224;
+  --diff-del-bg: #fce8e6;
+  --diff-del-ink: #8c1d18;
+  --shadow-sm: 0 1px 2px rgba(31, 31, 31, 0.06);
+  --shadow-md: 0 4px 16px rgba(31, 31, 31, 0.08), 0 1px 3px rgba(31, 31, 31, 0.05);
+  --shadow-lg: 0 12px 32px rgba(31, 31, 31, 0.12);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-stage: #131314;
+  --bg-surface: #131314;
+  --bg-rail: #1e1f20;
+  --bg-elevated: #282a2c;
+  --bg-subtle: #1b1c1d;
+  --bg-hover: #303235;
+  --bg-active: #004a77;
+  --bg-code: #1a1b1e;
+  --ink-primary: #e3e3e3;
+  --ink-secondary: #c4c7c5;
+  --ink-muted: #8e918f;
+  --accent: #a8c7fa;
+  --accent-hover: #c2d7fa;
+  --accent-ink: #062e6f;
+  --accent-soft: #1b3252;
+  --accent-soft-ink: #d3e3fd;
+  --border-subtle: #2d2f31;
+  --border-strong: #444746;
+  --status-ok: #81c995;
+  --status-ok-bg: #132a1c;
+  --status-ok-border: #255436;
+  --status-warn: #fdd663;
+  --status-warn-bg: #2b210e;
+  --status-warn-border: #5c4314;
+  --status-err: #f28b82;
+  --status-err-bg: #341616;
+  --status-err-border: #692825;
+  --status-muted: #9aa0a6;
+  --status-muted-bg: #242628;
+  --diff-add-bg: #12291b;
+  --diff-add-ink: #9ae0ad;
+  --diff-del-bg: #351717;
+  --diff-del-ink: #f6aea7;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+
+:root {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, ui-monospace, monospace;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+  --rail-width: 264px;
+  --canvas-width: 460px;
+  --topbar-height: 54px;
+  --transition-fast: 150ms cubic-bezier(0.2, 0, 0, 1);
+  --transition-med: 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.katex {
+  font-size: 1.06em;
+}
+
+.katex-display {
+  margin: 0.9em 0;
+  padding: 0.2em 0.15em;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+[hidden] {
+  display: none !important;
+}

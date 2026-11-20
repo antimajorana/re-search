@@ -192,6 +192,44 @@ result.
   `Worker`/`AppContainerSandbox` epoch, so prior `worker-session` grants never
   carry across process boundaries and `sympy_eval` always re-prompts.
 
+## What Stages 6–8 add (workspace/LaTeX tools, proof guardrails & loopback desktop UI)
+
+- **Workspace path sandboxing & bounded ingestion (`crates/research-tools`).**
+  `WorkspaceSandbox` canonicalizes paths strictly inside the attached
+  `workspace_root` and `sessions/<id>/sources`, rejecting `..`, NUL bytes,
+  alternate data streams, symlinks escaping root, and writes targeting
+  `ledger.db`, `blobs/`, or `providers.json`. Archive (`tar.gz`/`zip`) and PDF
+  ingestion enforce anti-bomb byte/file/page caps, reject archive symlinks, and
+  record `"source.ingested"` `"raw_blob"` digests.
+- **Unconfigurable `write-workspace` unified-diff human approvals.** Both
+  `ExecuteCode` (`sympy_eval`, `latex_compile`) and `WriteWorkspace` (`fs_write`,
+  `latex_patch`) are hard-clamped from `allow` to `ask` in `policy::evaluate`.
+  `ConsoleApprover` and `UiApprover` display a unified diff preview
+  (`preview_workspace_edit`) and SHA-256 request digest, store pre-write file
+  backups in `blobs/` (`"workspace.backup"`), and record `"approval.answered"`
+  before modifying any workspace file.
+- **Allowlisted literature egress & deterministic `tex_audit`.** `arxiv_search`
+  and `literature_search` restrict remote hosts to allowlisted HTTPS science
+  endpoints (`arxiv.org`, `export.arxiv.org`, `inspirehep.net`,
+  `api.crossref.org`, `api.semanticscholar.org`, plus loopback mock overrides in
+  tests), reject XXE/DTD feeds, and record `"literature.fetched"` `"raw_blob"`s.
+  `tex_audit` deterministically checks `\label`/`\ref`/`\cite`, verbatim TeX
+  quotes, and blocks reliance on withdrawn arXiv papers or retracted DOIs.
+- **Stateless verifiers, isolated Side-Talk & verified fork/export
+  (`crates/agent`, `crates/export`).** Step and Full-Solution Verifiers see only
+  the problem prompt, `depends_on` DAG ancestors, and `<deterministic_tex_audit>`
+  (forcing `"rejected"` if `tex_audit` has blockers). Side-Talk writes only to
+  `sidetalk:<id>` without mutating the solver chain; `fork` and `export` verify
+  session hash chains before cloning prefixes or writing `.tex`/`.html`/`.zip`
+  bundles.
+- **Loopback `127.0.0.1` desktop server & CSRF protection
+  (`crates/desktop-server`).** Binds exclusively to `127.0.0.1` (`std::net` +
+  `httparse`, zero `tokio`), checks `Host` and `Origin` headers, issues a
+  per-launch 256-bit `getrandom` token (`HttpOnly; SameSite=Strict` cookie +
+  `X-ReSearch-Token` header on mutating routes), serves KaTeX `0.19.1` offline,
+  and stores `<data_dir>/providers.json` outside git (`0600` on Unix, redacted on
+  `GET`/`PUT /api/settings/providers`).
+
 ## Remaining limits & gaps
 
 - **Windows system and `ALL APPLICATION PACKAGES` files remain readable.**
@@ -236,11 +274,13 @@ result.
   `mcp.json` token exposure.** On `--route cli`, `claude.exe` runs uncontained
   in a kill-on-close Job Object, controls the external loop, and reads
   `sessions/<id>/mcp.json` (`CORE_SESSION_TOKEN`).
-- **Supervisor memory shares the user's logon context (`--route api`).** While
-  the Python worker runs inside the zero-capability AppContainer (when
-  `--python` is configured on Windows) and cannot read `re-search` memory or
-  environment variables, any uncontained local process running as the same
-  Windows user has OS privileges equal to `re-search` itself
-  (provider API keys in environment/process memory).
-- **Nothing is verified.** `sympy_eval` returns computations, and `ledger_note`
-  records `unverified` notes.
+- **Supervisor & LaTeX compiler run in the user's logon context.** While the
+  Python worker runs inside the zero-capability AppContainer on Windows, host
+  supervisor operations (`fs_read`, approved `fs_write`/`latex_patch`, approved
+  `latex_compile` invoking `pdflatex`/`latexmk` with `-no-shell-escape`, and
+  allowlisted literature HTTP calls) execute as the `re-search` user, and any
+  uncontained local process running as the same OS user shares access to
+  `providers.json`, loopback ports, and environment memory.
+- **Heuristic & LLM checks are not formal kernel proofs.** `sympy_eval`,
+  `check_expression_sanity`, `tex_audit`, and LLM Step/Full Verifiers catch many
+  algebraic and citation errors, not formal theorem-prover guarantees.

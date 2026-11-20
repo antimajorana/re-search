@@ -8,11 +8,18 @@
 
 pub mod anthropic;
 pub mod gemini;
+pub mod guardrails;
 pub(crate) mod http;
+pub mod narrator;
 pub mod openai;
+pub mod presets;
+pub mod provider_config;
 pub mod resume;
 pub mod runner;
+pub mod sidetalk;
+pub mod strategist;
 pub mod transport;
+pub mod verifiers;
 pub(crate) mod wire;
 
 pub use anthropic::{
@@ -20,7 +27,17 @@ pub use anthropic::{
     DEFAULT_API_MODEL,
 };
 pub use gemini::{GeminiConfig, GeminiTransport};
+pub use guardrails::{
+    build_research_system_prompt, check_computation_interpretation, check_final_answer_gate,
+    mask_old_tool_outputs, mask_old_tool_outputs_stepped, run_research_loop,
+    validate_pinned_conventions, GuardrailConfig,
+};
+pub use narrator::{build_derivation_sheet, narrate_session, NarrationReport};
 pub use openai::{OpenAiConfig, OpenAiTransport};
+pub use presets::{ModelEndpointSpec, PresetKind, RoleAssignment};
+pub use provider_config::{
+    ProviderEntry, ProviderKeyStore, RedactedProviderConfigView, RedactedProviderEntry, PROVIDERS_FILE,
+};
 pub use resume::{
     inspect_session_for_resume, resume_agent_loop, ResumeConfig, ResumeInspection, ResumeReject, ResumeRejectKind,
 };
@@ -28,8 +45,16 @@ pub use runner::{
     run_agent_loop, AgentConfig, EventSink, NoopSink, SessionOutcome, DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_SYSTEM_PROMPT, EVENT_VERSION,
 };
+pub use sidetalk::{ask_sidetalk, read_sidetalk_thread, sidetalk_session_key, SideTalkTurn};
+pub use strategist::{
+    consult_strategist, count_strategist_consultations, mandatory_strategist_required,
+    StrategistAdvice, MAX_STRATEGIST_CONSULTATIONS,
+};
 pub use transport::{
     ContentBlock, Message, ModelRequest, ModelResponse, PreparedRequest, ProviderKind, Role, StopReason, ToolSpec,
     Transport, TransportError, TransportErrorKind, TransportInfo, DEFAULT_GEMINI_BASE, DEFAULT_GEMINI_MODEL,
     DEFAULT_OLLAMA_BASE, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE, DEFAULT_OPENAI_MODEL,
+};
+pub use verifiers::{
+    verify_full_solution, verify_step, VerificationIssue, VerificationReport, VerificationVerdict,
 };

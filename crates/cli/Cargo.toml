@@ -1,6 +1,6 @@
 [package]
 name = "cli"
-description = "Supervisor: starts a headless agent session and records it."
+description = "Supervisor: runs CLI/API sessions, fork/diff/export, and the Gemini-inspired desktop UI."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,8 +11,12 @@ name = "re-search"
 path = "src/main.rs"
 
 [dependencies]
+policy = { path = "../policy" }
 agent = { path = "../agent" }
 ledger = { path = "../ledger" }
 tools = { path = "../tools" }
+research-tools = { path = "../research-tools" }
+export = { path = "../export" }
+desktop-server = { path = "../desktop-server" }
 worker = { path = "../worker" }
 serde_json = { workspace = true }

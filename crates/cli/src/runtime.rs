@@ -75,11 +75,36 @@ fn build_worker(_data_dir: &Path, _session: &str, _setup: WorkerSetup) -> Result
     Err("AppContainer sandbox requires Windows".to_string())
 }
 
+pub(crate) struct ResearchRouterOpts {
+    pub workspace_root: Option<PathBuf>,
+    pub literature_endpoints: research_tools::LiteratureEndpoints,
+}
+
 pub(crate) fn build_in_process_router(
     data_dir: &Path,
     session: &str,
     worker_setup: Option<WorkerSetup>,
     eval_timeout_s: u64,
+) -> Result<BuiltRouter, String> {
+    build_router_inner(data_dir, session, worker_setup, eval_timeout_s, None)
+}
+
+pub(crate) fn build_research_router(
+    data_dir: &Path,
+    session: &str,
+    worker_setup: Option<WorkerSetup>,
+    eval_timeout_s: u64,
+    research_opts: ResearchRouterOpts,
+) -> Result<BuiltRouter, String> {
+    build_router_inner(data_dir, session, worker_setup, eval_timeout_s, Some(research_opts))
+}
+
+fn build_router_inner(
+    data_dir: &Path,
+    session: &str,
+    worker_setup: Option<WorkerSetup>,
+    eval_timeout_s: u64,
+    research_opts: Option<ResearchRouterOpts>,
 ) -> Result<BuiltRouter, String> {
     let worker = match worker_setup {
         Some(setup) => Some(build_worker(data_dir, session, setup)?),
@@ -112,12 +137,26 @@ pub(crate) fn build_in_process_router(
 
     let router_ledger = Ledger::open(data_dir).map_err(|e| e.to_string())?;
     let approval_ledger = Ledger::open(data_dir).map_err(|e| e.to_string())?;
-    let approver = Arc::new(ConsoleApprover::new(
+    let mut approver = ConsoleApprover::new(
         approval_ledger,
         session.to_string(),
         containment.clone(),
         contained,
-    ));
-    let router = Router::new(registry, builtin::default_policy(), router_ledger, session, approver);
+    );
+    let policy = match research_opts {
+        Some(ro) => {
+            approver = approver.with_research_env(data_dir.to_path_buf(), ro.workspace_root.clone())?;
+            let env = match ro.workspace_root {
+                Some(ws) => research_tools::ResearchEnv::with_workspace(data_dir.to_path_buf(), ws)
+                    .map_err(|e| format!("invalid workspace: {e}"))?,
+                None => research_tools::ResearchEnv::new(data_dir.to_path_buf()),
+            }
+            .with_endpoints(ro.literature_endpoints);
+            research_tools::register_research_tools(&mut registry, Arc::new(env));
+            research_tools::research_policy()
+        }
+        None => builtin::default_policy(),
+    };
+    let router = Router::new(registry, policy, router_ledger, session, Arc::new(approver));
     Ok(BuiltRouter { router, containment, contained })
 }

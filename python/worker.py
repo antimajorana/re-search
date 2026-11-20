@@ -49,6 +49,17 @@ def clip(text):
 def make_namespace():
     ns = {"__name__": "__worker__"}
     exec("import sympy\nfrom sympy import *", ns)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    if script_dir and script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+    try:
+        import solver_calc  # noqa: F401
+
+        ns["solver_calc"] = solver_calc
+        for name in getattr(solver_calc, "__all__", ()):
+            ns[name] = getattr(solver_calc, name)
+    except Exception:
+        pass
     return ns
 
 

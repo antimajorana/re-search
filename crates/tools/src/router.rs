@@ -66,6 +66,10 @@ impl Router {
         &self.registry
     }
 
+    pub fn policy(&self) -> &Policy {
+        &self.policy
+    }
+
     pub fn session(&self) -> &str {
         &self.session
     }

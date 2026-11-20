@@ -165,6 +165,21 @@ fn build_router() -> Result<Router, String> {
     };
     let worker = Arc::new(Mutex::new(worker));
 
+    let workspace_root = env("CORE_WORKSPACE")
+        .or_else(|| env("RE_SEARCH_WORKSPACE"))
+        .map(PathBuf::from);
+    if let Some(ws) = &workspace_root {
+        if !ws.exists() || !ws.is_dir() {
+            return Err(format!("CORE_WORKSPACE `{}` does not exist or is not a directory", ws.display()));
+        }
+    }
+    let sources_exist = research_tools::validate_session_id(&session).is_ok()
+        && data_dir.join("sessions").join(&session).join("sources").exists();
+    let enable_flag = env("CORE_ENABLE_RESEARCH_TOOLS")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    let use_research = workspace_root.is_some() || sources_exist || enable_flag;
+
     let mut registry = Registry::new();
     registry.register_worker_session(
         builtin::sympy_eval_def(),
@@ -181,13 +196,40 @@ fn build_router() -> Result<Router, String> {
     );
     registry.register(builtin::ledger_note_def(), builtin::ledger_note_handler());
 
+    let policy = if use_research {
+        let mut endpoints = research_tools::LiteratureEndpoints::default();
+        if let Some(u) = env("RE_SEARCH_ARXIV_BASE") {
+            endpoints.arxiv_api_base = u.trim_end_matches('/').to_string();
+            endpoints.arxiv_eprint_base = endpoints.arxiv_api_base.clone();
+        }
+        if let Some(u) = env("RE_SEARCH_INSPIRE_BASE") {
+            endpoints.inspire_api_base = u.trim_end_matches('/').to_string();
+        }
+        if let Some(u) = env("RE_SEARCH_CROSSREF_BASE") {
+            endpoints.crossref_api_base = u.trim_end_matches('/').to_string();
+        }
+        if let Some(u) = env("RE_SEARCH_S2_BASE").or_else(|| env("RE_SEARCH_SEMANTIC_SCHOLAR_BASE")) {
+            endpoints.semantic_scholar_api_base = u.trim_end_matches('/').to_string();
+        }
+        let r_env = match workspace_root {
+            Some(ws) => research_tools::ResearchEnv::with_workspace(data_dir.clone(), ws)
+                .map_err(|e| format!("invalid CORE_WORKSPACE: {e}"))?,
+            None => research_tools::ResearchEnv::new(data_dir.clone()),
+        }
+        .with_endpoints(endpoints);
+        research_tools::register_research_tools(&mut registry, Arc::new(r_env));
+        research_tools::research_policy()
+    } else {
+        builtin::default_policy()
+    };
+
     let approver: Arc<dyn tools::Approver> = match (env("CORE_APPROVAL_ADDR"), env("CORE_SESSION_TOKEN")) {
         (Some(addr), Some(token)) => {
             Arc::new(TcpApprover { addr, token, containment, contained, wait: Duration::from_secs(900) })
         }
         _ => Arc::new(DenyAll),
     };
-    Ok(Router::new(registry, builtin::default_policy(), ledger, &session, approver))
+    Ok(Router::new(registry, policy, ledger, &session, approver))
 }
 
 #[tokio::main(flavor = "current_thread")]

@@ -4,8 +4,11 @@ members = [
     "crates/policy",
     "crates/ledger",
     "crates/tools",
+    "crates/research-tools",
     "crates/worker",
     "crates/agent",
+    "crates/export",
+    "crates/desktop-server",
     "crates/mcp-server",
     "crates/cli",
 ]
@@ -23,3 +26,13 @@ sha2 = "0.10"
 getrandom = "0.2"
 ureq = { version = "3.5.2", default-features = false, features = ["rustls", "gzip"] }
 zeroize = "1.9"
+flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
+tar = { version = "0.4.46", default-features = false }
+zip = { version = "9.8.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+pdf-extract = "0.12.1"
+similar = "3.2.1"
+regex = "1.13.2"
+roxmltree = "0.21.2"
+percent-encoding = "2.3.2"
+httparse = "1.10.1"
+tempfile = "3.27.0"

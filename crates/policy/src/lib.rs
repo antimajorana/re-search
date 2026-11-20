@@ -7,9 +7,8 @@
 //! Precedence among matching rules is deny > ask > allow. If no rule matches,
 //! the policy's default applies (deny unless stated otherwise).
 //!
-//! One invariant is built in and cannot be configured away in v0: a tool of
-//! effect class `execute-code` is never allowed without asking, because v0 has
-//! no sandbox that contains the code.
+//! Built-in invariants that cannot be configured away: tools of effect class
+//! `execute-code` or `write-workspace` are never allowed without asking a human.
 
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +24,9 @@ pub enum EffectClass {
     MutateReversible,
     MutateIrreversible,
     ExecuteCode,
+    ReadWorkspace,
+    WriteWorkspace,
+    NetworkRead,
 }
 
 impl EffectClass {
@@ -35,6 +37,9 @@ impl EffectClass {
             EffectClass::MutateReversible => "mutate-reversible",
             EffectClass::MutateIrreversible => "mutate-irreversible",
             EffectClass::ExecuteCode => "execute-code",
+            EffectClass::ReadWorkspace => "read-workspace",
+            EffectClass::WriteWorkspace => "write-workspace",
+            EffectClass::NetworkRead => "network-read",
         }
     }
 }
@@ -159,9 +164,18 @@ pub fn evaluate(policy: &Policy, req: &Request) -> Response {
         Some(r) => (r.decision, Some(r.id.as_str()), "matched rule"),
         None => (policy.default, None, "no rule matched; policy default"),
     };
-    if req.effect == EffectClass::ExecuteCode && decision == Decision::Allow {
-        decision = Decision::Ask;
-        reason = "execute-code is never allowed without asking in v0 (no sandbox)";
+    if decision == Decision::Allow {
+        match req.effect {
+            EffectClass::ExecuteCode => {
+                decision = Decision::Ask;
+                reason = "execute-code is never allowed without asking in v0 (no sandbox)";
+            }
+            EffectClass::WriteWorkspace => {
+                decision = Decision::Ask;
+                reason = "write-workspace is never allowed without human approval";
+            }
+            _ => {}
+        }
     }
     respond(policy, decision, rule_id, reason)
 }
@@ -267,5 +281,37 @@ mod tests {
         let p = policy(vec![rule("a", Match::Any, Decision::Ask)]);
         let q = req("x", EffectClass::ObserveLocal);
         assert_eq!(evaluate(&p, &q), evaluate(&p, &q));
+    }
+
+    #[test]
+    fn write_workspace_is_clamped_to_ask_while_deny_stays_deny() {
+        let p = policy(vec![rule("a", Match::Any, Decision::Allow)]);
+        let r = evaluate(&p, &req("fs_write", EffectClass::WriteWorkspace));
+        assert_eq!(r.decision, Decision::Ask);
+        assert_eq!(r.matched_rule.as_deref(), Some("a"));
+
+        let p_ask = policy(vec![rule("k", Match::Any, Decision::Ask)]);
+        let r_ask = evaluate(&p_ask, &req("latex_patch", EffectClass::WriteWorkspace));
+        assert_eq!((r_ask.decision, r_ask.matched_rule.as_deref()), (Decision::Ask, Some("k")));
+
+        let p_deny = policy(vec![rule("d", Match::Any, Decision::Deny)]);
+        assert_eq!(evaluate(&p_deny, &req("fs_write", EffectClass::WriteWorkspace)).decision, Decision::Deny);
+    }
+
+    #[test]
+    fn stage6_effect_classes_allow_read_and_network_read_when_configured() {
+        assert_eq!(EffectClass::ReadWorkspace.as_str(), "read-workspace");
+        assert_eq!(EffectClass::WriteWorkspace.as_str(), "write-workspace");
+        assert_eq!(EffectClass::NetworkRead.as_str(), "network-read");
+
+        let mut r_read = rule("rw", Match::Any, Decision::Allow);
+        r_read.effect = Some(EffectClass::ReadWorkspace);
+        let mut r_net = rule("nr", Match::Any, Decision::Allow);
+        r_net.effect = Some(EffectClass::NetworkRead);
+        let p = policy(vec![r_read, r_net]);
+
+        assert_eq!(evaluate(&p, &req("fs_read", EffectClass::ReadWorkspace)).decision, Decision::Allow);
+        assert_eq!(evaluate(&p, &req("arxiv_search", EffectClass::NetworkRead)).decision, Decision::Allow);
+        assert_eq!(evaluate(&p, &req("other_net", EffectClass::NetworkEgress)).decision, Decision::Deny);
     }
 }

@@ -1,6 +1,7 @@
 //! CLI argument parsing, usage text, and subcommand dispatch helpers.
 
 use crate::api_session;
+use crate::cmd_ext;
 use crate::session;
 use crate::session_lock::validate_session_id;
 use agent::{ProviderKind, DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS};
@@ -11,9 +12,22 @@ pub const USAGE: &str = "usage:
   re-search run --prompt TEXT [--route cli|api] [--provider anthropic|openai|ollama|gemini] [--model MODEL]
                 [--python EXE] [--claude EXE] [--core-exe EXE] [--data-dir DIR]
                 [--worker-script PY] [--api-base URL] [--max-turns N] [--max-tokens N]
+                [--workspace DIR] [--enable-research-tools true|false]
+                [--verification-mode true|false] [--calculation-mode true|false]
+                [--conventions TEXT] [--arxiv-base URL] [--inspire-base URL] [--crossref-base URL]
   re-search resume SESSION --prompt TEXT [--provider anthropic|openai|ollama|gemini] [--model MODEL]
                 [--python EXE] [--data-dir DIR] [--worker-script PY] [--api-base URL]
-                [--max-turns N] [--max-tokens N]
+                [--max-turns N] [--max-tokens N] [--workspace DIR] [--enable-research-tools true|false]
+                [--arxiv-base URL] [--inspire-base URL] [--crossref-base URL]
+  re-search ui [--port PORT] [--workspace DIR] [--data-dir DIR] [--python EXE]
+               [--api-base URL] [--arxiv-base URL] [--inspire-base URL] [--crossref-base URL]
+               [--no-open true|false] [--print-url-json true|false]
+  re-search desktop [--port PORT] [--workspace DIR] [--data-dir DIR] [--python EXE]
+               [--api-base URL] [--arxiv-base URL] [--inspire-base URL] [--crossref-base URL]
+               [--no-open true|false] [--print-url-json true|false]
+  re-search fork SESSION --at-seq N [--assumption TEXT] [--data-dir DIR]
+  re-search diff BASE_SESSION TARGET_SESSION [--data-dir DIR]
+  re-search export SESSION --format tex|html|zip --out PATH [--data-dir DIR]
   re-search show SESSION [--data-dir DIR]
   re-search sessions [--data-dir DIR]
   re-search verify [SESSION] [--data-dir DIR]
@@ -21,7 +35,7 @@ pub const USAGE: &str = "usage:
 environment (RE_SEARCH_* preferred, RESEARCH_CORE_* fallback):
   RE_SEARCH_ROUTE, RE_SEARCH_PROVIDER, RE_SEARCH_API_KEY, RE_SEARCH_API_BASE,
   RE_SEARCH_PYTHON, RE_SEARCH_CLAUDE, RE_SEARCH_DATA, RE_SEARCH_WORKER_SCRIPT,
-  RE_SEARCH_CORE_EXE,
+  RE_SEARCH_CORE_EXE, RE_SEARCH_ARXIV_BASE, RE_SEARCH_INSPIRE_BASE, RE_SEARCH_CROSSREF_BASE,
   ANTHROPIC_API_KEY, OPENAI_API_KEY, OLLAMA_API_KEY, GEMINI_API_KEY, GOOGLE_API_KEY";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +78,7 @@ fn parse_positive_u32(flag: &str, raw: String) -> Result<u32, String> {
     Ok(val)
 }
 
-fn parse_eval_timeout_s() -> u64 {
+pub(crate) fn parse_eval_timeout_s() -> u64 {
     env_str_any(&[
         "RE_SEARCH_EVAL_TIMEOUT_S",
         "RESEARCH_CORE_EVAL_TIMEOUT_S",
@@ -144,7 +158,7 @@ fn find_core_exe(flag: Option<String>, exe_dir: &Path) -> Result<PathBuf, String
     Ok(core_exe)
 }
 
-fn resolve_worker_paths(
+pub(crate) fn resolve_worker_paths(
     flags: &mut HashMap<String, String>,
     exe_dir: &Path,
 ) -> Result<(Option<PathBuf>, Option<PathBuf>), String> {
@@ -175,11 +189,34 @@ fn resolve_optional_provider(flag: Option<String>) -> Result<Option<ProviderKind
         .transpose()
 }
 
-fn reject_unknown_flags(flags: &HashMap<String, String>) -> Result<(), String> {
+pub(crate) fn reject_unknown_flags(flags: &HashMap<String, String>) -> Result<(), String> {
     if let Some(unknown) = flags.keys().next() {
         return Err(format!("unknown flag --{unknown}\n{USAGE}"));
     }
     Ok(())
+}
+
+fn take_research_opts(flags: &mut HashMap<String, String>) -> Result<api_session::ResearchOpts, String> {
+    let workspace_root = flags
+        .remove("workspace")
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from);
+    let enable_research_tools =
+        cmd_ext::parse_bool_flag("enable-research-tools", flags.remove("enable-research-tools"), false)?;
+    let verification_mode =
+        cmd_ext::parse_bool_flag("verification-mode", flags.remove("verification-mode"), false)?;
+    let calculation_mode =
+        cmd_ext::parse_bool_flag("calculation-mode", flags.remove("calculation-mode"), false)?;
+    let pinned_conventions = flags.remove("conventions").filter(|s| !s.trim().is_empty());
+    let literature_endpoints = cmd_ext::parse_literature_endpoints(flags)?;
+    Ok(api_session::ResearchOpts {
+        workspace_root,
+        enable_research_tools,
+        literature_endpoints,
+        verification_mode,
+        calculation_mode,
+        pinned_conventions,
+    })
 }
 
 fn run_command(mut flags: HashMap<String, String>, data_dir: PathBuf) -> Result<i32, String> {
@@ -193,7 +230,20 @@ fn run_command(mut flags: HashMap<String, String>, data_dir: PathBuf) -> Result<
 
     match route {
         Route::Cli => {
-            for disallowed in ["provider", "api-base", "max-turns", "max-tokens"] {
+            for disallowed in [
+                "provider",
+                "api-base",
+                "max-turns",
+                "max-tokens",
+                "workspace",
+                "enable-research-tools",
+                "verification-mode",
+                "calculation-mode",
+                "conventions",
+                "arxiv-base",
+                "inspire-base",
+                "crossref-base",
+            ] {
                 if flags.contains_key(disallowed) {
                     return Err(format!("--{disallowed} is only supported with --route api\n{USAGE}"));
                 }
@@ -252,6 +302,7 @@ fn run_command(mut flags: HashMap<String, String>, data_dir: PathBuf) -> Result<
                 None => DEFAULT_MAX_TOKENS,
             };
             let (python, worker_script) = resolve_worker_paths(&mut flags, exe_dir)?;
+            let research_opts = take_research_opts(&mut flags)?;
             reject_unknown_flags(&flags)?;
 
             let opts = api_session::ApiRunOpts {
@@ -267,7 +318,7 @@ fn run_command(mut flags: HashMap<String, String>, data_dir: PathBuf) -> Result<
                 eval_timeout_s: parse_eval_timeout_s(),
             };
             std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
-            api_session::run(&opts)
+            api_session::run_with_research(&opts, &research_opts)
         }
     }
 }
@@ -311,6 +362,7 @@ fn resume_command(
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exe_dir = exe.parent().ok_or("executable has no directory")?;
     let (python, worker_script) = resolve_worker_paths(&mut flags, exe_dir)?;
+    let research_opts = take_research_opts(&mut flags)?;
     reject_unknown_flags(&flags)?;
 
     let opts = api_session::ApiResumeOpts {
@@ -326,7 +378,7 @@ fn resume_command(
         max_tokens,
         eval_timeout_s: parse_eval_timeout_s(),
     };
-    api_session::resume(&opts)
+    api_session::resume_with_research(&opts, &research_opts)
 }
 
 pub(crate) fn run_args<I>(mut args: I) -> Result<i32, String>
@@ -357,6 +409,21 @@ where
             run_command(flags, data_dir)
         }
         "resume" => resume_command(positional, flags, data_dir),
+        "ui" => {
+            if !positional.is_empty() {
+                return Err(format!("unexpected positional argument `{}`\n{USAGE}", positional[0]));
+            }
+            cmd_ext::ui_command(flags, data_dir, false)
+        }
+        "desktop" => {
+            if !positional.is_empty() {
+                return Err(format!("unexpected positional argument `{}`\n{USAGE}", positional[0]));
+            }
+            cmd_ext::ui_command(flags, data_dir, true)
+        }
+        "fork" => cmd_ext::fork_command(positional, flags, data_dir),
+        "diff" => cmd_ext::diff_command(positional, flags, data_dir),
+        "export" => cmd_ext::export_command(positional, flags, data_dir),
         "show" => {
             reject_unknown_flags(&flags)?;
             let session = positional.first().ok_or(format!("show needs a session id\n{USAGE}"))?;
