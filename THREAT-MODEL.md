@@ -256,9 +256,14 @@ result.
   - *Host.* Every request must carry a loopback `Host` (`127.0.0.1[:port]` or
     `localhost[:port]`), which defeats DNS-rebinding pages.
   - *Two secrets per launch.* A 256-bit `getrandom` **token** and a separate
-    256-bit **stream cookie** value. The browser is opened at `/?token=…`;
-    only that load gets the token written into the page (`<meta>` tag), and it
-    sets the `HttpOnly; SameSite=Strict` cookie `__research_stream_<port>`.
+    256-bit **stream cookie** value. `re-search ui` opens the browser at
+    `/?token=…`; the `re-search-app` window instead requests `/` with the
+    token in the `X-ReSearch-Token` request header (see below). Only a load
+    of `/` that already carries a valid token (query or header) gets the token
+    written into the page (`<meta>` tag), and it sets the
+    `HttpOnly; SameSite=Strict` cookie `__research_stream_<port>`. A page on
+    another origin cannot attach that header to a navigation, and a `fetch`
+    carrying it needs a CORS preflight the server never grants.
     The UI removes the token from the address bar and keeps it in
     `sessionStorage` (per origin, port included, per tab). A reload carries
     only the cookie and is served the page *without* the token, so the cookie
@@ -311,6 +316,70 @@ result.
     stored value that fails the same check is not echoed.
   - KaTeX `0.19.1` is served offline from the binary; the UI loads nothing
     from the network.
+
+## The desktop window (`re-search-app`, `crates/desktop-app`)
+
+- **One process, no browser.** `re-search-app.exe` starts the loopback
+  server in-process (`open_window: false`, `print_url_json: false`) and runs
+  one WebView2 window (`wry 0.57.3` + `tao 0.37.3`) on the main thread.
+  Closing the window shuts the server down and exits the process, which also
+  ends child processes held in kill-on-close Job Objects. `re-search desktop`
+  starts it from its own directory (passing only `--data-dir`, `--workspace`,
+  `--python`, `--worker-script`, `--port`, never a token); with any other flag,
+  or when `re-search-app.exe` is absent, it falls back to `re-search ui`.
+- **Token delivery without a URL.** The first navigation is `GET /` with the
+  token in the `X-ReSearch-Token` request header (WebView2
+  `NavigateWithWebResourceRequest`). The token is never placed in a URL, on
+  the command line of `re-search-app` or of the WebView2 processes (checked
+  on this machine with WebView2 158: no `msedgewebview2.exe` command line
+  carried it), or in the readiness JSON. WebView2 may drop such a header
+  silently, so after the first load a probe script reports only `ok` /
+  `no-token` / `elsewhere`. On `no-token`, a fallback script is run in the
+  current top-level document, only if `window.location.origin` is exactly
+  this server's `http://127.0.0.1:<port>`: it stores the token in the
+  `sessionStorage` key the UI reads (`re-search-token`), fetches `/` with the
+  header (which sets the stream cookie) and reloads `/` (served without the
+  token because only the cookie is sent). On the test machine the header path
+  worked and the fallback was not needed.
+- **WebView2 profile.** The window runs InPrivate (`with_incognito(true)`,
+  WebView2 `IsInPrivateModeEnabled`), intended to keep cookies (including the
+  stream cookie), `sessionStorage` (holding the token) and the HTTP cache for
+  the session only. Microsoft's reference page for that property does not
+  spell out what InPrivate stores where, so this rests on InPrivate's general
+  browser semantics plus the on-disk search below. Cookies and
+  `sessionStorage` are what the event stream (`EventSource` with the
+  `SameSite=Strict` cookie) and export downloads rely on; the test run showed
+  the page authenticated (the token reached the page), but the event stream
+  and an export download were not exercised inside the window. The user data
+  folder is
+  `%LOCALAPPDATA%\re-search\webview` (never under a data directory's
+  `sessions/` or inside the workspace; the app refuses to start otherwise).
+  WebView2 still writes browser component data there (`Local State`,
+  crash-report settings, variations seeds, shader caches, an empty `Default`
+  profile skeleton). After a test run, a search of that folder found neither
+  the stream-cookie name, the server URL nor the page's token `<meta>`; that
+  search was not exhaustive.
+- **Lock-down.** A navigation handler allows only URLs on exactly
+  `http://127.0.0.1:<port>` (the character after the port must be `/`, `?`,
+  `#` or the end) plus `about:blank`; look-alikes such as
+  `http://127.0.0.1:<port>.evil.example` or another port are refused. Every
+  new-window request (`window.open`, `target="_blank"` links such as arXiv
+  links in rendered text) is denied, so external links do not open from the
+  window. A download is allowed only from
+  `http://127.0.0.1:<port>/api/sessions/<id>/export`, saved into
+  `%USERPROFILE%\Downloads` under a sanitized name that never overwrites an
+  existing file (`name (1).ext`, `name (2).ext`, ...). The navigation rule
+  sees top-level navigations only, so the page's own policy (`frame-src
+  'none'`, `object-src 'none'`, `base-uri 'none'`, sent with `/`) is what
+  keeps frames and plugins out. DevTools are off unless the app is started
+  with `RE_SEARCH_DEVTOOLS=1`.
+- **Identity and single instance.** Window and taskbar icons are embedded,
+  the process sets the AppUserModelID `ReSearch.Desktop` before creating its
+  window, and a named mutex `Local\ReSearch.Desktop.SingleInstance` makes a
+  second launch exit without touching the running one.
+- **No `--app=<url>` browser mode any more.** The former Edge/Chrome
+  `--app=<url>` launch path of `re-search desktop` was removed because it put
+  the token on the browser's command line.
 
 ## Remaining limits & gaps
 
@@ -368,7 +437,37 @@ result.
   which sends that provider's stored key to the new host; it can also attach
   any directory outside the data directory as a workspace, which the model
   then reads without asking. Treat the token like the keys.
-- **Where the desktop token is exposed.** It is in the launch URL, which
+- **The app window's residual limits.** In `re-search-app` the token is in
+  the memory of `re-search-app.exe` and of the WebView2 renderer, in the
+  page's `<meta>` tag and `sessionStorage`; any program running as you can
+  read process memory. If WebView2 drops the header, the fallback hands the
+  token to the page through `ExecuteScript` (guarded by an exact-origin check,
+  but it is a second path). WebView2 is an Evergreen component that Windows
+  updates outside re:Search, so its behaviour (including header navigation)
+  can change without a re:Search release. Downloads go to
+  `%USERPROFILE%\Downloads`; a Downloads folder moved elsewhere is not
+  followed. Permission prompts (camera, microphone, ...) use WebView2's
+  default dialog. A second launch exits quietly without focusing the
+  running window. Further limits: on a WebView2 runtime too old to support
+  InPrivate, the library used (`wry`) silently creates a normal profile, in
+  which case the token's `sessionStorage` copy and the stream cookie would be
+  written under `%LOCALAPPDATA%\re-search\webview` (the app does not check
+  this; the Evergreen runtime on Windows 11 supports it). If the WebView2
+  process crashes, its crash dump in that folder can contain the per-launch
+  token. The app reads `re-search-app.json` beside the executable and looks
+  for `python/worker.py` beside it and in up to three parent folders, so the
+  install folder and its parents must not be writable by other users (the
+  default `%LOCALAPPDATA%\Programs\re-search` is not).
+- **Dependencies of the app window.** `wry` and `tao` are compiled only into
+  `re-search-app`, on Windows only. `tao` is Apache-2.0 only. The Windows
+  build includes three Unicode data crates under "(MIT OR Apache-2.0) AND
+  Unicode-3.0", and `Cargo.lock` pins `idna_adapter` to `1.1.0` to keep the
+  larger ICU set (Unicode-3.0 only) out; a plain `cargo update` would bring
+  it back. `Cargo.lock` also lists MPL-2.0 crates (`cssparser`, `selectors`,
+  and others) that `wry` uses only on Linux and macOS; they are never
+  compiled on Windows.
+- **Where the desktop token is exposed (`re-search ui`, and `re-search
+  desktop` when it falls back).** It is in the launch URL, which
   appears on the command line of the browser process that is started (and of
   `cmd.exe` when the default browser is used), readable by other accounts on
   Linux via `/proc` and by programs running as you on Windows, and possibly

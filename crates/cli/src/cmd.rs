@@ -22,9 +22,9 @@ pub const USAGE: &str = "usage:
   re-search ui [--port PORT] [--workspace DIR] [--data-dir DIR] [--python EXE]
                [--api-base URL] [--arxiv-base URL] [--inspire-base URL] [--crossref-base URL]
                [--no-open true|false] [--print-url-json true|false]
-  re-search desktop [--port PORT] [--workspace DIR] [--data-dir DIR] [--python EXE]
-               [--api-base URL] [--arxiv-base URL] [--inspire-base URL] [--crossref-base URL]
-               [--no-open true|false] [--print-url-json true|false]
+  re-search desktop [--port PORT] [--workspace DIR] [--data-dir DIR] [--python EXE] [--worker-script PY]
+               (opens re-search-app.exe from this directory when present; with any other
+                `ui` flag, or without re-search-app.exe, behaves like `re-search ui`)
   re-search fork SESSION --at-seq N [--assumption TEXT] [--data-dir DIR]
   re-search diff BASE_SESSION TARGET_SESSION [--data-dir DIR]
   re-search export SESSION --format tex|html|zip --out PATH [--data-dir DIR]
@@ -413,13 +413,18 @@ where
             if !positional.is_empty() {
                 return Err(format!("unexpected positional argument `{}`\n{USAGE}", positional[0]));
             }
-            cmd_ext::ui_command(flags, data_dir, false)
+            cmd_ext::ui_command(flags, data_dir)
         }
         "desktop" => {
             if !positional.is_empty() {
                 return Err(format!("unexpected positional argument `{}`\n{USAGE}", positional[0]));
             }
-            cmd_ext::ui_command(flags, data_dir, true)
+            // The re:Search window (`re-search-app` next to this executable) when it exists
+            // and only flags it understands were given; otherwise the default browser.
+            if let Some(code) = cmd_ext::launch_desktop_app(&flags, &data_dir)? {
+                return Ok(code);
+            }
+            cmd_ext::ui_command(flags, data_dir)
         }
         "fork" => cmd_ext::fork_command(positional, flags, data_dir),
         "diff" => cmd_ext::diff_command(positional, flags, data_dir),

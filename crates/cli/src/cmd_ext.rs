@@ -10,7 +10,9 @@ use export::{compute_branch_diff, export_session_to_path, fork_session, ExportFo
 use ledger::Ledger;
 use research_tools::LiteratureEndpoints;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 pub(crate) fn parse_bool_flag(flag: &str, raw: Option<String>, default: bool) -> Result<bool, String> {
     let Some(v) = raw else {
@@ -64,10 +66,62 @@ fn validate_endpoint_url(flag: &str, raw: &str) -> Result<String, String> {
     Ok(clean)
 }
 
+/// The flags `re-search-app` understands besides `--data-dir` (which is always passed).
+const APP_FLAGS: [&str; 4] = ["workspace", "python", "worker-script", "port"];
+
+/// Arguments for `re-search-app`, or `None` when a flag only the in-process server
+/// understands (`--no-open`, `--print-url-json`, `--api-base`, ...) was given. No token is
+/// ever part of them: the app makes its own.
+pub(crate) fn desktop_app_args(flags: &HashMap<String, String>, data_dir: &Path) -> Option<Vec<OsString>> {
+    if flags.keys().any(|k| !APP_FLAGS.contains(&k.as_str())) {
+        return None;
+    }
+    let mut args: Vec<OsString> = vec!["--data-dir".into(), data_dir.as_os_str().to_owned()];
+    for name in APP_FLAGS {
+        // An empty value means "not set", as in `re-search ui`.
+        if let Some(v) = flags.get(name).filter(|v| !v.trim().is_empty()) {
+            args.push(format!("--{name}").into());
+            args.push(v.into());
+        }
+    }
+    Some(args)
+}
+
+/// `re-search desktop`: starts `re-search-app` from this executable's directory and returns
+/// `Some(0)`, or `None` (fall back to the browser) when it is absent or cannot take the flags.
+pub(crate) fn launch_desktop_app(flags: &HashMap<String, String>, data_dir: &Path) -> Result<Option<i32>, String> {
+    if !cfg!(windows) {
+        return Ok(None);
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let Some(dir) = exe.parent() else {
+        return Ok(None);
+    };
+    let app = dir.join(format!("re-search-app{}", std::env::consts::EXE_SUFFIX));
+    if !app.is_file() {
+        return Ok(None);
+    }
+    let abs_data = std::path::absolute(data_dir).map_err(|e| e.to_string())?;
+    let Some(args) = desktop_app_args(flags, &abs_data) else {
+        return Ok(None);
+    };
+    Command::new(&app)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not start {}: {e}", app.display()))?;
+    eprintln!(
+        "[re-search] started {} (if re:Search was already running, its window is unchanged)",
+        app.display()
+    );
+    Ok(Some(0))
+}
+
 pub(crate) fn ui_command(
     mut flags: HashMap<String, String>,
     data_dir: PathBuf,
-    app_mode: bool,
 ) -> Result<i32, String> {
     let port: u16 = match flags.remove("port") {
         Some(raw) => raw
@@ -113,7 +167,6 @@ pub(crate) fn ui_command(
         api_base_override,
         literature_endpoints,
         open_window: !no_open,
-        app_mode,
         print_url_json,
         eval_timeout_s: parse_eval_timeout_s(),
     })
@@ -211,4 +264,40 @@ pub(crate) fn export_command(
         out.display()
     );
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flags(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn desktop_app_gets_only_its_five_flags_and_never_a_token() {
+        let data = Path::new("D:/data");
+        let args = desktop_app_args(
+            &flags(&[("workspace", "W"), ("python", "P"), ("worker-script", "S"), ("port", "8123")]),
+            data,
+        )
+        .unwrap();
+        let args: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(
+            args,
+            ["--data-dir", "D:/data", "--workspace", "W", "--python", "P", "--worker-script", "S", "--port", "8123"]
+        );
+        assert!(!args.iter().any(|a| a.contains("token")));
+
+        let only_data = desktop_app_args(&flags(&[]), data).unwrap();
+        assert_eq!(only_data.len(), 2);
+    }
+
+    #[test]
+    fn server_only_flags_fall_back_to_the_in_process_server() {
+        let data = Path::new("D:/data");
+        for extra in ["no-open", "print-url-json", "api-base", "arxiv-base", "token"] {
+            assert!(desktop_app_args(&flags(&[("port", "0"), (extra, "x")]), data).is_none(), "{extra}");
+        }
+    }
 }

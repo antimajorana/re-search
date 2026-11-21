@@ -90,15 +90,24 @@ fn handle_connection(mut stream: TcpStream, state: Arc<DesktopState>, shutdown: 
 
     if method == "GET" && (path == "/" || path == "/index.html") {
         let valid_query = state.auth.validate_query_token(req.raw_query.as_deref());
+        // `re-search-app` navigates its window here with the token in a request header, so
+        // the token never appears in a URL or on a command line.
+        let valid_header =
+            state.auth.has_valid_header_token(req.header("x-research-token"), req.header("authorization"));
         let valid_cookie = state.auth.has_valid_cookie(req.header("cookie"));
-        if !valid_query && !valid_cookie {
+        if !valid_query && !valid_header && !valid_cookie {
             write_json(&mut stream, 403, json!({ "error": "invalid or missing launch token" }), &[]);
             return;
         }
-        // The token is written into the page only for a valid `?token=` launch URL. A
-        // reload carries just the stream cookie and gets the page without the token (the UI
-        // keeps it in per-origin sessionStorage), so the cookie can never be traded for it.
-        let html = if valid_query { state.auth.inject_csrf_meta(INDEX_HTML) } else { INDEX_HTML.to_string() };
+        // The token is written into the page only for a request that already carries it (a
+        // valid `?token=` launch URL or header). A reload carries just the stream cookie and
+        // gets the page without the token (the UI keeps it in per-origin sessionStorage), so
+        // the cookie can never be traded for it.
+        let html = if valid_query || valid_header {
+            state.auth.inject_csrf_meta(INDEX_HTML)
+        } else {
+            INDEX_HTML.to_string()
+        };
         let set_cookie = state.auth.set_cookie_header();
         write_bytes(
             &mut stream,
@@ -111,7 +120,9 @@ fn handle_connection(mut stream: TcpStream, state: Arc<DesktopState>, shutdown: 
                 ("Referrer-Policy", "no-referrer"),
                 // Never render inside another page's frame (a page on another local port is same-site).
                 ("X-Frame-Options", "DENY"),
-                ("Content-Security-Policy", "frame-ancestors 'none'"),
+                // No framing by others, and no frames, plugins or <base> inside the page: the app
+                // window's navigation rule only sees top-level navigations.
+                ("Content-Security-Policy", "frame-ancestors 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'"),
             ],
         );
         return;

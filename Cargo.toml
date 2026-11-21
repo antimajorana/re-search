@@ -11,6 +11,7 @@ members = [
     "crates/desktop-server",
     "crates/mcp-server",
     "crates/cli",
+    "crates/desktop-app",
 ]
 
 [workspace.package]

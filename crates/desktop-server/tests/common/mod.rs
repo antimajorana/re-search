@@ -133,7 +133,6 @@ pub fn test_cfg(data_dir: &Path, workspace: Option<PathBuf>, api_base: Option<St
         api_base_override: api_base,
         literature_endpoints: endpoints,
         open_window: false,
-        app_mode: false,
         print_url_json: false,
         eval_timeout_s: 30,
     }

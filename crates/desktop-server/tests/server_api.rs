@@ -65,7 +65,7 @@ fn auth_bootstrap_assets_host_origin_and_csrf_enforced() {
     assert!(!String::from_utf8_lossy(&reload_html).contains(&tok));
 
     // The page refuses to be framed, and `/` with no credential at all is refused.
-    for (name, want) in [("x-frame-options", "DENY"), ("content-security-policy", "frame-ancestors 'none'")] {
+    for (name, want) in [("x-frame-options", "DENY"), ("content-security-policy", "frame-ancestors 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'")] {
         assert!(hdrs.iter().any(|(k, v)| k == name && v == want), "missing {name}: {hdrs:?}");
     }
     assert_eq!(raw_http(port, "GET", "/", &[], b"").0, 403);

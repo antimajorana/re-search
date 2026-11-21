@@ -35,7 +35,6 @@ pub struct DesktopConfig {
     pub api_base_override: Option<String>,
     pub literature_endpoints: LiteratureEndpoints,
     pub open_window: bool,
-    pub app_mode: bool,
     pub print_url_json: bool,
     pub eval_timeout_s: u64,
 }
@@ -128,7 +127,7 @@ pub fn start_desktop_server(cfg: DesktopConfig) -> Result<RunningDesktopServer, 
         emit_launch_json(&info)?;
     }
     if cfg.open_window {
-        launch_browser_window(&url, cfg.app_mode);
+        launch_browser_window(&url);
     }
 
     Ok(RunningDesktopServer {

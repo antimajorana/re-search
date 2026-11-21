@@ -16,16 +16,17 @@ A small, tamper-evident Rust research core and loopback desktop workbench for ma
 | `crates/agent` | Multi-provider HTTP transports (`Anthropic`, `OpenAI`, `Ollama`, `Gemini`), Stage 7 guardrails, Step & Full Verifiers, Narrator, Side-Talk, and verified resume. |
 | `crates/export` | Verified counterfactual `fork`, structural branch `diff`, and `.tex`/`.html`/`.zip` `export`. |
 | `crates/desktop-server` | Loopback `127.0.0.1` HTTP + SSE desktop server (`std::net` + `httparse`, zero `tokio`), `UiApprover` diff broker, and embedded offline KaTeX UI. |
+| `crates/desktop-app` | `re-search-app`: the re:Search window. One process runs the desktop server and one locked-down WebView2 window (`wry` + `tao`, Windows only); the token is delivered in a request header, never in a URL. The only crate with GUI dependencies. |
 | `crates/mcp-server` | `core`: the stdio MCP server (registers `research-tools` automatically when `CORE_WORKSPACE` or session `sources/` exists). |
 | `crates/cli` | `re-search`: CLI supervisor supporting `run`, `resume`, `ui`, `desktop`, `fork`, `diff`, `export`, `show`, `sessions`, and `verify`. |
 
 ## Build and test
 
-Core unit, research-tool, agent, export, desktop-server, and CLI route tests run on both **Linux and Windows** against in-test loopback mock servers:
+Core unit, research-tool, agent, export, desktop-server, desktop-app (pure config and lock-down rules; no display or WebView2 needed), and CLI route tests run on both **Linux and Windows** against in-test loopback mock servers:
 
 ```bash
 cargo build
-cargo test -p policy -p ledger -p tools -p research-tools -p agent -p export -p desktop-server -p cli
+cargo test -p policy -p ledger -p tools -p research-tools -p agent -p export -p desktop-server -p desktop-app -p cli
 ```
 
 Windows AppContainer containment probes require **Windows 11 + Python (SymPy and NumPy)**:
@@ -36,14 +37,21 @@ cargo test -p worker -- --nocapture
 cargo test -p cli --test contained_router -- --nocapture
 ```
 
-## Desktop UI (`re-search ui` / `re-search desktop`)
+## Desktop UI (`re-search-app`, `re-search desktop`, `re-search ui`)
 
-Launch the local CSRF-protected desktop server with offline KaTeX rendering, live SSE proof-DAG inspector, LaTeX canvas, literature/sources drawer, counterfactual fork/diff, and isolated Side-Talk:
+The local CSRF-protected desktop server offers offline KaTeX rendering, a live SSE proof-DAG inspector, LaTeX canvas, literature/sources drawer, counterfactual fork/diff, and isolated Side-Talk. There are two ways to show it:
+
+- **Its own window (Windows 11, WebView2 runtime).** `re-search-app.exe` starts the server and opens a window titled *re:Search*; closing the window stops the server. It needs no console and no browser (Microsoft Edge itself need not be installed, only the WebView2 Evergreen runtime). Only one instance runs per logon session; a second launch exits quietly. `re-search desktop` starts `re-search-app.exe` from its own directory when it is there and only `--data-dir`/`--workspace`/`--python`/`--worker-script`/`--port` were given; otherwise it behaves like `re-search ui`.
+- **The default browser.** `re-search ui` opens `http://127.0.0.1:<port>/?token=…` in the default browser, as before.
 
 ```bash
-re-search ui --workspace ./paper --data-dir ./data
+cargo build -p desktop-app -p cli          # target/debug/re-search-app.exe and re-search.exe
+re-search-app --workspace ./paper --data-dir ./data --python C:\path\to\python.exe
 re-search desktop --workspace ./paper --data-dir ./data
+re-search ui --workspace ./paper --data-dir ./data
 ```
+
+`re-search-app` settings, in order of precedence: the flags above; then `RE_SEARCH_PYTHON`, `RE_SEARCH_DATA`, `RE_SEARCH_WORKER_SCRIPT` (with the `RESEARCH_CORE_*` fallbacks); then an optional `re-search-app.json` next to the executable (keys `python`, `worker_script`, `data_dir`, `workspace`; relative paths are relative to that directory); then the defaults (`%LOCALAPPDATA%\re-search`, and `python/worker.py` next to the executable when a Python is set). A Start-menu shortcut gets no useful environment, so use the JSON file there. Startup errors appear in a message box. WebView2 keeps its (InPrivate) profile folder in `%LOCALAPPDATA%\re-search\webview`.
 
 The server listens on `127.0.0.1` only. Every `/api/` route except `/api/health` needs the per-launch token in the `X-ReSearch-Token` header; a separate cookie opens only the event stream and export downloads. A workspace may not overlap the data directory. See [THREAT-MODEL.md](THREAT-MODEL.md).
 
