@@ -10,6 +10,9 @@
 //!   CORE_APPROVAL_ADDR, CORE_SESSION_TOKEN               approval channel (else: deny)
 //!   CORE_PYTHON, CORE_WORKER_SCRIPT, CORE_SCRATCH, CORE_PYCACHE  compute worker
 //!   CORE_EVAL_TIMEOUT_S                                  default 120
+//!   CORE_WORKSPACE, CORE_ENABLE_RESEARCH_TOOLS           research tools + `v0.4-research`
+//!                                                        (also when sessions/<id>/sources exists)
+//!   RE_SEARCH_{ARXIV,INSPIRE,CROSSREF,S2}_BASE           literature endpoint overrides
 
 mod approver;
 
@@ -24,7 +27,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tools::{builtin, CallCtx, CallOutcome, Registry, Router};
+use tools::{CallCtx, CallOutcome, Registry, Router, ToolHandler};
 #[cfg(windows)]
 use worker::appcontainer::AppContainerSandbox;
 #[cfg(windows)]
@@ -180,23 +183,19 @@ fn build_router() -> Result<Router, String> {
         .unwrap_or(false);
     let use_research = workspace_root.is_some() || sources_exist || enable_flag;
 
-    let mut registry = Registry::new();
-    registry.register_worker_session(
-        builtin::sympy_eval_def(),
-        Arc::new(WorkerEpochAdapter { epoch: epoch_handle, contained }),
-        Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
-            let code = args["code"].as_str().ok_or("`code` must be a string")?;
-            let mut guard = worker.lock().map_err(|_| "worker lock poisoned".to_string())?;
-            let w = guard.as_mut().ok_or("no compute worker is configured for this session")?;
-            let (result, ran_epoch) =
-                w.evaluate_in_epoch(code, timeout, ctx.required_epoch).map_err(|e| e.to_string())?;
-            ctx.record_worker_epoch(ran_epoch);
-            Ok(result)
-        }),
-    );
-    registry.register(builtin::ledger_note_def(), builtin::ledger_note_handler());
+    let sympy_handler: Arc<dyn ToolHandler> = Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
+        let code = args["code"].as_str().ok_or("`code` must be a string")?;
+        let mut guard = worker.lock().map_err(|_| "worker lock poisoned".to_string())?;
+        let w = guard.as_mut().ok_or("no compute worker is configured for this session")?;
+        let (result, ran_epoch) = w.evaluate_in_epoch(code, timeout, ctx.required_epoch).map_err(|e| e.to_string())?;
+        ctx.record_worker_epoch(ran_epoch);
+        Ok(result)
+    });
+    let sympy_epoch = Arc::new(WorkerEpochAdapter { epoch: epoch_handle, contained });
 
-    let policy = if use_research {
+    // The same registration the supervisor uses to compute the tool list it expects the
+    // agent CLI to offer (`cli_route::core_tools::core_tool_set`).
+    let research = if use_research {
         let mut endpoints = research_tools::LiteratureEndpoints::default();
         if let Some(u) = env("RE_SEARCH_ARXIV_BASE") {
             endpoints.arxiv_api_base = u.trim_end_matches('/').to_string();
@@ -217,11 +216,12 @@ fn build_router() -> Result<Router, String> {
             None => research_tools::ResearchEnv::new(data_dir.clone()),
         }
         .with_endpoints(endpoints);
-        research_tools::register_research_tools(&mut registry, Arc::new(r_env));
-        research_tools::research_policy()
+        Some(Arc::new(r_env))
     } else {
-        builtin::default_policy()
+        None
     };
+    let mut registry = Registry::new();
+    let policy = cli_route::core_tools::register_core_tools(&mut registry, sympy_epoch, sympy_handler, research);
 
     let approver: Arc<dyn tools::Approver> = match (env("CORE_APPROVAL_ADDR"), env("CORE_SESSION_TOKEN")) {
         (Some(addr), Some(token)) => {

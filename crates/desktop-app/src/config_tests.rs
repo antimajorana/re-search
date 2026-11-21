@@ -53,6 +53,7 @@ fn flag_beats_env_beats_file_beats_default() {
         worker_script: Some("file-worker.py".into()),
         data_dir: Some("file-data".into()),
         workspace: Some("file-ws".into()),
+        ..FileConfig::default()
     };
     let env = env_of(&[
         ("RE_SEARCH_DATA", s("env-data")),
@@ -68,6 +69,7 @@ fn flag_beats_env_beats_file_beats_default() {
         python: Some(s("flag-py.exe")),
         worker_script: Some(s("flag-worker.py")),
         port: Some(9),
+        ..Flags::default()
     };
     let c = resolve(&flags, &env, Some(&file), &exe_dir).unwrap();
     assert_eq!(c.data_dir, abs("flag-data"));
@@ -98,6 +100,33 @@ fn flag_beats_env_beats_file_beats_default() {
 
     // No LOCALAPPDATA and nothing else: a clear error rather than a guess.
     assert!(resolve(&Flags::default(), &env_of(&[]), None, &exe_dir).is_err());
+}
+
+#[test]
+fn core_exe_and_claude_follow_flag_env_file_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let exe_dir = tmp.path().join("bin");
+    let f = parse_flags(args(&["--core-exe", &s("flag-core.exe"), "--claude=C"])).unwrap();
+    assert_eq!((f.core_exe, f.claude.as_deref()), (Some(s("flag-core.exe")), Some("C")));
+
+    let file = FileConfig { core_exe: Some("file-core.exe".into()), claude: Some("file-claude.exe".into()), ..FileConfig::default() };
+    let env = env_of(&[("LOCALAPPDATA", s("local")), ("RE_SEARCH_CLAUDE", s("env-claude.exe"))]);
+    let flags = Flags { core_exe: Some(s("flag-core.exe")), ..Flags::default() };
+    let c = resolve(&flags, &env, Some(&file), &exe_dir).unwrap();
+    assert_eq!(c.core_exe, Some(abs("flag-core.exe")));
+    assert_eq!(c.claude, Some(abs("env-claude.exe")));
+
+    let only_local = env_of(&[("LOCALAPPDATA", s("local")), ("RE_SEARCH_CORE_EXE", s("env-core.exe"))]);
+    let c = resolve(&Flags::default(), &only_local, Some(&file), &exe_dir).unwrap();
+    assert_eq!(c.core_exe, Some(abs("env-core.exe")));
+    assert_eq!(c.claude, Some(exe_dir.join("file-claude.exe")));
+
+    let c = resolve(&Flags::default(), &env_of(&[("LOCALAPPDATA", s("local"))]), None, &exe_dir).unwrap();
+    assert_eq!((c.core_exe, c.claude), (None, None), "the server then looks beside itself and on PATH");
+
+    std::fs::write(tmp.path().join(CONFIG_FILE_NAME), r#"{"core_exe":"core.exe","claude":"claude.exe"}"#).unwrap();
+    let f = load_file_config(tmp.path()).unwrap().unwrap();
+    assert_eq!((f.core_exe.as_deref(), f.claude.as_deref()), (Some("core.exe"), Some("claude.exe")));
 }
 
 #[test]
@@ -145,6 +174,8 @@ fn webview_folder_is_under_localappdata_and_never_in_sessions_or_workspace() {
         python: None,
         worker_script: None,
         port: 0,
+        core_exe: None,
+        claude: None,
     };
     assert!(check_webview_dir(&wv, &base).is_ok(), "default layout is fine");
 

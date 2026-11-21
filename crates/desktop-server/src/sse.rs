@@ -156,11 +156,12 @@ pub fn stream_session_sse(
         "Connection: close\r\n\r\n",
         ": connected\n\n"
     );
+    // Subscribe first: once a client has read ": connected", no later event is missed.
+    let (sub_id, rx) = hub.subscribe(session_id);
     if stream.write_all(headers.as_bytes()).is_err() || stream.flush().is_err() {
+        hub.unsubscribe(session_id, sub_id);
         return;
     }
-
-    let (sub_id, rx) = hub.subscribe(session_id);
     let mut last_ping = Instant::now();
 
     loop {

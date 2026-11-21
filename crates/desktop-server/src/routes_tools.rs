@@ -2,9 +2,9 @@
 //! literature search, proof DAG, chain verification, narration, side-talk, and export.
 
 use crate::routes_session::{bad, internal, not_found, parse_json_body, ApiResult};
-use crate::state::{decode_base64, parse_multipart_files, DesktopState, UploadedFile};
+use crate::state::{decode_base64, parse_multipart_files, DesktopState, UploadedFile, CLAUDE_CLI_ROUTE};
 use crate::turn_runner::build_desktop_router;
-use agent::{ask_sidetalk, narrate_session, read_sidetalk_thread, ProviderKind};
+use agent::{ask_sidetalk, narrate_session, read_sidetalk_thread, ProviderKeyStore, ProviderKind};
 use export::{export_session_bytes, ExportFormat};
 use research_tools::fs_tools::{handle_fs_list, handle_fs_read};
 use research_tools::{
@@ -364,24 +364,52 @@ pub fn handle_verify(state: &DesktopState, session_id: &str) -> ApiResult {
     }
 }
 
+/// Message when narration or side questions have no API provider to run on.
+pub const NEEDS_API_PROVIDER: &str = "Narrate proof and side questions need an API-key provider for now \
+     (Anthropic, OpenAI or Gemini); they cannot run on the Claude subscription route (claude-cli) yet. \
+     Connect an API key under Connect, or pick an API model in the model dropdown.";
+
+/// Provider and model for narration and side questions: the request's (the model picker's
+/// current choice) when it names an API provider; otherwise (`claude-cli`, or nothing) the
+/// first API provider that has a key, with its default model; else 400.
+fn side_provider(state: &DesktopState, val: &Value) -> Result<(ProviderKind, String), (u16, String)> {
+    let ui = state.load_ui_settings();
+    let requested = val
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or(ui.default_provider.as_deref())
+        .filter(|p| *p != CLAUDE_CLI_ROUTE);
+    if let Some(name) = requested {
+        let provider = ProviderKind::parse(name).map_err(bad)?;
+        let model = val
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(|m| provider.resolve_model(m))
+            .unwrap_or_else(|| provider.default_model().to_string());
+        return Ok((provider, model));
+    }
+    let store = ProviderKeyStore::load_from_data_dir(&state.cfg.data_dir).map_err(internal)?;
+    crate::connections::API_PROVIDERS
+        .into_iter()
+        .filter(|p| *p != ProviderKind::Ollama)
+        // Only a provider with its OWN key (saved, or its own variable): a generic key says
+        // nothing about which provider the person meant, and session content goes there.
+        .find(|p| crate::connections::own_key(state, *p, &store).is_ok_and(|k| k.is_some()))
+        .map(|p| (p, p.default_model().to_string()))
+        .ok_or_else(|| bad(NEEDS_API_PROVIDER))
+}
+
 pub fn handle_narrate(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiResult {
     validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
     if !state.session_exists(session_id).map_err(internal)? {
         return Err(not_found(format!("session `{session_id}` not found")));
     }
     let val = parse_json_body(body)?;
-    let ui = state.load_ui_settings();
-    let provider_str = val
-        .get("provider")
-        .and_then(Value::as_str)
-        .or(ui.default_provider.as_deref())
-        .unwrap_or("anthropic");
-    let provider = ProviderKind::parse(provider_str).map_err(bad)?;
-    let model = val
-        .get("model")
-        .and_then(Value::as_str)
-        .map(|m| provider.resolve_model(m))
-        .unwrap_or_else(|| provider.default_model().to_string());
+    let (provider, model) = side_provider(state, &val)?;
     let transport = state
         .build_transport(provider, &model)
         .map_err(bad)?;
@@ -423,18 +451,7 @@ pub fn handle_post_sidetalk(state: &DesktopState, session_id: &str, body: &[u8])
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| bad("`question` is required"))?;
-    let ui = state.load_ui_settings();
-    let provider_str = val
-        .get("provider")
-        .and_then(Value::as_str)
-        .or(ui.default_provider.as_deref())
-        .unwrap_or("anthropic");
-    let provider = ProviderKind::parse(provider_str).map_err(bad)?;
-    let model = val
-        .get("model")
-        .and_then(Value::as_str)
-        .map(|m| provider.resolve_model(m))
-        .unwrap_or_else(|| provider.default_model().to_string());
+    let (provider, model) = side_provider(state, &val)?;
     let transport = state
         .build_transport(provider, &model)
         .map_err(bad)?;

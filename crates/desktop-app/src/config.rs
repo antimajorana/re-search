@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 pub const CONFIG_FILE_NAME: &str = "re-search-app.json";
 
 pub const USAGE: &str = "usage: re-search-app [--data-dir DIR] [--workspace DIR] [--python EXE] \
-[--worker-script PY] [--port PORT]";
+[--worker-script PY] [--port PORT] [--core-exe EXE] [--claude EXE]";
 
-/// The five flags the app understands.
+/// The flags the app understands.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Flags {
     pub data_dir: Option<String>,
@@ -22,6 +22,10 @@ pub struct Flags {
     pub python: Option<String>,
     pub worker_script: Option<String>,
     pub port: Option<u16>,
+    /// `core.exe` for the Claude subscription route.
+    pub core_exe: Option<String>,
+    /// `claude.exe` for the Claude subscription route.
+    pub claude: Option<String>,
 }
 
 /// Keys accepted in `re-search-app.json`. Relative paths are taken relative to the
@@ -33,6 +37,8 @@ pub struct FileConfig {
     pub worker_script: Option<String>,
     pub data_dir: Option<String>,
     pub workspace: Option<String>,
+    pub core_exe: Option<String>,
+    pub claude: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +48,10 @@ pub struct AppConfig {
     pub python: Option<PathBuf>,
     pub worker_script: Option<PathBuf>,
     pub port: u16,
+    /// `None`: the desktop server looks beside its executable (`core.exe`).
+    pub core_exe: Option<PathBuf>,
+    /// `None`: the desktop server looks on `PATH` and in the npm install location.
+    pub claude: Option<PathBuf>,
 }
 
 /// Parses `--name value` and `--name=value`. Unknown flags and positional arguments are errors.
@@ -64,6 +74,8 @@ pub fn parse_flags<I: IntoIterator<Item = String>>(args: I) -> Result<Flags, Str
             "workspace" => &mut flags.workspace,
             "python" => &mut flags.python,
             "worker-script" => &mut flags.worker_script,
+            "core-exe" => &mut flags.core_exe,
+            "claude" => &mut flags.claude,
             "port" => {
                 let port = value
                     .trim()
@@ -174,12 +186,20 @@ pub fn resolve(
         ),
     };
 
+    let exe_setting = |flag: &Option<String>, vars: &[&str], from_file: &Option<String>| {
+        flag.as_deref().map(PathBuf::from).or_else(|| env_any(env, vars)).or_else(|| file_path(exe_dir, from_file))
+    };
+    let core_exe = exe_setting(&flags.core_exe, &["RE_SEARCH_CORE_EXE"], &file.core_exe);
+    let claude = exe_setting(&flags.claude, &["RE_SEARCH_CLAUDE", "RESEARCH_CORE_CLAUDE"], &file.claude);
+
     Ok(AppConfig {
         data_dir: absolute(data_dir)?,
         workspace: workspace.map(absolute).transpose()?,
         python: python.map(absolute).transpose()?,
         worker_script: worker_script.map(absolute).transpose()?,
         port: flags.port.unwrap_or(0),
+        core_exe: core_exe.map(absolute).transpose()?,
+        claude: claude.map(absolute).transpose()?,
     })
 }
 

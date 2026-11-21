@@ -4,8 +4,12 @@
 pub mod approver;
 pub mod assets;
 pub mod auth;
+mod cli_relay;
+pub mod cli_turn;
+pub mod connections;
 pub mod http_srv;
 pub mod launcher;
+pub mod model_catalog;
 pub mod routes_session;
 pub mod routes_tools;
 pub mod sse;
@@ -19,6 +23,7 @@ use research_tools::LiteratureEndpoints;
 use serde::{Deserialize, Serialize};
 use sse::SseHub;
 use state::DesktopState;
+use std::collections::BTreeMap;
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -37,6 +42,17 @@ pub struct DesktopConfig {
     pub open_window: bool,
     pub print_url_json: bool,
     pub eval_timeout_s: u64,
+    /// `core.exe` for the Claude subscription route; `None`: `RE_SEARCH_CORE_EXE`, then
+    /// `core.exe` beside the running executable.
+    pub core_exe: Option<PathBuf>,
+    /// `claude.exe` for the Claude subscription route; `None`: `RE_SEARCH_CLAUDE`, `PATH`,
+    /// then the npm install location.
+    pub claude_exe: Option<PathBuf>,
+    /// Environment used by `GET /api/connections` and `GET /api/models` (provider key
+    /// variables, the Claude CLI's location and the billing-safety variables). `None`: the
+    /// process environment, which is what turns use. Tests pass a fixed map so the answer
+    /// does not depend on the machine.
+    pub connection_env: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +68,7 @@ pub struct RunningDesktopServer {
     pub addr: SocketAddr,
     shutdown: Arc<AtomicBool>,
     sse: Arc<SseHub>,
+    state: Arc<DesktopState>,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -65,10 +82,12 @@ impl RunningDesktopServer {
         Ok(())
     }
 
-    /// Signals the accept loop and active SSE streams to stop.
+    /// Signals the accept loop and active SSE streams to stop, and kills the process tree
+    /// of every running Claude subscription (`claude-cli`) turn.
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Release);
         self.sse.shutdown();
+        self.state.stop_all_cli_turns();
     }
 }
 
@@ -115,6 +134,8 @@ pub fn start_desktop_server(cfg: DesktopConfig) -> Result<RunningDesktopServer, 
     let sse = Arc::new(SseHub::new());
     let shutdown = Arc::new(AtomicBool::new(false));
     let state = Arc::new(DesktopState::new(cfg.clone(), auth, Arc::clone(&sse)));
+    // `mcp.json` files (they hold a turn's session token) left by a killed earlier run.
+    cli_turn::sweep_all_tool_configs(&state);
 
     let loop_state = Arc::clone(&state);
     let loop_shutdown = Arc::clone(&shutdown);
@@ -135,6 +156,7 @@ pub fn start_desktop_server(cfg: DesktopConfig) -> Result<RunningDesktopServer, 
         addr,
         shutdown,
         sse,
+        state,
         handle: Some(handle),
     })
 }

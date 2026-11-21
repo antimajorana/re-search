@@ -1,0 +1,19 @@
+[package]
+name = "cli-route"
+description = "Vendor-CLI route: drives an unmodified agent CLI (Claude Code) whose only tools are re:Search's, served by core.exe over MCP."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Builds `cli_route::testkit` (a scripted fake vendor CLI) for other crates' tests.
+testkit = []
+
+[dependencies]
+policy = { path = "../policy" }
+ledger = { path = "../ledger" }
+tools = { path = "../tools" }
+research-tools = { path = "../research-tools" }
+worker = { path = "../worker" }
+serde_json = { workspace = true }

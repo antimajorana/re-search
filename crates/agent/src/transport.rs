@@ -10,6 +10,10 @@ pub const DEFAULT_OLLAMA_BASE: &str = "http://127.0.0.1:11434/v1";
 pub const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5-coder:7b";
 pub const DEFAULT_GEMINI_BASE: &str = "https://generativelanguage.googleapis.com";
 pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
+/// Key variables every provider's transport reads first (not tied to one provider).
+pub const GENERIC_KEY_ENV_VARS: [&str; 2] = ["RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY"];
+/// Variables that name the provider explicitly (as the console's `--provider` default).
+pub const PROVIDER_ENV_VARS: [&str; 2] = ["RE_SEARCH_PROVIDER", "RESEARCH_CORE_PROVIDER"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -66,6 +70,32 @@ impl ProviderKind {
             ProviderKind::OpenAi => DEFAULT_OPENAI_MODEL,
             ProviderKind::Ollama => DEFAULT_OLLAMA_MODEL,
             ProviderKind::Gemini => DEFAULT_GEMINI_MODEL,
+        }
+    }
+
+    /// Environment variables the transport reads its API key from, in order (the first
+    /// non-empty one wins); the first two are [`GENERIC_KEY_ENV_VARS`], read by every
+    /// provider. The desktop server uses this list to report which key a turn would use;
+    /// its model-list calls use [`ProviderKind::own_key_env_vars`] instead.
+    pub fn key_env_vars(self) -> &'static [&'static str] {
+        match self {
+            ProviderKind::Anthropic => &["RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY", "ANTHROPIC_API_KEY"],
+            ProviderKind::OpenAi => &["RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY", "OPENAI_API_KEY"],
+            ProviderKind::Ollama => &["RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY", "OLLAMA_API_KEY", "OPENAI_API_KEY"],
+            ProviderKind::Gemini => &["RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        }
+    }
+
+    /// Only this provider's own key variables: no generic variable
+    /// ([`GENERIC_KEY_ENV_VARS`]) and no other provider's (Ollama does not fall back to
+    /// `OPENAI_API_KEY` here). Model-list calls, which the desktop makes on its own rather
+    /// than because the person chose this provider, read only these.
+    pub fn own_key_env_vars(self) -> &'static [&'static str] {
+        match self {
+            ProviderKind::Anthropic => &["ANTHROPIC_API_KEY"],
+            ProviderKind::OpenAi => &["OPENAI_API_KEY"],
+            ProviderKind::Ollama => &["OLLAMA_API_KEY"],
+            ProviderKind::Gemini => &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         }
     }
 

@@ -35,7 +35,14 @@ pub struct SessionMeta {
     pub created_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork_info: Option<ForkInfo>,
+    /// `Some("claude-cli")` once the session is bound to the Claude subscription route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
 }
+
+/// Route value stored in [`SessionMeta::route`] (and accepted as `provider`) for the
+/// Claude subscription route (the Claude Code CLI driven by re:Search).
+pub const CLAUDE_CLI_ROUTE: &str = "claude-cli";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForkInfo {
@@ -86,6 +93,12 @@ pub struct DesktopState {
     pub active_turns: Mutex<HashSet<String>>,
     pub pending_approvals: Mutex<HashMap<(String, String), Arc<PendingSlot>>>,
     pub ledger_write_lock: Mutex<()>,
+    /// Running Claude subscription (`claude-cli`) turns, by session: their stop handles.
+    pub cli_turns: Mutex<HashMap<String, cli_route::StopHandle>>,
+    /// Model lists fetched from providers, kept for [`crate::model_catalog::CACHE_TTL`].
+    pub catalog: crate::model_catalog::Catalog,
+    /// `claude --version` output once a probe succeeded (a failed probe is not kept).
+    pub claude_version: std::sync::OnceLock<String>,
 }
 
 impl DesktopState {
@@ -97,6 +110,61 @@ impl DesktopState {
             active_turns: Mutex::new(HashSet::new()),
             pending_approvals: Mutex::new(HashMap::new()),
             ledger_write_lock: Mutex::new(()),
+            cli_turns: Mutex::new(HashMap::new()),
+            catalog: crate::model_catalog::Catalog::default(),
+            claude_version: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Deny (never approve) pending approval cards of `session`, optionally only the one
+    /// bound to `digest`. Used when the caller went away, the turn was stopped, or the
+    /// server shuts down; `responder` says why. Returns how many cards were denied.
+    pub fn deny_pending(&self, session: &str, digest: Option<&str>, responder: &str) -> usize {
+        let slots: Vec<Arc<PendingSlot>> = match self.pending_approvals.lock() {
+            Ok(map) => map
+                .iter()
+                .filter(|((sid, _), slot)| sid == session && digest.is_none_or(|d| slot.view.digest == d))
+                .map(|(_, slot)| Arc::clone(slot))
+                .collect(),
+            Err(_) => return 0,
+        };
+        let mut denied = 0;
+        for slot in slots {
+            if let Ok(mut dec) = slot.decision.lock() {
+                if dec.is_none() {
+                    *dec = Some(ApprovalDecision {
+                        digest: slot.view.digest.clone(),
+                        approved: false,
+                        responder: responder.to_string(),
+                    });
+                    slot.cv.notify_all();
+                    denied += 1;
+                }
+            }
+        }
+        denied
+    }
+
+    /// Stop every running `claude-cli` turn (kills each CLI process tree), then wait up to
+    /// five seconds for those turns to record `session.abort` and delete their `mcp.json`
+    /// (the process may exit right after this, e.g. when the app window closes).
+    pub fn stop_all_cli_turns(&self) {
+        let handles: Vec<cli_route::StopHandle> = match self.cli_turns.lock() {
+            Ok(map) => map.values().cloned().collect(),
+            Err(_) => return,
+        };
+        if handles.is_empty() {
+            return;
+        }
+        for h in handles {
+            h.stop();
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if self.cli_turns.lock().map(|m| m.is_empty()).unwrap_or(true) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
         }
     }
 
@@ -273,17 +341,7 @@ impl DesktopState {
         let store = ProviderKeyStore::load_from_data_dir(&self.cfg.data_dir).unwrap_or_default();
         // The base URL comes only from launch configuration or saved settings, never from a
         // request body: the stored provider key is sent to whatever host this names.
-        let base_url = self
-            .cfg
-            .api_base_override
-            .clone()
-            .or_else(|| {
-                store
-                    .providers
-                    .get(provider.cli_name())
-                    .and_then(|e| e.base_url.clone())
-            })
-            .unwrap_or_else(|| provider.default_base_url().to_string());
+        let (base_url, _) = self.base_url_for(provider, &store);
 
         match provider {
             ProviderKind::Anthropic => {

@@ -1,4 +1,4 @@
-// Main entry controller: wires left rail, settings modal, center stream, SSE live updates, Canvas tabs, and postMessage bridge.
+// Main entry controller: wires left rail, Connect panel, model picker, center stream, SSE live updates, Canvas tabs, and postMessage bridge.
 import * as api from '/assets/api.js';
 import { escapeHtml } from '/assets/math.js';
 import {
@@ -17,8 +17,16 @@ import {
   initComposer,
   setComposerBusy,
   setComposerPrompt,
-  setComposerProviderModel,
 } from '/assets/composer.js';
+import {
+  applySession,
+  getModelChoice,
+  initModelPicker,
+  loadModels,
+  noModelReason,
+  rememberForSession,
+} from '/assets/model_picker.js';
+import { initConnect, openConnect } from '/assets/connect.js';
 import { initLatexCanvas, refreshWorkspaceFiles } from '/assets/canvas_latex.js';
 import { initDagCanvas, refreshDag, selectNodeById } from '/assets/canvas_dag.js';
 import {
@@ -43,8 +51,13 @@ async function boot() {
   restoreTheme();
   wireShellControls();
   wireCanvasTabs();
-  wireSettingsModal();
   wirePostMessageBridge();
+  initConnect({
+    onNotify: showToast,
+    // A key was saved or removed, or an address changed: re-read the model list.
+    onChanged: () => loadModels(true),
+  });
+  initModelPicker({ onNotify: showToast, onOpenConnect: openConnect });
 
   initStream({
     onPromptPick: (prompt) => setComposerPrompt(prompt, true),
@@ -57,6 +70,9 @@ async function boot() {
     onAttachWorkspace: handleAttachWorkspace,
     onSourcesUpdated: (sid) => loadSessionSources(sid),
     onNotify: showToast,
+    getModelChoice,
+    noModelReason,
+    onNeedModel: openConnect,
   });
 
   initLatexCanvas({ onNotify: showToast });
@@ -91,7 +107,8 @@ async function boot() {
       '(<code>re-search desktop</code> or the Start menu shortcut), or switch back to the window it opened.</p></div>';
     return;
   }
-  await checkHealthAndSettings();
+  await checkHealth();
+  await loadModels(false);
   await refreshSessionList();
 
   if (state.sessions.length > 0) {
@@ -111,8 +128,6 @@ function cacheElements() {
   el.wsPill = document.getElementById('active-workspace-pill');
   el.healthBadge = document.getElementById('health-badge');
   el.themeToggle = document.getElementById('theme-toggle');
-  el.settingsBtn = document.getElementById('settings-btn');
-  el.settingsDialog = document.getElementById('settings-dialog');
 }
 
 function restoreTheme() {
@@ -188,7 +203,7 @@ function activateCanvasTab(activeTabId) {
   }
 }
 
-async function checkHealthAndSettings() {
+async function checkHealth() {
   try {
     const h = await api.getHealth();
     if (el.healthBadge && h && h.ok) {
@@ -200,15 +215,6 @@ async function checkHealthAndSettings() {
       el.healthBadge.textContent = 'Offline';
       el.healthBadge.className = 'badge warn';
     }
-  }
-  try {
-    const settings = await api.getProviderSettings();
-    if (settings) {
-      setComposerProviderModel(settings.default_provider || settings.provider, settings.default_model || settings.model);
-      populateSettingsForm(settings);
-    }
-  } catch {
-    // Default composer provider remains selected
   }
 }
 
@@ -277,6 +283,7 @@ async function selectSession(id) {
       }
     }
     renderSessionStream(id, sess);
+    applySession(id, sess);
     await Promise.all([
       refreshWorkspaceFiles(id),
       refreshDag(id),
@@ -315,6 +322,7 @@ function connectSessionSse(id) {
       setStreamStatus('Ready', 'ok');
       if (d && d.text) {
         appendAssistantMessage(d.text);
+        await refreshSessionRoute(id);
       } else {
         await selectSession(id);
       }
@@ -326,14 +334,28 @@ function connectSessionSse(id) {
       setComposerBusy(false);
       setStreamStatus('Error', 'err');
       showToast(`Turn error: ${(d && (d.error || d.message)) || 'unknown failure'}`);
+      refreshSessionRoute(id);
     },
   });
+}
+
+// After a turn the session may now be bound to a route (or, after a turn refused before
+// it started, still unbound): let the model dropdown follow the server's answer.
+async function refreshSessionRoute(id) {
+  if (state.activeSessionId !== id) return;
+  try {
+    const sess = await api.getSession(id);
+    if (state.activeSessionId === id) applySession(id, sess);
+  } catch {
+    // Keep the dropdown as it is; the server still refuses a send on the wrong route.
+  }
 }
 
 async function handleSendPrompt(sessionId, prompt, opts) {
   appendUserMessage(prompt);
   setStreamStatus('Thinking...', 'accent');
   await api.sendMessage(sessionId, { prompt, ...opts });
+  rememberForSession(sessionId, { provider: opts.provider, model: opts.model });
 }
 
 async function handleAttachWorkspace(workspaceRoot) {
@@ -343,80 +365,6 @@ async function handleAttachWorkspace(workspaceRoot) {
   }
   await createAndSelectSession({ title: 'Workspace Research', workspace_root: workspaceRoot });
   showToast(`Attached workspace: ${workspaceRoot}`);
-}
-
-function wireSettingsModal() {
-  const closeBtn = document.getElementById('settings-close-btn');
-  const cancelBtn = document.getElementById('settings-cancel-btn');
-  const form = document.getElementById('settings-form');
-  const close = () => { if (el.settingsDialog) el.settingsDialog.hidden = true; };
-
-  if (el.settingsBtn) {
-    el.settingsBtn.addEventListener('click', async () => {
-      if (el.settingsDialog) el.settingsDialog.hidden = false;
-      try {
-        const s = await api.getProviderSettings();
-        if (s) populateSettingsForm(s);
-      } catch {
-        // Use current field state
-      }
-    });
-  }
-  if (closeBtn) closeBtn.addEventListener('click', close);
-  if (cancelBtn) cancelBtn.addEventListener('click', close);
-
-  if (form) {
-    form.addEventListener('submit', async (ev) => {
-      ev.preventDefault();
-      const payload = {
-        default_provider: document.getElementById('set-provider').value,
-        default_model: document.getElementById('set-model').value.trim(),
-        pinned_conventions: document.getElementById('set-conventions').value,
-        role_presets: {
-          step_verification: document.getElementById('set-role-verifier').value.trim() || undefined,
-          research_strategist: document.getElementById('set-role-strategist').value.trim() || undefined,
-        },
-        keys: {},
-      };
-      const kAnth = document.getElementById('set-key-anthropic').value.trim();
-      const kOpen = document.getElementById('set-key-openai').value.trim();
-      const kGem = document.getElementById('set-key-gemini').value.trim();
-      const kOll = document.getElementById('set-key-ollama').value.trim();
-      if (kAnth) payload.keys.anthropic = kAnth;
-      if (kOpen) payload.keys.openai = kOpen;
-      if (kGem) payload.keys.gemini = kGem;
-      if (kOll) {
-        if (kOll.startsWith('http://') || kOll.startsWith('https://')) {
-          payload.base_urls = { ollama: kOll };
-        } else {
-          payload.keys.ollama = kOll;
-        }
-      }
-
-      try {
-        await api.updateProviderSettings(payload);
-        setComposerProviderModel(payload.default_provider, payload.default_model);
-        close();
-        showToast('Provider settings saved.');
-      } catch (err) {
-        showToast(`Failed to save settings: ${err.message}`);
-      }
-    });
-  }
-}
-
-function populateSettingsForm(s) {
-  const setVal = (id, val) => {
-    const node = document.getElementById(id);
-    if (node && val !== undefined && val !== null) node.value = val;
-  };
-  setVal('set-provider', s.default_provider || s.provider || 'anthropic');
-  setVal('set-model', s.default_model || s.model || '');
-  setVal('set-conventions', s.pinned_conventions || '');
-  if (s.role_presets) {
-    setVal('set-role-verifier', s.role_presets.step_verification || '');
-    setVal('set-role-strategist', s.role_presets.research_strategist || '');
-  }
 }
 
 function wirePostMessageBridge() {

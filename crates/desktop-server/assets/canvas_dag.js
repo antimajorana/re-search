@@ -1,6 +1,14 @@
 // Tab 2: Proof Graph & Ledger Canvas — layered SVG DAG, SHA-256 chain verify, counterfactual fork, diff, and proof narration.
 import * as api from '/assets/api.js';
 import { escapeHtml, renderRichInto } from '/assets/math.js';
+import { getModelChoice } from '/assets/model_picker.js';
+
+// The model picker's current {provider, model}. On the Claude subscription route the
+// server picks the first connected API provider (narration and side questions need one).
+function sideModelPayload() {
+  const c = getModelChoice();
+  return c ? { provider: c.provider, model: c.model } : {};
+}
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -226,7 +234,7 @@ function selectNode(entry) {
     <div style="font-weight:500;margin-bottom:6px;">${escapeHtml(entry.summary || '')}</div>
     <div class="node-latex-body rich-prose" style="font-size:12.5px;margin-bottom:8px;"></div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11.5px;color:var(--ink-muted);">
-      <span>seq ${entry.seq || 0} · deps: ${(entry.depends_on || []).join(', ') || 'none'}</span>
+      <span>seq ${escapeHtml(String(entry.seq || 0))} · deps: ${escapeHtml((Array.isArray(entry.depends_on) ? entry.depends_on : []).join(', ') || 'none')}</span>
       <button id="node-verify-step-btn" type="button" class="pill-btn sm">Verify Step</button>
     </div>
   `;
@@ -300,7 +308,7 @@ function renderBranchDiff(diff) {
 async function handleNarrateProof() {
   if (!currentSessionId) return;
   try {
-    const res = await api.narrateSession(currentSessionId, {});
+    const res = await api.narrateSession(currentSessionId, sideModelPayload());
     const text = (res && (res.narrative || res.markdown || res.text)) || JSON.stringify(res);
     if (typeof callbacks.onNarrativeReady === 'function') {
       callbacks.onNarrativeReady(text);

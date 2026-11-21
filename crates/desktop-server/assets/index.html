@@ -31,7 +31,7 @@
       <div class="rail-section-label">Sessions &amp; Forks</div>
       <nav id="session-list" aria-label="Session threads"></nav>
       <div class="rail-footer">
-        <button id="settings-btn" type="button" class="pill-btn sm">Settings &amp; Providers</button>
+        <button id="settings-btn" type="button" class="pill-btn sm" aria-haspopup="dialog" aria-controls="settings-dialog">Connect</button>
         <button id="theme-toggle" type="button" class="icon-btn" title="Toggle light or dark theme" aria-label="Toggle theme">Theme</button>
       </div>
     </aside>
@@ -71,13 +71,11 @@
               <button id="strategist-chip" type="button" class="chip-toggle" aria-pressed="false" title="Toggle research strategist">Strategist</button>
             </div>
             <div class="composer-right">
-              <select id="composer-provider" class="compact-select" aria-label="Model provider">
-                <option value="anthropic">Anthropic</option>
-                <option value="openai">OpenAI</option>
-                <option value="ollama">Ollama</option>
-                <option value="gemini">Gemini</option>
+              <span id="composer-route-note" class="route-note" hidden></span>
+              <select id="composer-model" class="compact-select model-picker" aria-label="Model for the next message" title="Model for the next message">
+                <option value="">Loading models...</option>
               </select>
-              <input id="composer-model" class="compact-select" type="text" placeholder="Model ID" aria-label="Model identifier" style="width:146px">
+              <button id="composer-connect" type="button" class="pill-btn sm" title="Connect a model provider" hidden>Connect</button>
               <button id="composer-send" type="submit" title="Send prompt" aria-label="Send prompt">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                   <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
@@ -202,66 +200,38 @@
     </aside>
   </div>
 
-  <!-- Settings & Provider Presets Modal -->
+  <!-- Connect panel: one row per provider (from /api/connections); advanced settings folded away -->
   <div id="settings-dialog" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
     <div class="modal-card">
       <div class="modal-header">
-        <h2 id="settings-title">Providers, Keys &amp; Research Conventions</h2>
-        <button id="settings-close-btn" type="button" class="icon-btn" aria-label="Close settings">✕</button>
+        <h2 id="settings-title">Connect a model</h2>
+        <button id="settings-close-btn" type="button" class="icon-btn" aria-label="Close Connect">✕</button>
       </div>
-      <form id="settings-form" class="form-grid" autocomplete="off">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-          <div class="form-row">
-            <label for="set-provider">Default Provider</label>
-            <select id="set-provider" class="text-input">
-              <option value="anthropic">Anthropic</option>
-              <option value="openai">OpenAI</option>
-              <option value="ollama">Ollama</option>
-              <option value="gemini">Gemini</option>
-            </select>
+      <p class="connect-intro">Connect any one of these, then pick a model in the box next to Send.</p>
+      <div id="connect-list" class="connect-list" aria-live="polite"></div>
+      <details id="connect-advanced" class="connect-advanced">
+        <summary>Advanced</summary>
+        <form id="settings-form" class="form-grid" autocomplete="off">
+          <div id="advanced-base-urls" class="form-grid"></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div class="form-row">
+              <label for="set-role-verifier">Verifier Role Model</label>
+              <input id="set-role-verifier" class="text-input" type="text" placeholder="Optional preset">
+            </div>
+            <div class="form-row">
+              <label for="set-role-strategist">Strategist Role Model</label>
+              <input id="set-role-strategist" class="text-input" type="text" placeholder="Optional preset">
+            </div>
           </div>
           <div class="form-row">
-            <label for="set-model">Default Model</label>
-            <input id="set-model" class="text-input" type="text" placeholder="claude-sonnet-4-5">
+            <label for="set-conventions">Pinned Conventions (max 2000 chars)</label>
+            <textarea id="set-conventions" class="text-input" rows="3" maxlength="2000" placeholder="Metric signature (-,+,+,+), natural units hbar = c = 1..."></textarea>
           </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-          <div class="form-row">
-            <label for="set-key-anthropic">Anthropic API Key</label>
-            <input id="set-key-anthropic" class="text-input" type="password" placeholder="Leave blank to keep existing">
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
+            <button id="settings-save-btn" type="submit" class="pill-btn primary">Save advanced settings</button>
           </div>
-          <div class="form-row">
-            <label for="set-key-openai">OpenAI API Key</label>
-            <input id="set-key-openai" class="text-input" type="password" placeholder="Leave blank to keep existing">
-          </div>
-          <div class="form-row">
-            <label for="set-key-gemini">Gemini API Key</label>
-            <input id="set-key-gemini" class="text-input" type="password" placeholder="Leave blank to keep existing">
-          </div>
-          <div class="form-row">
-            <label for="set-key-ollama">Ollama Base / Key</label>
-            <input id="set-key-ollama" class="text-input" type="text" placeholder="http://127.0.0.1:11434">
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-          <div class="form-row">
-            <label for="set-role-verifier">Verifier Role Model</label>
-            <input id="set-role-verifier" class="text-input" type="text" placeholder="Optional preset">
-          </div>
-          <div class="form-row">
-            <label for="set-role-strategist">Strategist Role Model</label>
-            <input id="set-role-strategist" class="text-input" type="text" placeholder="Optional preset">
-          </div>
-        </div>
-        <div class="form-row">
-          <label for="set-conventions">Pinned Conventions (max 2000 chars)</label>
-          <textarea id="set-conventions" class="text-input" rows="3" maxlength="2000" placeholder="Metric signature (-,+,+,+), natural units hbar = c = 1..."></textarea>
-        </div>
-        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
-          <button id="settings-cancel-btn" type="button" class="pill-btn">Cancel</button>
-          <button id="settings-save-btn" type="submit" class="pill-btn primary">Save Settings</button>
-        </div>
-      </form>
+        </form>
+      </details>
     </div>
   </div>
 

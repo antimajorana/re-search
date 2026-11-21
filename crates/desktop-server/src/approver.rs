@@ -168,8 +168,11 @@ impl Approver for UiApprover {
             Some(dec) if dec.digest == request.digest => {
                 if dec.approved {
                     (true, format!("approved in desktop UI ({})", dec.responder))
-                } else {
+                } else if dec.responder == "desktop-ui" {
                     (false, format!("denied in desktop UI ({})", dec.responder))
+                } else {
+                    // Denied by the server itself (caller gone, turn stopped), not by a person.
+                    (false, format!("denied: {}", dec.responder))
                 }
             }
             Some(_) => (false, "approval digest mismatch; failing closed".to_string()),

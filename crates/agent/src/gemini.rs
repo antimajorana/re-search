@@ -4,7 +4,8 @@ use crate::http::{
     build_ureq_agent, config_err, malformed_response_err, post_json, scrub_bytes, validate_base_url, SecretKey,
 };
 use crate::transport::{
-    ContentBlock, Message, ModelRequest, ModelResponse, PreparedRequest, Role, StopReason, ToolSpec, Transport,
+    ContentBlock, Message, ModelRequest, ModelResponse, PreparedRequest, ProviderKind, Role, StopReason, ToolSpec,
+    Transport,
     TransportError, TransportInfo, DEFAULT_GEMINI_BASE, DEFAULT_GEMINI_MODEL,
 };
 use serde_json::{json, Value};
@@ -41,7 +42,7 @@ pub struct GeminiTransport {
 impl GeminiTransport {
     pub fn from_env(config: GeminiConfig) -> Result<Self, TransportError> {
         let (key, key_env) = SecretKey::from_env_vars(
-            &["RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"],
+            ProviderKind::Gemini.key_env_vars(),
             "RE_SEARCH_API_KEY or GEMINI_API_KEY",
         )?;
         Self::new(config, key, key_env)
@@ -62,7 +63,7 @@ impl GeminiTransport {
     }
 }
 
-fn validate_gemini_model(raw: &str) -> Result<String, TransportError> {
+pub(crate) fn validate_gemini_model(raw: &str) -> Result<String, TransportError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(config_err("Gemini model name is empty"));

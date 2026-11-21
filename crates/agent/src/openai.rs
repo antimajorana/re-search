@@ -52,13 +52,13 @@ impl OpenAiTransport {
         let validated = validate_base_url(&config.base_url)?;
         let (key, key_env) = match config.provider {
             ProviderKind::OpenAi => SecretKey::optional_from_env_vars(
-                &["RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY", "OPENAI_API_KEY"],
+                ProviderKind::OpenAi.key_env_vars(),
                 true,
                 validated.is_loopback_http,
                 "RE_SEARCH_API_KEY or OPENAI_API_KEY",
             )?,
             ProviderKind::Ollama => SecretKey::optional_from_env_vars(
-                &["RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY", "OLLAMA_API_KEY", "OPENAI_API_KEY"],
+                ProviderKind::Ollama.key_env_vars(),
                 true,
                 validated.is_loopback_http,
                 "RE_SEARCH_API_KEY or OLLAMA_API_KEY (or use http://127.0.0.1:11434/v1)",

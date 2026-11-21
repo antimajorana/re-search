@@ -67,7 +67,7 @@ fn validate_endpoint_url(flag: &str, raw: &str) -> Result<String, String> {
 }
 
 /// The flags `re-search-app` understands besides `--data-dir` (which is always passed).
-const APP_FLAGS: [&str; 4] = ["workspace", "python", "worker-script", "port"];
+const APP_FLAGS: [&str; 6] = ["workspace", "python", "worker-script", "port", "core-exe", "claude"];
 
 /// Arguments for `re-search-app`, or `None` when a flag only the in-process server
 /// understands (`--no-open`, `--print-url-json`, `--api-base`, ...) was given. No token is
@@ -150,6 +150,18 @@ pub(crate) fn ui_command(
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exe_dir = exe.parent().ok_or("executable has no directory")?;
     let (python, worker_script) = resolve_worker_paths(&mut flags, exe_dir)?;
+    // Claude subscription route: `--core-exe` / `--claude`, else the environment; when both
+    // are unset the server looks beside its executable (core.exe) and on PATH / npm (claude).
+    let exe_flag = |flags: &mut HashMap<String, String>, flag: &str, vars: &[&str]| {
+        flags
+            .remove(flag)
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| env_str_any(vars))
+            .map(|p| std::path::absolute(PathBuf::from(p)).map_err(|e| e.to_string()))
+            .transpose()
+    };
+    let core_exe = exe_flag(&mut flags, "core-exe", &["RE_SEARCH_CORE_EXE"])?;
+    let claude_exe = exe_flag(&mut flags, "claude", &["RE_SEARCH_CLAUDE", "RESEARCH_CORE_CLAUDE"])?;
     reject_unknown_flags(&flags)?;
 
     let abs_data = std::path::absolute(&data_dir).map_err(|e| e.to_string())?;
@@ -169,6 +181,9 @@ pub(crate) fn ui_command(
         open_window: !no_open,
         print_url_json,
         eval_timeout_s: parse_eval_timeout_s(),
+        core_exe,
+        claude_exe,
+        connection_env: None,
     })
 }
 

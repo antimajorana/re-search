@@ -12,7 +12,10 @@ The `re-search` supervisor supports two execution routes:
   Object. The CLI runs the model's agent loop and is given exactly two tools
   served over stdio by our MCP server `core.exe` (via `sessions/<id>/mcp.json`
   carrying `CORE_SESSION_TOKEN`): `sympy_eval` (Python/SymPy in a
-  zero-capability Windows `AppContainerSandbox`) and `ledger_note`.
+  zero-capability Windows `AppContainerSandbox`) and `ledger_note`. The
+  desktop server runs the same route for sessions bound to `claude-cli` (see
+  "The Claude subscription route in the desktop" below), with the research
+  tools added. Both use `crates/cli-route`.
 - **`--route api` (Stage 4–5, `"in-core loop, full provenance"`).** Runs the
   in-core agent loop (`crates/agent`) directly inside `re-search` over the
   `Transport` trait (`AnthropicTransport`, `OpenAiTransport` for OpenAI/Ollama,
@@ -325,7 +328,8 @@ result.
   Closing the window shuts the server down and exits the process, which also
   ends child processes held in kill-on-close Job Objects. `re-search desktop`
   starts it from its own directory (passing only `--data-dir`, `--workspace`,
-  `--python`, `--worker-script`, `--port`, never a token); with any other flag,
+  `--python`, `--worker-script`, `--port`, `--core-exe`, `--claude`, never a
+  token); with any other flag,
   or when `re-search-app.exe` is absent, it falls back to `re-search ui`.
 - **Token delivery without a URL.** The first navigation is `GET /` with the
   token in the `X-ReSearch-Token` request header (WebView2
@@ -381,6 +385,196 @@ result.
   `--app=<url>` launch path of `re-search desktop` was removed because it put
   the token on the browser's command line.
 
+## The Claude subscription route in the desktop (`claude-cli`)
+
+- **What runs.** For a session created or messaged with `provider:
+  "claude-cli"`, each turn starts the unmodified `claude.exe` the user signed
+  into (re:Search never reads or passes its login token, never passes
+  `--bare`, and adds no sign-in flow) in a kill-on-close Job Object, with the
+  console route's flags (`-p`, `--output-format stream-json`, `--verbose`,
+  `--tools ""`, `--strict-mcp-config`, `--mcp-config <sessions/<id>/mcp.json>`,
+  `--setting-sources ""`, `--disable-slash-commands`,
+  `--no-session-persistence`, `--allowedTools mcp__core__*`) plus
+  `--permission-prompts none` (listed by `claude --help` of 2.1.318: anything
+  that would prompt inside the CLI is denied; our tools are pre-allowed). The
+  same flags are now used by `re-search run --route cli`.
+- **Only our tools, checked before the model acts.** `core.exe` gets the
+  session id, a fresh 256-bit session token, the loopback relay address, the
+  data directory, the session's workspace (`CORE_WORKSPACE`) and
+  `CORE_ENABLE_RESEARCH_TOOLS=1`, so it serves `sympy_eval`, `ledger_note` and
+  the research tools under `v0.4-research`, as the API route does. The list
+  the `system/init` event must show is computed by the same registration code
+  `core.exe` uses (`cli_route::core_tools`); any extra or missing tool, or any
+  MCP server besides `core`, aborts the turn (`session.abort`) before any
+  model output is accepted, and kills the process tree.
+- **Approvals.** `core.exe` asks over the loopback relay, which checks the
+  channel version, session token, session, scope and containment (an
+  uncontained `worker-session` request is refused) and then shows the request
+  as the normal approval card (`UiApprover`: digest-bound, `approval.answered`
+  recorded fail-closed before the answer is sent). Only
+  `POST /api/sessions/{id}/approvals/{call_id}` with the header token and the
+  matching digest approves; a wrong digest is refused. If `core.exe`
+  disconnects while the card is open, or the turn is stopped, the card is
+  denied (`"denied: supervisor: ..."`), never approved. ACK bookkeeping
+  (`approval.delivered` / `approval.undelivered` / `approval.expired`) is the
+  console route's.
+- **What "partial provenance" means here.** The model's requests and
+  responses are not seen by re:Search: the ledger holds what the CLI printed
+  (each raw stream-json line as a blob, mapped to `cli.*` / `model.*` events),
+  the exact prompt written to the CLI (the start event's `raw_blob`), and,
+  from `core.exe`, every tool request, policy decision, approval and result.
+  The system prompt, sampling, any CLI-internal retries and what the vendor
+  sends to its servers are not recorded. Start events carry route
+  `claude-code-cli` and `"external loop, partial provenance"`;
+  `GET /api/sessions/{id}` reports both. A session never mixes this route
+  with the in-core API route.
+- **Billing safety.** `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`,
+  `CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY` take precedence over
+  the subscription login in non-interactive mode. re:Search does not remove
+  them (that would restrict how the CLI authenticates); when any is set (non-
+  empty) it refuses to start the turn, naming the variables but never their
+  values, on the desktop and on `re-search run --route cli`.
+  `RE_SEARCH_ALLOW_CLAUDE_ENV_AUTH=1` proceeds anyway and records the names in
+  the start event (`env_auth_vars_allowed`). Second check, on the CLI's own
+  report: after a verified `system/init`, a turn whose `apiKeySource` is
+  present and not `"none"` (for example `"apiKeyHelper"` from managed
+  settings, which `--setting-sources ""` does not switch off, or a key the CLI
+  found elsewhere) is aborted at once (`session.abort` with the reason, process
+  tree killed) unless `RE_SEARCH_ALLOW_CLAUDE_ENV_AUTH=1` is set. The live
+  2.1.318 recording (`crates/cli/src/fixtures/stream_cli_2_1_318.ndjson`)
+  shows `"apiKeySource":"none"` for a subscription login. The model may have
+  been loaded by then but has not acted (the abort comes on the init line,
+  before any assistant event is accepted). Not covered: a third-party
+  provider chosen in managed settings that the CLI does not report in
+  `apiKeySource`, and an inherited `CLAUDE_CODE_SIMPLE=1` (bare mode), which
+  makes the CLI ignore the subscription login (the Connect panel warns).
+- **Prompt on stdin.** The prompt is written to the CLI's standard input and
+  stdin is then closed; it is not on the command line (not visible in the
+  process list, no length limit). Both routes.
+- **History replay.** The CLI is one-shot, so turns after the first start
+  with a delimited transcript of this session's earlier user messages and
+  final assistant replies, read from the ledger after `verify_session`
+  passes (most recent turns up to about 24,000 characters; the prompt says
+  how many older turns were left out; tool calls and results are not
+  replayed). The start event records `history_replayed`, `history_chars`,
+  `history_turns` and `history_turns_dropped`. Every tag and the new-message
+  line carry a random marker chosen per prompt, and tag- or marker-like text
+  inside replayed messages (`<turn`, `</assistant`, `[New message from the
+  user`, ...) is rewritten into an inert, visibly quoted form, so text an
+  earlier turn printed (for example quoted from a paper) cannot pose as a new
+  user message. Turns that ended in `session.abort` are marked as aborted. The
+  transcript is still text the model reads: this keeps the structure
+  unambiguous, it does not make the model ignore what the text says; the
+  approval cards gate every effect either way.
+- **`mcp.json` lifetime.** `sessions/<id>/mcp.json` holds the turn's
+  `CORE_SESSION_TOKEN`. It is written at the start of a turn and deleted when
+  the turn ends on every path (completion, abort, stop, error, server
+  shutdown: closing the window waits up to 5 s for running turns to finish
+  their cleanup). While the turn runs it is readable by any process running
+  as you; a crash or kill of re:Search itself leaves it behind (the token is
+  useless once its relay listener is gone) until the next server start or
+  until the session is opened: both delete `sessions/*/mcp.json` unless a
+  live turn owns it (one of this process, or another running process named
+  in the session's `.active.lock`).
+- **Stop and shutdown.** `POST /api/sessions/{id}/stop` (header token) kills
+  the turn's process tree and records `session.abort` (`stopped: true`); the
+  stop handle is registered before the turn's thread starts, so a stop right
+  after the message's 202 ends the turn before anything is started (nothing
+  is recorded then). `claude --version` runs with a 5 s deadline, without a
+  console window and with stdin closed, and the stop is checked right after;
+  stopping the server (closing the app window) stops every running turn, and
+  process exit closes the Job Object, which kills the tree in any case.
+- **Not verified, because no live model call was made.** That `claude -p`
+  2.1.318 reads the prompt from stdin when no prompt argument is given (the
+  documented headless use; `--help` says only "useful for pipes"); how
+  `--permission-prompts none` behaves in practice (every flag re:Search
+  passes, this one included, appears in the captured 2.1.318 `--help`
+  excerpt `crates/cli-route/fixtures/claude_help_2_1_318.txt`, which a unit
+  test checks, and the fake CLIs reject unknown options; a supervised live
+  run is still needed before merge); what `apiKeySource` the real CLI prints
+  under an `apiKeyHelper`; the `system/init` tool list
+  the real CLI prints when `core.exe` serves the research tools; and that a
+  real turn's stream maps to the SSE events as the scripted fake's does. All
+  route tests use a scripted fake CLI and never start `core.exe`.
+- **Output read errors.** The CLI's stdout is read as bytes: a line that is
+  not valid UTF-8 is kept as a blob and recorded as `cli.unparsed`; a read
+  error (other than the pipe closing after a stop) ends the turn with
+  `session.abort`, never with a clean `session.end`.
+
+## Connection status and live model lists (`/api/connections`, `/api/models`)
+
+- **Same credential rule as every API route.** Both are `GET` routes under
+  `/api/` and need the header token (tested in the route matrix of
+  `tests/api_auth.rs`); the stream cookie does not open them.
+- **Which hosts are called, with which credential.** These calls are made
+  by the desktop on its own (when the app opens, on refresh), not because the
+  person chose a provider, so each uses only that provider's own credential.
+  `GET /api/models` makes one read-only `GET` per provider that has one, only
+  to that provider's saved `base_url`, else its default (never a request
+  body): Anthropic `{base}/v1/models?limit=1000` with `x-api-key` and
+  `anthropic-version`, OpenAI `{base}/v1/models` with `Authorization:
+  Bearer`, Gemini `{base}/v1beta/models?pageSize=1000` with the key in the
+  `x-goog-api-key` header (never in the URL), Ollama
+  `{base without /v1}/api/tags`. The key is the provider's own variable
+  (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`,
+  `OLLAMA_API_KEY`), else its saved key. The generic `RE_SEARCH_API_KEY` /
+  `RESEARCH_CORE_API_KEY`, which a turn reads first for whatever provider it
+  runs on, is used for a list call only when `RE_SEARCH_PROVIDER` (or
+  `RESEARCH_CORE_PROVIDER`) names that one provider; otherwise it is never
+  sent to list models, and a provider whose only key is the generic one is
+  shown as not connected, with a status that says why. The Ollama probe
+  never carries `OPENAI_API_KEY` (the Ollama transport's fallback) or any
+  other provider's key: only `OLLAMA_API_KEY` or a saved Ollama key, else no
+  key. With `--api-base` / `RE_SEARCH_API_BASE` at launch, every provider's
+  calls would go to that one address, so **no list call is made at all**:
+  providers with their own key are shown connected with re:Search's
+  built-in model names and a status saying the list was not fetched, and
+  Ollama is shown as not checked. (Turns still use the launch override and
+  the turn key order; that is the person's explicit choice per message.)
+  Tested with loopback mocks that record the `Authorization`, `x-api-key`
+  and `x-goog-api-key` headers each host received
+  (`tests/models_api.rs`). The calls use the transports' rules
+  (`agent::model_list`): `https://` except on loopback, no redirects, a
+  4 MiB response limit, connect and total timeouts (10 s; 3 s for Ollama).
+  **Errors carry only a status class** (`auth (HTTP 401)`,
+  `rate limit (HTTP 429)`, `HTTP n`, `timeout`, `network`,
+  `oversized response`, `unexpected response`): the body of an error
+  answer is never read, so a provider message that quotes part of a key
+  (for example a masked `sk-proj-****abcd`) cannot reach the cache, the
+  JSON responses or the UI (tested). `GET /api/connections` calls no API
+  provider; it only asks Ollama's `/api/tags` (to say whether it is
+  running) and reports, for each provider, whether a key is saved and
+  whether the key a turn would use comes from the environment (with the
+  variable's name), never the key.
+- **The Claude CLI is never given a prompt here.** Connection status locates
+  `claude.exe` the same way a turn does, applies the same billing-safety
+  check (naming variables, never values) and runs `claude --version` at most
+  once per server launch (5 s timeout, no console window, nesting markers
+  removed). The model choices for this route are the CLI's own aliases
+  (`fable`, `opus`, `sonnet`, `haiku`); no list endpoint is called.
+- **What is cached.** Model lists (ids, labels, times, the last error)
+  stay in the server's memory for 10 minutes (a failed call for 30 s),
+  never on disk; `?refresh=1` bypasses the cache and saving or removing a
+  key or base URL clears it; a list call that began before such a change
+  does not store its result (a generation counter). Keys are not cached by
+  this code (they are
+  read from the environment or `providers.json` for each call). The browser
+  keeps only the last chosen provider and model id per session in
+  `localStorage`.
+- **Model names are untrusted text.** Ids and labels come from the
+  provider (or a server at a configured base URL). The server keeps only
+  ids of at most 160 characters without whitespace, control characters or
+  a leading `-` (Gemini ids also pass the transport's model-name check),
+  strips control characters from labels and caps their length and the list
+  (500 models); the UI inserts them only as option text, never as HTML,
+  and a chosen id is sent back as the `model` of a message, where the
+  transports and the CLI route validate it again.
+- **Not covered.** A base URL saved by whoever holds the token decides
+  where the list call (and the key) goes, as for turns (see "The desktop
+  token is as powerful as your provider keys"). Ollama's status call goes
+  to its address without asking.
+
 ## Remaining limits & gaps
 
 - **Windows system and `ALL APPLICATION PACKAGES` files remain readable.**
@@ -421,10 +615,12 @@ result.
   on `--route api`, through a local Ollama server, or through `claude.exe` on
   `--route cli`), and the remote provider's weights and sampling remain
   untrusted external computation.
-- **External CLI route (`--route cli`) retains partial provenance and
-  `mcp.json` token exposure.** On `--route cli`, `claude.exe` runs uncontained
-  in a kill-on-close Job Object, controls the external loop, and reads
-  `sessions/<id>/mcp.json` (`CORE_SESSION_TOKEN`).
+- **External CLI route (`--route cli`, desktop `claude-cli`) retains partial
+  provenance and `mcp.json` token exposure.** `claude.exe` runs uncontained
+  in a kill-on-close Job Object (it can read and write what you can, and use
+  the network, through its own code even though its built-in tools are off),
+  controls the external loop, and reads `sessions/<id>/mcp.json`
+  (`CORE_SESSION_TOKEN`) during the turn.
 - **Supervisor & LaTeX compiler run in the user's logon context.** While the
   Python worker runs inside the zero-capability AppContainer on Windows, host
   supervisor operations (`fs_read`, approved `fs_write`/`latex_patch`, approved

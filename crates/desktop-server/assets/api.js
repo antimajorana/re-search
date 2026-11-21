@@ -159,6 +159,16 @@ export function updateProviderSettings(payload) {
   return rawJson('PUT', '/api/settings/providers', payload);
 }
 
+// Which providers are connected (never returns a key). `refresh` re-asks Ollama.
+export function getConnections(refresh = false) {
+  return rawJson('GET', `/api/connections${refresh ? '?refresh=1' : ''}`);
+}
+
+// Models the user can pick now, grouped by connected provider (server-cached 10 minutes).
+export function getModels(refresh = false) {
+  return rawJson('GET', `/api/models${refresh ? '?refresh=1' : ''}`);
+}
+
 export function exportUrl(id, format) {
   return `/api/sessions/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`;
 }

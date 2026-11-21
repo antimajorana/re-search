@@ -46,6 +46,9 @@ fn start_server(cfg: &AppConfig) -> Result<RunningDesktopServer, String> {
         open_window: false,
         print_url_json: false,
         eval_timeout_s: DEFAULT_EVAL_TIMEOUT_S,
+        core_exe: cfg.core_exe.clone(),
+        claude_exe: cfg.claude.clone(),
+        connection_env: None,
     })
 }
 

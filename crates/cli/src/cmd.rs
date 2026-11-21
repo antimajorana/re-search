@@ -20,9 +20,11 @@ pub const USAGE: &str = "usage:
                 [--max-turns N] [--max-tokens N] [--workspace DIR] [--enable-research-tools true|false]
                 [--arxiv-base URL] [--inspire-base URL] [--crossref-base URL]
   re-search ui [--port PORT] [--workspace DIR] [--data-dir DIR] [--python EXE]
+               [--core-exe EXE] [--claude EXE]
                [--api-base URL] [--arxiv-base URL] [--inspire-base URL] [--crossref-base URL]
                [--no-open true|false] [--print-url-json true|false]
   re-search desktop [--port PORT] [--workspace DIR] [--data-dir DIR] [--python EXE] [--worker-script PY]
+               [--core-exe EXE] [--claude EXE]
                (opens re-search-app.exe from this directory when present; with any other
                 `ui` flag, or without re-search-app.exe, behaves like `re-search ui`)
   re-search fork SESSION --at-seq N [--assumption TEXT] [--data-dir DIR]
@@ -36,7 +38,10 @@ environment (RE_SEARCH_* preferred, RESEARCH_CORE_* fallback):
   RE_SEARCH_ROUTE, RE_SEARCH_PROVIDER, RE_SEARCH_API_KEY, RE_SEARCH_API_BASE,
   RE_SEARCH_PYTHON, RE_SEARCH_CLAUDE, RE_SEARCH_DATA, RE_SEARCH_WORKER_SCRIPT,
   RE_SEARCH_CORE_EXE, RE_SEARCH_ARXIV_BASE, RE_SEARCH_INSPIRE_BASE, RE_SEARCH_CROSSREF_BASE,
-  ANTHROPIC_API_KEY, OPENAI_API_KEY, OLLAMA_API_KEY, GEMINI_API_KEY, GOOGLE_API_KEY";
+  ANTHROPIC_API_KEY, OPENAI_API_KEY, OLLAMA_API_KEY, GEMINI_API_KEY, GOOGLE_API_KEY
+  RE_SEARCH_ALLOW_CLAUDE_ENV_AUTH=1  start the Claude CLI route although ANTHROPIC_API_KEY,
+      ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN or CLAUDE_CODE_USE_{BEDROCK,VERTEX,FOUNDRY}
+      is set (otherwise refused: the CLI would bill that instead of your Claude subscription)";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Route {

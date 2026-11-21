@@ -1,7 +1,7 @@
 //! Session, SSE, approval, fork, diff, and provider-settings REST handlers.
 
 use crate::sse::stream_session_sse;
-use crate::state::{now_ms, update_provider_roles_from_ui, DesktopState, ForkInfo, SessionMeta};
+use crate::state::{now_ms, update_provider_roles_from_ui, DesktopState, ForkInfo, SessionMeta, CLAUDE_CLI_ROUTE};
 use crate::turn_runner::{reconstruct_session_view, spawn_turn_thread};
 use agent::{ProviderKeyStore, ProviderKind, RoleAssignment};
 use export::{compute_branch_diff, fork_session, ForkOptions};
@@ -101,9 +101,11 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
             .or_else(|| events.first().map(|e| e.ts_ms))
             .unwrap_or(0);
         let updated_ms = events.last().map(|e| e.ts_ms).unwrap_or(created_ms);
+        let (route, _) = crate::cli_turn::session_route(meta.as_ref(), &events);
         sessions.push(json!({
             "id": id,
             "title": title,
+            "route": route,
             "workspace_root": workspace_root,
             "parent_session": parent_session,
             "event_count": events.len(),
@@ -167,7 +169,9 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
         })
         .unwrap_or_else(|| "Research Session".to_string());
 
+    let provider = val.get("provider").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
     let meta = SessionMeta {
+        route: (provider == Some(CLAUDE_CLI_ROUTE)).then(|| CLAUDE_CLI_ROUTE.to_string()),
         id: id.clone(),
         title: title.clone(),
         workspace_root: workspace_root.clone(),
@@ -188,11 +192,7 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
             .get("model_preset")
             .and_then(Value::as_str)
             .map(str::to_string),
-        default_provider: val
-            .get("provider")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or(ui.default_provider),
+        default_provider: provider.map(str::to_string).or(ui.default_provider),
         default_model: val
             .get("model")
             .and_then(Value::as_str)
@@ -219,6 +219,7 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
             "title": title,
             "workspace_root": workspace_root,
             "created_ms": meta.created_ms,
+            "route": meta.route,
         }),
     ))
 }
@@ -228,6 +229,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
     if !state.session_exists(session_id).map_err(internal)? {
         return Err(not_found(format!("session `{session_id}` not found")));
     }
+    crate::cli_turn::sweep_session_tool_config(state, session_id);
     let meta = state.load_meta(session_id);
     let ledger = state.open_ledger().map_err(internal)?;
     let events = ledger
@@ -251,6 +253,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
         .and_then(|m| m.workspace_root.clone())
         .or_else(|| state.cfg.workspace_root.as_ref().map(|p| p.display().to_string()));
     let pending = state.pending_for_session(session_id);
+    let (route, provenance) = crate::cli_turn::session_route(meta.as_ref(), &events);
     let fork_info = meta.as_ref().and_then(|m| m.fork_info.clone()).or_else(|| {
         events.iter().find(|e| e.kind == "session.forked").map(|e| ForkInfo {
             parent_session: e.payload["parent_session"].as_str().unwrap_or("").to_string(),
@@ -280,6 +283,8 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
             "id": session_id,
             "title": title,
             "workspace_root": workspace_root,
+            "route": route,
+            "provenance": provenance,
             "meta": meta,
             "fork_info": fork_info,
             "events": events_json,
@@ -392,6 +397,7 @@ pub fn handle_fork(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRe
         model_preset: parent_meta.as_ref().and_then(|m| m.model_preset.clone()),
         default_provider: parent_meta.as_ref().and_then(|m| m.default_provider.clone()),
         default_model: parent_meta.as_ref().and_then(|m| m.default_model.clone()),
+        route: parent_meta.as_ref().and_then(|m| m.route.clone()),
         created_ms: now_ms(),
         fork_info: Some(ForkInfo {
             parent_session: session_id.to_string(),
@@ -464,6 +470,10 @@ pub fn handle_put_settings(state: &DesktopState, body: &[u8]) -> ApiResult {
 
     store.save_to_data_dir(&state.cfg.data_dir).map_err(internal)?;
     state.save_ui_settings(&ui).map_err(internal)?;
+    if val.get("keys").is_some() || val.get("base_urls").is_some() {
+        // Lists fetched with the old key or from the old host are no longer valid.
+        state.catalog.clear();
+    }
     Ok((200, state.settings_json().map_err(internal)?))
 }
 

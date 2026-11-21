@@ -1,138 +1,15 @@
 //! Mapping from the Claude Code CLI's `stream-json` lines to the core's own
 //! versioned events, and the check of the `system/init` event.
 //!
-//! Both functions are pure. The CLI's format is not ours and may change
-//! between CLI versions, so every raw line is also kept as a blob and each
-//! core event carries the hash of the line it came from.
+//! The implementation moved to `cli_route::claude` so the desktop server uses the same
+//! code; this module re-exports it and keeps the fixture-based tests of the real CLI
+//! stream next to the console supervisor.
 
+#[cfg(test)]
+pub use cli_route::claude::{check_init, map_line, parse_cli_version};
+pub use cli_route::EVENT_VERSION;
+#[cfg(test)]
 use serde_json::{json, Value};
-
-/// Version of the NDJSON events this module produces.
-pub const EVENT_VERSION: u32 = 1;
-
-/// Claude Code CLI version this supervisor was tested against.
-pub const TESTED_CLI_VERSION: &str = "2.1.318";
-
-/// Extract the leading version token from `claude --version` output
-/// (for example `"2.1.318 (Claude Code)"` -> `"2.1.318"`).
-pub fn parse_cli_version(raw: &str) -> &str {
-    raw.split_whitespace().next().unwrap_or("")
-}
-
-/// Longest tool-result text copied into an event (the raw line has it all).
-const RESULT_TEXT_LIMIT: usize = 4000;
-
-fn clip(text: &str) -> (String, bool) {
-    if text.chars().count() <= RESULT_TEXT_LIMIT {
-        (text.to_string(), false)
-    } else {
-        (text.chars().take(RESULT_TEXT_LIMIT).collect(), true)
-    }
-}
-
-/// Text of a tool_result `content`, which is a string or a list of blocks.
-fn result_text(content: &Value) -> String {
-    match content {
-        Value::String(s) => s.clone(),
-        Value::Array(blocks) => blocks
-            .iter()
-            .filter_map(|b| b.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    }
-}
-
-/// Map one parsed stream-json line to zero or more `(kind, data)` events.
-pub fn map_line(line: &Value) -> Vec<(String, Value)> {
-    let ty = line["type"].as_str().unwrap_or("");
-    let subtype = line["subtype"].as_str().unwrap_or("");
-    let mut out = Vec::new();
-    match (ty, subtype) {
-        ("system", "init") => out.push((
-            "cli.init".to_string(),
-            json!({
-                "model": line["model"],
-                "tools": line["tools"],
-                "mcp_servers": line["mcp_servers"],
-                "cli_version": line["claude_code_version"],
-                "api_key_source": line["apiKeySource"],
-                "permission_mode": line["permissionMode"],
-                "cli_session_id": line["session_id"],
-            }),
-        )),
-        ("assistant", _) => {
-            for block in line["message"]["content"].as_array().into_iter().flatten() {
-                match block["type"].as_str().unwrap_or("") {
-                    "text" => out.push(("model.text".to_string(), json!({ "text": block["text"] }))),
-                    "tool_use" => out.push((
-                        "model.tool_use".to_string(),
-                        json!({ "id": block["id"], "name": block["name"], "input": block["input"] }),
-                    )),
-                    "thinking" => out.push((
-                        "model.thinking".to_string(),
-                        json!({ "chars": block["thinking"].as_str().map_or(0, |s| s.chars().count()) }),
-                    )),
-                    other => out.push(("model.other".to_string(), json!({ "block_type": other }))),
-                }
-            }
-        }
-        ("user", _) => {
-            for block in line["message"]["content"].as_array().into_iter().flatten() {
-                if block["type"] == "tool_result" {
-                    let (text, truncated) = clip(&result_text(&block["content"]));
-                    out.push((
-                        "model.tool_result".to_string(),
-                        json!({
-                            "tool_use_id": block["tool_use_id"],
-                            "is_error": block["is_error"].as_bool().unwrap_or(false),
-                            "text": text,
-                            "truncated": truncated,
-                        }),
-                    ));
-                }
-            }
-        }
-        ("result", _) => out.push((
-            "cli.result".to_string(),
-            json!({
-                "subtype": subtype,
-                "is_error": line["is_error"],
-                "result": line["result"],
-                "num_turns": line["num_turns"],
-                "duration_ms": line["duration_ms"],
-                "total_cost_usd": line["total_cost_usd"],
-                "usage": line["usage"],
-            }),
-        )),
-        _ => out.push(("cli.other".to_string(), json!({ "type": ty, "subtype": subtype }))),
-    }
-    out
-}
-
-/// Check the CLI's `system/init` line: the model must be offered exactly the
-/// expected tools (no built-ins, nothing extra, nothing missing) and the
-/// `core` MCP server must be connected. Any difference is an error; the
-/// supervisor aborts the session on it.
-pub fn check_init(init: &Value, expected_tools: &[String]) -> Result<(), String> {
-    if init["type"] != "system" || init["subtype"] != "init" {
-        return Err("not a system/init event".into());
-    }
-    let tools = init["tools"].as_array().ok_or("init event has no `tools` list")?;
-    let mut seen: Vec<String> = tools.iter().map(|t| t.as_str().unwrap_or("<non-string>").to_string()).collect();
-    seen.sort();
-    let mut expected = expected_tools.to_vec();
-    expected.sort();
-    if seen != expected {
-        return Err(format!("tool list mismatch: the CLI offers {seen:?}, expected exactly {expected:?}"));
-    }
-    let servers = init["mcp_servers"].as_array().ok_or("init event has no `mcp_servers` list")?;
-    if servers.len() != 1 || servers[0]["name"] != "core" || servers[0]["status"] != "connected" {
-        return Err(format!("MCP servers mismatch: {}, expected only `core`, connected", init["mcp_servers"]));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

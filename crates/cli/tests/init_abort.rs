@@ -57,6 +57,11 @@ fn supervisor_cmd(fake_exe: &Path, data_dir: &Path, prompt: &str) -> Command {
             cmd.env_remove(k);
         }
     }
+    // The route refuses to start while a Claude credential is in the environment; these
+    // tests must not depend on whether this machine has one set.
+    for name in cli_route::claude::CLAUDE_ENV_AUTH_VARS {
+        cmd.env_remove(name);
+    }
     cmd.stdin(Stdio::null())
         .arg("run")
         .arg("--prompt")
@@ -124,6 +129,30 @@ fn mismatched_init_aborts_live_and_kills_tree() {
     assert!(abort.payload["reason"].as_str().unwrap_or("").contains("tool list mismatch"), "{abort:?}");
     assert!(!kinds.contains(&"session.end"), "{kinds:?}");
 
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+#[test]
+fn env_credential_refuses_before_the_cli_starts() {
+    let fake = FakeClaude::compile("envauth");
+    let data_dir = temp_data_dir("envauth");
+    let pid_file = data_dir.join("started.pid");
+    for name in cli_route::claude::CLAUDE_ENV_AUTH_VARS {
+        let mut cmd = supervisor_cmd(&fake.exe, &data_dir, "test env refusal");
+        let value = "dummy-not-a-credential-4711";
+        cmd.env(name, value).env("FAKE_CLAUDE_PID_FILE", &pid_file);
+        let out = cmd.output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_ne!(out.status.code(), Some(0), "{name}: {stderr}");
+        assert_eq!(out.status.code(), Some(2), "{name}: {stderr}");
+        assert!(stderr.contains(name) && stderr.contains("subscription"), "{name}: {stderr}");
+        assert!(stderr.contains(cli_route::env_auth::ALLOW_ENV_AUTH_VAR), "{stderr}");
+        assert!(!stderr.contains(value), "the value is never shown: {stderr}");
+        assert!(!String::from_utf8_lossy(&out.stdout).contains(value));
+        assert!(!pid_file.exists(), "{name}: the fake CLI must not have been started");
+    }
+    let ledger = Ledger::open(&data_dir).unwrap();
+    assert!(ledger.sessions().unwrap().is_empty(), "nothing recorded");
     let _ = std::fs::remove_dir_all(&data_dir);
 }
 

@@ -37,13 +37,44 @@ pub(crate) fn spawn_turn_thread(
             return Err((409, format!("a turn is already running for `{session_id}`")));
         }
     }
+    // `provider: "claude-cli"` (or a session bound to it) runs on the Claude subscription
+    // route; anything else on the in-core API route. A session never mixes the two.
+    let on_cli_route = match crate::cli_turn::wants_cli_route(&state, &session_id, &req_json) {
+        Ok(v) => v,
+        Err(e) => {
+            if let Ok(mut active) = state.active_turns.lock() {
+                active.remove(&session_id);
+            }
+            return Err(e);
+        }
+    };
+
+    // A `claude-cli` turn's stop handle is registered before the thread exists, so a stop
+    // sent right after the 202 reaches it (the turn checks it before starting anything).
+    let registered = if on_cli_route {
+        match crate::cli_turn::Registered::new(&state, &session_id) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                if let Ok(mut active) = state.active_turns.lock() {
+                    active.remove(&session_id);
+                }
+                return Err((500, e));
+            }
+        }
+    } else {
+        None
+    };
 
     let thread_state = Arc::clone(&state);
     let thread_session = session_id.clone();
     std::thread::Builder::new()
         .name(format!("turn-{session_id}"))
         .spawn(move || {
-            let outcome = run_session_turn(&thread_state, &thread_session, &req_json, &prompt);
+            let outcome = match &registered {
+                Some(reg) => crate::cli_turn::run_cli_turn(&thread_state, &thread_session, &req_json, &prompt, &reg.stop),
+                None => run_session_turn(&thread_state, &thread_session, &req_json, &prompt),
+            };
+            drop(registered);
             if let Ok(mut active) = thread_state.active_turns.lock() {
                 active.remove(&thread_session);
             }
@@ -119,12 +150,7 @@ fn run_session_turn(
         build_desktop_router(Arc::clone(state), Arc::new(env), session_id)?;
     let ledger = state.open_ledger()?;
     let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
-    let mut sink = SseEventSink {
-        sse: Arc::clone(&state.sse),
-        session_id: session_id.to_string(),
-        final_text: String::new(),
-        tool_calls: std::collections::HashMap::new(),
-    };
+    let mut sink = SseEventSink::new(Arc::clone(&state.sse), session_id);
 
     if existing.is_empty() {
         let guardrails = GuardrailConfig {
@@ -278,11 +304,28 @@ pub(crate) fn build_desktop_router(
     Ok((router, containment, contained))
 }
 
-struct SseEventSink {
+pub(crate) struct SseEventSink {
     sse: Arc<SseHub>,
     session_id: String,
     final_text: String,
     tool_calls: std::collections::HashMap<String, (String, Value)>,
+}
+
+impl SseEventSink {
+    pub(crate) fn new(sse: Arc<SseHub>, session_id: &str) -> Self {
+        Self { sse, session_id: session_id.to_string(), final_text: String::new(), tool_calls: Default::default() }
+    }
+
+    pub(crate) fn final_text(&self) -> &str {
+        &self.final_text
+    }
+}
+
+/// The Claude subscription route (`cli_route`) feeds the same SSE events as the API route.
+impl cli_route::EventSink for SseEventSink {
+    fn on_event(&mut self, receipt: &AppendedEvent, kind: &str, data: &Value) -> Result<(), String> {
+        EventSink::on_event(self, receipt, kind, data)
+    }
 }
 
 impl EventSink for SseEventSink {

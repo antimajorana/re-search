@@ -1,0 +1,43 @@
+# Excerpt of `claude --help` from Claude Code 2.1.318 (`claude --version` printed "2.1.318 (Claude Code)"),
+# captured on 2026-11-21 on Windows (no model call). Only the usage line and the options
+# re:Search passes are kept, verbatim; the flag-pinning test in src/claude.rs checks against it.
+Usage: claude [options] [command] [prompt]
+
+  --allowedTools, --allowed-tools <tools...>
+      Comma or space-separated list of tool names to allow (e.g. "Bash(git *)
+      Edit")
+  --disable-slash-commands              Disable all skills and commands
+  --mcp-config <configs...>             Load MCP servers from JSON files or
+                                        strings (space-separated)
+  --model <model>                       Model for the current session. Provide
+                                        an alias for the latest model (e.g.
+                                        'fable', 'opus', or 'sonnet') or a
+                                        model's full name.
+  --no-session-persistence              Disable session persistence - sessions
+                                        will not be saved to disk and cannot be
+                                        resumed (only works with --print)
+  --output-format <format>              Output format (only works with --print):
+                                        "text" (default), "json" (single
+                                        result), or "stream-json" (realtime
+                                        streaming) (choices: "text", "json",
+                                        "stream-json")
+  --permission-prompts <target>         Who answers permission prompts with
+                                        --print: "host" (the SDK host or
+                                        --permission-prompt-tool) or "none"
+                                        (nobody: anything that would prompt is
+                                        denied automatically; the permission
+                                        mode still decides everything else)
+  -p, --print                           Print response and exit (useful for
+                                        pipes). Note: The workspace trust dialog
+                                        is skipped when Claude is run in
+  --setting-sources <sources>           Comma-separated list of setting sources
+                                        to load (user, project, local).
+  --strict-mcp-config                   Only use MCP servers from --mcp-config,
+                                        ignoring all other MCP configurations
+  --tools <tools...>                    Specify the list of available tools from
+                                        the built-in set. Use "" to disable all
+                                        tools, "default" to use the default set,
+                                        or specify tool names (e.g.
+                                        "Bash,Edit,Read").
+  --verbose                             Override verbose mode setting from
+                                        config

@@ -1,4 +1,4 @@
-// Floating Gemini composer pill: auto-resizing textarea, <=5 file / 10 MiB Base64 upload, workspace picker, toggles.
+// Floating Gemini composer pill: auto-resizing textarea, <=5 file / 10 MiB Base64 upload, workspace picker, toggles; the model comes from model_picker.js.
 import * as api from '/assets/api.js';
 import { escapeHtml } from '/assets/math.js';
 
@@ -13,8 +13,6 @@ let filesBoxEl = null;
 let workspaceBtn = null;
 let verifierChip = null;
 let strategistChip = null;
-let providerEl = null;
-let modelEl = null;
 let wsDialogEl = null;
 let wsInputEl = null;
 let callbacks = {};
@@ -30,8 +28,6 @@ export function initComposer(opts = {}) {
   workspaceBtn = document.getElementById('workspace-attach-btn');
   verifierChip = document.getElementById('verifier-chip');
   strategistChip = document.getElementById('strategist-chip');
-  providerEl = document.getElementById('composer-provider');
-  modelEl = document.getElementById('composer-model');
   wsDialogEl = document.getElementById('workspace-dialog');
   wsInputEl = document.getElementById('workspace-path-input');
 
@@ -85,17 +81,13 @@ export function setComposerBusy(busy) {
   if (sendEl) sendEl.disabled = !!busy;
 }
 
-export function setComposerProviderModel(provider, model) {
-  if (providerEl && provider) providerEl.value = provider;
-  if (modelEl && model !== undefined) modelEl.value = model || '';
-}
-
-export function getComposerOptions() {
+// Provider and model come from the single model dropdown (model_picker.js).
+export function getComposerOptions(choice) {
   const verifyOn = Boolean(verifierChip && verifierChip.getAttribute('aria-pressed') === 'true');
   const stratOn = Boolean(strategistChip && strategistChip.getAttribute('aria-pressed') === 'true');
   return {
-    provider: providerEl ? providerEl.value : 'anthropic',
-    model: modelEl ? modelEl.value.trim() : '',
+    provider: choice.provider,
+    model: choice.model,
     verification_mode: verifyOn,
     calculation_mode: verifyOn,
     use_strategist: stratOn,
@@ -180,11 +172,30 @@ async function flushStagedUploads(sessionId) {
 async function handleSubmit() {
   const prompt = inputEl ? inputEl.value.trim() : '';
   if (!prompt && stagedFiles.length === 0) return;
+  const currentChoice = () => (typeof callbacks.getModelChoice === 'function' ? callbacks.getModelChoice() : null);
+  // Keep the prompt when nothing can answer it: no model connected, or none on the
+  // route the session is bound to (the server would refuse the send).
+  const refuseNoModel = () => {
+    const reason = typeof callbacks.noModelReason === 'function' ? callbacks.noModelReason() : null;
+    notify(reason || 'No model connected - open Connect.');
+    if (!reason && typeof callbacks.onNeedModel === 'function') callbacks.onNeedModel();
+  };
+  if (prompt && !currentChoice()) {
+    refuseNoModel();
+    return;
+  }
 
   try {
     setComposerBusy(true);
     const sessionId = await callbacks.ensureSession();
     if (!sessionId) return;
+    // Selecting or creating the session may have changed which models it can use: check
+    // again before anything is uploaded, cleared or shown as sent.
+    const choice = currentChoice();
+    if (prompt && !choice) {
+      refuseNoModel();
+      return;
+    }
 
     if (stagedFiles.length > 0) {
       await flushStagedUploads(sessionId);
@@ -198,7 +209,7 @@ async function handleSubmit() {
       inputEl.value = '';
       resizeTextarea();
       if (typeof callbacks.onSendPrompt === 'function') {
-        await callbacks.onSendPrompt(sessionId, prompt, getComposerOptions());
+        await callbacks.onSendPrompt(sessionId, prompt, getComposerOptions(choice));
       }
     }
   } catch (err) {

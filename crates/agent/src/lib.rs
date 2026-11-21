@@ -10,6 +10,7 @@ pub mod anthropic;
 pub mod gemini;
 pub mod guardrails;
 pub(crate) mod http;
+pub mod model_list;
 pub mod narrator;
 pub mod openai;
 pub mod presets;

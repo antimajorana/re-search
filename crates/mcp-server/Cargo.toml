@@ -16,6 +16,7 @@ ledger = { path = "../ledger" }
 tools = { path = "../tools" }
 research-tools = { path = "../research-tools" }
 worker = { path = "../worker" }
+cli-route = { path = "../cli-route" }
 serde_json = { workspace = true }
 # rmcp is Apache-2.0 only. It is a dependency of this crate alone and must
 # stay out of the dependency graphs of `policy` and `ledger`.

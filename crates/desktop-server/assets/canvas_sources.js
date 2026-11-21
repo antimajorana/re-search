@@ -1,6 +1,14 @@
 // Tabs 3 & 4: Literature & Sources Canvas (arXiv/INSPIRE/Crossref/S2) and isolated Side-Talk Canvas.
 import * as api from '/assets/api.js';
 import { escapeHtml, renderRichInto } from '/assets/math.js';
+import { getModelChoice } from '/assets/model_picker.js';
+
+// The model picker's current {provider, model}. On the Claude subscription route the
+// server picks the first connected API provider (narration and side questions need one).
+function sideModelPayload() {
+  const c = getModelChoice();
+  return c ? { provider: c.provider, model: c.model } : {};
+}
 
 let litFormEl = null;
 let litSourceEl = null;
@@ -178,7 +186,7 @@ async function handleSidetalkSubmit() {
   const pendingNode = sidetalkStreamEl ? sidetalkStreamEl.lastElementChild : null;
 
   try {
-    const resp = await api.postSidetalk(currentSessionId, { question });
+    const resp = await api.postSidetalk(currentSessionId, { question, ...sideModelPayload() });
     const answer = (resp && (resp.answer || resp.text || resp.a)) || '';
     if (pendingNode) pendingNode.remove();
     appendSidetalkPair(question, answer);

@@ -77,6 +77,9 @@ fn every_api_route_except_health_requires_the_token() {
         format!("{s}/sidetalk"),
         format!("{s}/export?format=tex"),
         "/api/settings/providers".to_string(),
+        "/api/connections".to_string(),
+        "/api/models".to_string(),
+        "/api/models?refresh=1".to_string(),
         "/api/no-such-route".to_string(),
         // Path tricks must not reach an open route: only the exact `/api/health` is open.
         "/api/health/".to_string(),

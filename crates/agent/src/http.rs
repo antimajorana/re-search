@@ -47,7 +47,7 @@ impl SecretKey {
 
     pub fn from_env() -> Result<(Self, String), TransportError> {
         Self::from_env_vars(
-            &["RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY", "ANTHROPIC_API_KEY"],
+            crate::transport::ProviderKind::Anthropic.key_env_vars(),
             "RE_SEARCH_API_KEY or ANTHROPIC_API_KEY",
         )
     }
@@ -245,6 +245,53 @@ pub(crate) fn post_json(
         message,
         raw_body: Some(clean_body),
     })
+}
+
+/// Bounded `GET` with the same rules as [`post_json`]: no redirects (the agent) and at
+/// most `limit` bytes of a 200 body. Errors carry only a status class, never text from
+/// the server or the HTTP stack: a non-200 answer is `HTTP n` (its body is not read, so a
+/// provider message that quotes part of a key cannot reach a caller), and a transport
+/// failure is `timeout`, `network`, `oversized response` or `bad address`.
+pub(crate) fn get_json(
+    agent: &ureq::Agent,
+    url: &str,
+    headers: &[(&str, &str)],
+    limit: u64,
+) -> Result<Vec<u8>, TransportError> {
+    let mut req = agent.get(url);
+    for &(name, val) in headers {
+        req = req.header(name, val);
+    }
+    let mut resp = req.call().map_err(|e| class_only_error(&e, None))?;
+    let status = resp.status().as_u16();
+    if status != 200 {
+        let kind = match status {
+            401 | 403 => TransportErrorKind::Auth,
+            429 => TransportErrorKind::RateLimit,
+            _ => TransportErrorKind::HttpStatus,
+        };
+        return Err(TransportError { kind, status: Some(status), message: format!("HTTP {status}"), raw_body: None });
+    }
+    resp.body_mut()
+        .with_config()
+        .limit(limit)
+        .read_to_vec()
+        .map_err(|e| class_only_error(&e, Some(status)))
+}
+
+/// A transport failure as a fixed class (see [`get_json`]).
+fn class_only_error(err: &ureq::Error, status: Option<u16>) -> TransportError {
+    let timed_out = matches!(err, ureq::Error::Timeout(_))
+        || matches!(err, ureq::Error::Io(e) if e.kind() == std::io::ErrorKind::TimedOut);
+    let (kind, message) = match err {
+        ureq::Error::BodyExceedsLimit(_) | ureq::Error::LargeResponseHeader(_, _) => {
+            (TransportErrorKind::OversizedResponse, "oversized response")
+        }
+        ureq::Error::BadUri(_) | ureq::Error::InvalidProxyUrl => (TransportErrorKind::Config, "bad address"),
+        _ if timed_out => (TransportErrorKind::Network, "timeout"),
+        _ => (TransportErrorKind::Network, "network"),
+    };
+    TransportError { kind, status, message: message.to_string(), raw_body: None }
 }
 
 pub(crate) fn scrub_text(text: &str, secret: &str) -> String {

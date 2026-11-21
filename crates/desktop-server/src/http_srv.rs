@@ -208,6 +208,9 @@ fn dispatch_api(
         ("POST", ["api", "sessions", id, "approvals", call_id]) => {
             write_api_res(&mut stream, handle_post_approval(state, id, call_id, &req.body));
         }
+        ("POST", ["api", "sessions", id, "stop"]) => {
+            write_api_res(&mut stream, crate::cli_turn::handle_stop_turn(state, id));
+        }
         ("POST", ["api", "sessions", id, "upload"]) => {
             let ct = req.header("content-type");
             write_api_res(&mut stream, handle_upload(state, id, ct, &req.body));
@@ -266,6 +269,12 @@ fn dispatch_api(
         }
         ("PUT", ["api", "settings", "providers"]) => {
             write_api_res(&mut stream, handle_put_settings(state, &req.body));
+        }
+        ("GET", ["api", "connections"]) => {
+            write_api_res(&mut stream, crate::connections::handle_connections(state, &req.query));
+        }
+        ("GET", ["api", "models"]) => {
+            write_api_res(&mut stream, crate::model_catalog::handle_models(state, &req.query));
         }
         _ => write_json(
             &mut stream,

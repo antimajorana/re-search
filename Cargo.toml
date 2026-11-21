@@ -10,6 +10,7 @@ members = [
     "crates/export",
     "crates/desktop-server",
     "crates/mcp-server",
+    "crates/cli-route",
     "crates/cli",
     "crates/desktop-app",
 ]

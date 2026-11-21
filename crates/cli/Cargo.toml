@@ -18,5 +18,6 @@ tools = { path = "../tools" }
 research-tools = { path = "../research-tools" }
 export = { path = "../export" }
 desktop-server = { path = "../desktop-server" }
+cli-route = { path = "../cli-route" }
 worker = { path = "../worker" }
 serde_json = { workspace = true }
