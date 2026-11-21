@@ -10,6 +10,12 @@ pub const DEFAULT_OLLAMA_BASE: &str = "http://127.0.0.1:11434/v1";
 pub const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5-coder:7b";
 pub const DEFAULT_GEMINI_BASE: &str = "https://generativelanguage.googleapis.com";
 pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
+/// The only production host the ChatGPT-plan route talks to (Responses API and model list).
+pub const DEFAULT_CHATGPT_BASE: &str = "https://api.openai.com";
+/// Fallback model id for the ChatGPT-plan route when the live list (`GET /v1/models`,
+/// `visibility == "list"`) is unavailable. Taken from the SDK example in OpenAI's "Models
+/// and inference" page for Sign in with ChatGPT; the live list is authoritative.
+pub const DEFAULT_CHATGPT_MODEL: &str = "gpt-6.2-sol";
 /// Key variables every provider's transport reads first (not tied to one provider).
 pub const GENERIC_KEY_ENV_VARS: [&str; 2] = ["RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY"];
 /// Variables that name the provider explicitly (as the console's `--provider` default).
@@ -22,6 +28,11 @@ pub enum ProviderKind {
     OpenAi,
     Ollama,
     Gemini,
+    /// The user's ChatGPT plan through OpenAI's "Sign in with ChatGPT" flow for open-source
+    /// apps: OAuth access token, Responses API (`POST /v1/responses`, `store: false`,
+    /// `stream: true`). Never reads an API-key variable.
+    #[serde(rename = "chatgpt")]
+    ChatGpt,
 }
 
 impl ProviderKind {
@@ -31,8 +42,9 @@ impl ProviderKind {
             "openai" | "openai-chat" => Ok(ProviderKind::OpenAi),
             "ollama" | "ollama-chat" => Ok(ProviderKind::Ollama),
             "gemini" | "gemini-generate-content" => Ok(ProviderKind::Gemini),
+            "chatgpt" | "chatgpt-responses" => Ok(ProviderKind::ChatGpt),
             other => Err(format!(
-                "unknown provider `{other}` (expected `anthropic`, `openai`, `ollama`, or `gemini`)"
+                "unknown provider `{other}` (expected `anthropic`, `openai`, `ollama`, `gemini`, or `chatgpt`)"
             )),
         }
     }
@@ -43,6 +55,7 @@ impl ProviderKind {
             ProviderKind::OpenAi => "openai",
             ProviderKind::Ollama => "ollama",
             ProviderKind::Gemini => "gemini",
+            ProviderKind::ChatGpt => "chatgpt",
         }
     }
 
@@ -52,6 +65,7 @@ impl ProviderKind {
             ProviderKind::OpenAi => "openai-chat",
             ProviderKind::Ollama => "ollama-chat",
             ProviderKind::Gemini => "gemini-generate-content",
+            ProviderKind::ChatGpt => "chatgpt-responses",
         }
     }
 
@@ -61,6 +75,7 @@ impl ProviderKind {
             ProviderKind::OpenAi => DEFAULT_OPENAI_BASE,
             ProviderKind::Ollama => DEFAULT_OLLAMA_BASE,
             ProviderKind::Gemini => DEFAULT_GEMINI_BASE,
+            ProviderKind::ChatGpt => DEFAULT_CHATGPT_BASE,
         }
     }
 
@@ -70,6 +85,7 @@ impl ProviderKind {
             ProviderKind::OpenAi => DEFAULT_OPENAI_MODEL,
             ProviderKind::Ollama => DEFAULT_OLLAMA_MODEL,
             ProviderKind::Gemini => DEFAULT_GEMINI_MODEL,
+            ProviderKind::ChatGpt => DEFAULT_CHATGPT_MODEL,
         }
     }
 
@@ -83,6 +99,8 @@ impl ProviderKind {
             ProviderKind::OpenAi => &["RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY", "OPENAI_API_KEY"],
             ProviderKind::Ollama => &["RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY", "OLLAMA_API_KEY", "OPENAI_API_KEY"],
             ProviderKind::Gemini => &["RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"],
+            // Signed in with ChatGPT only: no key variable (not even the generic one) is read.
+            ProviderKind::ChatGpt => &[],
         }
     }
 
@@ -96,6 +114,7 @@ impl ProviderKind {
             ProviderKind::OpenAi => &["OPENAI_API_KEY"],
             ProviderKind::Ollama => &["OLLAMA_API_KEY"],
             ProviderKind::Gemini => &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+            ProviderKind::ChatGpt => &[],
         }
     }
 

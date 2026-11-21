@@ -85,7 +85,8 @@ pub struct TurnSpec<'a> {
     pub tool_config: &'a Path,
     pub core: &'a CoreLaunch,
     pub model: &'a str,
-    /// Written to the CLI's stdin, then stdin is closed. Never put in argv.
+    /// Written to the CLI's stdin (framed by [`VendorCli::stdin_payload`]), then stdin is
+    /// closed. Never put in argv.
     pub prompt: &'a str,
     /// The tools `core.exe` serves (see [`crate::core_tools::core_tool_set`]).
     pub tool_defs: &'a [ToolDef],
@@ -153,7 +154,7 @@ pub fn run_turn(
         "tested_cli_version": version.tested,
         "cli_version_matches_tested": version.matches_tested(),
         "cli_flags": args,
-        "prompt_via": "stdin",
+        "prompt_via": vendor.prompt_via(),
         "caller": vendor.caller(spec.session),
         "core_exe": spec.core.exe.to_string_lossy(),
         "model_requested": spec.model,
@@ -170,7 +171,8 @@ pub fn run_turn(
     }
     // The start event's `raw_blob` is the exact text written to the CLI's stdin.
     start["stdin_prompt_chars"] = json!(spec.prompt.chars().count());
-    let prompt_blob = rec.ledger.put_blob(spec.prompt.as_bytes()).map_err(|e| e.to_string())?;
+    let stdin_bytes = vendor.stdin_payload(spec.prompt);
+    let prompt_blob = rec.ledger.put_blob(&stdin_bytes).map_err(|e| e.to_string())?;
     rec.emit_into(sink, spec.start_kind, start, Some(&prompt_blob))?;
     if !version.matches_tested() {
         let warn = json!({ "source": "version-flag", "detected": version.detected, "raw": version.raw, "tested": version.tested });
@@ -204,10 +206,9 @@ pub fn run_turn(
 
     // The prompt goes on stdin (not visible in the process list, no argv length limit).
     // A separate thread, so a CLI that does not read stdin cannot block the line loop.
-    let prompt = spec.prompt.to_string();
     let writer = stdin.map(|mut pipe| {
         std::thread::spawn(move || {
-            let _ = pipe.write_all(prompt.as_bytes()).and_then(|_| pipe.flush());
+            let _ = pipe.write_all(&stdin_bytes).and_then(|_| pipe.flush());
             // Dropping `pipe` closes stdin: end of prompt.
         })
     });
@@ -258,7 +259,8 @@ pub fn run_turn(
                 Err(e) => abort = Some(e),
             }
         } else if !init_ok && vendor.is_model_activity(&value) {
-            abort = Some(format!("`{}` event before a verified system/init event", value["type"].as_str().unwrap_or("")));
+            let kind = value["type"].as_str().or_else(|| value["event"].as_str()).unwrap_or("");
+            abort = Some(format!("`{kind}` event before a verified system/init event"));
         }
         // The offending line itself is still recorded (it is what the CLI printed).
         for (kind, data) in vendor.map_line(&value) {

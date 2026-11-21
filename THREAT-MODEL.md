@@ -1,4 +1,4 @@
-# Threat model (Stages 1–8: AppContainer isolation, hash-chained ledger, multi-provider loop, research tools & loopback desktop UI)
+# Threat model (Stages 1–9: AppContainer isolation, hash-chained ledger, multi-provider loop, research tools, loopback desktop UI & subscription routes)
 
 This file says plainly what re:Search currently protects against and what it
 does not. Read the remaining limits before approving anything.
@@ -574,6 +574,241 @@ result.
   where the list call (and the key) goes, as for turns (see "The desktop
   token is as powerful as your provider keys"). Ollama's status call goes
   to its address without asking.
+
+## Sign in with ChatGPT (`chatgpt`, `crates/chatgpt-auth`)
+
+The `chatgpt` provider runs a session on the person's ChatGPT plan through
+OpenAI's "Sign in with ChatGPT" flow for open-source and locally hosted apps
+(documentation: <https://developers.openai.com/siwc/token-sharing-open-source>
+and its pages *Registration and sign-in*, *Accounts and sessions*, *Models and
+inference*, *Token reference*, *Errors and recovery*, *Preview limitations*;
+read 2026-11-21). OpenAI calls the programme a preview. The model runs in
+re:Search's own loop (`agent::ChatGptTransport`, Responses API), so every tool
+call goes through the router, the policy, the approval cards and the ledger
+exactly as on the API-key route; the session records `route: "api"`,
+`provider: "chatgpt-responses"`, the endpoint, the model and
+`api_key_env: "chatgpt-sign-in"` (a label, never a token).
+
+- **Sign-in.** `POST /api/connections/chatgpt/login` (launch token required,
+  like every `/api/` route) persists this host's `ext_agent_host_id`
+  (`urn:uuid:` + a random UUIDv4, created once) and starts a one-shot listener
+  on `127.0.0.1` with a system-chosen port and the fixed path `/auth/callback`
+  (the documentation lets only the port vary and forbids `localhost`). The
+  authorize URL carries `response_type=code`, `client_id`
+  (`dynamic_agent_client` the first time, then the issued `oaiapp_…` ID),
+  `redirect_uri`, `scope=openid profile email offline_access resource.invoke
+  chatgpt.tokens.use.direct`, `resource=https://api.openai.com/v1`, a fresh
+  random `state` and `nonce`, `code_challenge` (S256) and
+  `ext_agent_host_id`; `agent_name_hint=re:Search` only on first
+  registration. **No `id_token_hint`** is sent: the URL is shown in the UI and
+  may be copied, and a token must not travel in a URL. The UI shows the URL
+  with *Open in browser* and *Copy link*. *Open in browser* asks the server
+  (`POST …/open`) to open **its own pending URL** (never a URL from the
+  request, and only one starting with the authorize endpoint) with the
+  system's default handler (`ShellExecuteW`, no shell, so `&` in the URL
+  cannot start a command); nothing opens a browser unless the person clicks.
+  Tests replace the opener and never start a browser.
+- **The callback is unauthenticated by nature.** The listener answers only
+  `GET /auth/callback` with `Host: 127.0.0.1:<port>` and the attempt's exact
+  `state` (constant-time comparison). Anything else gets a short static page
+  and the listener keeps waiting (at most 32 such requests, then the attempt
+  fails). The first request with the right `state` ends the attempt whatever
+  its outcome, and the listener closes, so a replayed callback finds nothing
+  listening (tested). `error=access_denied` stops the attempt without an
+  exchange. A new registration must return an issued `client_id`; on
+  reauthorization a different `client_id` is rejected. The attempt expires
+  after 5 minutes. Pages are static text with `Cache-Control: no-store`,
+  `Referrer-Policy: no-referrer` and `Content-Security-Policy:
+  default-src 'none'`; no code, token or claim is echoed.
+- **Exchange and validation.** The code is exchanged at
+  `https://auth.openai.com/api/accounts/oauth/token` (form-encoded
+  `authorization_code` grant with the issued `client_id`, `code`,
+  `code_verifier`, the same `redirect_uri` and `resource`; no client secret).
+  The ID token is checked before anything is stored: RS256 signature against
+  `https://auth.openai.com/.well-known/jwks.json` (`ring`, already in the
+  dependency tree through rustls), `iss` exactly `https://auth.openai.com`,
+  `aud` containing the issued client ID (and `azp`, if present, equal to it),
+  `exp` with 5 s skew (as in OpenAI's example), `iat` present, `nonce` equal to
+  the attempt's, non-empty `sub`. An email is kept only when
+  `email_verified` is `true`. A returning sign-in whose `sub` differs from the
+  saved account is rejected. ChatGPT plan use requires
+  `chatgpt.tokens.use.direct` in the token answer's `scope`: without it the
+  sign-in is kept (as the documentation advises) but no turn, model list or
+  token use happens, and the status says so. Tested: bad signature, wrong
+  audience, wrong nonce, expired token, missing scope, declined consent,
+  missing client ID, wrong state, wrong path, method or host.
+- **Storage.** `<data_dir>/chatgpt/registration.dpapi` (host ID, issued
+  client ID, account subject) and `<data_dir>/chatgpt/credentials.dpapi` (ID,
+  access and refresh tokens, scopes, expiry), each encrypted with Windows
+  DPAPI (`CryptProtectData`, current user, `CRYPTPROTECT_UI_FORBIDDEN`, an
+  app-specific entropy) and replaced atomically (new temp file, `sync`,
+  rename). Never in `sessions/`, the workspace (which may not overlap the data
+  directory), `providers.json`, browser storage or the ledger. On other
+  systems nothing is written: sign-in fails with "not supported yet" instead
+  of storing tokens in plain text. DPAPI protects against other Windows users
+  and copies of the files to another account or machine, **not** against
+  code running as the same user.
+- **Refresh.** A token expiring within 5 minutes is refreshed
+  (`grant_type=refresh_token`, issued `client_id`, `refresh_token`,
+  `resource`, no `scope`) under one mutex that also covers sign-in completion
+  and sign-out; the credentials are re-read under the lock, so concurrent
+  callers share one refresh and a rotated refresh token is stored before
+  anyone uses it (tested with four threads). `invalid_grant`,
+  `invalid_refresh_token`, `token_expired`, `refresh_token_expired`,
+  `refresh_token_invalidated` and `refresh_token_reused` delete the tokens and
+  mark the connection disconnected with that code; `invalid_client` also
+  forgets the registration; network or 5xx failures keep the sign-in. The
+  lock is per process: two re:Search processes on one data directory could
+  still race a rotation (the app is single-instance; `re-search ui` beside it
+  is not prevented).
+- **Sign-out.** `POST /api/connections/chatgpt/logout` revokes the refresh
+  token at `https://auth.openai.com/api/accounts/oauth/revoke` (`token`,
+  `token_type_hint=refresh_token`, `client_id`; retried twice on network or
+  5xx failures), then deletes `credentials.dpapi`, keeping the registration
+  for the next sign-in. If revocation is not confirmed the UI says so and
+  points to ChatGPT Settings.
+- **Where the token goes.** Only to `auth.openai.com` (refresh, revocation)
+  and as `Authorization: Bearer` to `https://api.openai.com/v1/responses` and
+  `/v1/models`. `agent::ChatGptTransport` and the model-list code refuse any
+  other host except plaintext `127.0.0.1` (tests). The ChatGPT route ignores
+  `--api-base`, `RE_SEARCH_API_BASE` and saved base URLs; `PUT
+  /api/settings/providers` refuses a key or address for `chatgpt`; no API-key
+  variable (not even `RE_SEARCH_API_KEY`) is read for it. Test endpoints can
+  be set only through `DesktopConfig::chatgpt_test`, a field the CLI and the
+  app always leave empty, and only to `http://127.0.0.1:<port>`.
+- **Tokens never cross the HTTP API, SSE, ledger or error strings.** Status,
+  login and logout answers carry only states, fixed messages, OAuth error
+  codes from a known list and the verified email. Transport errors are
+  scrubbed of the token; Responses errors keep only `error.code`,
+  `error.param` and a documented recovery hint. The desktop test signs in,
+  lists models, runs a turn with an approved `fs_write` and signs out, then
+  checks every API answer, every SSE frame and every file under the data
+  directory (ledger, blobs, metadata; the DPAPI files are ciphertext) for the
+  tokens and the authorization code. Nothing in these paths writes a log.
+- **Inference rules followed.** `store: false`, `stream: true`, the full
+  history in `input` (no `previous_response_id`), the system prompt as
+  `instructions`, function tools grouped in one `namespace` tool
+  (`research`), and none of the fields the preview rejects
+  (`max_output_tokens` among them, so re:Search's `max_tokens` is not sent).
+  A turn succeeds only on `response.completed`; `response.failed`,
+  `response.incomplete`, an `error` event or a stream that ends early abort
+  the turn with the documented code (tested). Reasoning items are not
+  replayed in later requests.
+- **Not verified.** No live sign-in, token exchange, refresh, revocation,
+  model list or inference against OpenAI was performed by the builder; all of
+  it is tested against loopback mocks written from the documentation. Not
+  checked live: that the issued client accepts a callback port different from
+  the one used at registration (the documentation says only the port may
+  vary), the exact shape of `function_call` output items under a `namespace`
+  tool (the transport reads `call_id`, `name`, `arguments` and accepts an
+  optional `namespace`), whether `namespace` must be repeated on replayed
+  `function_call` input items (re:Search sends it), whether the model-list
+  answer has more fields, and `ShellExecuteW` opening the browser (never run
+  by the builder). **Whether OpenAI requires approval for a local open-source
+  app is unverified:** the documentation says these pages cover "open-source
+  and locally hosted apps" and asks paid or remotely hosted apps to use an
+  interest form; it states no approval step for local open-source apps, and
+  mentions `force_reconsent=true` "only after OpenAI confirms deployment for
+  your integration". The production endpoints are fixed in the code (the
+  values the discovery document returned on 2026-11-21) rather than read from
+  it at run time.
+
+## The Antigravity route in the desktop (`antigravity`) — vendor-sandboxed, not confined to re:Search tools
+
+The user chose to build this route knowing two things it cannot fix: Google's terms
+for consumer plans may treat third-party wrapping of the Antigravity CLI as
+unsupported or a breach (account risk, the user's own), and the CLI's built-in
+tools are outside re:Search's control. Every surface labels it "vendor-sandboxed,
+not confined to re:Search tools" (Connect row, model group, composer note, start
+event, this file, README).
+
+- **Gate.** `POST /api/connections/antigravity/acknowledge` (header token) stores
+  `antigravity_ack {acknowledged_ms, notice_version}` in `ui_settings.json`. The UI
+  calls it only when the person clicks the button under the full warning and
+  confirms a dialog that repeats it. Without it (or for an older notice version)
+  `run_cli_turn` refuses before locating the CLI, so nothing is recorded or started;
+  the model group is not listed and `agy models` is not run. `PUT
+  /api/settings/providers` cannot set it; `.../withdraw` clears it. Any holder of the
+  launch token could call the endpoint, as with approvals; re:Search itself never
+  does.
+- **What runs.** Each turn starts the unmodified `agy.exe` (found via `--agy`,
+  `RE_SEARCH_AGY`, `PATH`, WinGet's `Links` and `Packages\Google.AntigravityCLI_*`)
+  in a kill-on-close Job Object with working directory `sessions/<id>/agy` and
+  `--input-format stream-json --output-format stream-json --model <slug> --sandbox
+  --disable-slash-commands --settings <json>` (no `-p`). The prompt goes on stdin as
+  one stream-json `user` event (`{"event":"user","message":{"content":...}}`), then
+  stdin is closed; per the "Headless mode" page the CLI finishes that turn and exits,
+  and a prompt given with `-p` would be argv (and is dropped in this mode). The
+  ledger's start-event blob is exactly that stdin line. Events are parsed in the
+  documented shape, fields nested under the event's name (`{"event":"init",
+  "init":{...}}`); an `init` with its fields at the top level is not accepted. Print
+  mode was chosen over `agy acp`: its NDJSON stream fits the existing turn loop; core
+  tools are allowed by rule, so the CLI never needs to ask about them (`core.exe`
+  asks the person through re:Search's relay); and ACP's permission channel would only
+  ever ask about tools this route wants denied. Print mode soft-denies anything that
+  needs an approval it cannot get (documented), which fails closed. `--mode` is not
+  passed: its values are `accept-edits`, `auto` and `plan` (the Settings page: `plan`
+  prepends `/plan` to the prompt; the others approve edits), none stricter than
+  Default; `agentMode: "default"` in `--settings` selects Default, in which file edits
+  need review and commands follow `toolPermission`. If `agentMode` were unset,
+  headless runs use `auto` where available, which auto-approves workspace edits.
+  `toolPermission: strict` is not used: it prompts even when an allow rule matches,
+  so core tools could never run headless.
+- **The settings (the only thing holding built-ins back).** `toolPermission:
+  request-review`, `enableTerminalSandbox: true`, `allowNonWorkspaceAccess: false`,
+  `permissions.deny = [command(*), read_file(*), write_file(*), read_url(*),
+  execute_url(*)]`, `permissions.allow = [mcp(core/*)]`. Per Google's permission docs,
+  deny > ask > allow, so a user-level allow rule for those kinds cannot win, and MCP
+  calls without a rule default to Ask, which print mode soft-denies. `mcp(*)` cannot
+  be denied (it would beat the core allow), so other servers' tools rely on that
+  default and on the user's own settings not allowing them.
+- **Tool config.** `sessions/<id>/agy/.agents/mcp_config.json` names only `core`
+  (with the same env and session token as the Claude route's `mcp.json`, plus
+  `CORE_CALLER_ROUTE=antigravity` so `core.exe` labels calls `antigravity:<session>`),
+  `enabledTools` = exactly the tools `core.exe` serves, each `eager` so the model sees
+  it as `mcp_core_<tool>` and `init` lists it. Deleted on every exit path
+  (`ToolConfigGuard`), and swept when stale (`TOOL_CONFIG_FILES`) at server start and
+  when a session is opened. Global MCP servers (`~/.gemini/config/mcp_config.json`)
+  still load; re:Search never reads that file.
+- **Handshake: "core tools reachable + settings applied".** Built-ins cannot be
+  removed, so the `init` check is: `permission_mode == "request-review"` (missing, or
+  `always-proceed`, aborts), every expected `mcp_core_*` tool offered, no other
+  `mcp_core_*` tool. Anything else aborts (`session.abort`) before model output is
+  accepted. `cli.init` records the full tool list, the built-in tools, the
+  permission mode and the cwd.
+- **Built-in tool use is recorded, never hidden.** Each tool `step_update` whose tool
+  is not core's (eager `mcp_core_*`, or `call_mcp_tool` with `ServerName: core`) is
+  recorded as `vendor.builtin_tool` (first sighting and the final frame, with state,
+  name, clipped parameters and any error) and shown as a warning line live and when
+  the session is reopened. Only what the CLI prints is seen: a built-in the CLI runs
+  without reporting it is invisible to re:Search.
+- **Guarantees that do NOT hold on this route** (for the CLI's own tools): routing
+  through re:Search's router and policy, person-given approval cards, the ledger
+  record of the call and its result, the AppContainer worker, and the "only our
+  tools" check. They still hold for re:Search's own tools served by `core.exe`.
+  Partial provenance as on the Claude route (the start event's `raw_blob` is the exact
+  stdin text; every raw line is a blob).
+- **Credentials.** re:Search never reads, copies or passes the CLI's cached login and
+  never reads files under the user's Antigravity/Gemini folders. With
+  `GEMINI_API_KEY`, `GOOGLE_GEMINI_BASE_URL` or `AGY_ADC_AUTH` set (from the CLI's
+  changelog and Settings page) the turn is refused, names only;
+  `RE_SEARCH_ALLOW_AGY_ENV_AUTH=1` proceeds and records the names. The `init` event
+  reports no credential source, so there is no second check.
+- **Not verified (no live turn was run by the builder; every test uses a scripted
+  fake `agy`):** that the CLI honours the deny rules and `agentMode` given through
+  `--settings` (merge semantics with the user's `settings.json` are undocumented);
+  that the workspace `mcp_config.json` is loaded in an untrusted, non-git folder
+  under the data directory in headless mode; that eager tools appear in `init` as
+  `mcp_core_<tool>`; that `--sandbox` works on this Windows build; the exact live
+  shape of `step_update` for tools (`tool_name`, `tool_info.error`) and whether the
+  final `agent_response` frame repeats the whole text (both handled); that
+  `--input-format stream-json` without `-p` runs headless as the Headless page says,
+  and that `--disable-slash-commands` (documented for print mode) is accepted with
+  it; that the inline `--settings` JSON survives Windows command-line quoting as one
+  argument; the exit code when a
+  built-in is soft-denied (documented as 0); whether `agy models` and `--version`
+  (run by the Connect panel) trigger a self-update (observed once, 1.5.13 → 1.5.14);
+  the non-Windows build of these paths.
 
 ## Remaining limits & gaps
 

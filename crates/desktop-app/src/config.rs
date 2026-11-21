@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 pub const CONFIG_FILE_NAME: &str = "re-search-app.json";
 
 pub const USAGE: &str = "usage: re-search-app [--data-dir DIR] [--workspace DIR] [--python EXE] \
-[--worker-script PY] [--port PORT] [--core-exe EXE] [--claude EXE]";
+[--worker-script PY] [--port PORT] [--core-exe EXE] [--claude EXE] [--agy EXE]";
 
 /// The flags the app understands.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -26,6 +26,8 @@ pub struct Flags {
     pub core_exe: Option<String>,
     /// `claude.exe` for the Claude subscription route.
     pub claude: Option<String>,
+    /// `agy.exe` for the Antigravity route.
+    pub agy: Option<String>,
 }
 
 /// Keys accepted in `re-search-app.json`. Relative paths are taken relative to the
@@ -39,6 +41,7 @@ pub struct FileConfig {
     pub workspace: Option<String>,
     pub core_exe: Option<String>,
     pub claude: Option<String>,
+    pub agy: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +55,8 @@ pub struct AppConfig {
     pub core_exe: Option<PathBuf>,
     /// `None`: the desktop server looks on `PATH` and in the npm install location.
     pub claude: Option<PathBuf>,
+    /// `None`: the desktop server looks on `PATH` and in WinGet's folders.
+    pub agy: Option<PathBuf>,
 }
 
 /// Parses `--name value` and `--name=value`. Unknown flags and positional arguments are errors.
@@ -76,6 +81,7 @@ pub fn parse_flags<I: IntoIterator<Item = String>>(args: I) -> Result<Flags, Str
             "worker-script" => &mut flags.worker_script,
             "core-exe" => &mut flags.core_exe,
             "claude" => &mut flags.claude,
+            "agy" => &mut flags.agy,
             "port" => {
                 let port = value
                     .trim()
@@ -191,6 +197,7 @@ pub fn resolve(
     };
     let core_exe = exe_setting(&flags.core_exe, &["RE_SEARCH_CORE_EXE"], &file.core_exe);
     let claude = exe_setting(&flags.claude, &["RE_SEARCH_CLAUDE", "RESEARCH_CORE_CLAUDE"], &file.claude);
+    let agy = exe_setting(&flags.agy, &["RE_SEARCH_AGY"], &file.agy);
 
     Ok(AppConfig {
         data_dir: absolute(data_dir)?,
@@ -200,6 +207,7 @@ pub fn resolve(
         port: flags.port.unwrap_or(0),
         core_exe: core_exe.map(absolute).transpose()?,
         claude: claude.map(absolute).transpose()?,
+        agy: agy.map(absolute).transpose()?,
     })
 }
 

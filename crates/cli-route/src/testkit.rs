@@ -1,22 +1,25 @@
-//! Test support (feature `testkit`): a scripted fake vendor CLI.
+//! Test support (feature `testkit`): scripted fake vendor CLIs.
 //!
-//! [`FakeCli::new`] compiles `fixtures/fake_cli.rs` once per test process with `rustc` and
-//! copies the executable into a fresh directory per test. The fake reads its script
-//! (`script.ndjson`, `version.txt`, ...) from files next to its copy and records its argv,
-//! stdin and `--mcp-config` path there; see the fixture's header for the format.
+//! [`FakeCli::new`] compiles `fixtures/fake_cli.rs` (a Claude Code stand-in) and
+//! [`FakeCli::new_agy`] compiles `fixtures/fake_agy.rs` (an Antigravity CLI stand-in), each
+//! once per test process with `rustc`, and copies the executable into a fresh directory per
+//! test. The fake reads its script (`script.ndjson`, `version.txt`, ...) from files next to
+//! its copy and records its argv, stdin and tool-config path there; see the fixtures'
+//! headers for the format.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
 static COMPILED: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+static COMPILED_AGY: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 
-fn compile() -> Result<PathBuf, String> {
-    let dir = std::env::temp_dir().join(format!("cli-route-fake-cli-{}", std::process::id()));
+fn compile(fixture: &str, out_name: &str) -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join(format!("cli-route-{out_name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join("fake_cli.rs");
-    let exe = dir.join(format!("fake_cli{}", std::env::consts::EXE_SUFFIX));
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join(fixture);
+    let exe = dir.join(format!("{out_name}{}", std::env::consts::EXE_SUFFIX));
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let out = Command::new(rustc)
         .arg("--edition")
@@ -27,25 +30,35 @@ fn compile() -> Result<PathBuf, String> {
         .output()
         .map_err(|e| format!("could not run rustc: {e}"))?;
     if !out.status.success() {
-        return Err(format!("rustc fake_cli.rs failed: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(format!("rustc {fixture} failed: {}", String::from_utf8_lossy(&out.stderr)));
     }
     Ok(exe)
 }
 
-/// One copy of the fake CLI in its own directory.
+/// One copy of a fake CLI in its own directory.
 pub struct FakeCli {
     pub dir: PathBuf,
     pub exe: PathBuf,
 }
 
 impl FakeCli {
-    /// A fresh copy under `parent/name`.
+    /// A fresh copy of the fake Claude Code CLI under `parent/name`.
     pub fn new(parent: &Path, name: &str) -> FakeCli {
-        let compiled = COMPILED.get_or_init(compile).clone().expect("compile fake CLI");
+        let compiled = COMPILED.get_or_init(|| compile("fake_cli.rs", "fake_cli")).clone().expect("compile fake CLI");
+        Self::copy(&compiled, parent, name)
+    }
+
+    /// A fresh copy of the fake Antigravity CLI (`agy.exe`) under `parent/name`.
+    pub fn new_agy(parent: &Path, name: &str) -> FakeCli {
+        let compiled = COMPILED_AGY.get_or_init(|| compile("fake_agy.rs", "fake_agy")).clone().expect("compile fake agy");
+        Self::copy(&compiled, parent, name)
+    }
+
+    fn copy(compiled: &Path, parent: &Path, name: &str) -> FakeCli {
         let dir = parent.join(name);
         std::fs::create_dir_all(&dir).expect("fake CLI dir");
         let exe = dir.join(compiled.file_name().expect("exe name"));
-        std::fs::copy(&compiled, &exe).expect("copy fake CLI");
+        std::fs::copy(compiled, &exe).expect("copy fake CLI");
         FakeCli { dir, exe }
     }
 

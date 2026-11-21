@@ -15,6 +15,7 @@ pub mod narrator;
 pub mod openai;
 pub mod presets;
 pub mod provider_config;
+pub mod responses;
 pub mod resume;
 pub mod runner;
 pub mod sidetalk;
@@ -39,6 +40,7 @@ pub use presets::{ModelEndpointSpec, PresetKind, RoleAssignment};
 pub use provider_config::{
     ProviderEntry, ProviderKeyStore, RedactedProviderConfigView, RedactedProviderEntry, PROVIDERS_FILE,
 };
+pub use responses::{BearerSource, ChatGptConfig, ChatGptTransport, TOOL_NAMESPACE};
 pub use resume::{
     inspect_session_for_resume, resume_agent_loop, ResumeConfig, ResumeInspection, ResumeReject, ResumeRejectKind,
 };
@@ -54,7 +56,8 @@ pub use strategist::{
 pub use transport::{
     ContentBlock, Message, ModelRequest, ModelResponse, PreparedRequest, ProviderKind, Role, StopReason, ToolSpec,
     Transport, TransportError, TransportErrorKind, TransportInfo, DEFAULT_GEMINI_BASE, DEFAULT_GEMINI_MODEL,
-    DEFAULT_OLLAMA_BASE, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE, DEFAULT_OPENAI_MODEL,
+    DEFAULT_CHATGPT_BASE, DEFAULT_CHATGPT_MODEL, DEFAULT_OLLAMA_BASE, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE,
+    DEFAULT_OPENAI_MODEL,
 };
 pub use verifiers::{
     verify_full_solution, verify_step, VerificationIssue, VerificationReport, VerificationVerdict,

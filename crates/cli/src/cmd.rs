@@ -20,11 +20,11 @@ pub const USAGE: &str = "usage:
                 [--max-turns N] [--max-tokens N] [--workspace DIR] [--enable-research-tools true|false]
                 [--arxiv-base URL] [--inspire-base URL] [--crossref-base URL]
   re-search ui [--port PORT] [--workspace DIR] [--data-dir DIR] [--python EXE]
-               [--core-exe EXE] [--claude EXE]
+               [--core-exe EXE] [--claude EXE] [--agy EXE]
                [--api-base URL] [--arxiv-base URL] [--inspire-base URL] [--crossref-base URL]
                [--no-open true|false] [--print-url-json true|false]
   re-search desktop [--port PORT] [--workspace DIR] [--data-dir DIR] [--python EXE] [--worker-script PY]
-               [--core-exe EXE] [--claude EXE]
+               [--core-exe EXE] [--claude EXE] [--agy EXE]
                (opens re-search-app.exe from this directory when present; with any other
                 `ui` flag, or without re-search-app.exe, behaves like `re-search ui`)
   re-search fork SESSION --at-seq N [--assumption TEXT] [--data-dir DIR]

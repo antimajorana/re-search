@@ -137,8 +137,10 @@ pub fn test_cfg(data_dir: &Path, workspace: Option<PathBuf>, api_base: Option<St
         eval_timeout_s: 30,
         core_exe: None,
         claude_exe: None,
+        agy_exe: None,
         // Hermetic: connection status and model lists never see this machine's keys or CLI.
         connection_env: Some(std::collections::BTreeMap::new()),
+        chatgpt_test: None,
     }
 }
 

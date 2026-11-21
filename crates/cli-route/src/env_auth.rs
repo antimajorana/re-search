@@ -22,7 +22,12 @@ pub fn detect(vars: &[&'static str], env: &dyn Fn(&str) -> Option<OsString>) -> 
 /// lets a turn proceed when the CLI's `system/init` reports an `apiKeySource` other than
 /// `"none"` (see [`crate::claude::check_auth_source`]).
 pub fn opted_in(env: &dyn Fn(&str) -> Option<OsString>) -> bool {
-    env(ALLOW_ENV_AUTH_VAR)
+    flag_set(ALLOW_ENV_AUTH_VAR, env)
+}
+
+/// Whether the opt-in variable `name` is `1`, `true` or `yes` (any case).
+pub fn flag_set(name: &str, env: &dyn Fn(&str) -> Option<OsString>) -> bool {
+    env(name)
         .map(|v| v.to_string_lossy().trim().to_ascii_lowercase())
         .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
 }

@@ -1,19 +1,24 @@
-//! Desktop turns on the Claude subscription route (`provider: "claude-cli"`).
+//! Desktop turns on the subscription-CLI routes: the Claude subscription route
+//! (`provider: "claude-cli"`) and the Antigravity route (`provider: "antigravity"`).
 //!
-//! The unmodified Claude Code CLI the user signed into runs the agent loop, exactly as
-//! `re-search run --route cli` does on the console, through `cli_route`. The model gets
-//! only re:Search's tools, served by `core.exe` over MCP (with the session's workspace
-//! and the research policy), every tool call goes through the router in `core.exe`, and
+//! An unmodified vendor CLI the user signed into runs the agent loop through `cli_route`.
+//! re:Search's tools are served by `core.exe` over MCP (with the session's workspace and
+//! the research policy), every call of them goes through the router in `core.exe`, and
 //! approvals are answered by a person on the desktop approval cards. Events go to the
-//! ledger and to the same SSE events the API route emits, so the UI needs no
-//! route-specific code. Later turns replay a bounded transcript of the session.
-
+//! ledger and to the same SSE events the API route emits. Later turns replay a bounded
+//! transcript of the session.
+//!
+//! On the Claude route the model gets ONLY those tools. The Antigravity route is
+//! "vendor-sandboxed, not confined to re:Search tools": the CLI keeps its built-in tools,
+//! which re:Search can only ask it to deny ([`cli_route::antigravity`]), and it needs the
+//! person's acknowledgement first ([`crate::antigravity`]).
 use crate::cli_relay::UiRelay;
 use crate::routes_session::ApiResult;
-use crate::state::{DesktopState, SessionMeta, CLAUDE_CLI_ROUTE};
+use crate::state::{DesktopState, SessionMeta, ANTIGRAVITY_ROUTE, CLAUDE_CLI_ROUTE};
 use crate::turn_runner::SseEventSink;
 use crate::DesktopConfig;
-use cli_route::claude::{ClaudeCode, ROUTE};
+use cli_route::antigravity::Antigravity;
+use cli_route::claude::ClaudeCode;
 use cli_route::core_tools::core_tool_set;
 use cli_route::history::{build_prompt, prior_turns, DEFAULT_HISTORY_BUDGET};
 use cli_route::{run_turn, CoreLaunch, Recorder, SessionGuard, StopHandle, TurnEnd, TurnSpec, VendorCli};
@@ -27,6 +32,53 @@ use tools::canon::random_hex;
 /// Model alias used when neither the request nor the session names one.
 pub const DEFAULT_CLI_MODEL: &str = "sonnet";
 
+/// Which subscription CLI a session runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CliRouteKind {
+    Claude,
+    Antigravity,
+}
+
+impl CliRouteKind {
+    /// The `provider` value (and [`SessionMeta::route`]) of the route.
+    pub fn provider_id(self) -> &'static str {
+        match self {
+            Self::Claude => CLAUDE_CLI_ROUTE,
+            Self::Antigravity => ANTIGRAVITY_ROUTE,
+        }
+    }
+
+    /// The route label its ledger start events carry.
+    pub fn ledger_route(self) -> &'static str {
+        match self {
+            Self::Claude => cli_route::claude::ROUTE,
+            Self::Antigravity => cli_route::antigravity::ROUTE,
+        }
+    }
+
+    pub fn from_provider(p: &str) -> Option<Self> {
+        [Self::Claude, Self::Antigravity].into_iter().find(|k| k.provider_id() == p)
+    }
+
+    pub fn from_ledger_route(r: &str) -> Option<Self> {
+        [Self::Claude, Self::Antigravity].into_iter().find(|k| k.ledger_route() == r)
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Claude => "the Claude subscription route",
+            Self::Antigravity => "the Antigravity route (vendor-sandboxed, not confined to re:Search tools)",
+        }
+    }
+
+    fn cli_name(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude Code",
+            Self::Antigravity => "The Antigravity CLI",
+        }
+    }
+}
+
 fn route_of_first_start(events: &[ledger::Event]) -> Option<String> {
     events
         .iter()
@@ -35,104 +87,120 @@ fn route_of_first_start(events: &[ledger::Event]) -> Option<String> {
         .map(str::to_string)
 }
 
-fn meta_bound(meta: Option<&SessionMeta>) -> bool {
-    meta.is_some_and(|m| match m.route.as_deref() {
-        Some(r) => r == CLAUDE_CLI_ROUTE,
-        None => m.default_provider.as_deref() == Some(CLAUDE_CLI_ROUTE),
-    })
+/// The subscription CLI a session's metadata binds it to, if any.
+fn meta_kind(meta: Option<&SessionMeta>) -> Option<CliRouteKind> {
+    let m = meta?;
+    match m.route.as_deref() {
+        Some(r) => CliRouteKind::from_provider(r),
+        None => m.default_provider.as_deref().and_then(CliRouteKind::from_provider),
+    }
 }
 
 /// Route (and provenance) to show for a session: what its first start event recorded, or
-/// the Claude subscription route when the session is bound to it but has no turn yet.
+/// the subscription-CLI route the session is bound to when it has no turn yet.
 pub fn session_route(meta: Option<&SessionMeta>, events: &[ledger::Event]) -> (Value, Value) {
     if let Some(start) = events.iter().find(|e| e.kind == "session.start") {
         return (start.payload.get("route").cloned().unwrap_or(Value::Null), start.payload.get("provenance").cloned().unwrap_or(Value::Null));
     }
-    if meta_bound(meta) {
-        return (json!(ROUTE), json!(cli_route::PROVENANCE));
+    if let Some(kind) = meta_kind(meta) {
+        return (json!(kind.ledger_route()), json!(cli_route::PROVENANCE));
     }
     (Value::Null, Value::Null)
 }
-
-/// Whether this turn runs on the Claude subscription route. Binds an unbound session that
-/// has no turns yet when the request asks for `claude-cli`; refuses to mix routes in one
-/// session (409). The binding is final only once a `session.start` is in the ledger: until
-/// then (a first turn refused before it started) another provider may take the session.
-pub(crate) fn wants_cli_route(state: &DesktopState, session_id: &str, req: &Value) -> Result<bool, (u16, String)> {
+/// Which subscription-CLI route this turn runs on, if any. Binds an unbound session that
+/// has no turns yet when the request asks for `claude-cli` or `antigravity`; refuses to mix
+/// routes in one session (409). The binding is final only once a `session.start` is in the
+/// ledger: until then (a first turn refused before it started) another provider may take
+/// the session.
+pub(crate) fn wants_cli_route(
+    state: &DesktopState,
+    session_id: &str,
+    req: &Value,
+) -> Result<Option<CliRouteKind>, (u16, String)> {
     let requested = req.get("provider").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
     let meta = state.load_meta(session_id);
-    let bound = meta_bound(meta.as_ref());
+    let bound = meta_kind(meta.as_ref());
     let events = state
         .open_ledger()
         .and_then(|l| l.read_session(session_id).map_err(|e| e.to_string()))
         .map_err(|e| (500, e))?;
     let recorded = route_of_first_start(&events);
-    let ledger_cli = recorded.as_deref() == Some(ROUTE);
-    let ledger_other = recorded.is_some() && !ledger_cli;
-    match requested {
-        Some(CLAUDE_CLI_ROUTE) => {
-            if ledger_other {
-                return Err((409, format!(
-                    "session `{session_id}` already has turns on another route; start a new session for the Claude subscription route"
-                )));
-            }
-            if !bound {
-                // Provisional until the turn records `session.start` (see the rebinding below).
-                let mut m = meta.ok_or_else(|| (404, format!("session `{session_id}` has no metadata to bind")))?;
-                m.route = Some(CLAUDE_CLI_ROUTE.to_string());
-                m.default_provider = Some(CLAUDE_CLI_ROUTE.to_string());
-                if let Some(model) = req.get("model").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
-                    m.default_model = Some(model.to_string());
-                }
-                state.save_meta(&m).map_err(|e| (500, e))?;
-            }
-            Ok(true)
+    let recorded_kind = recorded.as_deref().and_then(CliRouteKind::from_ledger_route);
+    if let Some(kind) = requested.and_then(CliRouteKind::from_provider) {
+        if recorded.is_some() && recorded_kind != Some(kind) {
+            return Err((409, format!(
+                "session `{session_id}` already has turns on another route; start a new session for {}",
+                kind.name()
+            )));
         }
-        Some(other) if ledger_cli => Err((409, format!(
-            "session `{session_id}` runs on the Claude subscription route (claude-cli); start a new session to use `{other}`"
-        ))),
+        if bound != Some(kind) {
+            // Provisional until the turn records `session.start` (see the rebinding below).
+            let mut m = meta.ok_or_else(|| (404, format!("session `{session_id}` has no metadata to bind")))?;
+            m.route = Some(kind.provider_id().to_string());
+            m.default_provider = Some(kind.provider_id().to_string());
+            if let Some(model) = req.get("model").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
+                m.default_model = Some(model.to_string());
+            }
+            state.save_meta(&m).map_err(|e| (500, e))?;
+        }
+        return Ok(Some(kind));
+    }
+    let runs_on = |kind: CliRouteKind, other: &str| {
+        (409, format!(
+            "session `{session_id}` runs on {} ({}); start a new session to use `{other}`",
+            kind.name(),
+            kind.provider_id()
+        ))
+    };
+    match (requested, recorded_kind, bound) {
+        (Some(other), Some(kind), _) => Err(runs_on(kind, other)),
         // Bound in its metadata, but no turn ever started there (refused before
-        // `session.start`, for example by the billing check or a missing claude.exe): the
-        // binding was only provisional, so the session may move to the API route.
-        Some(_) if bound && recorded.is_none() => {
+        // `session.start`, for example by the billing check or a missing CLI): the binding
+        // was only provisional, so the session may move to the API route.
+        (Some(_), None, Some(kind)) if recorded.is_none() => {
             if let Some(mut m) = meta {
                 m.route = None;
-                if m.default_provider.as_deref() == Some(CLAUDE_CLI_ROUTE) {
+                if m.default_provider.as_deref() == Some(kind.provider_id()) {
                     m.default_provider = None;
                     m.default_model = None;
                 }
                 state.save_meta(&m).map_err(|e| (500, e))?;
             }
-            Ok(false)
+            Ok(None)
         }
-        Some(other) if bound => Err((409, format!(
-            "session `{session_id}` runs on the Claude subscription route (claude-cli); start a new session to use `{other}`"
-        ))),
-        Some(_) => Ok(false),
-        None => Ok(bound || ledger_cli),
+        (Some(other), None, Some(kind)) => Err(runs_on(kind, other)),
+        (Some(_), None, None) => Ok(None),
+        (None, recorded_kind, bound) => Ok(recorded_kind.or(bound)),
     }
 }
-
-/// A model alias or full model name: never something the CLI could read as a flag.
-fn pick_model(req: &Value, meta: Option<&SessionMeta>) -> Result<String, String> {
+/// A model alias, full model name or slug: never something the CLI could read as a flag.
+fn pick_model(req: &Value, meta: Option<&SessionMeta>, kind: CliRouteKind) -> Result<String, String> {
+    let default = match kind {
+        CliRouteKind::Claude => DEFAULT_CLI_MODEL,
+        CliRouteKind::Antigravity => crate::antigravity::DEFAULT_AGY_MODEL,
+    };
     let model = req
         .get("model")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-        .or_else(|| meta.filter(|m| meta_bound(Some(m))).and_then(|m| m.default_model.clone()))
-        .unwrap_or_else(|| DEFAULT_CLI_MODEL.to_string());
-    let ok = !model.starts_with('-')
-        && model.len() <= 100
-        && model.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '[' | ']' | '@'));
+        .or_else(|| meta.filter(|m| meta_kind(Some(m)) == Some(kind)).and_then(|m| m.default_model.clone()))
+        .unwrap_or_else(|| default.to_string());
+    let ok = match kind {
+        CliRouteKind::Claude => {
+            !model.starts_with('-')
+                && model.len() <= 100
+                && model.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '[' | ']' | '@'))
+        }
+        CliRouteKind::Antigravity => cli_route::antigravity::valid_model_id(&model),
+    };
     if ok {
         Ok(model)
     } else {
-        Err(format!("invalid model `{model}` for the Claude subscription route"))
+        Err(format!("invalid model `{model}` for {}", kind.name()))
     }
 }
-
 fn resolve_core_exe(cfg: &DesktopConfig) -> Result<PathBuf, String> {
     let check = |p: PathBuf, from: &str| {
         if p.is_file() {
@@ -202,7 +270,7 @@ fn core_env(
     env
 }
 
-/// A `claude-cli` turn's stop handle, registered in [`DesktopState::cli_turns`] before its
+/// A subscription-CLI turn's stop handle, registered in [`DesktopState::cli_turns`] before its
 /// thread is spawned (so a stop right after the 202 reaches it); removed when dropped.
 pub(crate) struct Registered {
     state: Arc<DesktopState>,
@@ -226,31 +294,44 @@ impl Drop for Registered {
     }
 }
 
-/// Run one desktop turn on the Claude subscription route; returns the final reply text.
+/// Run one desktop turn on a subscription-CLI route; returns the final reply text.
 pub(crate) fn run_cli_turn(
     state: &Arc<DesktopState>,
     session_id: &str,
     req: &Value,
     message: &str,
     stop: &StopHandle,
+    kind: CliRouteKind,
 ) -> Result<String, String> {
-    let vendor = ClaudeCode;
     let env_lookup = |n: &str| std::env::var_os(n);
-    // Billing safety first: nothing is started while environment credentials would win.
-    let allowed_env = cli_route::env_auth::check(vendor.env_auth_vars(), &env_lookup)?;
+    // The person's acknowledgement (Antigravity), then billing safety: nothing is started
+    // while either is missing.
+    let (vendor, allowed_env, allow_env_auth, explicit_exe): (Box<dyn VendorCli>, Vec<&str>, bool, Option<&Path>) =
+        match kind {
+            CliRouteKind::Claude => {
+                let allowed = cli_route::env_auth::check(ClaudeCode.env_auth_vars(), &env_lookup)?;
+                (Box::new(ClaudeCode), allowed, cli_route::env_auth::opted_in(&env_lookup), state.cfg.claude_exe.as_deref())
+            }
+            CliRouteKind::Antigravity => {
+                crate::antigravity::require_acknowledged(state)?;
+                let allowed = cli_route::antigravity::check_env_auth(&env_lookup)?;
+                let opted = cli_route::env_auth::flag_set(cli_route::antigravity::ALLOW_ENV_AUTH_VAR, &env_lookup);
+                (Box::new(Antigravity::new()), allowed, opted, state.cfg.agy_exe.as_deref())
+            }
+        };
     if stop.is_stopped() {
         return Err("turn stopped by the user".to_string());
     }
-    let claude = vendor.locate(state.cfg.claude_exe.as_deref(), &env_lookup)?;
+    let cli_exe = vendor.locate(explicit_exe, &env_lookup)?;
     let core_exe = resolve_core_exe(&state.cfg)?;
     let meta = state.load_meta(session_id);
-    let model = pick_model(req, meta.as_ref())?;
+    let model = pick_model(req, meta.as_ref(), kind)?;
     let research = Arc::new(state.research_env_for_session(session_id)?);
 
     let ledger = state.open_ledger()?;
     let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
-    if let Some(route) = route_of_first_start(&existing).filter(|r| r != ROUTE) {
-        return Err(format!("session `{session_id}` was started on route `{route}`; it cannot continue on the Claude subscription route"));
+    if let Some(route) = route_of_first_start(&existing).filter(|r| r != kind.ledger_route()) {
+        return Err(format!("session `{session_id}` was started on route `{route}`; it cannot continue on {}", kind.name()));
     }
     if !existing.is_empty() {
         ledger.verify_session(session_id).map_err(|e| format!("cannot continue session `{session_id}`: {e}"))?;
@@ -259,7 +340,13 @@ pub(crate) fn run_cli_turn(
 
     validate_session_id(session_id).map_err(|e| e.to_string())?;
     let sdir = state.session_dir(session_id)?;
-    let (work, scratch, pycache) = (sdir.join("work"), sdir.join("scratch"), sdir.join("pycache"));
+    // The CLI's working directory, an empty per-session folder; for Antigravity also the
+    // CLI's workspace, holding `.agents/mcp_config.json` during the turn.
+    let work = sdir.join(match kind {
+        CliRouteKind::Claude => "work",
+        CliRouteKind::Antigravity => "agy",
+    });
+    let (scratch, pycache) = (sdir.join("scratch"), sdir.join("pycache"));
     for d in [&work, &scratch, &pycache] {
         std::fs::create_dir_all(d).map_err(|e| format!("could not create {}: {e}", d.display()))?;
     }
@@ -274,15 +361,19 @@ pub(crate) fn run_cli_turn(
     )
     .map_err(|e| format!("could not start the approval relay: {e}"))?;
     let workspace = research.workspace_root.clone();
-    let core = CoreLaunch {
+    let mut core = CoreLaunch {
         exe: core_exe,
         env: core_env(&state.cfg, session_id, &token, &relay.addr, &scratch, &pycache, workspace.as_deref()),
     };
+    if kind == CliRouteKind::Antigravity {
+        // core.exe labels its tool calls `antigravity:<session>` (see mcp-server).
+        core.env.insert("CORE_CALLER_ROUTE".into(), cli_route::antigravity::ROUTE.into());
+    }
     let tools = core_tool_set(Some(Arc::clone(&research)));
 
     let mut start_fields = json!({
         "prompt": message,
-        "provider": CLAUDE_CLI_ROUTE,
+        "provider": kind.provider_id(),
         "surface": "desktop",
         "history_replayed": replay.replayed,
         "history_chars": replay.history_chars,
@@ -290,13 +381,22 @@ pub(crate) fn run_cli_turn(
         "history_turns_dropped": replay.turns_dropped,
         "workspace_root": workspace.as_deref().map(|w| path_str(&strip_verbatim_prefix(w))),
     });
+    if kind == CliRouteKind::Antigravity {
+        start_fields["confinement"] = json!(cli_route::antigravity::CONFINEMENT);
+        start_fields["route_label"] = json!(crate::antigravity::AGY_LABEL);
+        start_fields["vendor_builtin_tools"] =
+            json!("not removable; denied only through the CLI's own --settings deny rules, enforced by the CLI");
+    }
     if !allowed_env.is_empty() {
         start_fields["env_auth_vars_allowed"] = json!(allowed_env);
     }
-    let tool_config = sdir.join("mcp.json");
+    let tool_config = match kind {
+        CliRouteKind::Claude => sdir.join(cli_route::TOOL_CONFIG_FILE),
+        CliRouteKind::Antigravity => work.join(cli_route::antigravity::TOOL_CONFIG_REL),
+    };
     let spec = TurnSpec {
         session: session_id,
-        exe: &claude,
+        exe: &cli_exe,
         work_dir: &work,
         tool_config: &tool_config,
         core: &core,
@@ -307,28 +407,30 @@ pub(crate) fn run_cli_turn(
         start_kind: if existing.is_empty() { "session.start" } else { "session.resume" },
         start_fields,
         inherit_stderr: false,
-        allow_env_auth: cli_route::env_auth::opted_in(&env_lookup),
+        allow_env_auth,
     };
     let rec = Recorder { ledger, session: session_id.to_string() };
     let mut sink = SseEventSink::new(Arc::clone(&state.sse), session_id);
-    let outcome = run_turn(&vendor, &rec, &mut sink, &spec, stop);
+    let outcome = run_turn(vendor.as_ref(), &rec, &mut sink, &spec, stop);
     drop(relay);
     let report = outcome?;
+    let cli = kind.cli_name();
     match report.end {
         TurnEnd::Completed { exit_code: Some(0), init_verified: true } => {
             let text = sink.final_text().to_string();
             Ok(if text.is_empty() { report.final_text } else { text })
         }
-        TurnEnd::Completed { init_verified: false, .. } => {
-            Err("Claude Code ended without a verified system/init event; turn aborted".to_string())
-        }
-        TurnEnd::Completed { exit_code, .. } => Err(format!("Claude Code exited with code {exit_code:?}")),
+        TurnEnd::Completed { init_verified: false, .. } => match kind {
+            CliRouteKind::Claude => Err("Claude Code ended without a verified system/init event; turn aborted".to_string()),
+            CliRouteKind::Antigravity => Err(format!("{cli} ended without a verified init event; turn aborted")),
+        },
+        TurnEnd::Completed { exit_code, .. } => Err(format!("{cli} exited with code {exit_code:?}")),
         TurnEnd::Aborted(reason) => Err(format!("turn aborted: {reason}")),
         TurnEnd::Stopped => Err("turn stopped by the user".to_string()),
     }
 }
 
-/// Delete the session's `mcp.json` if no live turn owns it (left behind when re:Search was
+/// Delete the session's tool configs if no live turn owns them (left behind when re:Search was
 /// killed before its cleanup ran). Called when a session is opened.
 pub fn sweep_session_tool_config(state: &DesktopState, session_id: &str) {
     let live = state.active_turns.lock().map(|a| a.contains(session_id)).unwrap_or(true);
@@ -344,7 +446,7 @@ pub fn sweep_all_tool_configs(state: &DesktopState) -> usize {
     })
 }
 
-/// `POST /api/sessions/{id}/stop`: kill the running `claude-cli` turn's process tree and
+/// `POST /api/sessions/{id}/stop`: kill the running subscription-CLI turn's process tree and
 /// deny its open approval cards. The turn records `session.abort`.
 pub fn handle_stop_turn(state: &DesktopState, session_id: &str) -> ApiResult {
     validate_session_id(session_id).map_err(|e| (400, e.to_string()))?;
@@ -358,7 +460,7 @@ pub fn handle_stop_turn(state: &DesktopState, session_id: &str) -> ApiResult {
         None => {
             let running = state.active_turns.lock().map(|a| a.contains(session_id)).unwrap_or(false);
             Err((409, if running {
-                "only Claude subscription (claude-cli) turns can be stopped".to_string()
+                "only subscription-CLI turns (claude-cli, antigravity) can be stopped".to_string()
             } else {
                 format!("no turn is running for `{session_id}`")
             }))

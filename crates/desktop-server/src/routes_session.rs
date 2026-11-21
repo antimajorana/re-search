@@ -1,7 +1,7 @@
 //! Session, SSE, approval, fork, diff, and provider-settings REST handlers.
 
 use crate::sse::stream_session_sse;
-use crate::state::{now_ms, update_provider_roles_from_ui, DesktopState, ForkInfo, SessionMeta, CLAUDE_CLI_ROUTE};
+use crate::state::{now_ms, update_provider_roles_from_ui, DesktopState, ForkInfo, SessionMeta};
 use crate::turn_runner::{reconstruct_session_view, spawn_turn_thread};
 use agent::{ProviderKeyStore, ProviderKind, RoleAssignment};
 use export::{compute_branch_diff, fork_session, ForkOptions};
@@ -171,7 +171,7 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
 
     let provider = val.get("provider").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
     let meta = SessionMeta {
-        route: (provider == Some(CLAUDE_CLI_ROUTE)).then(|| CLAUDE_CLI_ROUTE.to_string()),
+        route: provider.and_then(crate::cli_turn::CliRouteKind::from_provider).map(|k| k.provider_id().to_string()),
         id: id.clone(),
         title: title.clone(),
         workspace_root: workspace_root.clone(),

@@ -121,6 +121,7 @@ impl ProviderKeyStore {
     }
 
     pub fn set_key(&mut self, provider: ProviderKind, key: Option<String>) -> Result<(), String> {
+        refuse_chatgpt(provider)?;
         let cleaned = match key {
             Some(mut raw) => {
                 let t = raw.trim().to_string();
@@ -147,6 +148,7 @@ impl ProviderKeyStore {
     }
 
     pub fn set_base_url(&mut self, provider: ProviderKind, url: Option<String>) -> Result<(), String> {
+        refuse_chatgpt(provider)?;
         let cleaned = url.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         if let Some(u) = &cleaned {
             base_url_is_safe(u)?;
@@ -160,6 +162,9 @@ impl ProviderKeyStore {
     }
 
     pub fn key_for(&self, provider: ProviderKind) -> Option<&str> {
+        if provider == ProviderKind::ChatGpt {
+            return None;
+        }
         self.providers
             .get(provider.cli_name())
             .and_then(|e| e.api_key.as_deref())
@@ -191,6 +196,15 @@ impl ProviderKeyStore {
             roles: self.roles.clone(),
         }
     }
+}
+
+/// The ChatGPT-plan route signs in with ChatGPT (OAuth): it has no API key and no
+/// configurable address (its tokens go only to OpenAI's fixed hosts).
+fn refuse_chatgpt(provider: ProviderKind) -> Result<(), String> {
+    if provider == ProviderKind::ChatGpt {
+        return Err("ChatGPT uses Sign in with ChatGPT: it takes no API key and no address".into());
+    }
+    Ok(())
 }
 
 /// The base URL is shown back unredacted by the settings API, so it must not be able to carry

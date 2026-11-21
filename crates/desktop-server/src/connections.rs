@@ -7,6 +7,10 @@
 //! `base_url`). Keys are never returned: only whether one is saved and where the key in
 //! use comes from (`"saved key"` or `"environment"`, with the variable's name).
 //!
+//! The Antigravity CLI is located the same way and asked only `agy --version`; its entry
+//! carries the route's warning and whether the person acknowledged it
+//! ([`crate::antigravity`]).
+//!
 //! Nothing here sends a prompt anywhere. The Claude CLI is only located and asked for its
 //! version (`claude --version`, with a timeout; kept once it succeeded); Ollama is
 //! connected when its model list answers (a local `GET /api/tags`, cached like the lists,
@@ -42,6 +46,7 @@ pub fn api_label(p: ProviderKind) -> &'static str {
         ProviderKind::OpenAi => "OpenAI API",
         ProviderKind::Gemini => "Google Gemini API",
         ProviderKind::Ollama => "Ollama (models on this computer)",
+        ProviderKind::ChatGpt => crate::chatgpt::CHATGPT_LABEL,
     }
 }
 
@@ -53,6 +58,7 @@ fn api_how_to(p: ProviderKind) -> &'static str {
         ProviderKind::Ollama => {
             "Install Ollama and start it; re:Search looks for it at http://127.0.0.1:11434 (change the address under Advanced)."
         }
+        ProviderKind::ChatGpt => crate::chatgpt::CHATGPT_HOW_TO,
     }
 }
 
@@ -70,6 +76,10 @@ impl DesktopState {
     /// `"launch"` (`--api-base`), `"saved"` (providers.json) or `"default"`. Never a
     /// request body.
     pub fn base_url_for(&self, provider: ProviderKind, store: &ProviderKeyStore) -> (String, &'static str) {
+        // The ChatGPT token goes only to OpenAI's API host: no launch override, no saved URL.
+        if provider == ProviderKind::ChatGpt {
+            return (self.chatgpt.api_base(), "fixed");
+        }
         if let Some(b) = &self.cfg.api_base_override {
             return (b.clone(), "launch");
         }
@@ -262,6 +272,7 @@ fn claude_entry(state: &DesktopState) -> Value {
         "id": CLAUDE_CLI_ROUTE,
         "label": CLAUDE_CLI_LABEL,
         "kind": "subscription",
+        "route": CLAUDE_CLI_ROUTE,
         "connected": st.connected,
         "status": st.status,
         "how_to": st.how_to,
@@ -332,6 +343,7 @@ fn api_entry(state: &DesktopState, store: &ProviderKeyStore, p: ProviderKind, re
         "id": id,
         "label": api_label(p),
         "kind": "api-key",
+        "route": "api",
         "connected": connected,
         "status": status,
         "how_to": (!connected).then(|| api_how_to(p)),
@@ -353,7 +365,7 @@ pub fn handle_connections(state: &DesktopState, query: &HashMap<String, String>)
     let refresh = query.get("refresh").is_some_and(|v| v == "1" || v == "true");
     let since = state.catalog.generation();
     let store = ProviderKeyStore::load_from_data_dir(&state.cfg.data_dir).map_err(|e| (500, e))?;
-    let mut list = vec![claude_entry(state)];
+    let mut list = vec![claude_entry(state), crate::antigravity::connection_entry(state), crate::chatgpt::connection_entry(state)];
     for p in API_PROVIDERS {
         list.push(api_entry(state, &store, p, refresh, since));
     }

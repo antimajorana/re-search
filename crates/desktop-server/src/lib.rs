@@ -1,9 +1,11 @@
 //! Loopback `127.0.0.1` HTTP + SSE desktop server, UI approval broker, and
 //! embedded Gemini-inspired research UI.
 
+pub mod antigravity;
 pub mod approver;
 pub mod assets;
 pub mod auth;
+pub mod chatgpt;
 mod cli_relay;
 pub mod cli_turn;
 pub mod connections;
@@ -48,11 +50,17 @@ pub struct DesktopConfig {
     /// `claude.exe` for the Claude subscription route; `None`: `RE_SEARCH_CLAUDE`, `PATH`,
     /// then the npm install location.
     pub claude_exe: Option<PathBuf>,
+    /// `agy.exe` for the Antigravity route; `None`: `RE_SEARCH_AGY`, `PATH`, then WinGet's
+    /// link and package folders.
+    pub agy_exe: Option<PathBuf>,
     /// Environment used by `GET /api/connections` and `GET /api/models` (provider key
     /// variables, the Claude CLI's location and the billing-safety variables). `None`: the
     /// process environment, which is what turns use. Tests pass a fixed map so the answer
     /// does not depend on the machine.
     pub connection_env: Option<BTreeMap<String, String>>,
+    /// Test-only: points Sign in with ChatGPT at a loopback mock and replaces the browser
+    /// opener. `None` (always, outside tests): OpenAI's production endpoints.
+    pub chatgpt_test: Option<chatgpt::ChatGptTestHooks>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,7 +141,8 @@ pub fn start_desktop_server(cfg: DesktopConfig) -> Result<RunningDesktopServer, 
 
     let sse = Arc::new(SseHub::new());
     let shutdown = Arc::new(AtomicBool::new(false));
-    let state = Arc::new(DesktopState::new(cfg.clone(), auth, Arc::clone(&sse)));
+    let chatgpt = chatgpt::ChatGptHub::new(&cfg)?;
+    let state = Arc::new(DesktopState::new(cfg.clone(), auth, Arc::clone(&sse), chatgpt));
     // `mcp.json` files (they hold a turn's session token) left by a killed earlier run.
     cli_turn::sweep_all_tool_configs(&state);
 

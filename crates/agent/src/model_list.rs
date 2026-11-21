@@ -67,6 +67,10 @@ pub fn models_url(provider: ProviderKind, base_url: &str) -> Result<String, Tran
             let b = b.strip_suffix("/v1").unwrap_or(b);
             format!("{root}{b}/api/tags")
         }
+        ProviderKind::ChatGpt => {
+            let b = base.strip_suffix("/v1").unwrap_or(base);
+            format!("{root}{b}/v1/models")
+        }
     })
 }
 
@@ -79,6 +83,9 @@ pub fn list_models(
     timeout: Duration,
 ) -> Result<Vec<ListedModel>, TransportError> {
     let v = validate_base_url(base_url)?;
+    if provider == ProviderKind::ChatGpt && !crate::responses::chatgpt_base_allowed(&v) {
+        return Err(config_err("the ChatGPT plan route only talks to https://api.openai.com"));
+    }
     let url = models_url(provider, base_url)?;
     let secret = key.map(SecretKey::as_str).unwrap_or("");
     let keyless_ok = provider == ProviderKind::Ollama || (provider == ProviderKind::OpenAi && v.is_loopback_http);
@@ -93,7 +100,7 @@ pub fn list_models(
             headers.push(("anthropic-version", crate::anthropic::ANTHROPIC_VERSION));
         }
         ProviderKind::Gemini => headers.push(("x-goog-api-key", secret)),
-        ProviderKind::OpenAi | ProviderKind::Ollama => {
+        ProviderKind::OpenAi | ProviderKind::Ollama | ProviderKind::ChatGpt => {
             if !secret.is_empty() {
                 headers.push(("Authorization", bearer.as_str()));
             }
@@ -186,7 +193,7 @@ pub fn parse_model_list(provider: ProviderKind, body: &[u8]) -> Result<Vec<Liste
     let v: Value = serde_json::from_slice(body).map_err(|e| format!("model list is not JSON: {e}"))?;
     let (items, list_key) = match provider {
         ProviderKind::Anthropic | ProviderKind::OpenAi => (v.get("data"), "data"),
-        ProviderKind::Gemini | ProviderKind::Ollama => (v.get("models"), "models"),
+        ProviderKind::Gemini | ProviderKind::Ollama | ProviderKind::ChatGpt => (v.get("models"), "models"),
     };
     let items = items
         .and_then(Value::as_array)
@@ -220,6 +227,13 @@ pub fn parse_model_list(provider: ProviderKind, body: &[u8]) -> Result<Vec<Liste
                         id,
                     })
             }
+            // Sign in with ChatGPT: keep entries meant for display (`visibility == "list"`),
+            // id = `slug`, label = `display_name`, in the server's order (no time given).
+            ProviderKind::ChatGpt => item["slug"]
+                .as_str()
+                .filter(|_| item["visibility"].as_str() == Some("list"))
+                .and_then(clean_id)
+                .map(|id| ListedModel { label: clean_label(item["display_name"].as_str(), &id), created_s: None, id }),
             ProviderKind::Ollama => item["name"].as_str().or(item["model"].as_str()).and_then(clean_id).map(|id| {
                 ListedModel {
                     label: clean_label(None, &id),
@@ -421,6 +435,24 @@ mod tests {
         assert_eq!(ids(&list), ["qwen2.5-coder:7b", "llama3:8b"]);
         assert!(parse_model_list(ProviderKind::Ollama, b"<html>").is_err());
         assert!(parse_model_list(ProviderKind::OpenAi, b"{\"models\":[]}").is_err());
+    }
+
+    #[test]
+    fn chatgpt_list_keeps_visible_slugs_in_server_order() {
+        let body = json!({ "models": [
+            { "slug": "gpt-b", "display_name": "GPT B", "visibility": "list" },
+            { "slug": "gpt-hidden", "display_name": "Hidden", "visibility": "hide" },
+            { "slug": "gpt-a", "display_name": "GPT A", "visibility": "list" },
+            { "slug": "bad slug", "visibility": "list" }
+        ]});
+        let list = parse_model_list(ProviderKind::ChatGpt, body.to_string().as_bytes()).unwrap();
+        assert_eq!(ids(&list), ["gpt-b", "gpt-a"]);
+        assert_eq!(list[0].label, "GPT B");
+        assert_eq!(models_url(ProviderKind::ChatGpt, "https://api.openai.com").unwrap(), "https://api.openai.com/v1/models");
+        let t = Duration::from_millis(200);
+        let k = SecretKey::new("tok".into()).unwrap();
+        let err = list_models(ProviderKind::ChatGpt, "https://proxy.example", Some(&k), t).unwrap_err();
+        assert_eq!(err.kind, TransportErrorKind::Config);
     }
 
     #[test]

@@ -1,5 +1,5 @@
-//! The vendor-specific half of the route, as a trait. [`crate::claude::ClaudeCode`] is the
-//! only implementation today.
+//! The vendor-specific half of the route, as a trait, implemented by
+//! [`crate::claude::ClaudeCode`] and [`crate::antigravity::Antigravity`].
 
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -49,6 +49,15 @@ pub trait VendorCli: Send + Sync {
     fn write_tool_config(&self, path: &Path, core: &CoreLaunch) -> Result<(), String>;
     /// Command-line arguments. The prompt is never among them: it goes on stdin.
     fn args(&self, model: &str, tool_config: &Path) -> Vec<String>;
+    /// The exact bytes written to the CLI's stdin for `prompt` (stdin is closed after them).
+    /// Default: the prompt text itself.
+    fn stdin_payload(&self, prompt: &str) -> Vec<u8> {
+        prompt.as_bytes().to_vec()
+    }
+    /// How the prompt reaches the CLI, recorded in the start event as `prompt_via`.
+    fn prompt_via(&self) -> &'static str {
+        "stdin"
+    }
     /// Last adjustments to the command (for example removing nesting markers).
     fn prepare(&self, cmd: &mut Command);
     /// Whether this output line is the handshake that lists the offered tools.

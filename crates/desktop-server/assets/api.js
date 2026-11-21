@@ -164,6 +164,14 @@ export function getConnections(refresh = false) {
   return rawJson('GET', `/api/connections${refresh ? '?refresh=1' : ''}`);
 }
 
+// A provider's sign-in action (`login`, `open`, `logout`) or its state (GET `login`), for
+// rows of GET /api/connections that carry an `action` (Sign in with ChatGPT). The server
+// opens only its own pending sign-in URL; nothing here sends a URL or a token.
+export function connectionAction(id, action, method = 'POST') {
+  const path = `/api/connections/${encodeURIComponent(id)}/${encodeURIComponent(action)}`;
+  return rawJson(method, path, method === 'POST' ? {} : undefined);
+}
+
 // Models the user can pick now, grouped by connected provider (server-cached 10 minutes).
 export function getModels(refresh = false) {
   return rawJson('GET', `/api/models${refresh ? '?refresh=1' : ''}`);

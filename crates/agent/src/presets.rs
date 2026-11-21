@@ -58,6 +58,7 @@ impl RoleAssignment {
             ProviderKind::OpenAi => "gpt-4.1-mini",
             ProviderKind::Ollama => "qwen2.5-coder:7b",
             ProviderKind::Gemini => "gemini-2.5-flash",
+            ProviderKind::ChatGpt => crate::transport::DEFAULT_CHATGPT_MODEL,
         };
         let spec = ModelEndpointSpec::new(provider, model);
         Self {

@@ -48,7 +48,9 @@ fn start_server(cfg: &AppConfig) -> Result<RunningDesktopServer, String> {
         eval_timeout_s: DEFAULT_EVAL_TIMEOUT_S,
         core_exe: cfg.core_exe.clone(),
         claude_exe: cfg.claude.clone(),
+        agy_exe: cfg.agy.clone(),
         connection_env: None,
+        chatgpt_test: None,
     })
 }
 

@@ -35,7 +35,8 @@ pub struct SessionMeta {
     pub created_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork_info: Option<ForkInfo>,
-    /// `Some("claude-cli")` once the session is bound to the Claude subscription route.
+    /// `Some("claude-cli")` / `Some("antigravity")` once the session is bound to that
+    /// subscription-CLI route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
 }
@@ -43,6 +44,11 @@ pub struct SessionMeta {
 /// Route value stored in [`SessionMeta::route`] (and accepted as `provider`) for the
 /// Claude subscription route (the Claude Code CLI driven by re:Search).
 pub const CLAUDE_CLI_ROUTE: &str = "claude-cli";
+
+/// Route value stored in [`SessionMeta::route`] (and accepted as `provider`) for the
+/// Antigravity route (the Antigravity CLI driven by re:Search; vendor-sandboxed, not
+/// confined to re:Search tools). Also the route label in its ledger start events.
+pub const ANTIGRAVITY_ROUTE: &str = "antigravity";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForkInfo {
@@ -57,6 +63,18 @@ pub struct UiSettings {
     pub default_model: Option<String>,
     pub pinned_conventions: Option<String>,
     pub role_presets: Option<Value>,
+    /// The person's acknowledgement of the Antigravity route's warning (terms risk, built-in
+    /// tools outside re:Search's control), given by clicking in the Connect panel. Without
+    /// it (or for an older notice version) the route refuses to start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antigravity_ack: Option<AntigravityAck>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AntigravityAck {
+    pub acknowledged_ms: i64,
+    /// [`crate::antigravity::NOTICE_VERSION`] of the warning that was shown.
+    pub notice_version: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,16 +111,22 @@ pub struct DesktopState {
     pub active_turns: Mutex<HashSet<String>>,
     pub pending_approvals: Mutex<HashMap<(String, String), Arc<PendingSlot>>>,
     pub ledger_write_lock: Mutex<()>,
-    /// Running Claude subscription (`claude-cli`) turns, by session: their stop handles.
+    /// Running subscription-CLI turns (`claude-cli`, `antigravity`), by session: their stop handles.
     pub cli_turns: Mutex<HashMap<String, cli_route::StopHandle>>,
     /// Model lists fetched from providers, kept for [`crate::model_catalog::CACHE_TTL`].
     pub catalog: crate::model_catalog::Catalog,
     /// `claude --version` output once a probe succeeded (a failed probe is not kept).
     pub claude_version: std::sync::OnceLock<String>,
+    /// Sign in with ChatGPT: tokens, sign-in attempts and the browser opener.
+    pub chatgpt: crate::chatgpt::ChatGptHub,
+    /// `agy --version` output once a probe succeeded (a failed probe is not kept).
+    pub agy_version: std::sync::OnceLock<String>,
+    /// `agy models`, kept for [`crate::model_catalog::CACHE_TTL`].
+    pub agy_models: Mutex<Option<crate::antigravity::AgyModelCache>>,
 }
 
 impl DesktopState {
-    pub fn new(cfg: DesktopConfig, auth: AuthGuard, sse: Arc<SseHub>) -> Self {
+    pub fn new(cfg: DesktopConfig, auth: AuthGuard, sse: Arc<SseHub>, chatgpt: crate::chatgpt::ChatGptHub) -> Self {
         Self {
             cfg,
             auth,
@@ -113,6 +137,9 @@ impl DesktopState {
             cli_turns: Mutex::new(HashMap::new()),
             catalog: crate::model_catalog::Catalog::default(),
             claude_version: std::sync::OnceLock::new(),
+            chatgpt,
+            agy_version: std::sync::OnceLock::new(),
+            agy_models: Mutex::new(None),
         }
     }
 
@@ -145,7 +172,7 @@ impl DesktopState {
         denied
     }
 
-    /// Stop every running `claude-cli` turn (kills each CLI process tree), then wait up to
+    /// Stop every running subscription-CLI turn (kills each CLI process tree), then wait up to
     /// five seconds for those turns to record `session.abort` and delete their `mcp.json`
     /// (the process may exit right after this, e.g. when the app window closes).
     pub fn stop_all_cli_turns(&self) {
@@ -344,6 +371,7 @@ impl DesktopState {
         let (base_url, _) = self.base_url_for(provider, &store);
 
         match provider {
+            ProviderKind::ChatGpt => crate::chatgpt::build_transport(self),
             ProviderKind::Anthropic => {
                 let cfg = AnthropicConfig {
                     base_url,

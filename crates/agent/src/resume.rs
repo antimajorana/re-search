@@ -220,6 +220,7 @@ fn decode_provider_response(provider: ProviderKind, raw: Vec<u8>) -> Result<Mode
         ProviderKind::Anthropic => crate::wire::parse_response(raw, ""),
         ProviderKind::OpenAi | ProviderKind::Ollama => crate::openai::parse_openai_response(raw, ""),
         ProviderKind::Gemini => crate::gemini::parse_gemini_response(raw, ""),
+        ProviderKind::ChatGpt => crate::responses::parse_responses_stream(raw, ""),
     };
     res.map_err(|e| corrupt(format!("failed to decode model.response for {}: {e}", provider.wire_id())))
 }

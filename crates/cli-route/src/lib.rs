@@ -9,7 +9,9 @@
 //!
 //! - [`recorder`]: ledger recorder, event sinks, session and tool-config guards;
 //! - [`vendor`]: the [`VendorCli`] trait for the vendor-specific parts, [`claude`] its
-//!   Claude Code implementation;
+//!   Claude Code implementation, [`antigravity`] the Antigravity CLI one (labelled
+//!   "vendor-sandboxed, not confined to re:Search tools": its built-in tools cannot be
+//!   removed, only denied through the CLI's own settings);
 //! - [`turn`]: one turn (spawn in a kill-on-close job object, prompt on stdin, line loop,
 //!   handshake check, abort/stop, cleanup);
 //! - [`relay`]: the loopback approval listener's wire handling, with the decision taken
@@ -18,6 +20,7 @@
 //! - [`env_auth`]: refusal to start when environment credentials would bypass the
 //!   subscription login; [`history`]: bounded transcript replay for later turns.
 
+pub mod antigravity;
 pub mod claude;
 pub mod core_tools;
 pub mod env_auth;
@@ -32,7 +35,7 @@ pub mod testkit;
 
 pub use recorder::{
     ndjson_line, remove_stale_tool_config, sweep_stale_tool_configs, EventSink, Recorder, SessionGuard, ToolConfigGuard,
-    TOOL_CONFIG_FILE,
+    TOOL_CONFIG_FILE, TOOL_CONFIG_FILES,
 };
 pub use turn::{run_turn, StopHandle, TurnEnd, TurnReport, TurnSpec};
 pub use vendor::{CoreLaunch, VendorCli, VersionInfo};

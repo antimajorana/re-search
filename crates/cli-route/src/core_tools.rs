@@ -59,6 +59,16 @@ pub fn core_tool_set(research: Option<Arc<ResearchEnv>>) -> CoreToolSet {
     CoreToolSet { defs: registry.defs().into_iter().cloned().collect(), policy_version: policy.version }
 }
 
+/// Ids of the tools `core.exe` serves for a launch environment: with research tools when
+/// `CORE_ENABLE_RESEARCH_TOOLS=1` is in `core_env` (as on every desktop session), else the
+/// built-in pair. Used where a tool config must name the tools (Antigravity's
+/// `enabledTools`).
+pub fn core_tool_ids_for(core_env: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+    let research = core_env.get("CORE_ENABLE_RESEARCH_TOOLS").is_some_and(|v| v == "1");
+    let env = research.then(|| Arc::new(ResearchEnv::new(std::env::temp_dir())));
+    core_tool_set(env).defs.into_iter().map(|d| d.id).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

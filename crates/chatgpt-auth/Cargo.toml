@@ -1,0 +1,36 @@
+[package]
+name = "chatgpt-auth"
+description = "Sign in with ChatGPT for open-source apps: PKCE OAuth with a one-shot loopback callback, RS256 ID-token checks, DPAPI token vault and serialized refresh."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+getrandom = { workspace = true }
+ureq = { workspace = true }
+zeroize = { workspace = true }
+percent-encoding = { workspace = true }
+# Already in the lock file through rustls (ureq's TLS); used here only for RS256
+# signature checks on ID tokens (`RsaPublicKeyComponents`).
+ring = "0.17.14"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+chatgpt-auth = { path = ".", features = ["testkit"] }
+
+[features]
+# Loopback mock of OpenAI's auth server, a throwaway RSA test key and JWT signing, for
+# this crate's and desktop-server's tests only.
+testkit = []

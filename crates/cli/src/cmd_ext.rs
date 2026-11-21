@@ -67,7 +67,7 @@ fn validate_endpoint_url(flag: &str, raw: &str) -> Result<String, String> {
 }
 
 /// The flags `re-search-app` understands besides `--data-dir` (which is always passed).
-const APP_FLAGS: [&str; 6] = ["workspace", "python", "worker-script", "port", "core-exe", "claude"];
+const APP_FLAGS: [&str; 7] = ["workspace", "python", "worker-script", "port", "core-exe", "claude", "agy"];
 
 /// Arguments for `re-search-app`, or `None` when a flag only the in-process server
 /// understands (`--no-open`, `--print-url-json`, `--api-base`, ...) was given. No token is
@@ -162,6 +162,8 @@ pub(crate) fn ui_command(
     };
     let core_exe = exe_flag(&mut flags, "core-exe", &["RE_SEARCH_CORE_EXE"])?;
     let claude_exe = exe_flag(&mut flags, "claude", &["RE_SEARCH_CLAUDE", "RESEARCH_CORE_CLAUDE"])?;
+    // Antigravity route: `--agy`, else RE_SEARCH_AGY; unset, the server looks on PATH and in WinGet's folders.
+    let agy_exe = exe_flag(&mut flags, "agy", &["RE_SEARCH_AGY"])?;
     reject_unknown_flags(&flags)?;
 
     let abs_data = std::path::absolute(&data_dir).map_err(|e| e.to_string())?;
@@ -183,7 +185,9 @@ pub(crate) fn ui_command(
         eval_timeout_s: parse_eval_timeout_s(),
         core_exe,
         claude_exe,
+        agy_exe,
         connection_env: None,
+        chatgpt_test: None,
     })
 }
 

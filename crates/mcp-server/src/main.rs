@@ -241,7 +241,14 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    let caller = format!("claude-code-cli:{}", router.session());
+    // The route that started this server (it labels every tool call and is part of each
+    // approval digest): `CORE_CALLER_ROUTE=antigravity` on the Antigravity route; anything
+    // else, or nothing, is the Claude Code route as before.
+    let route = match std::env::var("CORE_CALLER_ROUTE").as_deref() {
+        Ok("antigravity") => "antigravity",
+        _ => "claude-code-cli",
+    };
+    let caller = format!("{route}:{}", router.session());
     let server = CoreServer { router, caller };
     match server.serve(rmcp::transport::io::stdio()).await {
         Ok(running) => {

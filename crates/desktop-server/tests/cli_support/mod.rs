@@ -31,14 +31,27 @@ impl CliHarness {
 
     /// [`CliHarness::start`] with a last change to the configuration.
     pub fn start_with(edit: impl FnOnce(&mut desktop_server::DesktopConfig)) -> CliHarness {
+        Self::start_inner(false, edit)
+    }
+
+    /// A server whose `agy.exe` is the scripted fake Antigravity CLI (and no claude.exe).
+    pub fn start_agy() -> CliHarness {
+        Self::start_inner(true, |_| {})
+    }
+
+    fn start_inner(agy: bool, edit: impl FnOnce(&mut desktop_server::DesktopConfig)) -> CliHarness {
         let tmp = TempDir::new().unwrap();
         let data = tmp.path().join("data");
         let ws = tmp.path().join("ws");
         std::fs::create_dir_all(&ws).unwrap();
         std::fs::write(ws.join("notes.tex"), "old\n").unwrap();
-        let fake = FakeCli::new(tmp.path(), "fake-cli");
+        let fake = if agy { FakeCli::new_agy(tmp.path(), "fake-agy") } else { FakeCli::new(tmp.path(), "fake-cli") };
         let mut cfg = test_cfg(&data, Some(ws.clone()), None, None);
-        cfg.claude_exe = Some(fake.exe.clone());
+        if agy {
+            cfg.agy_exe = Some(fake.exe.clone());
+        } else {
+            cfg.claude_exe = Some(fake.exe.clone());
+        }
         // Never started by the fake CLI; it only has to exist.
         cfg.core_exe = Some(fake.exe.clone());
         edit(&mut cfg);
@@ -195,4 +208,51 @@ pub fn clear_env_auth() {
         std::env::remove_var(v);
     }
     std::env::remove_var(cli_route::env_auth::ALLOW_ENV_AUTH_VAR);
+}
+
+/// Eager names under which the Antigravity CLI offers `core.exe`'s tools on a desktop session.
+pub fn agy_expected_tools(data: &std::path::Path) -> Vec<String> {
+    let env = std::sync::Arc::new(research_tools::ResearchEnv::new(data));
+    cli_route::core_tools::core_tool_set(Some(env)).defs.iter().map(|d| format!("mcp_core_{}", d.id)).collect()
+}
+
+/// A headless `init` event of the Antigravity CLI (fields under `init`, as documented).
+pub fn agy_init(tools: &[String], permission_mode: &str) -> String {
+    let init = json!({ "cwd": "C:/x/agy", "tools": tools, "permission_mode": permission_mode, "model": "fake-model-a" });
+    json!({ "event": "init", "conversation_id": "c-1", "init": init }).to_string()
+}
+
+/// A `step_update` event.
+pub fn agy_step(idx: u64, state: &str, step_type: &str, extra: Value) -> String {
+    let mut v = json!({ "conversation_id": "c-1", "step_index": idx, "state": state, "step_type": step_type });
+    for (k, val) in extra.as_object().cloned().unwrap_or_default() {
+        v[k] = val;
+    }
+    json!({ "event": "step_update", "step_update": v }).to_string()
+}
+
+/// A tool `step_update` event.
+pub fn agy_tool(idx: u64, state: &str, name: &str, params: Value, output: Option<&str>, error: Option<Value>) -> String {
+    let mut info = json!({ "name": name, "parameters": params });
+    if let Some(o) = output {
+        info["output"] = json!(o);
+    }
+    if let Some(e) = error {
+        info["error"] = e;
+    }
+    agy_step(idx, state, "tool", json!({ "tool_name": name, "tool_info": info }))
+}
+
+/// The final `result` event.
+pub fn agy_result(status: &str, text: &str) -> String {
+    let result = json!({ "conversation_id": "c-1", "status": status, "response": text, "num_turns": 1, "duration_seconds": 0.1 });
+    json!({ "event": "result", "result": result }).to_string()
+}
+
+/// Make the test process's environment free of the variables the Antigravity refusal looks for.
+pub fn clear_agy_env_auth() {
+    for v in cli_route::antigravity::AGY_ENV_AUTH_VARS {
+        std::env::remove_var(v);
+    }
+    std::env::remove_var(cli_route::antigravity::ALLOW_ENV_AUTH_VAR);
 }

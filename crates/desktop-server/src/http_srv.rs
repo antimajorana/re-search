@@ -273,6 +273,24 @@ fn dispatch_api(
         ("GET", ["api", "connections"]) => {
             write_api_res(&mut stream, crate::connections::handle_connections(state, &req.query));
         }
+        ("POST", ["api", "connections", "chatgpt", "login"]) => {
+            write_api_res(&mut stream, crate::chatgpt::handle_login(state));
+        }
+        ("GET", ["api", "connections", "chatgpt", "login"]) => {
+            write_api_res(&mut stream, crate::chatgpt::handle_login_status(state));
+        }
+        ("POST", ["api", "connections", "chatgpt", "open"]) => {
+            write_api_res(&mut stream, crate::chatgpt::handle_open(state));
+        }
+        ("POST", ["api", "connections", "chatgpt", "logout"]) => {
+            write_api_res(&mut stream, crate::chatgpt::handle_logout(state));
+        }
+        ("POST", ["api", "connections", "antigravity", "acknowledge"]) => {
+            write_api_res(&mut stream, crate::antigravity::handle_acknowledge(state));
+        }
+        ("POST", ["api", "connections", "antigravity", "withdraw"]) => {
+            write_api_res(&mut stream, crate::antigravity::handle_withdraw(state));
+        }
         ("GET", ["api", "models"]) => {
             write_api_res(&mut stream, crate::model_catalog::handle_models(state, &req.query));
         }

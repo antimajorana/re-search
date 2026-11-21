@@ -79,6 +79,8 @@ export function renderSessionStream(sessionId, sessionPayload) {
   for (const msg of messages) {
     if ((msg.role || 'assistant') === 'user') {
       appendUserMessage(msg.text || msg.content || '');
+    } else if (msg.role === 'warning') {
+      appendWarningLine(msg.text || '');
     } else {
       appendAssistantMessage(msg.text || msg.content || '', msg.thinking || '', msg.tool_traces || []);
     }
@@ -132,6 +134,22 @@ export function appendUserMessage(text) {
   bubble.className = 'msg-bubble-user rich-prose';
   renderRichInto(bubble, text);
   row.appendChild(bubble);
+  inner.appendChild(row);
+  scrollToBottom();
+}
+
+// A plain-text warning line in the transcript (for example a vendor CLI's built-in tool
+// running outside re:Search's tools). Text only, never HTML.
+export function appendWarningLine(text) {
+  const inner = clearHeroIfPresent();
+  if (!inner) return;
+  const row = document.createElement('div');
+  row.className = 'msg-row warning';
+  row.setAttribute('role', 'status');
+  const line = document.createElement('div');
+  line.className = 'msg-warning';
+  line.textContent = String(text);
+  row.appendChild(line);
   inner.appendChild(row);
   scrollToBottom();
 }

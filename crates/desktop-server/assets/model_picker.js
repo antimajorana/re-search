@@ -3,13 +3,16 @@
 // Model ids and labels come from providers: they are only ever set as option text/values
 // (textContent), never as HTML. localStorage holds only the last choice (no secret).
 // A session whose first turn has started is bound to its route (the Claude subscription
-// CLI, or the API route): the other route's groups are disabled and never picked, so a
-// send the server would refuse (409) is never attempted.
+// CLI, the Antigravity CLI, or the API route): the other routes' groups are disabled and
+// never picked, so a send the server would refuse (409) is never attempted.
 import * as api from '/assets/api.js';
 
 const CONNECT_VALUE = '__connect__';
 const PLACEHOLDER_VALUE = '__none__';
 const CLI_ROUTE_ID = 'claude-cli';
+const AGY_ROUTE_ID = 'antigravity';
+// Ledger route of a session's first start -> the `route` of the provider groups it may use.
+const LEDGER_ROUTES = { 'claude-code-cli': CLI_ROUTE_ID, antigravity: AGY_ROUTE_ID };
 const GLOBAL_KEY = 're-search-model-choice';
 const SESSION_KEY = 're-search-model-by-session';
 const MAX_REMEMBERED_SESSIONS = 200;
@@ -25,13 +28,20 @@ let sessionId = null;
 let sessionRouteNote = '';
 let loading = null;
 let connectBtn = null;
-// Route the active session is bound to: CLI_ROUTE_ID, 'api', or null (not bound yet).
+// Route the active session is bound to: CLI_ROUTE_ID, AGY_ROUTE_ID, 'api', or null.
 let routeLock = null;
+
+// The route a provider group runs on: the server's `route` field ("claude-cli" or "api";
+// the ChatGPT plan is a subscription on the in-core "api" route), else derived as before.
+function routeOf(g) {
+  if (g && typeof g.route === 'string' && g.route) return g.route;
+  return g && g.id === CLI_ROUTE_ID ? CLI_ROUTE_ID : 'api';
+}
 
 // Whether a provider group may be used in the active session.
 function allowed(g) {
   if (!g || !routeLock) return true;
-  return routeLock === CLI_ROUTE_ID ? g.id === CLI_ROUTE_ID : g.kind === 'api-key';
+  return routeOf(g) === routeLock;
 }
 
 function readStore(key, fallback) {
@@ -140,14 +150,15 @@ function openConnect() {
 }
 
 // The route a session is bound to, as the server decides it: fixed once a turn has
-// recorded `session.start` (route "claude-code-cli" for the subscription CLI, else the
-// API route). A binding without a start is provisional on the server, so it locks nothing.
+// recorded `session.start` (route "claude-code-cli" or "antigravity" for a subscription
+// CLI, else the API route). A binding without a start is provisional on the server, so it
+// locks nothing.
 function lockOf(sess) {
   const events = Array.isArray(sess && sess.events) ? sess.events : [];
   const started = events.some((e) => e && e.kind === 'session.start')
     || (Array.isArray(sess && sess.messages) && sess.messages.length > 0);
   if (!started) return null;
-  return sess.route === 'claude-code-cli' ? CLI_ROUTE_ID : 'api';
+  return LEDGER_ROUTES[sess.route] || 'api';
 }
 
 // Called when a session is selected (and again after each of its turns): its remembered
@@ -188,9 +199,13 @@ export function getModelChoice() {
 export function noModelReason() {
   if (getModelChoice() || !routeLock) return null;
   if (!groups.some((g) => (g.models || []).length > 0)) return null;
-  return routeLock === CLI_ROUTE_ID
-    ? 'This session runs on your Claude subscription (Claude Code), which is not available right now. Start a new session to use another model.'
-    : 'This session runs on an API provider, and none is connected right now. Start a new session to use your Claude subscription.';
+  if (routeLock === CLI_ROUTE_ID) {
+    return 'This session runs on your Claude subscription (Claude Code), which is not available right now. Start a new session to use another model.';
+  }
+  if (routeLock === AGY_ROUTE_ID) {
+    return 'This session runs on the Antigravity CLI (vendor-sandboxed, not confined to re:Search tools), which is not available right now. Start a new session to use another model.';
+  }
+  return "This session runs in re:Search's own loop (an API provider or your ChatGPT plan), and none is connected right now. Start a new session to use a subscription CLI.";
 }
 
 // Remember the model a message was sent with, for this session.

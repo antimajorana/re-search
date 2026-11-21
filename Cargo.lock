@@ -32,6 +32,7 @@ dependencies = [
 name = "agent"
 version = "0.0.1"
 dependencies = [
+ "chatgpt-auth",
  "ledger",
  "policy",
  "research-tools",
@@ -275,6 +276,23 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
  "rand_core",
+]
+
+[[package]]
+name = "chatgpt-auth"
+version = "0.0.1"
+dependencies = [
+ "chatgpt-auth",
+ "getrandom 0.2.17",
+ "percent-encoding",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "ureq",
+ "windows-sys 0.59.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -539,6 +557,7 @@ name = "desktop-server"
 version = "0.0.1"
 dependencies = [
  "agent",
+ "chatgpt-auth",
  "cli-route",
  "export",
  "getrandom 0.2.17",

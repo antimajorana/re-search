@@ -19,3 +19,4 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+chatgpt-auth = { path = "../chatgpt-auth", features = ["testkit"] }

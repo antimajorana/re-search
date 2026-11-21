@@ -12,7 +12,12 @@
 //! others: it is returned with an `error`, its last good list, or else a small built-in
 //! list, marked `stale`. The Claude subscription route has no list endpoint that can be
 //! called without a prompt, so it offers the CLI's own aliases, which always resolve to
-//! the latest models. Model ids and labels from providers are untrusted text.
+//! the latest models. The ChatGPT plan (Sign in with ChatGPT) is listed once signed in
+//! with plan use granted: `GET https://api.openai.com/v1/models` with the access token,
+//! keeping entries with `visibility == "list"`, through the same cache and class-only
+//! errors. The Antigravity route (once acknowledged) lists `agy models` (a list call with
+//! the CLI's own login, no prompt), cached the same way, else a small built-in list marked
+//! as such. Model ids and labels from providers are untrusted text.
 
 use crate::connections::{
     api_label, claude_status, list_access, ListAccess, API_PROVIDERS, CLAUDE_CLI_LABEL, SUBSCRIPTION_NOTE,
@@ -231,6 +236,7 @@ fn claude_group() -> Value {
         "id": CLAUDE_CLI_ROUTE,
         "label": CLAUDE_CLI_LABEL,
         "kind": "subscription",
+        "route": CLAUDE_CLI_ROUTE,
         "session_note": SUBSCRIPTION_NOTE,
         "models": models,
         "source": "cli-aliases",
@@ -238,6 +244,41 @@ fn claude_group() -> Value {
         "error": null,
         "fetched_ms": null,
     })
+}
+
+/// The ChatGPT plan's group, when signed in with plan use granted.
+fn chatgpt_group(state: &DesktopState, store: &ProviderKeyStore, ui: &UiSettings, refresh: bool, since: u64) -> Option<Value> {
+    use crate::chatgpt::{bearer, CHATGPT_ID, CHATGPT_LABEL, CHATGPT_NOTE};
+    if !state.chatgpt.ready() {
+        return None;
+    }
+    let p = ProviderKind::ChatGpt;
+    let f = match bearer(&state.chatgpt.auth) {
+        Ok(key) => state.catalog.fetch(state, store, p, Some(&key), refresh, since),
+        Err(e) => Fetched {
+            models: fallback(p, store, ui),
+            error: Some(clip(&e.message)),
+            stale: true,
+            source: "fallback",
+            fetched_ms: None,
+            ever_ok: false,
+        },
+    };
+    let default = default_id(p, &f.models, store, ui);
+    let models: Vec<Value> =
+        f.models.iter().map(|m| model_json(CHATGPT_ID, &m.id, &m.label, default.as_deref() == Some(m.id.as_str()))).collect();
+    Some(json!({
+        "id": CHATGPT_ID,
+        "label": CHATGPT_LABEL,
+        "kind": "subscription",
+        "route": "api",
+        "session_note": CHATGPT_NOTE,
+        "models": models,
+        "source": f.source,
+        "stale": f.stale,
+        "error": f.error,
+        "fetched_ms": f.fetched_ms,
+    }))
 }
 
 /// `GET /api/models[?refresh=1]` (token required).
@@ -249,6 +290,13 @@ pub fn handle_models(state: &DesktopState, query: &HashMap<String, String>) -> A
     let mut groups = Vec::new();
     if claude_status(state).connected {
         groups.push(claude_group());
+    }
+    // Only once found, with a clean environment, and acknowledged by the person.
+    if let Some(g) = crate::antigravity::model_group(state, refresh) {
+        groups.push(g);
+    }
+    if let Some(g) = chatgpt_group(state, &store, &ui, refresh, since) {
+        groups.push(g);
     }
     // One thread per provider, so a slow provider does not hold up the others.
     let fetched: Vec<(ProviderKind, Option<Fetched>)> = std::thread::scope(|s| {
@@ -295,6 +343,7 @@ pub fn handle_models(state: &DesktopState, query: &HashMap<String, String>) -> A
             "id": id,
             "label": api_label(p),
             "kind": "api-key",
+            "route": "api",
             "session_note": null,
             "models": models,
             "source": f.source,

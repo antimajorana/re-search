@@ -1,7 +1,13 @@
 // The Connect panel: one row per provider from GET /api/connections, with a green
 // "Connected" badge or a single action (an API key field + Save, or the how-to for the
 // subscription CLI). Keys are sent once with PUT /api/settings/providers and never shown
-// again. Base URLs, role presets and pinned conventions sit behind "Advanced".
+// again. Rows with an `action` (Sign in with ChatGPT) get a sign-in button instead: the
+// server returns the sign-in URL, shown with "Open in browser" (the server opens its own
+// pending URL with the system browser) and "Copy link"; tokens never reach the page.
+// Rows with a `warning` (the Antigravity route) show it in full, and until the person
+// clicks the acknowledgement button (after a confirm dialog) the route stays off; the
+// server stores the acknowledgement and refuses the route without it.
+// Base URLs, role presets and pinned conventions sit behind "Advanced".
 // Every server string is set as textContent, never as HTML.
 import * as api from '/assets/api.js';
 
@@ -11,6 +17,7 @@ let baseUrlsEl = null;
 let callbacks = {};
 let lastFocus = null;
 let connections = [];
+let signinPoll = null;
 
 function make(tag, cls, text) {
   const node = document.createElement(tag);
@@ -79,6 +86,8 @@ function renderRow(c) {
   if (c.status) row.append(make('div', 'connect-status', c.status));
   if (!c.connected && c.how_to) row.append(make('div', 'connect-howto', c.how_to));
 
+  if (c.warning) renderWarning(c, row);
+  if (c.action) return renderActionRow(c, row);
   const needsKey = c.accepts_key && c.key_required !== false;
   if (needsKey && !c.connected) row.append(keyForm(c));
   const actions = make('div', 'connect-actions');
@@ -100,6 +109,156 @@ function renderRow(c) {
   }
   if (actions.childElementCount > 0) row.append(actions);
   return row;
+}
+
+// The route's warning, always shown, with the acknowledgement the person gives (or withdraws).
+function renderWarning(c, row) {
+  const box = make('div', 'connect-warning');
+  box.setAttribute('role', 'note');
+  box.append(make('strong', '', c.acknowledged ? 'Acknowledged warning' : 'Read before first use'));
+  box.append(make('p', '', c.warning));
+  const actions = make('div', 'connect-actions');
+  if (!c.acknowledged && c.acknowledge_action) {
+    const btn = make('button', 'pill-btn sm', 'I understand the risk: enable this route');
+    btn.type = 'button';
+    btn.addEventListener('click', () => acknowledge(c, btn));
+    actions.append(btn);
+  } else if (c.acknowledged && c.withdraw_action) {
+    const btn = make('button', 'pill-btn sm', 'Withdraw acknowledgement');
+    btn.type = 'button';
+    btn.addEventListener('click', () => withdraw(c));
+    actions.append(btn);
+  }
+  if (actions.childElementCount > 0) box.append(actions);
+  row.append(box);
+}
+
+async function acknowledge(c, btn) {
+  if (!window.confirm(`${c.label || c.id}\n\n${c.warning}\n\nEnable this route?`)) return;
+  btn.disabled = true;
+  try {
+    await api.connectionAction(c.id, c.acknowledge_action);
+    notify(`${c.label || c.id}: enabled. It stays vendor-sandboxed, not confined to re:Search tools.`);
+  } catch (err) {
+    notify(`Could not save the acknowledgement: ${err.message}`);
+  }
+  await refreshConnections(true);
+  changed();
+}
+
+async function withdraw(c) {
+  try {
+    await api.connectionAction(c.id, c.withdraw_action);
+    notify(`${c.label || c.id}: acknowledgement withdrawn; the route is off.`);
+  } catch (err) {
+    notify(`Could not withdraw: ${err.message}`);
+  }
+  await refreshConnections(false);
+  changed();
+}
+
+// A provider connected by signing in (data-driven: `action` is "signin" or "signout").
+function renderActionRow(c, row) {
+  if (c.connected && c.account) row.append(make('div', 'connect-status', `Account: ${c.account}`));
+  if (c.connected && c.usage_url) row.append(make('div', 'connect-howto', `Manage usage: ${c.usage_url}`));
+  const box = make('div', 'connect-signin');
+  const actions = make('div', 'connect-actions');
+  if (c.action === 'signin' && c.action_supported !== false) {
+    const btn = make('button', 'pill-btn sm primary', c.action_label || 'Sign in');
+    btn.type = 'button';
+    btn.addEventListener('click', () => startSignin(c, box, btn));
+    actions.append(btn);
+  } else if (c.action === 'signout') {
+    const btn = make('button', 'pill-btn sm', c.action_label || 'Sign out');
+    btn.type = 'button';
+    btn.addEventListener('click', () => signOut(c));
+    actions.append(btn);
+  }
+  if (actions.childElementCount > 0) row.append(actions);
+  row.append(box);
+  return row;
+}
+
+async function startSignin(c, box, btn) {
+  btn.disabled = true;
+  let start;
+  try {
+    start = await api.connectionAction(c.id, 'login');
+  } catch (err) {
+    btn.disabled = false;
+    notify(`Could not start the sign-in: ${err.message}`);
+    return;
+  }
+  const url = String((start && start.authorize_url) || '');
+  const status = make('div', 'connect-status', (start && start.message) || 'Waiting for the browser sign-in.');
+  const label = make('label', 'connect-howto', 'Sign-in link (open it in your browser):');
+  const field = make('input', 'text-input');
+  field.type = 'text';
+  field.readOnly = true;
+  field.spellcheck = false;
+  field.value = url;
+  field.id = `signin-url-${String(c.id).replace(/[^a-z0-9_-]/gi, '')}`;
+  label.htmlFor = field.id;
+  const open = make('button', 'pill-btn sm primary', 'Open in browser');
+  open.type = 'button';
+  open.addEventListener('click', async () => {
+    try {
+      await api.connectionAction(c.id, 'open');
+    } catch (err) {
+      notify(`Could not open the browser: ${err.message}. Use Copy link.`);
+    }
+  });
+  const copy = make('button', 'pill-btn sm', 'Copy link');
+  copy.type = 'button';
+  copy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      notify('Sign-in link copied.');
+    } catch {
+      field.focus();
+      field.select();
+      notify('Select the link and copy it.');
+    }
+  });
+  const buttons = make('div', 'connect-actions');
+  buttons.append(open, copy);
+  box.replaceChildren(label, field, buttons, status);
+  pollSignin(c, status, Number(start && start.expires_in_s) || 300);
+}
+
+function pollSignin(c, statusEl, seconds) {
+  if (signinPoll) clearInterval(signinPoll);
+  const deadline = Date.now() + (seconds + 5) * 1000;
+  signinPoll = setInterval(async () => {
+    let s = null;
+    try {
+      s = await api.connectionAction(c.id, 'login', 'GET');
+    } catch {
+      return;
+    }
+    if (s && s.message) statusEl.textContent = String(s.message);
+    if ((s && s.state !== 'pending') || Date.now() > deadline) {
+      clearInterval(signinPoll);
+      signinPoll = null;
+      if (s && s.state === 'succeeded' && s.connected) {
+        notify("You're using your ChatGPT plan. Eligible requests in re:Search use your ChatGPT plan; manage usage in ChatGPT settings.");
+      }
+      await refreshConnections(false);
+      changed();
+    }
+  }, 2000);
+}
+
+async function signOut(c) {
+  if (!window.confirm(`Sign out of ${c.label || c.id} on this computer?`)) return;
+  try {
+    const out = await api.connectionAction(c.id, 'logout');
+    notify((out && out.message) || 'Signed out.');
+  } catch (err) {
+    notify(`Could not sign out: ${err.message}`);
+  }
+  await refreshConnections(false);
+  changed();
 }
 
 function keyForm(c) {

@@ -128,6 +128,9 @@ pub(crate) fn build_transport(
         })
         .map(|t| Box::new(t) as Box<dyn Transport>)
         .map_err(|e| e.to_string()),
+        ProviderKind::ChatGpt => Err(
+            "the ChatGPT plan (Sign in with ChatGPT) is available in the desktop app only (Connect > ChatGPT)".to_string(),
+        ),
     }
 }
 

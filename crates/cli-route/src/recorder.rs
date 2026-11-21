@@ -134,6 +134,10 @@ impl Drop for ToolConfigGuard {
 /// File name of the per-turn tool config in a session directory.
 pub const TOOL_CONFIG_FILE: &str = "mcp.json";
 
+/// Every per-turn tool config a session directory can hold, relative to it: the Claude
+/// route's `mcp.json` and the Antigravity route's `agy/.agents/mcp_config.json`.
+pub const TOOL_CONFIG_FILES: [&str; 2] = [TOOL_CONFIG_FILE, "agy/.agents/mcp_config.json"];
+
 /// Whether the session's `.active.lock` names a running process other than this one.
 /// Unknown liveness counts as running (nothing is deleted under a turn that may be live).
 fn locked_by_other_live_process(session_dir: &Path) -> bool {
@@ -154,16 +158,20 @@ fn locked_by_other_live_process(session_dir: &Path) -> bool {
     }
 }
 
-/// Delete `<session_dir>/mcp.json` (it holds a turn's `CORE_SESSION_TOKEN`) when no live
-/// turn owns it: `live_here` says whether this process runs a turn for the session; a
-/// lock held by another running process also keeps it. Covers configs left behind when
-/// the process was killed before its guards ran. Returns whether a file was removed.
+/// Delete the session's tool configs ([`TOOL_CONFIG_FILES`]; they hold a turn's
+/// `CORE_SESSION_TOKEN`) when no live turn owns them: `live_here` says whether this process
+/// runs a turn for the session; a lock held by another running process also keeps them.
+/// Covers configs left behind when the process was killed before its guards ran. Returns
+/// whether a file was removed.
 pub fn remove_stale_tool_config(session_dir: &Path, live_here: bool) -> bool {
-    let path = session_dir.join(TOOL_CONFIG_FILE);
-    if live_here || !path.is_file() || locked_by_other_live_process(session_dir) {
+    let present: Vec<PathBuf> =
+        TOOL_CONFIG_FILES.iter().map(|rel| session_dir.join(rel)).filter(|p| p.is_file()).collect();
+    if live_here || present.is_empty() || locked_by_other_live_process(session_dir) {
         return false;
     }
-    std::fs::remove_file(&path).is_ok()
+    // Every file is attempted (no short circuit), then report whether any went.
+    let removed: Vec<bool> = present.iter().map(|p| std::fs::remove_file(p).is_ok()).collect();
+    removed.contains(&true)
 }
 
 /// [`remove_stale_tool_config`] for every `sessions/*` directory under `data_dir`;
@@ -210,6 +218,20 @@ mod tests {
         assert!(ours_live.exists(), "a live turn's config is kept");
         assert!(!remove_stale_tool_config(&data.join("sessions").join("s-ours-live"), true));
         assert!(ours_live.exists());
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn stale_antigravity_tool_config_is_swept_too() {
+        let data = std::env::temp_dir().join(format!("cli-route-sweep-agy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        let cfg = data.join("sessions").join("s-agy").join(TOOL_CONFIG_FILES[1]);
+        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+        std::fs::write(&cfg, "{\"token\":\"t\"}").unwrap();
+        assert_eq!(sweep_stale_tool_configs(&data, &|id| id == "s-agy"), 0, "kept while a turn owns it");
+        assert!(cfg.exists());
+        assert_eq!(sweep_stale_tool_configs(&data, &|_| false), 1);
+        assert!(!cfg.exists());
         let _ = std::fs::remove_dir_all(&data);
     }
 

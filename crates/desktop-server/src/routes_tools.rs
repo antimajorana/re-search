@@ -380,7 +380,7 @@ fn side_provider(state: &DesktopState, val: &Value) -> Result<(ProviderKind, Str
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .or(ui.default_provider.as_deref())
-        .filter(|p| *p != CLAUDE_CLI_ROUTE);
+        .filter(|p| *p != CLAUDE_CLI_ROUTE && crate::cli_turn::CliRouteKind::from_provider(p).is_none());
     if let Some(name) = requested {
         let provider = ProviderKind::parse(name).map_err(bad)?;
         let model = val

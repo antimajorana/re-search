@@ -130,6 +130,21 @@ fn core_exe_and_claude_follow_flag_env_file_order() {
 }
 
 #[test]
+fn agy_follows_flag_env_file_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let exe_dir = tmp.path().join("bin");
+    assert_eq!(parse_flags(args(&["--agy=A"])).unwrap().agy.as_deref(), Some("A"));
+    let file = FileConfig { agy: Some("file-agy.exe".into()), ..FileConfig::default() };
+    let flags = Flags { agy: Some(s("flag-agy.exe")), ..Flags::default() };
+    let env = env_of(&[("LOCALAPPDATA", s("local")), ("RE_SEARCH_AGY", s("env-agy.exe"))]);
+    assert_eq!(resolve(&flags, &env, Some(&file), &exe_dir).unwrap().agy, Some(abs("flag-agy.exe")));
+    assert_eq!(resolve(&Flags::default(), &env, Some(&file), &exe_dir).unwrap().agy, Some(abs("env-agy.exe")));
+    let local = env_of(&[("LOCALAPPDATA", s("local"))]);
+    assert_eq!(resolve(&Flags::default(), &local, Some(&file), &exe_dir).unwrap().agy, Some(exe_dir.join("file-agy.exe")));
+    assert_eq!(resolve(&Flags::default(), &local, None, &exe_dir).unwrap().agy, None);
+}
+
+#[test]
 fn worker_script_defaults_to_python_worker_py_next_to_the_exe() {
     let tmp = tempfile::tempdir().unwrap();
     let exe_dir = tmp.path().join("app");
@@ -176,6 +191,7 @@ fn webview_folder_is_under_localappdata_and_never_in_sessions_or_workspace() {
         port: 0,
         core_exe: None,
         claude: None,
+        agy: None,
     };
     assert!(check_webview_dir(&wv, &base).is_ok(), "default layout is fine");
 

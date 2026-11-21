@@ -37,8 +37,9 @@ pub(crate) fn spawn_turn_thread(
             return Err((409, format!("a turn is already running for `{session_id}`")));
         }
     }
-    // `provider: "claude-cli"` (or a session bound to it) runs on the Claude subscription
-    // route; anything else on the in-core API route. A session never mixes the two.
+    // `provider: "claude-cli"` / `"antigravity"` (or a session bound to one) runs on that
+    // subscription-CLI route; anything else on the in-core API route. A session never mixes
+    // routes.
     let on_cli_route = match crate::cli_turn::wants_cli_route(&state, &session_id, &req_json) {
         Ok(v) => v,
         Err(e) => {
@@ -49,11 +50,11 @@ pub(crate) fn spawn_turn_thread(
         }
     };
 
-    // A `claude-cli` turn's stop handle is registered before the thread exists, so a stop
-    // sent right after the 202 reaches it (the turn checks it before starting anything).
-    let registered = if on_cli_route {
+    // A subscription-CLI turn's stop handle is registered before the thread exists, so a
+    // stop sent right after the 202 reaches it (the turn checks it before starting anything).
+    let registered = if let Some(kind) = on_cli_route {
         match crate::cli_turn::Registered::new(&state, &session_id) {
-            Ok(r) => Some(r),
+            Ok(r) => Some((r, kind)),
             Err(e) => {
                 if let Ok(mut active) = state.active_turns.lock() {
                     active.remove(&session_id);
@@ -71,7 +72,9 @@ pub(crate) fn spawn_turn_thread(
         .name(format!("turn-{session_id}"))
         .spawn(move || {
             let outcome = match &registered {
-                Some(reg) => crate::cli_turn::run_cli_turn(&thread_state, &thread_session, &req_json, &prompt, &reg.stop),
+                Some((reg, kind)) => {
+                    crate::cli_turn::run_cli_turn(&thread_state, &thread_session, &req_json, &prompt, &reg.stop, *kind)
+                }
                 None => run_session_turn(&thread_state, &thread_session, &req_json, &prompt),
             };
             drop(registered);
@@ -321,7 +324,8 @@ impl SseEventSink {
     }
 }
 
-/// The Claude subscription route (`cli_route`) feeds the same SSE events as the API route.
+/// The subscription-CLI routes (`cli_route`) feed the same SSE events as the API route;
+/// `vendor.builtin_tool` (Antigravity) goes out as a `session_event` the UI shows as a warning.
 impl cli_route::EventSink for SseEventSink {
     fn on_event(&mut self, receipt: &AppendedEvent, kind: &str, data: &Value) -> Result<(), String> {
         EventSink::on_event(self, receipt, kind, data)
@@ -414,6 +418,22 @@ impl EventSink for SseEventSink {
     }
 }
 
+/// One warning line for a `vendor.builtin_tool` event.
+pub(crate) fn builtin_tool_warning(data: &Value) -> String {
+    let name: String = data.get("tool_name").and_then(Value::as_str).unwrap_or("?").chars().take(80).collect();
+    let state = data.get("state").and_then(Value::as_str).unwrap_or("");
+    let outcome = if data.get("denied_or_failed").and_then(Value::as_bool).unwrap_or(false) {
+        "reported denied or failed"
+    } else if state == "DONE" {
+        "reported finished"
+    } else {
+        "reported running"
+    };
+    format!(
+        "Warning: the Antigravity CLI's built-in tool `{name}` {outcome}. It is outside re:Search's tools, policy and approvals; re:Search only records what the CLI reported (vendor-sandboxed, not confined to re:Search tools)."
+    )
+}
+
 pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
     let mut messages = Vec::new();
     let mut traces = Vec::new();
@@ -481,6 +501,10 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
             }
             "source.ingested" => {
                 sources.push(ev.payload.clone());
+            }
+            // Antigravity: a built-in tool of the CLI, outside re:Search's router. Shown, never hidden.
+            "vendor.builtin_tool" => {
+                messages.push(json!({ "role": "warning", "text": builtin_tool_warning(&ev.payload), "seq": ev.seq }));
             }
             _ => {}
         }

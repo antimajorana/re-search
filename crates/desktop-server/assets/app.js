@@ -4,6 +4,7 @@ import { escapeHtml } from '/assets/math.js';
 import {
   appendAssistantMessage,
   appendUserMessage,
+  appendWarningLine,
   finalizeLiveThinking,
   handleThinkingDelta,
   handleToolTrace,
@@ -315,6 +316,9 @@ function connectSessionSse(id) {
       if (d && d.kind === 'model.response' && d.text) {
         appendAssistantMessage(d.text);
       }
+      if (d && d.kind === 'vendor.builtin_tool') {
+        appendWarningLine(builtinToolWarning(d.data || {}));
+      }
     },
     turn_complete: async (d) => {
       finalizeLiveThinking();
@@ -337,6 +341,15 @@ function connectSessionSse(id) {
       refreshSessionRoute(id);
     },
   });
+}
+
+// Same wording as the server's transcript view (turn_runner::builtin_tool_warning).
+function builtinToolWarning(data) {
+  const name = String(data.tool_name || '?').slice(0, 80);
+  const outcome = data.denied_or_failed
+    ? 'reported denied or failed'
+    : data.state === 'DONE' ? 'reported finished' : 'reported running';
+  return `Warning: the Antigravity CLI's built-in tool \`${name}\` ${outcome}. It is outside re:Search's tools, policy and approvals; re:Search only records what the CLI reported (vendor-sandboxed, not confined to re:Search tools).`;
 }
 
 // After a turn the session may now be bound to a route (or, after a turn refused before
