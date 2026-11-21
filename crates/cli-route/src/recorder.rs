@@ -138,6 +138,30 @@ pub const TOOL_CONFIG_FILE: &str = "mcp.json";
 /// route's `mcp.json` and the Antigravity route's `agy/.agents/mcp_config.json`.
 pub const TOOL_CONFIG_FILES: [&str; 2] = [TOOL_CONFIG_FILE, "agy/.agents/mcp_config.json"];
 
+/// Write `bytes` to `path` with owner-only (`0o600`) permissions on Unix so per-turn tool
+/// configs carrying `CORE_SESSION_TOKEN` are never world-readable.
+pub(crate) fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("could not set permissions on {}: {e}", path.display()))?;
+        f.write_all(bytes)
+            .map_err(|e| format!("could not write {}: {e}", path.display()))
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, bytes).map_err(|e| format!("could not write {}: {e}", path.display()))
+    }
+}
+
 /// Whether the session's `.active.lock` names a running process other than this one.
 /// Unknown liveness counts as running (nothing is deleted under a turn that may be live).
 fn locked_by_other_live_process(session_dir: &Path) -> bool {
@@ -145,16 +169,17 @@ fn locked_by_other_live_process(session_dir: &Path) -> bool {
     else {
         return false;
     };
-    if pid == std::process::id() {
-        return false;
-    }
     #[cfg(windows)]
     {
-        !worker::win::process_is_gone(pid, 0)
+        pid != std::process::id() && !worker::win::process_is_gone(pid, 0)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
-        true
+        pid != std::process::id() && Path::new(&format!("/proc/{pid}")).exists()
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        pid != std::process::id()
     }
 }
 

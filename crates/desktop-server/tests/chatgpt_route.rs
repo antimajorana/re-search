@@ -139,6 +139,8 @@ fn sign_in_pick_a_model_run_a_turn_with_approval_and_sign_out() {
     assert_eq!(st, 200, "{login}");
     let url = login["authorize_url"].as_str().unwrap().to_string();
     assert!(url.starts_with(&format!("{}/api/accounts/authorize?", mock.base)));
+    let (_, conns) = call_api("GET", "/api/connections", Value::Null);
+    assert_eq!(chatgpt(&conns)["pending_authorize_url"], json!(url));
     assert_eq!(call_api("POST", "/api/connections/chatgpt/open", Value::Null).0, 200);
     assert_eq!(*opened.lock().unwrap(), vec![url.clone()]);
     assert_eq!(call_api("GET", "/api/connections/chatgpt/login", Value::Null).1["state"], json!("pending"));
@@ -154,7 +156,7 @@ fn sign_in_pick_a_model_run_a_turn_with_approval_and_sign_out() {
     assert_eq!(call_api("GET", "/api/connections/chatgpt/login", Value::Null).1["state"], json!("succeeded"));
     let (_, conns) = call_api("GET", "/api/connections", Value::Null);
     let c = chatgpt(&conns);
-    assert_eq!((c["connected"].clone(), c["action"].clone()), (json!(true), json!("signout")), "{c}");
+    assert_eq!((c["connected"].clone(), c["action"].clone(), c["can_signout"].clone(), c["plan_enabled"].clone()), (json!(true), json!("signout"), json!(true), json!(true)), "{c}");
 
     // Models: from /v1/models with the token, only `visibility == "list"`.
     let (_, models) = call_api("GET", "/api/models?refresh=1", Value::Null);
@@ -165,9 +167,24 @@ fn sign_in_pick_a_model_run_a_turn_with_approval_and_sign_out() {
     let list_req = mock.requests().into_iter().find(|r| r.path == "/v1/models").unwrap();
     assert_eq!(list_req.header("authorization"), Some(format!("Bearer {}", SECRETS[0]).as_str()));
 
-    // A key or address for the ChatGPT route is refused.
-    assert_eq!(call_api("PUT", "/api/settings/providers", json!({ "keys": { "chatgpt": "sk-x" } })).0, 400);
-    assert_eq!(call_api("PUT", "/api/settings/providers", json!({ "base_urls": { "chatgpt": "https://evil.example" } })).0, 400);
+    // A key, address, non-string value, or chatgpt role base_url is refused without touching providers.json.
+    let providers_path = data.join("providers.json");
+    let before = std::fs::read(&providers_path).ok();
+    for bad in [
+        json!({ "keys": { "chatgpt": "sk-x" } }),
+        json!({ "keys": { "chatgpt": 123 } }),
+        json!({ "base_urls": { "chatgpt": "https://evil.example" } }),
+        json!({ "base_urls": { "chatgpt": true } }),
+        json!({ "roles": {
+            "solver": { "provider": "chatgpt", "model": "gpt-test-sol", "base_url": "https://evil.example" },
+            "step_verifier": { "provider": "openai", "model": "gpt-4.1-mini" },
+            "strategist": { "provider": "openai", "model": "gpt-4.1-mini" },
+            "narrator": { "provider": "openai", "model": "gpt-4.1-mini" }
+        }}),
+    ] {
+        assert_eq!(call_api("PUT", "/api/settings/providers", bad).0, 400);
+        assert_eq!(std::fs::read(&providers_path).ok(), before);
+    }
 
     // A session on the ChatGPT plan: in-core loop, approval card answered over the API.
     let (_, created) = call_api("POST", "/api/sessions", json!({ "title": "ChatGPT", "workspace_root": ws, "provider": "chatgpt" }));
@@ -240,3 +257,98 @@ fn sign_in_pick_a_model_run_a_turn_with_approval_and_sign_out() {
     let _ = reader.join();
     scan_dir_for_secrets(&data);
 }
+
+#[test]
+fn chatgpt_turn_refused_without_signin_or_plan_scope_and_ignores_generic_key() {
+    let tmp = TempDir::new().unwrap();
+    let data = tmp.path().join("data");
+    let nonce = Arc::new(Mutex::new(String::new()));
+    let issuer = Arc::new(Mutex::new(String::new()));
+    let (n2, i2) = (Arc::clone(&nonce), Arc::clone(&issuer));
+    let mock = MockAuth::start(Arc::new(move |r: &Recorded| match (r.method.as_str(), r.path.as_str()) {
+        ("POST", "/api/accounts/oauth/token") => {
+            let client = r.form("client_id").unwrap_or_default();
+            let exp = chatgpt_auth::codec::now_s() + 3600;
+            let id = sign_jwt(&id_claims(&i2.lock().unwrap(), &client, &n2.lock().unwrap(), "sub-no-plan", exp));
+            // Deliberately omits chatgpt.tokens.use.direct -> plan_enabled == false.
+            Reply::json(200, &json!({ "access_token": SECRETS[0], "refresh_token": SECRETS[1], "id_token": id,
+                "token_type": "Bearer", "expires_in": 3600, "scope": "email offline_access openid profile" }))
+        }
+        ("GET", "/.well-known/jwks.json") => Reply::json(200, &jwks()),
+        ("POST", "/api/accounts/oauth/revoke") => Reply { status: 200, content_type: "application/json", body: Vec::new() },
+        _ => Reply::json(404, &json!({})),
+    }));
+    *issuer.lock().unwrap() = mock.base.clone();
+
+    let mut cfg = test_cfg(&data, None, None, None);
+    cfg.connection_env = Some(std::collections::BTreeMap::from([
+        ("RE_SEARCH_PROVIDER".to_string(), "chatgpt".to_string()),
+        ("RE_SEARCH_API_KEY".to_string(), "sk-generic-must-be-ignored".to_string()),
+    ]));
+    cfg.chatgpt_test = Some(ChatGptTestHooks {
+        mock_base: mock.base.clone(),
+        opener: Arc::new(|_| Ok(())),
+        login_timeout: Duration::from_secs(60),
+    });
+    let srv = start_desktop_server(cfg).unwrap();
+    let port = srv.addr.port();
+    let tok = srv.info.token.clone();
+    let h = [("X-ReSearch-Token", tok.as_str()), ("Content-Type", "application/json")];
+    let call_api = |method: &str, path: &str, body: Value| -> (u16, Value) {
+        let raw = if body.is_null() { Vec::new() } else { serde_json::to_vec(&body).unwrap() };
+        let (st, _, b) = raw_http(port, method, path, &h, &raw);
+        (st, serde_json::from_slice(&b).unwrap_or(Value::Null))
+    };
+
+    let wait_turn_error = |sid: &str| -> String {
+        let cookie = launch_cookie(port, &tok);
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+        write!(s, "GET /api/sessions/{sid}/events HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {cookie}\r\n\r\n").unwrap();
+        let (tx, rx) = mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            for line in BufReader::new(s).lines().flatten() {
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        assert!(matches!(call_api("POST", &format!("/api/sessions/{sid}/messages"), json!({ "prompt": "hi", "provider": "chatgpt" })).0, 200 | 202));
+        let mut buf = String::new();
+        while let Ok(line) = rx.recv_timeout(Duration::from_secs(15)) {
+            buf.push_str(&line);
+            buf.push('\n');
+            if line.contains("turn_error") {
+                return buf;
+            }
+            assert!(!line.contains("turn_complete"), "turn must not complete: {buf}");
+        }
+        panic!("expected turn_error, got: {buf}");
+    };
+
+    // 1. Not signed in: turn is refused (RE_SEARCH_API_KEY is ignored).
+    let sid = call_api("POST", "/api/sessions", json!({ "title": "no-signin" })).1["id"].as_str().unwrap().to_string();
+    let _ = wait_turn_error(&sid);
+    assert!(!mock.requests().iter().any(|r| r.path == "/v1/responses"));
+
+    // 2. Sign in without plan scope -> signed_in=true, plan_enabled=false.
+    let url = call_api("POST", "/api/connections/chatgpt/login", Value::Null).1["authorize_url"].as_str().unwrap().to_string();
+    *nonce.lock().unwrap() = url_param(&url, "nonce").unwrap();
+    let redirect = url_param(&url, "redirect_uri").unwrap();
+    let cb_port: u16 = redirect.trim_start_matches("http://127.0.0.1:").split('/').next().unwrap().parse().unwrap();
+    let st_param = url_param(&url, "state").unwrap();
+    assert_eq!(browser_get(cb_port, &format!("/auth/callback?code={}&state={st_param}&client_id=oaiapp_desk", SECRETS[2])).unwrap().0, 200);
+
+    let (_, conns) = call_api("GET", "/api/connections", Value::Null);
+    let c = conns["connections"].as_array().unwrap().iter().find(|c| c["id"] == "chatgpt").unwrap();
+    assert_eq!((c["connected"].clone(), c["plan_enabled"].clone(), c["can_signout"].clone()), (json!(false), json!(false), json!(true)), "{c}");
+    assert_eq!((c["action"].clone(), c["action_label"].clone()), (json!("signin"), json!("Allow ChatGPT plan")), "{c}");
+    let (_, models) = call_api("GET", "/api/models", Value::Null);
+    assert!(!models["providers"].as_array().unwrap().iter().any(|g| g["id"] == "chatgpt"));
+
+    let _ = wait_turn_error(&sid);
+    assert!(!mock.requests().iter().any(|r| r.path == "/v1/responses"));
+    assert_eq!(call_api("POST", "/api/connections/chatgpt/logout", Value::Null).0, 200);
+    srv.shutdown();
+}
+

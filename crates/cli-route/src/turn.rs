@@ -134,9 +134,6 @@ pub fn run_turn(
     spec: &TurnSpec<'_>,
     stop: &StopHandle,
 ) -> Result<TurnReport, String> {
-    let io = |e: std::io::Error| e.to_string();
-    let _config_guard = ToolConfigGuard::new(spec.tool_config);
-    vendor.write_tool_config(spec.tool_config, spec.core)?;
     // Bounded (see `ClaudeCode::version`), so a stop during it takes effect right after.
     let version = vendor.version(spec.exe)?;
     if stop.is_stopped() {
@@ -183,6 +180,12 @@ pub fn run_turn(
         return Ok(TurnReport { end: TurnEnd::Stopped, final_text: String::new() });
     }
 
+    // Write the per-turn tool config (carrying `CORE_SESSION_TOKEN`) only right before
+    // spawning the CLI, after `version()` and stop checks have passed. Declared before
+    // `ProcGuard` so the process tree is killed before the config file is deleted on drop.
+    let _config_guard = ToolConfigGuard::new(spec.tool_config);
+    vendor.write_tool_config(spec.tool_config, spec.core)?;
+
     let mut command = Command::new(spec.exe);
     command
         .args(&args)
@@ -213,10 +216,74 @@ pub fn run_turn(
         })
     });
 
+    let mut reader = BufReader::new(stdout);
+    let mut child = LiveTurnProcess { guard: Some(guard), writer };
+    drive_turn_stream(
+        vendor,
+        rec,
+        sink,
+        &version,
+        &expected,
+        spec.allow_env_auth,
+        stop,
+        &mut reader,
+        &mut child,
+    )
+}
+
+trait TurnProcess {
+    fn kill(&mut self);
+    fn wait(&mut self) -> Result<Option<i32>, String>;
+}
+
+struct LiveTurnProcess {
+    guard: Option<ProcGuard>,
+    writer: Option<std::thread::JoinHandle<()>>,
+}
+
+impl TurnProcess for LiveTurnProcess {
+    fn kill(&mut self) {
+        drop(self.guard.take());
+        join(self.writer.take());
+    }
+
+    fn wait(&mut self) -> Result<Option<i32>, String> {
+        let status = loop {
+            let polled = self
+                .guard
+                .as_ref()
+                .expect("proc guard active")
+                .proc
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .child()
+                .try_wait()
+                .map_err(|e| e.to_string())?;
+            match polled {
+                Some(status) => break status,
+                None => std::thread::sleep(Duration::from_millis(25)),
+            }
+        };
+        self.kill(); // nothing the CLI started may outlive the turn
+        Ok(status.code())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drive_turn_stream<R: BufRead>(
+    vendor: &dyn VendorCli,
+    rec: &Recorder,
+    sink: &mut dyn EventSink,
+    version: &crate::vendor::VersionInfo,
+    expected: &[String],
+    allow_env_auth: bool,
+    stop: &StopHandle,
+    reader: &mut R,
+    proc: &mut dyn TurnProcess,
+) -> Result<TurnReport, String> {
     let mut init_ok = false;
     let mut abort: Option<String> = None;
     let (mut last_text, mut result_text) = (String::new(), String::new());
-    let mut reader = BufReader::new(stdout);
     let mut bytes: Vec<u8> = Vec::new();
     loop {
         bytes.clear();
@@ -254,13 +321,13 @@ pub fn run_turn(
                     rec.emit_into(sink, "cli.version_warning", warn, Some(&raw))?;
                 }
             }
-            match vendor.check_handshake(&value, &expected).and_then(|()| vendor.check_auth(&value, spec.allow_env_auth)) {
+            match vendor.check_handshake(&value, expected).and_then(|()| vendor.check_auth(&value, allow_env_auth)) {
                 Ok(()) => init_ok = true,
                 Err(e) => abort = Some(e),
             }
         } else if !init_ok && vendor.is_model_activity(&value) {
             let kind = value["type"].as_str().or_else(|| value["event"].as_str()).unwrap_or("");
-            abort = Some(format!("`{kind}` event before a verified system/init event"));
+            abort = Some(format!("`{kind}` event before a verified init handshake"));
         }
         // The offending line itself is still recorded (it is what the CLI printed).
         for (kind, data) in vendor.map_line(&value) {
@@ -278,32 +345,27 @@ pub fn run_turn(
     let final_text = if last_text.is_empty() { result_text } else { last_text };
 
     if let Some(reason) = abort {
-        drop(guard);
-        join(writer);
+        proc.kill();
         rec.emit_into(sink, "session.abort", json!({ "reason": reason }), None)?;
         return Ok(TurnReport { end: TurnEnd::Aborted(reason), final_text });
     }
     if stop.is_stopped() {
-        drop(guard);
-        join(writer);
+        proc.kill();
         rec.emit_into(sink, "session.abort", json!({ "reason": "stopped by the user", "stopped": true }), None)?;
         return Ok(TurnReport { end: TurnEnd::Stopped, final_text });
     }
-    let status = loop {
-        let polled = guard.proc.lock().unwrap_or_else(|e| e.into_inner()).child().try_wait().map_err(io)?;
-        match polled {
-            Some(status) => break status,
-            None => std::thread::sleep(Duration::from_millis(25)),
-        }
-    };
-    drop(guard); // nothing the CLI started may outlive the turn
-    join(writer);
-    if stop.is_stopped() && status.code() != Some(0) {
+    let exit_code = proc.wait()?;
+    if stop.is_stopped() && exit_code != Some(0) {
         rec.emit_into(sink, "session.abort", json!({ "reason": "stopped by the user", "stopped": true }), None)?;
         return Ok(TurnReport { end: TurnEnd::Stopped, final_text });
     }
-    rec.emit_into(sink, "session.end", json!({ "cli_exit_code": status.code(), "init_verified": init_ok }), None)?;
-    Ok(TurnReport { end: TurnEnd::Completed { exit_code: status.code(), init_verified: init_ok }, final_text })
+    if !init_ok {
+        let reason = "CLI exited without a verified init handshake".to_string();
+        rec.emit_into(sink, "session.abort", json!({ "reason": reason, "cli_exit_code": exit_code }), None)?;
+        return Ok(TurnReport { end: TurnEnd::Aborted(reason), final_text });
+    }
+    rec.emit_into(sink, "session.end", json!({ "cli_exit_code": exit_code, "init_verified": true }), None)?;
+    Ok(TurnReport { end: TurnEnd::Completed { exit_code, init_verified: true }, final_text })
 }
 
 fn join(writer: Option<std::thread::JoinHandle<()>>) {
@@ -311,3 +373,7 @@ fn join(writer: Option<std::thread::JoinHandle<()>>) {
         let _ = w.join();
     }
 }
+
+#[cfg(test)]
+#[path = "turn_tests.rs"]
+mod tests;

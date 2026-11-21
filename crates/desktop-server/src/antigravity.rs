@@ -76,20 +76,26 @@ pub fn require_acknowledged(state: &DesktopState) -> Result<(), String> {
 /// `POST /api/connections/antigravity/acknowledge` (token required): the person clicked the
 /// acknowledgement button in the Connect panel.
 pub fn handle_acknowledge(state: &DesktopState) -> ApiResult {
-    let mut ui = state.load_ui_settings();
-    ui.antigravity_ack = Some(AntigravityAck { acknowledged_ms: now_ms(), notice_version: NOTICE_VERSION });
-    state.save_ui_settings(&ui).map_err(|e| (500, e))?;
+    state
+        .update_ui_settings(|ui| {
+            ui.antigravity_ack = Some(AntigravityAck { acknowledged_ms: now_ms(), notice_version: NOTICE_VERSION });
+        })
+        .map_err(|e| (500, e))?;
     Ok((200, json!({ "ok": true, "acknowledged": true, "notice_version": NOTICE_VERSION })))
 }
 
 /// `POST /api/connections/antigravity/withdraw` (token required): forget the acknowledgement.
 pub fn handle_withdraw(state: &DesktopState) -> ApiResult {
-    let mut ui = state.load_ui_settings();
-    ui.antigravity_ack = None;
-    state.save_ui_settings(&ui).map_err(|e| (500, e))?;
+    state
+        .update_ui_settings(|ui| {
+            ui.antigravity_ack = None;
+        })
+        .map_err(|e| (500, e))?;
     if let Ok(mut cache) = state.agy_models.lock() {
-        *cache = None;
+        cache.0 = cache.0.wrapping_add(1);
+        cache.1 = None;
     }
+    state.stop_cli_turns_of(crate::cli_turn::CliRouteKind::Antigravity);
     Ok((200, json!({ "ok": true, "acknowledged": false })))
 }
 
@@ -132,6 +138,25 @@ pub fn agy_status(state: &DesktopState) -> AgyStatus {
             };
         }
     };
+    let ack = acknowledged(state);
+    if !ack {
+        let mut status =
+            "Antigravity CLI found on this computer; read the warning below and acknowledge it before the first use.".to_string();
+        if !allowed.is_empty() {
+            status.push_str(&format!(
+                " {} set and allowed by {ALLOW_ENV_AUTH_VAR}: the CLI may use it instead of your plan.",
+                allowed.join(", ")
+            ));
+        }
+        return AgyStatus {
+            connected: false,
+            found: true,
+            status,
+            how_to: Some("Acknowledge the warning to enable this route.".to_string()),
+            version: None,
+            exe: Some(exe),
+        };
+    }
     let version = match state.agy_version.get() {
         Some(v) => Ok(v.clone()),
         None => run_version(&exe).inspect(|v| {
@@ -142,12 +167,7 @@ pub fn agy_status(state: &DesktopState) -> AgyStatus {
         Ok(v) => format!("Antigravity CLI {v} found; it uses the Google account you signed into by running agy."),
         Err(e) => format!("Antigravity CLI found, but its version check failed ({e})."),
     };
-    let ack = acknowledged(state);
-    let mut status = if ack {
-        format!("{found} Vendor-sandboxed: its built-in tools are outside re:Search's control.")
-    } else {
-        format!("{found} Read the warning below and acknowledge it before the first use.")
-    };
+    let mut status = format!("{found} Vendor-sandboxed: its built-in tools are outside re:Search's control.");
     if !allowed.is_empty() {
         status.push_str(&format!(
             " {} set and allowed by {ALLOW_ENV_AUTH_VAR}: the CLI may use it instead of your plan.",
@@ -155,10 +175,10 @@ pub fn agy_status(state: &DesktopState) -> AgyStatus {
         ));
     }
     AgyStatus {
-        connected: ack,
+        connected: true,
         found: true,
         status,
-        how_to: (!ack).then(|| "Acknowledge the warning to enable this route.".to_string()),
+        how_to: None,
         version: version.ok(),
         exe: Some(exe),
     }
@@ -214,9 +234,12 @@ fn model_json(id: &str, label: &str, is_default: bool) -> Value {
 /// `agy models` makes no model call; it is run at most once per [`CACHE_TTL`] (30 s after
 /// a failure), never while holding the cache lock.
 pub fn model_group(state: &DesktopState, refresh: bool) -> Option<Value> {
+    if !acknowledged(state) {
+        return None;
+    }
     let st = agy_status(state);
     let exe = st.exe.filter(|_| st.connected)?;
-    let cached = state.agy_models.lock().ok().and_then(|c| c.clone());
+    let (generation, cached) = state.agy_models.lock().ok().map(|c| (c.0, c.1.clone()))?;
     let fresh = cached.as_ref().filter(|c| {
         let ttl = if c.error.is_some() { ERROR_TTL } else { CACHE_TTL };
         !refresh && c.checked.elapsed() < ttl
@@ -234,8 +257,18 @@ pub fn model_group(state: &DesktopState, refresh: bool) -> Option<Value> {
                 }
                 Err(err) => e.error = Some(err.chars().filter(|c| !c.is_control()).take(300).collect()),
             }
-            if let Ok(mut c) = state.agy_models.lock() {
-                *c = Some(e.clone());
+            let committed = if let Ok(mut c) = state.agy_models.lock() {
+                if c.0 == generation {
+                    c.1 = Some(e.clone());
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if !committed || !acknowledged(state) {
+                return None;
             }
             (e, "live")
         }

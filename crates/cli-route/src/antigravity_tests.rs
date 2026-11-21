@@ -226,3 +226,182 @@ fn prompt_is_one_stream_json_user_event_on_stdin() {
     assert_eq!(a.prompt_via(), "stdin (stream-json user event)");
     assert_eq!(crate::claude::ClaudeCode.stdin_payload("x"), b"x", "the Claude route is unchanged");
 }
+
+#[test]
+fn settings_forbid_non_workspace_access_and_have_empty_ask_list() {
+    let settings = session_settings();
+    assert_eq!(settings["allowNonWorkspaceAccess"], false);
+    assert_eq!(settings["permissions"]["ask"], json!([]));
+}
+
+#[test]
+fn spoofed_mcp_core_prefix_after_handshake_is_recorded_as_builtin_tool() {
+    let a = Antigravity::new();
+    // Before handshake, falls back to prefix / ServerName check.
+    assert!(a.is_expected_core_tool("mcp_core_shell_run", &Value::Null));
+    let ok = init(&["view_file", "mcp_core_ledger_note", "mcp_core_sympy_eval"], "request-review");
+    a.check_handshake(&ok, &expected()).unwrap();
+    // After handshake, requires exact verified membership.
+    assert!(a.is_expected_core_tool("mcp_core_ledger_note", &Value::Null));
+    assert!(!a.is_expected_core_tool("mcp_core_shell_run", &Value::Null));
+    assert!(a.is_expected_core_tool("call_mcp_tool", &json!({ "ServerName": "core", "ToolName": "ledger_note" })));
+    assert!(!a.is_expected_core_tool("call_mcp_tool", &json!({ "ServerName": "core", "ToolName": "shell_run" })));
+
+    // Unknown tool spoofing the `mcp_core_` prefix must NOT be classified as model.tool_use.
+    let spoof_info = json!({ "name": "mcp_core_shell_run", "parameters": { "cmd": "id" } });
+    let evs = a.map_line(&step(10, "ACTIVE", "tool", json!({ "tool_name": "mcp_core_shell_run", "tool_info": spoof_info })));
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0].0, "vendor.builtin_tool");
+    assert_eq!(evs[0].1["tool_name"], "mcp_core_shell_run");
+
+    // `call_mcp_tool` targeting server `core` with an unknown tool name is also non-core.
+    let unknown_lazy = json!({ "name": "call_mcp_tool", "parameters": { "ServerName": "core", "ToolName": "shell_run" } });
+    let evs = a.map_line(&step(11, "ACTIVE", "tool", json!({ "tool_name": "call_mcp_tool", "tool_info": unknown_lazy })));
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0].0, "vendor.builtin_tool");
+    assert_eq!(evs[0].1["tool_name"], "call_mcp_tool");
+}
+
+#[test]
+fn lazy_core_tool_omitting_parameters_on_done_stays_classified_as_core() {
+    let a = Antigravity::new();
+    let ok = init(&["mcp_core_ledger_note", "mcp_core_sympy_eval"], "request-review");
+    a.check_handshake(&ok, &expected()).unwrap();
+
+    let start_info = json!({
+        "name": "call_mcp_tool",
+        "parameters": { "ServerName": "core", "ToolName": "ledger_note", "Arguments": { "text": "hi" } }
+    });
+    let start = a.map_line(&step(12, "ACTIVE", "tool", json!({ "tool_name": "call_mcp_tool", "tool_info": start_info })));
+    assert_eq!(start.len(), 1);
+    assert_eq!(start[0].0, "model.tool_use");
+
+    // DONE frame omits `parameters` entirely: step 12 must still map to model.tool_result.
+    let done_info = json!({ "name": "call_mcp_tool", "output": "{\"recorded\":true}" });
+    let done = a.map_line(&step(12, "DONE", "tool", json!({ "tool_name": "call_mcp_tool", "tool_info": done_info })));
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].0, "model.tool_result");
+    assert_eq!(done[0].1["tool_use_id"], "step-12");
+    assert_eq!(done[0].1["is_error"], false);
+}
+
+#[test]
+fn non_done_terminal_builtin_states_emit_final_vendor_builtin_tool() {
+    let a = Antigravity::new();
+    for (idx, final_state) in [(20u64, "FAILED"), (21, "ERROR"), (22, "DENIED"), (23, "cancelled")] {
+        let info = json!({ "name": "run_command", "parameters": { "CommandLine": "rm -rf /" } });
+        let start = a.map_line(&step(idx, "ACTIVE", "tool", json!({ "tool_name": "run_command", "tool_info": info })));
+        assert_eq!(start.len(), 1);
+        assert_eq!(start[0].0, "vendor.builtin_tool");
+
+        let mut end_info = info.clone();
+        end_info["error"] = json!({ "message": "blocked" });
+        let end = a.map_line(&step(idx, final_state, "tool", json!({ "tool_name": "run_command", "tool_info": end_info })));
+        assert_eq!(end.len(), 1, "final frame for state {final_state} must emit");
+        assert_eq!(end[0].0, "vendor.builtin_tool");
+        assert_eq!(end[0].1["state"], final_state);
+        assert_eq!(end[0].1["denied_or_failed"], true);
+    }
+}
+
+#[test]
+fn missing_step_index_emits_builtin_tool_for_every_step() {
+    let a = Antigravity::new();
+    let unindexed = |tool: &str, cmd: &str| {
+        json!({
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": "c1",
+                "state": "ACTIVE",
+                "step_type": "tool",
+                "tool_name": tool,
+                "tool_info": { "name": tool, "parameters": { "cmd": cmd } }
+            }
+        })
+    };
+    let e1 = a.map_line(&unindexed("run_command", "ls"));
+    let e2 = a.map_line(&unindexed("write_file", "evil.txt"));
+    assert_eq!(e1.len(), 1);
+    assert_eq!(e1[0].0, "vendor.builtin_tool");
+    assert_eq!(e1[0].1["tool_name"], "run_command");
+    assert_eq!(e2.len(), 1, "second unindexed built-in step must not be swallowed");
+    assert_eq!(e2[0].0, "vendor.builtin_tool");
+    assert_eq!(e2[0].1["tool_name"], "write_file");
+}
+
+#[test]
+fn non_tool_step_type_with_tool_fields_routes_to_builtin_tool() {
+    let a = Antigravity::new();
+    let by_name = a.map_line(&step(30, "ACTIVE", "custom_action", json!({ "tool_name": "run_command" })));
+    assert_eq!(by_name.len(), 1);
+    assert_eq!(by_name[0].0, "vendor.builtin_tool");
+    assert_eq!(by_name[0].1["tool_name"], "run_command");
+
+    let by_info = a.map_line(&step(
+        31,
+        "DONE",
+        "unexpected_step",
+        json!({ "tool_info": { "name": "read_file", "parameters": { "path": "/etc/passwd" } } }),
+    ));
+    assert_eq!(by_info.len(), 1);
+    assert_eq!(by_info[0].0, "vendor.builtin_tool");
+    assert_eq!(by_info[0].1["tool_name"], "read_file");
+}
+
+#[test]
+fn check_init_rejects_non_string_tool_entries() {
+    let bad = json!({
+        "event": "init",
+        "init": {
+            "permission_mode": "request-review",
+            "tools": ["mcp_core_ledger_note", "mcp_core_sympy_eval", 42]
+        }
+    });
+    let err = check_init(&bad, &expected()).unwrap_err();
+    assert!(err.contains("non-string"), "{err}");
+}
+
+#[test]
+fn valid_model_id_rejects_dot_and_dotdot() {
+    assert!(!valid_model_id("."));
+    assert!(!valid_model_id(".."));
+    assert!(!valid_model_id("___"));
+    assert!(valid_model_id("gemini-2.5-pro"));
+}
+
+#[test]
+fn core_tool_done_with_error_and_single_frame_done_builtin() {
+    let a = Antigravity::new();
+    let err_info = json!({
+        "name": "mcp_core_sympy_eval",
+        "parameters": { "code": "1/0" },
+        "error": { "message": "division by zero" }
+    });
+    let evs = a.map_line(&step(40, "DONE", "tool", json!({ "tool_name": "mcp_core_sympy_eval", "tool_info": err_info })));
+    assert_eq!(evs.len(), 2);
+    assert_eq!(evs[0].0, "model.tool_use");
+    assert_eq!(evs[1].0, "model.tool_result");
+    assert_eq!(evs[1].1["is_error"], true);
+    assert_eq!(evs[1].1["text"], "division by zero");
+
+    let builtin_info = json!({ "name": "view_file", "parameters": { "path": "a.txt" } });
+    let evs = a.map_line(&step(41, "DONE", "tool", json!({ "tool_name": "view_file", "tool_info": builtin_info })));
+    assert_eq!(evs.len(), 1);
+    assert_eq!(evs[0].0, "vendor.builtin_tool");
+    assert_eq!(evs[0].1["denied_or_failed"], false);
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_config_file_permissions_are_0600_on_unix() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("cli-route-agy-perm-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join(TOOL_CONFIG_REL);
+    let env: BTreeMap<String, String> = [("CORE_SESSION_TOKEN".to_string(), "secret".to_string())].into();
+    Antigravity::new().write_tool_config(&path, &CoreLaunch { exe: PathBuf::from("/bin/core"), env }).unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "expected 0600, got {mode:o}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+

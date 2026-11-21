@@ -72,12 +72,13 @@ pub fn run(opts: &RunOpts) -> Result<i32, String> {
     let _session_guard = SessionGuard::create(&opts.data_dir, &dir, &session)?;
     let rec = Recorder { ledger: Ledger::open(&opts.data_dir).map_err(|e| e.to_string())?, session: session.clone() };
 
-    let approval = approval::start(opts.data_dir.clone(), session.clone(), token.clone()).map_err(io)?;
+    let approval = approval::start(opts.data_dir.clone(), session.clone(), token.clone(), vendor.caller(&session)).map_err(io)?;
     let core = CoreLaunch {
         exe: opts.core_exe.clone(),
         env: [
             ("CORE_SESSION", session.clone()),
             ("CORE_SESSION_TOKEN", token),
+            ("CORE_CALLER_ROUTE", cli_route::claude::ROUTE.to_string()),
             ("CORE_DATA_DIR", path_str(&opts.data_dir)),
             ("CORE_APPROVAL_ADDR", approval.addr.clone()),
             ("CORE_PYTHON", path_str(&opts.python)),

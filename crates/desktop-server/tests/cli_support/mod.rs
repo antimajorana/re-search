@@ -39,6 +39,11 @@ impl CliHarness {
         Self::start_inner(true, |_| {})
     }
 
+    /// [`CliHarness::start_agy`] with a last change to the configuration.
+    pub fn start_agy_with(edit: impl FnOnce(&mut desktop_server::DesktopConfig)) -> CliHarness {
+        Self::start_inner(true, edit)
+    }
+
     fn start_inner(agy: bool, edit: impl FnOnce(&mut desktop_server::DesktopConfig)) -> CliHarness {
         let tmp = TempDir::new().unwrap();
         let data = tmp.path().join("data");

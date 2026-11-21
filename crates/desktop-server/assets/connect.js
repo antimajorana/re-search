@@ -138,7 +138,12 @@ async function acknowledge(c, btn) {
   btn.disabled = true;
   try {
     await api.connectionAction(c.id, c.acknowledge_action);
-    notify(`${c.label || c.id}: enabled. It stays vendor-sandboxed, not confined to re:Search tools.`);
+    const blocked = typeof c.status === 'string' && c.status.startsWith('Blocked:');
+    notify(
+      c.found && !blocked
+        ? `${c.label || c.id}: enabled. It stays vendor-sandboxed, not confined to re:Search tools.`
+        : `${c.label || c.id}: acknowledgement recorded.`
+    );
   } catch (err) {
     notify(`Could not save the acknowledgement: ${err.message}`);
   }
@@ -159,38 +164,34 @@ async function withdraw(c) {
 
 // A provider connected by signing in (data-driven: `action` is "signin" or "signout").
 function renderActionRow(c, row) {
-  if (c.connected && c.account) row.append(make('div', 'connect-status', `Account: ${c.account}`));
+  if ((c.connected || c.can_signout) && c.account) row.append(make('div', 'connect-status', `Account: ${c.account}`));
   if (c.connected && c.usage_url) row.append(make('div', 'connect-howto', `Manage usage: ${c.usage_url}`));
   const box = make('div', 'connect-signin');
   const actions = make('div', 'connect-actions');
+  let signinBtn = null;
   if (c.action === 'signin' && c.action_supported !== false) {
-    const btn = make('button', 'pill-btn sm primary', c.action_label || 'Sign in');
-    btn.type = 'button';
-    btn.addEventListener('click', () => startSignin(c, box, btn));
-    actions.append(btn);
-  } else if (c.action === 'signout') {
-    const btn = make('button', 'pill-btn sm', c.action_label || 'Sign out');
-    btn.type = 'button';
-    btn.addEventListener('click', () => signOut(c));
-    actions.append(btn);
+    signinBtn = make('button', 'pill-btn sm primary', c.action_label || 'Sign in');
+    signinBtn.type = 'button';
+    signinBtn.addEventListener('click', () => startSignin(c, box, signinBtn));
+    actions.append(signinBtn);
+  }
+  if (c.action === 'signout' || (c.action === 'signin' && c.can_signout)) {
+    const outBtn = make('button', 'pill-btn sm', c.action === 'signout' ? (c.action_label || 'Sign out') : 'Sign out');
+    outBtn.type = 'button';
+    outBtn.addEventListener('click', () => signOut(c));
+    actions.append(outBtn);
   }
   if (actions.childElementCount > 0) row.append(actions);
   row.append(box);
+  if (c.login && c.login.state === 'pending' && c.pending_authorize_url) {
+    if (signinBtn) signinBtn.disabled = true;
+    renderPendingSignin(c, box, String(c.pending_authorize_url), c.login.message || 'Waiting for the browser sign-in.', 300);
+  }
   return row;
 }
 
-async function startSignin(c, box, btn) {
-  btn.disabled = true;
-  let start;
-  try {
-    start = await api.connectionAction(c.id, 'login');
-  } catch (err) {
-    btn.disabled = false;
-    notify(`Could not start the sign-in: ${err.message}`);
-    return;
-  }
-  const url = String((start && start.authorize_url) || '');
-  const status = make('div', 'connect-status', (start && start.message) || 'Waiting for the browser sign-in.');
+function renderPendingSignin(c, box, url, message, seconds) {
+  const status = make('div', 'connect-status', message || 'Waiting for the browser sign-in.');
   const label = make('label', 'connect-howto', 'Sign-in link (open it in your browser):');
   const field = make('input', 'text-input');
   field.type = 'text';
@@ -223,7 +224,20 @@ async function startSignin(c, box, btn) {
   const buttons = make('div', 'connect-actions');
   buttons.append(open, copy);
   box.replaceChildren(label, field, buttons, status);
-  pollSignin(c, status, Number(start && start.expires_in_s) || 300);
+  pollSignin(c, status, Number(seconds) || 300);
+}
+
+async function startSignin(c, box, btn) {
+  btn.disabled = true;
+  let start;
+  try {
+    start = await api.connectionAction(c.id, 'login');
+  } catch (err) {
+    btn.disabled = false;
+    notify(`Could not start the sign-in: ${err.message}`);
+    return;
+  }
+  renderPendingSignin(c, box, String((start && start.authorize_url) || ''), start && start.message, start && start.expires_in_s);
 }
 
 function pollSignin(c, statusEl, seconds) {

@@ -38,7 +38,7 @@ pub use narrator::{build_derivation_sheet, narrate_session, NarrationReport};
 pub use openai::{OpenAiConfig, OpenAiTransport};
 pub use presets::{ModelEndpointSpec, PresetKind, RoleAssignment};
 pub use provider_config::{
-    ProviderEntry, ProviderKeyStore, RedactedProviderConfigView, RedactedProviderEntry, PROVIDERS_FILE,
+    validate_roles, ProviderEntry, ProviderKeyStore, RedactedProviderConfigView, RedactedProviderEntry, PROVIDERS_FILE,
 };
 pub use responses::{BearerSource, ChatGptConfig, ChatGptTransport, TOOL_NAMESPACE};
 pub use resume::{

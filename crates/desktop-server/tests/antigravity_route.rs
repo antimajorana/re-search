@@ -3,7 +3,6 @@
 //! handshake ("core tools reachable + settings applied"), a core tool call approved on a
 //! UI card, built-in tool use recorded as `vendor.builtin_tool`, the workspace
 //! `mcp_config.json` lifetime, stop, the model list, and the labels.
-#![cfg(windows)]
 
 mod cli_support;
 mod common;
@@ -11,7 +10,10 @@ mod common;
 use cli_support::*;
 use ledger::Ledger;
 use serde_json::{json, Value};
-use std::time::{Duration, Instant};
+use std::collections::BTreeMap;
+use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
 
 const TURN: Duration = Duration::from_secs(60);
 const SUFFIX: &str = "vendor-sandboxed, not confined to re:Search tools";
@@ -37,6 +39,7 @@ fn send_agy(h: &CliHarness, sid: &str, prompt: &str) {
     assert_eq!(st, 202, "{v}");
 }
 
+#[cfg(windows)]
 fn builtins_and_core(h: &CliHarness) -> Vec<String> {
     let mut tools = vec!["run_command".to_string(), "view_file".to_string(), "call_mcp_tool".to_string()];
     tools.extend(agy_expected_tools(&h.data));
@@ -54,6 +57,7 @@ fn without_acknowledgement_the_route_refuses_and_lists_nothing() {
     let (_, conns) = h.get("/api/connections");
     let c = find(&conns, "connections", "antigravity").expect("antigravity entry").clone();
     assert_eq!((c["connected"].as_bool(), c["acknowledged"].as_bool(), c["found"].as_bool()), (Some(false), Some(false), Some(true)));
+    assert!(c["version"].is_null(), "must not probe --version before acknowledgement: {c}");
     assert!(c["label"].as_str().unwrap().contains(SUFFIX) && c["session_note"].as_str().unwrap().contains(SUFFIX), "{c}");
     assert_eq!(c["confinement"], "vendor-sandboxed");
     let warning = c["warning"].as_str().unwrap();
@@ -62,14 +66,39 @@ fn without_acknowledgement_the_route_refuses_and_lists_nothing() {
     let (_, models) = h.get("/api/models");
     assert!(find(&models, "providers", "antigravity").is_none(), "{models}");
 
+    // Fresh unbound session: unacknowledged Antigravity returns 403 synchronously and does not mutate meta.json.
+    let (st, created) = h.post("/api/sessions", &json!({ "title": "unbound" }));
+    assert_eq!(st, 200, "{created}");
+    let unbound_sid = created["id"].as_str().unwrap().to_string();
+    let (st, err) = h.post(&format!("/api/sessions/{unbound_sid}/messages"), &json!({ "prompt": "hello", "provider": "antigravity" }));
+    assert_eq!(st, 403, "{err}");
+    assert!(err["error"].as_str().unwrap().contains("acknowledgement"), "{err}");
+    let (_, sess_after) = h.get(&format!("/api/sessions/{unbound_sid}"));
+    assert!(sess_after["meta"]["route"].is_null(), "meta.route must stay null: {sess_after}");
+    assert!(kinds(&h.data, &unbound_sid).is_empty(), "nothing recorded");
+    assert!(h.fake.argv().is_none(), "the CLI was never started");
+
+    // A session created with provider=antigravity also returns 403 synchronously.
     let sid = create_agy_session(&h);
-    let mut sse = h.sse(&sid);
-    h.fake.script(&[agy_init(&builtins_and_core(&h), "request-review"), agy_result("SUCCESS", "x")]);
-    send_agy(&h, &sid, "hello");
-    let err = sse.wait_turn_end(TURN).expect_err("turn_error");
+    let (st, err) = h.post(&format!("/api/sessions/{sid}/messages"), &json!({ "prompt": "hello", "provider": "antigravity" }));
+    assert_eq!(st, 403, "{err}");
     assert!(err["error"].as_str().unwrap().contains("acknowledgement"), "{err}");
     assert!(kinds(&h.data, &sid).is_empty(), "nothing recorded");
     assert!(h.fake.argv().is_none(), "the CLI was never started");
+
+    // Stale notice_version: 0 in ui_settings.json is refused.
+    std::fs::write(
+        h.data.join("ui_settings.json"),
+        r#"{"antigravity_ack":{"acknowledged_ms":1,"notice_version":0}}"#,
+    )
+    .unwrap();
+    let (_, conns) = h.get("/api/connections");
+    let c = find(&conns, "connections", "antigravity").unwrap();
+    assert_eq!((c["connected"].as_bool(), c["acknowledged"].as_bool()), (Some(false), Some(false)));
+    let (_, models) = h.get("/api/models");
+    assert!(find(&models, "providers", "antigravity").is_none());
+    let (st, err) = h.post(&format!("/api/sessions/{sid}/messages"), &json!({ "prompt": "stale", "provider": "antigravity" }));
+    assert_eq!(st, 403, "{err}");
 
     // The acknowledgement is a token-protected mutation; withdrawing turns the route off again.
     let (st, _, _) = common::raw_http(h.port, "POST", "/api/connections/antigravity/acknowledge", &[], b"{}");
@@ -118,6 +147,7 @@ fn model_list_comes_from_agy_models_and_carries_the_label() {
     h.srv.shutdown();
 }
 
+#[cfg(windows)]
 #[test]
 fn turn_runs_core_tool_with_a_persons_approval_and_cleans_up() {
     clear_agy_env_auth();
@@ -215,6 +245,7 @@ fn turn_runs_core_tool_with_a_persons_approval_and_cleans_up() {
     h.srv.shutdown();
 }
 
+#[cfg(windows)]
 #[test]
 fn handshake_without_core_tools_or_settings_aborts() {
     clear_agy_env_auth();
@@ -246,6 +277,7 @@ fn handshake_without_core_tools_or_settings_aborts() {
     h.srv.shutdown();
 }
 
+#[cfg(windows)]
 #[test]
 fn builtin_tool_use_is_recorded_and_shown_as_a_warning() {
     clear_agy_env_auth();
@@ -279,6 +311,7 @@ fn builtin_tool_use_is_recorded_and_shown_as_a_warning() {
     h.srv.shutdown();
 }
 
+#[cfg(windows)]
 #[test]
 fn stop_kills_the_turn_and_deletes_the_config() {
     clear_agy_env_auth();
@@ -319,3 +352,202 @@ fn the_fake_rejects_unknown_flags_and_a_prompt_argument() {
     assert!(fake.argv().is_none());
     assert_eq!(String::from_utf8_lossy(&run(&["--version"]).stdout).trim(), "1.5.14");
 }
+
+#[test]
+fn pre_ack_never_spawns_agy_version_probe() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let src = tmp.path().join("probe.rs");
+    let marker = tmp.path().join("invoked.txt");
+    let exe = tmp.path().join(format!("probe_agy{}", std::env::consts::EXE_SUFFIX));
+    std::fs::write(
+        &src,
+        format!(
+            "fn main() {{ let _ = std::fs::write({:?}, b\"ran\"); println!(\"1.5.14\"); }}\n",
+            marker.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let out = std::process::Command::new(rustc).args(["--edition", "2021"]).arg(&src).arg("-o").arg(&exe).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    let h = CliHarness::start_agy_with(|cfg| cfg.agy_exe = Some(exe.clone()));
+    let (_, conns) = h.get("/api/connections");
+    let c = find(&conns, "connections", "antigravity").unwrap();
+    assert_eq!((c["found"].as_bool(), c["connected"].as_bool()), (Some(true), Some(false)));
+    assert!(c["version"].is_null(), "version must stay null before ack: {c}");
+    let (_, models) = h.get("/api/models");
+    assert!(find(&models, "providers", "antigravity").is_none());
+    assert!(!marker.exists(), "agy must NOT be spawned before acknowledgement");
+
+    acknowledge(&h);
+    let (_, conns) = h.get("/api/connections");
+    let c = find(&conns, "connections", "antigravity").unwrap();
+    assert!(marker.exists(), "agy --version should run once acknowledged");
+    assert_eq!(c["version"], "1.5.14");
+    h.srv.shutdown();
+}
+
+#[test]
+fn env_auth_refusal_blocks_route_unless_explicitly_allowed() {
+    for var in ["GEMINI_API_KEY", "AGY_ADC_AUTH"] {
+        let h = CliHarness::start_agy_with(|cfg| {
+            cfg.connection_env = Some(BTreeMap::from([(var.to_string(), "dummy-agy-secret".to_string())]));
+        });
+        acknowledge(&h);
+        let (_, conns) = h.get("/api/connections");
+        let c = find(&conns, "connections", "antigravity").unwrap();
+        assert_eq!(c["connected"], false, "{var}: {c}");
+        let status = c["status"].as_str().unwrap();
+        assert!(status.contains("Blocked:") && status.contains(var) && !status.contains("dummy-agy-secret"), "{status}");
+        let (_, models) = h.get("/api/models");
+        assert!(find(&models, "providers", "antigravity").is_none(), "{var}: {models}");
+
+        let sid = create_agy_session(&h);
+        let mut sse = h.sse(&sid);
+        send_agy(&h, &sid, "blocked turn");
+        let err = sse.wait_turn_end(TURN).expect_err("turn_error");
+        let text = err["error"].as_str().unwrap();
+        assert!(text.contains(var) && !text.contains("dummy-agy-secret"), "{text}");
+        assert!(h.fake.argv().is_none(), "agy must not start when {var} is set");
+        assert!(kinds(&h.data, &sid).is_empty());
+        h.srv.shutdown();
+    }
+
+    let h = CliHarness::start_agy_with(|cfg| {
+        cfg.connection_env = Some(BTreeMap::from([
+            ("GEMINI_API_KEY".to_string(), "dummy-agy-secret".to_string()),
+            ("RE_SEARCH_ALLOW_AGY_ENV_AUTH".to_string(), "1".to_string()),
+        ]));
+    });
+    acknowledge(&h);
+    let (_, conns) = h.get("/api/connections");
+    let c = find(&conns, "connections", "antigravity").unwrap();
+    assert_eq!(c["connected"], true, "{c}");
+    assert!(c["status"].as_str().unwrap().contains("RE_SEARCH_ALLOW_AGY_ENV_AUTH"), "{c}");
+    let (_, models) = h.get("/api/models");
+    assert!(find(&models, "providers", "antigravity").is_some(), "{models}");
+    h.srv.shutdown();
+}
+
+#[test]
+fn reopening_antigravity_session_after_withdraw_keeps_confinement_label() {
+    let h = CliHarness::start_agy();
+    acknowledge(&h);
+    let sid = create_agy_session(&h);
+    Ledger::open(&h.data)
+        .unwrap()
+        .append(&sid, "session.start", 1, &json!({ "route": "antigravity", "prompt": "hi" }))
+        .unwrap();
+    let (st, _) = h.post("/api/connections/antigravity/withdraw", &json!({}));
+    assert_eq!(st, 200);
+
+    let (st, sess) = h.get(&format!("/api/sessions/{sid}"));
+    assert_eq!(st, 200);
+    assert_eq!(sess["route"], "antigravity");
+    assert_eq!(sess["confinement"], "vendor-sandboxed");
+    assert!(sess["route_label"].as_str().unwrap().contains(SUFFIX), "{sess}");
+
+    let (st, list) = h.get("/api/sessions");
+    assert_eq!(st, 200);
+    let row = find(&list, "sessions", &sid).expect("session in list");
+    assert_eq!(row["confinement"], "vendor-sandboxed");
+    assert!(row["route_label"].as_str().unwrap().contains(SUFFIX), "{row}");
+
+    // Withdrawn session refuses both explicit and implicit antigravity sends synchronously.
+    let (st, _) = h.post(&format!("/api/sessions/{sid}/messages"), &json!({ "prompt": "again" }));
+    assert_eq!(st, 403);
+    h.srv.shutdown();
+}
+
+#[test]
+fn route_mixing_is_refused_even_after_pre_turn_one_upload() {
+    let h = CliHarness::start_agy();
+    acknowledge(&h);
+    let sid = create_agy_session(&h);
+    let (st, v) = h.post(
+        &format!("/api/sessions/{sid}/upload"),
+        &json!({ "files": [{ "name": "note.txt", "bytes_base64": "aGVsbG8K" }] }),
+    );
+    assert_eq!(st, 200, "{v}");
+    // Simulate a Turn 1 recorded as session.resume (after source.ingested) carrying route.
+    Ledger::open(&h.data)
+        .unwrap()
+        .append(&sid, "session.resume", 1, &json!({ "route": "antigravity", "prompt": "turn 1" }))
+        .unwrap();
+    for other in ["claude-cli", "anthropic"] {
+        let (st, err) = h.post(&format!("/api/sessions/{sid}/messages"), &json!({ "prompt": "mix", "provider": other }));
+        assert_eq!(st, 409, "switching to {other} must be 409: {err}");
+    }
+
+    // Also verify an API session with pre-Turn-1 upload + session.resume refuses CLI routes.
+    let (st, created) = h.post("/api/sessions", &json!({ "title": "api-pre-upload" }));
+    assert_eq!(st, 200);
+    let sid2 = created["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        h.post(&format!("/api/sessions/{sid2}/upload"), &json!({ "files": [{ "name": "a.txt", "bytes_base64": "YQ==" }] })).0,
+        200
+    );
+    Ledger::open(&h.data)
+        .unwrap()
+        .append(&sid2, "session.resume", 1, &json!({ "route": "api", "prompt": "t1" }))
+        .unwrap();
+    for other in ["antigravity", "claude-cli"] {
+        let (st, err) = h.post(&format!("/api/sessions/{sid2}/messages"), &json!({ "prompt": "mix", "provider": other }));
+        assert_eq!(st, 409, "switching API session to {other} must be 409: {err}");
+    }
+    h.srv.shutdown();
+}
+
+#[test]
+fn settings_validation_and_chatgpt_generic_key_isolation() {
+    let h = CliHarness::start_agy();
+    let hdrs = [("X-ReSearch-Token", h.tok.as_str()), ("Content-Type", "application/json")];
+    let put = |body: Value| {
+        let (st, _, b) = common::raw_http(h.port, "PUT", "/api/settings/providers", &hdrs, &serde_json::to_vec(&body).unwrap());
+        (st, String::from_utf8_lossy(&b).into_owned())
+    };
+    let (st, body) = put(json!({ "keys": { "openai": "sk-openai-valid-0001" } }));
+    assert_eq!(st, 200, "{body}");
+    let providers_path = h.data.join("providers.json");
+    let before = std::fs::read(&providers_path).unwrap();
+
+    for bad_req in [
+        json!({ "roles": {
+            "solver": { "provider": "chatgpt", "model": "gpt-5", "base_url": "https://evil.example" },
+            "step_verifier": { "provider": "openai", "model": "gpt-4.1-mini" },
+            "strategist": { "provider": "openai", "model": "gpt-4.1-mini" },
+            "narrator": { "provider": "openai", "model": "gpt-4.1-mini" }
+        }}),
+        json!({ "roles": {
+            "solver": { "provider": "openai", "model": "gpt-4.1", "base_url": "https://user:pass@example.org/v1" },
+            "step_verifier": { "provider": "openai", "model": "gpt-4.1-mini" },
+            "strategist": { "provider": "openai", "model": "gpt-4.1-mini" },
+            "narrator": { "provider": "openai", "model": "gpt-4.1-mini" }
+        }}),
+        json!({ "keys": { "chatgpt": 123 } }),
+        json!({ "base_urls": { "chatgpt": true } }),
+    ] {
+        let (st, body) = put(bad_req);
+        assert_eq!(st, 400, "must reject invalid settings: {body}");
+        assert_eq!(std::fs::read(&providers_path).unwrap(), before, "providers.json must stay untouched on 400");
+    }
+
+    // RE_SEARCH_API_KEY + RE_SEARCH_PROVIDER=chatgpt must never leak to ProviderKind::ChatGpt.
+    let mut cfg = common::test_cfg(&h.data, None, None, None);
+    cfg.connection_env = Some(BTreeMap::from([
+        ("RE_SEARCH_PROVIDER".to_string(), "chatgpt".to_string()),
+        ("RE_SEARCH_API_KEY".to_string(), "sk-generic-secret-9999".to_string()),
+    ]));
+    let chatgpt = desktop_server::chatgpt::ChatGptHub::new(&cfg).unwrap();
+    let auth = desktop_server::auth::AuthGuard::new(1).unwrap();
+    let sse = std::sync::Arc::new(desktop_server::sse::SseHub::new());
+    let state = desktop_server::state::DesktopState::new(cfg, auth, sse, chatgpt);
+    let store = agent::ProviderKeyStore::default();
+    assert!(matches!(
+        desktop_server::connections::list_access(&state, agent::ProviderKind::ChatGpt, &store),
+        Ok(desktop_server::connections::ListAccess::Off)
+    ));
+    h.srv.shutdown();
+}
+

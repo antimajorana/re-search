@@ -149,13 +149,15 @@ function openConnect() {
   if (typeof callbacks.onOpenConnect === 'function') callbacks.onOpenConnect();
 }
 
+const AGY_FALLBACK_NOTE = 'runs the Antigravity CLI (your Google login) — vendor-sandboxed, not confined to re:Search tools';
+
 // The route a session is bound to, as the server decides it: fixed once a turn has
 // recorded `session.start` (route "claude-code-cli" or "antigravity" for a subscription
 // CLI, else the API route). A binding without a start is provisional on the server, so it
 // locks nothing.
 function lockOf(sess) {
   const events = Array.isArray(sess && sess.events) ? sess.events : [];
-  const started = events.some((e) => e && e.kind === 'session.start')
+  const started = events.some((e) => e && (e.kind === 'session.start' || e.kind === 'session.resume'))
     || (Array.isArray(sess && sess.messages) && sess.messages.length > 0);
   if (!started) return null;
   return LEDGER_ROUTES[sess.route] || 'api';
@@ -176,7 +178,10 @@ export function applySession(id, sess) {
     ? { provider: String(meta.default_provider), model: String(meta.default_model) }
     : null;
   const routeGroup = meta.route ? groups.find((g) => g.id === meta.route) : null;
-  sessionRouteNote = routeGroup && routeGroup.session_note ? String(routeGroup.session_note) : '';
+  const isAgy = routeLock === AGY_ROUTE_ID || meta.route === AGY_ROUTE_ID || (sess && sess.route === AGY_ROUTE_ID);
+  sessionRouteNote = routeGroup && routeGroup.session_note
+    ? String(routeGroup.session_note)
+    : (isAgy ? String((sess && sess.route_label) || (meta && meta.route_label) || AGY_FALLBACK_NOTE) : '');
   // A provisional binding (meta.route without a started turn) is only a preference; the
   // route lock above is enforced by findModel/firstDefault for every candidate.
   const onRoute = (c) => (c && (!meta.route || c.provider === meta.route) ? c : null);

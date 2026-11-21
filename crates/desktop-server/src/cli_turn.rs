@@ -82,7 +82,10 @@ impl CliRouteKind {
 fn route_of_first_start(events: &[ledger::Event]) -> Option<String> {
     events
         .iter()
-        .find(|e| e.kind == "session.start")
+        .find(|e| {
+            (e.kind == "session.start" || e.kind == "session.resume")
+                && e.payload.get("route").and_then(Value::as_str).is_some()
+        })
         .and_then(|e| e.payload.get("route").and_then(Value::as_str))
         .map(str::to_string)
 }
@@ -99,7 +102,10 @@ fn meta_kind(meta: Option<&SessionMeta>) -> Option<CliRouteKind> {
 /// Route (and provenance) to show for a session: what its first start event recorded, or
 /// the subscription-CLI route the session is bound to when it has no turn yet.
 pub fn session_route(meta: Option<&SessionMeta>, events: &[ledger::Event]) -> (Value, Value) {
-    if let Some(start) = events.iter().find(|e| e.kind == "session.start") {
+    if let Some(start) = events.iter().find(|e| {
+        (e.kind == "session.start" || e.kind == "session.resume")
+            && e.payload.get("route").and_then(Value::as_str).is_some()
+    }) {
         return (start.payload.get("route").cloned().unwrap_or(Value::Null), start.payload.get("provenance").cloned().unwrap_or(Value::Null));
     }
     if let Some(kind) = meta_kind(meta) {
@@ -133,14 +139,15 @@ pub(crate) fn wants_cli_route(
                 kind.name()
             )));
         }
+        if kind == CliRouteKind::Antigravity {
+            crate::antigravity::require_acknowledged(state).map_err(|e| (403, e))?;
+        }
         if bound != Some(kind) {
             // Provisional until the turn records `session.start` (see the rebinding below).
             let mut m = meta.ok_or_else(|| (404, format!("session `{session_id}` has no metadata to bind")))?;
             m.route = Some(kind.provider_id().to_string());
             m.default_provider = Some(kind.provider_id().to_string());
-            if let Some(model) = req.get("model").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
-                m.default_model = Some(model.to_string());
-            }
+            m.default_model = req.get("model").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
             state.save_meta(&m).map_err(|e| (500, e))?;
         }
         return Ok(Some(kind));
@@ -170,7 +177,13 @@ pub(crate) fn wants_cli_route(
         }
         (Some(other), None, Some(kind)) => Err(runs_on(kind, other)),
         (Some(_), None, None) => Ok(None),
-        (None, recorded_kind, bound) => Ok(recorded_kind.or(bound)),
+        (None, recorded_kind, bound) => {
+            let resolved = recorded_kind.or(bound);
+            if resolved == Some(CliRouteKind::Antigravity) {
+                crate::antigravity::require_acknowledged(state).map_err(|e| (403, e))?;
+            }
+            Ok(resolved)
+        }
     }
 }
 /// A model alias, full model name or slug: never something the CLI could read as a flag.
@@ -279,9 +292,13 @@ pub(crate) struct Registered {
 }
 
 impl Registered {
-    pub(crate) fn new(state: &Arc<DesktopState>, session_id: &str) -> Result<Registered, String> {
+    pub(crate) fn new(state: &Arc<DesktopState>, session_id: &str, kind: CliRouteKind) -> Result<Registered, String> {
         let stop = StopHandle::new();
-        state.cli_turns.lock().map_err(|_| "turn registry poisoned".to_string())?.insert(session_id.to_string(), stop.clone());
+        state
+            .cli_turns
+            .lock()
+            .map_err(|_| "turn registry poisoned".to_string())?
+            .insert(session_id.to_string(), (kind, stop.clone()));
         Ok(Registered { state: Arc::clone(state), session: session_id.to_string(), stop })
     }
 }
@@ -303,7 +320,7 @@ pub(crate) fn run_cli_turn(
     stop: &StopHandle,
     kind: CliRouteKind,
 ) -> Result<String, String> {
-    let env_lookup = |n: &str| std::env::var_os(n);
+    let env_lookup = |n: &str| state.env_var(n);
     // The person's acknowledgement (Antigravity), then billing safety: nothing is started
     // while either is missing.
     let (vendor, allowed_env, allow_env_auth, explicit_exe): (Box<dyn VendorCli>, Vec<&str>, bool, Option<&Path>) =
@@ -353,10 +370,11 @@ pub(crate) fn run_cli_turn(
     let _session_guard = SessionGuard::create(&state.cfg.data_dir, &sdir, session_id)?;
 
     let token = random_hex(32);
-    let relay = cli_route::relay::start(
+    let relay = cli_route::relay::start_for_caller(
         state.open_ledger()?,
         session_id.to_string(),
         token.clone(),
+        vendor.caller(session_id),
         Arc::new(UiRelay { state: Arc::clone(state) }),
     )
     .map_err(|e| format!("could not start the approval relay: {e}"))?;
@@ -365,10 +383,7 @@ pub(crate) fn run_cli_turn(
         exe: core_exe,
         env: core_env(&state.cfg, session_id, &token, &relay.addr, &scratch, &pycache, workspace.as_deref()),
     };
-    if kind == CliRouteKind::Antigravity {
-        // core.exe labels its tool calls `antigravity:<session>` (see mcp-server).
-        core.env.insert("CORE_CALLER_ROUTE".into(), cli_route::antigravity::ROUTE.into());
-    }
+    core.env.insert("CORE_CALLER_ROUTE".into(), kind.ledger_route().into());
     let tools = core_tool_set(Some(Arc::clone(&research)));
 
     let mut start_fields = json!({
@@ -404,7 +419,7 @@ pub(crate) fn run_cli_turn(
         prompt: &replay.prompt,
         tool_defs: &tools.defs,
         policy_version: &tools.policy_version,
-        start_kind: if existing.is_empty() { "session.start" } else { "session.resume" },
+        start_kind: if !existing.iter().any(|e| e.kind == "session.start") { "session.start" } else { "session.resume" },
         start_fields,
         inherit_stderr: false,
         allow_env_auth,
@@ -450,7 +465,12 @@ pub fn sweep_all_tool_configs(state: &DesktopState) -> usize {
 /// deny its open approval cards. The turn records `session.abort`.
 pub fn handle_stop_turn(state: &DesktopState, session_id: &str) -> ApiResult {
     validate_session_id(session_id).map_err(|e| (400, e.to_string()))?;
-    let handle = state.cli_turns.lock().map_err(|_| (500, "turn registry poisoned".to_string()))?.get(session_id).cloned();
+    let handle = state
+        .cli_turns
+        .lock()
+        .map_err(|_| (500, "turn registry poisoned".to_string()))?
+        .get(session_id)
+        .map(|(_, h)| h.clone());
     match handle {
         Some(h) => {
             h.stop();
@@ -467,3 +487,54 @@ pub fn handle_stop_turn(state: &DesktopState, session_id: &str) -> ApiResult {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provisional_cli_switch_clears_stale_default_model() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cfg = DesktopConfig {
+            port: 0,
+            data_dir: tmp.path().to_path_buf(),
+            workspace_root: None,
+            python: None,
+            worker_script: None,
+            api_base_override: None,
+            literature_endpoints: LiteratureEndpoints::default(),
+            open_window: false,
+            print_url_json: false,
+            eval_timeout_s: 30,
+            core_exe: None,
+            claude_exe: None,
+            agy_exe: None,
+            connection_env: Some(std::collections::BTreeMap::new()),
+            chatgpt_test: None,
+        };
+        let chatgpt = crate::chatgpt::ChatGptHub::new(&cfg).unwrap();
+        let state = DesktopState::new(
+            cfg,
+            crate::auth::AuthGuard::new(1).unwrap(),
+            Arc::new(crate::sse::SseHub::new()),
+            chatgpt,
+        );
+        crate::antigravity::handle_acknowledge(&state).unwrap();
+        let meta = SessionMeta {
+            id: "s-switch01".into(),
+            title: "switch".into(),
+            route: Some(CLAUDE_CLI_ROUTE.into()),
+            default_provider: Some(CLAUDE_CLI_ROUTE.into()),
+            default_model: Some("haiku".into()),
+            ..SessionMeta::default()
+        };
+        state.save_meta(&meta).unwrap();
+
+        let kind = wants_cli_route(&state, "s-switch01", &json!({ "provider": "antigravity" })).unwrap();
+        assert_eq!(kind, Some(CliRouteKind::Antigravity));
+        let updated = state.load_meta("s-switch01").unwrap();
+        assert_eq!(updated.route.as_deref(), Some(ANTIGRAVITY_ROUTE));
+        assert_eq!(updated.default_model, None, "stale claude-cli model must be cleared");
+    }
+}
+

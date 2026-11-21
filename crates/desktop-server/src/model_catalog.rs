@@ -131,6 +131,24 @@ impl Catalog {
         }
     }
 
+    /// Return the cached entry for `p` if it is fresh and matches `since` (without fetching a credential).
+    pub fn cached_fresh(
+        &self,
+        state: &DesktopState,
+        store: &ProviderKeyStore,
+        p: ProviderKind,
+        force: bool,
+        since: u64,
+    ) -> Option<Fetched> {
+        if force {
+            return None;
+        }
+        let (cached, now) = self.begin(p.cli_name());
+        let e = cached.filter(|_| now == since)?;
+        let ttl = if e.last_error.is_some() { ERROR_TTL } else { CACHE_TTL };
+        (e.checked.elapsed() < ttl).then(|| served(p, store, state, &e, "cache"))
+    }
+
     /// The provider's list: from the cache while fresh (unless `force`), else fetched with
     /// `key` (the provider's own credential: [`crate::connections::list_access`]).
     pub fn fetch(
@@ -248,21 +266,37 @@ fn claude_group() -> Value {
 
 /// The ChatGPT plan's group, when signed in with plan use granted.
 fn chatgpt_group(state: &DesktopState, store: &ProviderKeyStore, ui: &UiSettings, refresh: bool, since: u64) -> Option<Value> {
-    use crate::chatgpt::{bearer, CHATGPT_ID, CHATGPT_LABEL, CHATGPT_NOTE};
+    use crate::chatgpt::{CHATGPT_ID, CHATGPT_LABEL, CHATGPT_NOTE};
+    use chatgpt_auth::TokenError;
     if !state.chatgpt.ready() {
         return None;
     }
     let p = ProviderKind::ChatGpt;
-    let f = match bearer(&state.chatgpt.auth) {
-        Ok(key) => state.catalog.fetch(state, store, p, Some(&key), refresh, since),
-        Err(e) => Fetched {
-            models: fallback(p, store, ui),
-            error: Some(clip(&e.message)),
-            stale: true,
-            source: "fallback",
-            fetched_ms: None,
-            ever_ok: false,
-        },
+    let f = if let Some(cached) = state.catalog.cached_fresh(state, store, p, refresh, since) {
+        cached
+    } else {
+        match state.chatgpt.auth.access_token() {
+            Ok(t) => match SecretKey::new(t.as_str().to_string()) {
+                Ok(key) => state.catalog.fetch(state, store, p, Some(&key), refresh, since),
+                Err(e) => Fetched {
+                    models: fallback(p, store, ui),
+                    error: Some(clip(&e.message)),
+                    stale: true,
+                    source: "fallback",
+                    fetched_ms: None,
+                    ever_ok: false,
+                },
+            },
+            Err(TokenError::Disconnected(_) | TokenError::NotSignedIn | TokenError::PlanNotEnabled) => return None,
+            Err(e) => Fetched {
+                models: fallback(p, store, ui),
+                error: Some(clip(&e.to_string())),
+                stale: true,
+                source: "fallback",
+                fetched_ms: None,
+                ever_ok: false,
+            },
+        }
     };
     let default = default_id(p, &f.models, store, ui);
     let models: Vec<Value> =
@@ -283,6 +317,7 @@ fn chatgpt_group(state: &DesktopState, store: &ProviderKeyStore, ui: &UiSettings
 
 /// `GET /api/models[?refresh=1]` (token required).
 pub fn handle_models(state: &DesktopState, query: &HashMap<String, String>) -> ApiResult {
+    state.chatgpt.sync_catalog(&state.catalog);
     let refresh = query.get("refresh").is_some_and(|v| v == "1" || v == "true");
     let since = state.catalog.generation();
     let store = ProviderKeyStore::load_from_data_dir(&state.cfg.data_dir).map_err(|e| (500, e))?;
@@ -295,15 +330,14 @@ pub fn handle_models(state: &DesktopState, query: &HashMap<String, String>) -> A
     if let Some(g) = crate::antigravity::model_group(state, refresh) {
         groups.push(g);
     }
-    if let Some(g) = chatgpt_group(state, &store, &ui, refresh, since) {
-        groups.push(g);
-    }
-    // One thread per provider, so a slow provider does not hold up the others.
-    let fetched: Vec<(ProviderKind, Option<Fetched>)> = std::thread::scope(|s| {
+    // One thread per provider (including ChatGPT), so a slow provider does not hold up the others.
+    let (chatgpt, fetched): (Option<Value>, Vec<(ProviderKind, Option<Fetched>)>) = std::thread::scope(|s| {
+        let store = &store;
+        let ui = &ui;
+        let cg_handle = s.spawn(move || chatgpt_group(state, store, ui, refresh, since));
         let handles: Vec<_> = API_PROVIDERS
             .iter()
             .map(|&p| {
-                let store = &store;
                 s.spawn(move || {
                     let fetched = match list_access(state, p, store) {
                         Ok(ListAccess::Call(key)) => Some(state.catalog.fetch(state, store, p, key.as_ref(), refresh, since)),
@@ -324,8 +358,13 @@ pub fn handle_models(state: &DesktopState, query: &HashMap<String, String>) -> A
                 })
             })
             .collect();
-        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+        let cg = cg_handle.join().ok().flatten();
+        let api = handles.into_iter().filter_map(|h| h.join().ok()).collect();
+        (cg, api)
     });
+    if let Some(g) = chatgpt {
+        groups.push(g);
+    }
     for (p, f) in fetched {
         let Some(f) = f else { continue };
         // Ollama counts as connected only once it has answered.

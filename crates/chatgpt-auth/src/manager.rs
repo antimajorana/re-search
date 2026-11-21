@@ -1,19 +1,22 @@
 //! [`ChatGptAuth`]: sign-in attempts, status, the current access token (refreshed under a
 //! mutex, rotated refresh tokens persisted atomically), and sign-out with revocation.
 
-use crate::codec::{new_host_id, now_s, pkce_challenge, random_token, Secret};
+use crate::codec::{ct_eq, new_host_id, pkce_challenge, random_token, try_now_s, Secret};
 use crate::jwt::verify_id_token;
 use crate::login::{self, Attempt, LoginState, Pending};
 use crate::oauth::{self, AuthorizeRequest, Endpoints, HttpCfg, OAuthError, DYNAMIC_CLIENT_ID, REDIRECT_PATH, TERMINAL_REFRESH_CODES};
-use crate::vault::{self, Credentials, Registration};
+use crate::vault::{self, Credentials, Registration, VaultLock};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use zeroize::Zeroize;
 
 /// Refresh when the access token has less than this many seconds left.
 pub const REFRESH_MARGIN_S: i64 = 300;
 pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
+const MAX_EXPIRES_IN_S: i64 = 86_400 * 365;
 
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -84,15 +87,23 @@ pub struct LogoutOutcome {
 pub struct ChatGptAuth {
     data_dir: PathBuf,
     opts: Options,
-    /// Serializes refresh, sign-in completion and sign-out (rotating refresh tokens).
+    /// Serializes refresh, sign-in start/completion, status reads and sign-out.
     lock: Mutex<()>,
     note: Mutex<Option<String>>,
     attempt: Mutex<Option<Arc<Attempt>>>,
+    login_gen: AtomicU64,
 }
 
 impl ChatGptAuth {
     pub fn new(data_dir: impl Into<PathBuf>, opts: Options) -> Self {
-        Self { data_dir: data_dir.into(), opts, lock: Mutex::new(()), note: Mutex::new(None), attempt: Mutex::new(None) }
+        Self {
+            data_dir: data_dir.into(),
+            opts,
+            lock: Mutex::new(()),
+            note: Mutex::new(None),
+            attempt: Mutex::new(None),
+            login_gen: AtomicU64::new(0),
+        }
     }
 
     pub fn endpoints(&self) -> &Endpoints {
@@ -101,6 +112,11 @@ impl ChatGptAuth {
 
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// Monotonic counter incremented on completed sign-in or sign-out.
+    pub fn login_generation(&self) -> u64 {
+        self.login_gen.load(Ordering::Acquire)
     }
 
     fn set_note(&self, n: Option<String>) {
@@ -118,6 +134,9 @@ impl ChatGptAuth {
         if !vault::supported() {
             return off(vault::NOT_SUPPORTED.to_string());
         }
+        let Ok(_g) = self.lock.lock() else {
+            return off("The saved sign-in cannot be used: sign-in lock poisoned.".to_string());
+        };
         match vault::load_credentials(&self.data_dir) {
             Ok(Some(c)) => {
                 let who = c.email.clone();
@@ -142,26 +161,54 @@ impl ChatGptAuth {
             return Err(TokenError::NotSupported);
         }
         let _g = self.lock.lock().map_err(|_| TokenError::Storage("sign-in lock poisoned".into()))?;
-        let mut c = vault::load_credentials(&self.data_dir).map_err(TokenError::Storage)?.ok_or(TokenError::NotSignedIn)?;
+        let _vl = VaultLock::acquire(&self.data_dir).map_err(TokenError::Storage)?;
+        let c = vault::load_credentials(&self.data_dir).map_err(TokenError::Storage)?.ok_or(TokenError::NotSignedIn)?;
         if !c.plan_enabled() {
             return Err(TokenError::PlanNotEnabled);
         }
-        if c.expires_at_s - now_s() > REFRESH_MARGIN_S {
+        let now = try_now_s().map_err(|e| TokenError::Temporary(format!("Cannot verify token expiry: {e}.")))?;
+        if c.expires_at_s.saturating_sub(now) > REFRESH_MARGIN_S {
             return Ok(c.access());
         }
+        self.refresh_locked(c, now, true)
+    }
+
+    /// Force a token refresh after an HTTP 401 on `failed_token`. If another thread or
+    /// process already rotated the access token, returns the newer token without calling
+    /// the token endpoint again.
+    pub fn force_refresh(&self, failed_token: &str) -> Result<Secret, TokenError> {
+        if !vault::supported() {
+            return Err(TokenError::NotSupported);
+        }
+        let _g = self.lock.lock().map_err(|_| TokenError::Storage("sign-in lock poisoned".into()))?;
+        let _vl = VaultLock::acquire(&self.data_dir).map_err(TokenError::Storage)?;
+        let c = vault::load_credentials(&self.data_dir).map_err(TokenError::Storage)?.ok_or(TokenError::NotSignedIn)?;
+        if !c.plan_enabled() {
+            return Err(TokenError::PlanNotEnabled);
+        }
+        if !ct_eq(c.access_token.as_bytes(), failed_token.as_bytes()) {
+            return Ok(c.access());
+        }
+        let now = try_now_s().map_err(|e| TokenError::Temporary(format!("Cannot verify token expiry: {e}.")))?;
+        self.refresh_locked(c, now, false)
+    }
+
+    fn refresh_locked(&self, mut c: Credentials, now: i64, allow_fallback: bool) -> Result<Secret, TokenError> {
         let Some(rt) = c.refresh_token.clone().map(Secret::new) else {
             return Err(self.disconnect("The ChatGPT access token expired and there is no refresh token. Sign in again.".into()));
         };
         match oauth::refresh(&self.opts.endpoints, &c.client_id, rt.as_str(), self.opts.http) {
             Ok(tr) => {
-                let now = now_s();
+                let now = try_now_s().map_err(|e| TokenError::Temporary(format!("Cannot verify token expiry: {e}.")))?;
+                let ttl = tr.expires_in.clamp(1, MAX_EXPIRES_IN_S);
+                c.access_token.zeroize();
                 c.access_token = tr.access_token.as_str().to_string();
-                c.expires_at_s = now + tr.expires_in;
+                c.expires_at_s = now.saturating_add(ttl);
                 if let Some(new_rt) = &tr.refresh_token {
+                    if let Some(old_rt) = &mut c.refresh_token {
+                        old_rt.zeroize();
+                    }
                     c.refresh_token = Some(new_rt.as_str().to_string());
-                }
-                if let Some(id) = &tr.id_token {
-                    c.id_token = id.as_str().to_string();
                 }
                 if let Some(scope) = &tr.scope {
                     c.scopes = scope.split_whitespace().map(str::to_string).collect();
@@ -179,15 +226,42 @@ impl ChatGptAuth {
                 "ChatGPT ended this sign-in ({code} on refresh). Sign in again."
             ))),
             Err(OAuthError::Rejected { code: "invalid_client", .. }) => {
-                if let Ok(Some(mut r)) = vault::load_registration(&self.data_dir) {
-                    r.client_id = None;
-                    r.subject = None;
-                    let _ = vault::save_registration(&self.data_dir, &r);
-                }
+                self.clear_client_registration_locked(Some(&c.client_id));
                 Err(self.disconnect("ChatGPT no longer accepts this app registration (invalid_client). Sign in again to register.".into()))
             }
-            Err(e) if e.is_transient() => Err(TokenError::Temporary(format!("Could not renew the ChatGPT sign-in right now ({e}); it is kept."))),
+            Err(e) if e.is_transient() => {
+                if allow_fallback && c.expires_at_s.saturating_sub(now) > 10 {
+                    return Ok(c.access());
+                }
+                Err(TokenError::Temporary(format!("Could not renew the ChatGPT sign-in right now ({e}); it is kept.")))
+            }
             Err(e) => Err(TokenError::Temporary(format!("Could not renew the ChatGPT sign-in ({e}); it is kept."))),
+        }
+    }
+
+    pub(crate) fn clear_client_registration(&self, expected_client: Option<&str>, attempt: &Attempt) {
+        if !vault::supported() || attempt.is_cancelled() {
+            return;
+        }
+        let Ok(_g) = self.lock.lock() else {
+            return;
+        };
+        let Ok(_vl) = VaultLock::acquire(&self.data_dir) else {
+            return;
+        };
+        if attempt.is_cancelled() {
+            return;
+        }
+        self.clear_client_registration_locked(expected_client);
+    }
+
+    fn clear_client_registration_locked(&self, expected_client: Option<&str>) {
+        if let Ok(Some(mut r)) = vault::load_registration(&self.data_dir) {
+            if expected_client.is_none_or(|c| r.client_id.as_deref() == Some(c)) {
+                r.client_id = None;
+                r.subject = None;
+                let _ = vault::save_registration(&self.data_dir, &r);
+            }
         }
     }
 
@@ -203,8 +277,16 @@ impl ChatGptAuth {
     /// and host ID) is kept for the next sign-in.
     pub fn logout(&self) -> LogoutOutcome {
         self.cancel_login();
+        if !vault::supported() {
+            self.login_gen.fetch_add(1, Ordering::Release);
+            self.set_note(None);
+            return LogoutOutcome { revoked: None, message: "Signed out.".into() };
+        }
         let Ok(_g) = self.lock.lock() else {
             return LogoutOutcome { revoked: Some(false), message: "sign-in lock poisoned".into() };
+        };
+        let Ok(_vl) = VaultLock::acquire(&self.data_dir) else {
+            return LogoutOutcome { revoked: Some(false), message: "could not lock the ChatGPT folder".into() };
         };
         let creds = vault::load_credentials(&self.data_dir).ok().flatten();
         let mut revoked = None;
@@ -225,6 +307,7 @@ impl ChatGptAuth {
             }
         }
         let deleted = vault::delete_credentials(&self.data_dir);
+        self.login_gen.fetch_add(1, Ordering::Release);
         self.set_note(None);
         let message = match (revoked, deleted) {
             (_, Err(e)) => e,
@@ -257,15 +340,20 @@ impl ChatGptAuth {
         if !vault::supported() {
             return Err(vault::NOT_SUPPORTED.to_string());
         }
-        let reg = match vault::load_registration(&self.data_dir) {
-            Ok(Some(r)) => r,
-            Ok(None) | Err(_) => {
-                let r = Registration { ext_agent_host_id: new_host_id()?, client_id: None, subject: None };
-                vault::save_registration(&self.data_dir, &r)?;
-                r
-            }
+        let _g = self.lock.lock().map_err(|_| "sign-in lock poisoned".to_string())?;
+        let (reg, prompt_consent) = {
+            let _vl = VaultLock::acquire(&self.data_dir)?;
+            let reg = match vault::load_registration(&self.data_dir)? {
+                Some(r) => r,
+                None => {
+                    let r = Registration { ext_agent_host_id: new_host_id()?, client_id: None, subject: None };
+                    vault::save_registration(&self.data_dir, &r)?;
+                    r
+                }
+            };
+            let prompt_consent = matches!(vault::load_credentials(&self.data_dir), Ok(Some(c)) if !c.plan_enabled());
+            (reg, prompt_consent)
         };
-        self.cancel_login();
         let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|_| "could not open a local port for the sign-in callback".to_string())?;
         let port = listener.local_addr().map_err(|_| "could not read the callback port".to_string())?.port();
         let pending = Pending {
@@ -285,31 +373,50 @@ impl ChatGptAuth {
                 nonce: &pending.nonce,
                 code_challenge: &pkce_challenge(&pending.verifier),
                 ext_agent_host_id: &reg.ext_agent_host_id,
+                prompt_consent,
             },
         );
         let attempt = Arc::new(Attempt::new(url.clone(), port, self.opts.login_timeout));
+        login::spawn(listener, Arc::clone(&attempt), pending, Arc::clone(self))?;
         if let Ok(mut g) = self.attempt.lock() {
-            *g = Some(Arc::clone(&attempt));
+            if let Some(prev) = g.replace(attempt) {
+                prev.cancel();
+            }
         }
-        login::spawn(listener, attempt, pending, Arc::clone(self))?;
         self.set_note(None);
         Ok(LoginStart { authorize_url: url, port, expires_in_s: self.opts.login_timeout.as_secs() })
     }
 
     /// Code exchange, ID-token and scope checks, then storage. Returns whether ChatGPT
     /// plan usage was granted. Errors are fixed text plus a class.
-    pub(crate) fn finish_login(&self, code: &str, client_id: &str, p: &Pending) -> Result<bool, String> {
+    pub(crate) fn finish_login(&self, code: &str, client_id: &str, p: &Pending, attempt: &Attempt) -> Result<bool, String> {
+        if attempt.is_cancelled() {
+            return Err("sign-in was cancelled".into());
+        }
         let ep = &self.opts.endpoints;
-        let tr = oauth::exchange_code(ep, client_id, code, &p.verifier, &p.redirect_uri, self.opts.http)
-            .map_err(|e| match e {
-                OAuthError::Rejected { code: "invalid_grant", .. } => "the authorization code was refused (invalid_grant); start the sign-in again".to_string(),
-                e => format!("the code exchange failed ({e})"),
-            })?;
+        let tr = match oauth::exchange_code(ep, client_id, code, &p.verifier, &p.redirect_uri, self.opts.http) {
+            Ok(tr) => tr,
+            Err(OAuthError::Rejected { code: "invalid_grant", .. }) => {
+                return Err("the authorization code was refused (invalid_grant); start the sign-in again".to_string());
+            }
+            Err(e @ OAuthError::Rejected { code: "invalid_client", .. }) => {
+                if let Some(known) = &p.known_client {
+                    self.clear_client_registration(Some(known), attempt);
+                }
+                return Err(format!("the code exchange failed ({e})"));
+            }
+            Err(e) => return Err(format!("the code exchange failed ({e})")),
+        };
         let id_token = tr.id_token.as_ref().ok_or("the token answer had no ID token")?;
         let jwks = oauth::fetch_jwks(ep, self.opts.http).map_err(|e| format!("could not fetch OpenAI's signing keys ({e})"))?;
-        let claims = verify_id_token(id_token.as_str(), &jwks, &ep.issuer, client_id, &p.nonce, now_s()).map_err(|e| e.to_string())?;
+        let now = try_now_s().map_err(|e| format!("cannot verify ID token time ({e})"))?;
+        let claims = verify_id_token(id_token.as_str(), &jwks, &ep.issuer, client_id, &p.nonce, now).map_err(|e| e.to_string())?;
 
         let _g = self.lock.lock().map_err(|_| "sign-in lock poisoned".to_string())?;
+        let _vl = VaultLock::acquire(&self.data_dir)?;
+        if attempt.is_cancelled() {
+            return Err("sign-in was cancelled".into());
+        }
         let mut reg = vault::load_registration(&self.data_dir)?.ok_or("this host's registration is missing; start the sign-in again")?;
         if let (Some(known), Some(sub)) = (&p.known_client, &reg.subject) {
             if known == client_id && *sub != claims.sub {
@@ -317,7 +424,8 @@ impl ChatGptAuth {
             }
         }
         let scopes: Vec<String> = tr.scope.as_deref().unwrap_or("").split_whitespace().map(str::to_string).collect();
-        let now = now_s();
+        let now = try_now_s().map_err(|e| format!("cannot save sign-in time ({e})"))?;
+        let ttl = tr.expires_in.clamp(1, MAX_EXPIRES_IN_S);
         let creds = Credentials {
             issuer: ep.issuer.clone(),
             client_id: client_id.to_string(),
@@ -327,7 +435,7 @@ impl ChatGptAuth {
             access_token: tr.access_token.as_str().to_string(),
             refresh_token: tr.refresh_token.as_ref().map(|r| r.as_str().to_string()),
             token_type: tr.token_type.clone(),
-            expires_at_s: now + tr.expires_in,
+            expires_at_s: now.saturating_add(ttl),
             scopes,
             saved_at_s: now,
             earliest_refresh_at: tr.earliest_refresh_at,
@@ -336,6 +444,7 @@ impl ChatGptAuth {
         reg.subject = Some(claims.sub);
         vault::save_registration(&self.data_dir, &reg)?;
         vault::save_credentials(&self.data_dir, &creds)?;
+        self.login_gen.fetch_add(1, Ordering::Release);
         self.set_note(None);
         Ok(creds.plan_enabled())
     }

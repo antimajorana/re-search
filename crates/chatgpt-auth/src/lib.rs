@@ -38,13 +38,26 @@ pub fn open_authorize_url(endpoints: &Endpoints, url: &str) -> Result<(), String
 
 #[cfg(windows)]
 fn open_with_os(url: &str) -> Result<(), String> {
+    use windows_sys::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+    };
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
     let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
     let (verb, file) = (wide("open"), wide(url));
-    // SAFETY: both strings are NUL-terminated and outlive the call.
+    // SAFETY: `CoInitializeEx` initializes COM for `ShellExecuteW` on this thread and
+    // `S_OK` (0) / `S_FALSE` (1) is paired with `CoUninitialize`. Both strings are
+    // NUL-terminated and outlive `ShellExecuteW`.
     let r = unsafe {
-        ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL)
+        let hr = CoInitializeEx(
+            std::ptr::null(),
+            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+        );
+        let r = ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL);
+        if hr == 0 || hr == 1 {
+            CoUninitialize();
+        }
+        r
     };
     // ShellExecuteW returns a value greater than 32 on success.
     if (r as isize) > 32 {
@@ -64,4 +77,26 @@ fn open_with_os(url: &str) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|_| "the default browser could not be started; use Copy link instead".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_authorize_url_rejects_untrusted_and_malformed_urls() {
+        let ep = Endpoints::production();
+        for bad in [
+            "https://evil.example/api/accounts/authorize?x=1",
+            "https://auth.openai.com/api/accounts/authorize",
+            "https://auth.openai.com/api/accounts/authorize?a=1 b=2",
+            "https://auth.openai.com/api/accounts/authorize?a=1\nb=2",
+            "https://auth.openai.com/api/accounts/authorize?a=1\x07",
+            "https://auth.openai.com/api/accounts/authorize?a=\"1\"",
+            "javascript:alert(1)",
+        ] {
+            let err = open_authorize_url(&ep, bad).unwrap_err();
+            assert!(err.contains("refusing to open"), "{bad}: {err}");
+        }
+    }
 }

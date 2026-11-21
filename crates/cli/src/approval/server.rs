@@ -50,13 +50,13 @@ impl RelayDecider for ConsoleRelay {
 
 /// Bind 127.0.0.1 on a free port and answer approval requests on a background thread,
 /// one at a time, on the terminal.
-pub fn start(data_dir: PathBuf, session: String, token: String) -> io::Result<RelayServer> {
+pub fn start(data_dir: PathBuf, session: String, token: String, expected_caller: String) -> io::Result<RelayServer> {
     let ledger = Ledger::open(&data_dir).map_err(|e| io::Error::other(e.to_string()))?;
     if io::stdin().is_terminal() && io::stderr().is_terminal() {
         let _ = stdin_hub();
     }
     let decider = Arc::new(ConsoleRelay { terminal: Mutex::new(TerminalInput::System) });
-    cli_route::relay::start(ledger, session, token, decider)
+    cli_route::relay::start_for_caller(ledger, session, token, expected_caller, decider)
 }
 
 #[cfg(test)]

@@ -23,6 +23,7 @@ use agent::{BearerSource, ChatGptConfig, ChatGptTransport, SecretKey, Transport,
 use chatgpt_auth::{ChatGptAuth, Endpoints, Options, TokenError};
 use serde_json::{json, Value};
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -55,6 +56,7 @@ impl fmt::Debug for ChatGptTestHooks {
 pub struct ChatGptHub {
     pub auth: Arc<ChatGptAuth>,
     opener: UrlOpener,
+    last_login_gen: AtomicU64,
 }
 
 impl ChatGptHub {
@@ -70,7 +72,24 @@ impl ChatGptHub {
                 (Options { endpoints: ep, ..Options::default() }, Arc::new(move |url: &str| chatgpt_auth::open_authorize_url(&ep2, url)))
             }
         };
-        Ok(Self { auth: Arc::new(ChatGptAuth::new(cfg.data_dir.clone(), opts)), opener })
+        let auth = Arc::new(ChatGptAuth::new(cfg.data_dir.clone(), opts));
+        let last_login_gen = AtomicU64::new(auth.login_generation());
+        Ok(Self { auth, opener, last_login_gen })
+    }
+
+    /// Clear `catalog` once whenever a new sign-in or sign-out advanced the login generation.
+    pub fn sync_catalog(&self, catalog: &crate::model_catalog::Catalog) {
+        let cur = self.auth.login_generation();
+        let mut prev = self.last_login_gen.load(Ordering::Acquire);
+        while cur > prev {
+            match self.last_login_gen.compare_exchange_weak(prev, cur, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => {
+                    catalog.clear();
+                    return;
+                }
+                Err(actual) => prev = actual,
+            }
+        }
     }
 
     /// Where the Responses API and the model list are (fixed; never a request or setting).
@@ -84,9 +103,8 @@ impl ChatGptHub {
     }
 }
 
-/// The access token as the agent transports' key type; errors without token material.
-pub(crate) fn bearer(auth: &ChatGptAuth) -> Result<SecretKey, TransportError> {
-    match auth.access_token() {
+fn map_token_result(res: Result<chatgpt_auth::Secret, TokenError>) -> Result<SecretKey, TransportError> {
+    match res {
         Ok(t) => SecretKey::new(t.as_str().to_string()),
         Err(e) => {
             let kind = match e {
@@ -99,11 +117,20 @@ pub(crate) fn bearer(auth: &ChatGptAuth) -> Result<SecretKey, TransportError> {
     }
 }
 
+/// The access token as the agent transports' key type; errors without token material.
+pub(crate) fn bearer(auth: &ChatGptAuth) -> Result<SecretKey, TransportError> {
+    map_token_result(auth.access_token())
+}
+
 struct HubBearer(Arc<ChatGptAuth>);
 
 impl BearerSource for HubBearer {
     fn bearer(&self) -> Result<SecretKey, TransportError> {
         bearer(&self.0)
+    }
+
+    fn force_refresh(&self, failed_token: &str) -> Result<SecretKey, TransportError> {
+        map_token_result(self.0.force_refresh(failed_token))
     }
 }
 
@@ -143,6 +170,8 @@ pub fn connection_entry(state: &DesktopState) -> Value {
         "kind": "subscription",
         "route": "api",
         "connected": connected,
+        "plan_enabled": st.plan_enabled,
+        "can_signout": st.signed_in,
         "status": status,
         "how_to": (!connected).then_some(CHATGPT_HOW_TO),
         "version": null,
@@ -153,11 +182,18 @@ pub fn connection_entry(state: &DesktopState) -> Value {
         "key_env": null,
         "base_url": null,
         "session_note": CHATGPT_NOTE,
-        "action": if st.signed_in { "signout" } else { "signin" },
-        "action_label": if st.signed_in { "Sign out" } else { "Continue with ChatGPT" },
+        "action": if st.signed_in && st.plan_enabled { "signout" } else { "signin" },
+        "action_label": if st.signed_in && !st.plan_enabled {
+            "Allow ChatGPT plan"
+        } else if st.signed_in {
+            "Sign out"
+        } else {
+            "Continue with ChatGPT"
+        },
         "action_supported": st.supported,
         "account": st.account,
         "login": { "state": login_state, "message": login_msg },
+        "pending_authorize_url": state.chatgpt.auth.pending_authorize_url(),
         "usage_url": USAGE_URL,
         "preview": true,
     })
@@ -180,10 +216,7 @@ pub fn handle_login(state: &DesktopState) -> ApiResult {
 /// `GET /api/connections/chatgpt/login`.
 pub fn handle_login_status(state: &DesktopState) -> ApiResult {
     let (login_state, message) = state.chatgpt.auth.login_view();
-    if login_state == "succeeded" {
-        // A new sign-in (perhaps another account): the cached model list is out of date.
-        state.catalog.clear();
-    }
+    state.chatgpt.sync_catalog(&state.catalog);
     Ok((200, json!({ "state": login_state, "message": message, "connected": state.chatgpt.ready() })))
 }
 

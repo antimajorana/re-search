@@ -102,10 +102,13 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
             .unwrap_or(0);
         let updated_ms = events.last().map(|e| e.ts_ms).unwrap_or(created_ms);
         let (route, _) = crate::cli_turn::session_route(meta.as_ref(), &events);
+        let is_agy = route.as_str() == Some(crate::state::ANTIGRAVITY_ROUTE);
         sessions.push(json!({
             "id": id,
             "title": title,
             "route": route,
+            "confinement": is_agy.then_some(cli_route::antigravity::CONFINEMENT),
+            "route_label": is_agy.then_some(crate::antigravity::AGY_LABEL),
             "workspace_root": workspace_root,
             "parent_session": parent_session,
             "event_count": events.len(),
@@ -254,6 +257,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
         .or_else(|| state.cfg.workspace_root.as_ref().map(|p| p.display().to_string()));
     let pending = state.pending_for_session(session_id);
     let (route, provenance) = crate::cli_turn::session_route(meta.as_ref(), &events);
+    let is_agy = route.as_str() == Some(crate::state::ANTIGRAVITY_ROUTE);
     let fork_info = meta.as_ref().and_then(|m| m.fork_info.clone()).or_else(|| {
         events.iter().find(|e| e.kind == "session.forked").map(|e| ForkInfo {
             parent_session: e.payload["parent_session"].as_str().unwrap_or("").to_string(),
@@ -284,6 +288,8 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
             "title": title,
             "workspace_root": workspace_root,
             "route": route,
+            "confinement": is_agy.then_some(cli_route::antigravity::CONFINEMENT),
+            "route_label": is_agy.then_some(crate::antigravity::AGY_LABEL),
             "provenance": provenance,
             "meta": meta,
             "fork_info": fork_info,
@@ -424,29 +430,39 @@ pub fn handle_get_settings(state: &DesktopState) -> ApiResult {
 pub fn handle_put_settings(state: &DesktopState, body: &[u8]) -> ApiResult {
     let val = parse_json_body(body)?;
     let mut store = ProviderKeyStore::load_from_data_dir(&state.cfg.data_dir).map_err(internal)?;
-    let mut ui = state.load_ui_settings();
 
-    if let Some(dp) = val.get("default_provider").and_then(Value::as_str) {
-        let pk = ProviderKind::parse(dp).map_err(bad)?;
-        ui.default_provider = Some(pk.cli_name().to_string());
-    }
-    if let Some(dm) = val.get("default_model").and_then(Value::as_str) {
+    let next_provider = match val.get("default_provider").and_then(Value::as_str) {
+        Some(dp) => Some(ProviderKind::parse(dp).map_err(bad)?.cli_name().to_string()),
+        None => None,
+    };
+    let next_model = val.get("default_model").and_then(Value::as_str).map(|dm| {
         let trimmed = dm.trim();
-        ui.default_model = (!trimmed.is_empty()).then(|| trimmed.to_string());
-    }
-    if let Some(conv) = val.get("pinned_conventions").and_then(Value::as_str) {
-        agent::validate_pinned_conventions(conv).map_err(bad)?;
-        ui.pinned_conventions = Some(conv.to_string());
-    }
-    if let Some(rp) = val.get("role_presets") {
-        ui.role_presets = Some(rp.clone());
-    }
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    });
+    let next_conv = match val.get("pinned_conventions").and_then(Value::as_str) {
+        Some(conv) => {
+            agent::validate_pinned_conventions(conv).map_err(bad)?;
+            Some(conv.to_string())
+        }
+        None => None,
+    };
+    let next_role_presets = val.get("role_presets").cloned();
+
     if let Some(roles_val) = val.get("roles") {
         let parsed: RoleAssignment =
             serde_json::from_value(roles_val.clone()).map_err(|e| bad(format!("invalid `roles`: {e}")))?;
+        agent::validate_roles(&parsed).map_err(bad)?;
         store.roles = parsed;
     } else {
-        update_provider_roles_from_ui(&mut store.roles, &ui);
+        let mut preview_ui = state.load_ui_settings();
+        if let Some(dp) = &next_provider {
+            preview_ui.default_provider = Some(dp.clone());
+        }
+        if let Some(dm) = &next_model {
+            preview_ui.default_model = dm.clone();
+        }
+        update_provider_roles_from_ui(&mut store.roles, &preview_ui);
+        agent::validate_roles(&store.roles).map_err(bad)?;
     }
 
     if let Some(keys) = val.get("keys").and_then(Value::as_object) {
@@ -456,20 +472,42 @@ pub fn handle_put_settings(state: &DesktopState, body: &[u8]) -> ApiResult {
                 store.set_key(pk, None).map_err(bad)?;
             } else if let Some(s) = v.as_str() {
                 store.set_key(pk, Some(s.to_string())).map_err(bad)?;
+            } else {
+                return Err(bad(format!("`keys.{k}` must be a string or null")));
             }
         }
     }
     if let Some(bases) = val.get("base_urls").and_then(Value::as_object) {
         for (k, v) in bases {
             let pk = ProviderKind::parse(k).map_err(bad)?;
-            store
-                .set_base_url(pk, v.as_str().map(str::to_string))
-                .map_err(bad)?;
+            let url = if v.is_null() {
+                None
+            } else if let Some(s) = v.as_str() {
+                Some(s.to_string())
+            } else {
+                return Err(bad(format!("`base_urls.{k}` must be a string or null")));
+            };
+            store.set_base_url(pk, url).map_err(bad)?;
         }
     }
 
     store.save_to_data_dir(&state.cfg.data_dir).map_err(internal)?;
-    state.save_ui_settings(&ui).map_err(internal)?;
+    state
+        .update_ui_settings(|ui| {
+            if let Some(dp) = next_provider {
+                ui.default_provider = Some(dp);
+            }
+            if let Some(dm) = next_model {
+                ui.default_model = dm;
+            }
+            if let Some(conv) = next_conv {
+                ui.pinned_conventions = Some(conv);
+            }
+            if let Some(rp) = next_role_presets {
+                ui.role_presets = Some(rp);
+            }
+        })
+        .map_err(internal)?;
     if val.get("keys").is_some() || val.get("base_urls").is_some() {
         // Lists fetched with the old key or from the old host are no longer valid.
         state.catalog.clear();

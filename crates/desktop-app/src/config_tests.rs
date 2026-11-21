@@ -134,6 +134,7 @@ fn agy_follows_flag_env_file_order() {
     let tmp = tempfile::tempdir().unwrap();
     let exe_dir = tmp.path().join("bin");
     assert_eq!(parse_flags(args(&["--agy=A"])).unwrap().agy.as_deref(), Some("A"));
+    assert_eq!(parse_flags(args(&["--agy", "A"])).unwrap().agy.as_deref(), Some("A"));
     let file = FileConfig { agy: Some("file-agy.exe".into()), ..FileConfig::default() };
     let flags = Flags { agy: Some(s("flag-agy.exe")), ..Flags::default() };
     let env = env_of(&[("LOCALAPPDATA", s("local")), ("RE_SEARCH_AGY", s("env-agy.exe"))]);
@@ -142,6 +143,10 @@ fn agy_follows_flag_env_file_order() {
     let local = env_of(&[("LOCALAPPDATA", s("local"))]);
     assert_eq!(resolve(&Flags::default(), &local, Some(&file), &exe_dir).unwrap().agy, Some(exe_dir.join("file-agy.exe")));
     assert_eq!(resolve(&Flags::default(), &local, None, &exe_dir).unwrap().agy, None);
+
+    std::fs::write(tmp.path().join(CONFIG_FILE_NAME), r#"{"agy":"agy.exe"}"#).unwrap();
+    let loaded = load_file_config(tmp.path()).unwrap().unwrap();
+    assert_eq!(loaded.agy.as_deref(), Some("agy.exe"));
 }
 
 #[test]

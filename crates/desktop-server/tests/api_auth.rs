@@ -78,6 +78,7 @@ fn every_api_route_except_health_requires_the_token() {
         format!("{s}/export?format=tex"),
         "/api/settings/providers".to_string(),
         "/api/connections".to_string(),
+        "/api/connections/chatgpt/login".to_string(),
         "/api/models".to_string(),
         "/api/models?refresh=1".to_string(),
         "/api/no-such-route".to_string(),
@@ -90,6 +91,7 @@ fn every_api_route_except_health_requires_the_token() {
         ("POST", "/api/sessions".to_string()),
         ("POST", format!("{s}/messages")),
         ("POST", format!("{s}/approvals/c-1")),
+        ("POST", format!("{s}/stop")),
         ("POST", format!("{s}/upload")),
         ("POST", format!("{s}/latex/patch")),
         ("POST", format!("{s}/tex-audit")),
@@ -98,6 +100,11 @@ fn every_api_route_except_health_requires_the_token() {
         ("POST", format!("{s}/fork")),
         ("POST", format!("{s}/narrate")),
         ("POST", format!("{s}/sidetalk")),
+        ("POST", "/api/connections/chatgpt/login".to_string()),
+        ("POST", "/api/connections/chatgpt/open".to_string()),
+        ("POST", "/api/connections/chatgpt/logout".to_string()),
+        ("POST", "/api/connections/antigravity/acknowledge".to_string()),
+        ("POST", "/api/connections/antigravity/withdraw".to_string()),
         ("PUT", "/api/settings/providers".to_string()),
         ("DELETE", s.clone()),
         ("PATCH", s.clone()),
@@ -200,9 +207,21 @@ fn valid_token_with_foreign_origin_cannot_mutate_and_refused_bodies_are_not_read
     let f = fixture(None);
     let port = f.port;
     let own_origin = format!("http://127.0.0.1:{port}");
+    let stop_path = format!("/api/sessions/{}/stop", f.sid);
+    let guarded_posts = [
+        "/api/sessions",
+        "/api/connections/chatgpt/login",
+        "/api/connections/chatgpt/open",
+        "/api/connections/chatgpt/logout",
+        "/api/connections/antigravity/acknowledge",
+        "/api/connections/antigravity/withdraw",
+        stop_path.as_str(),
+    ];
     for origin in ["http://evil.invalid", "http://127.0.0.1:1", "null"] {
         let hdrs = [("X-ReSearch-Token", f.tok.as_str()), ("Origin", origin)];
-        assert_eq!(raw_http(port, "POST", "/api/sessions", &hdrs, b"{}").0, 403, "Origin {origin}");
+        for path in guarded_posts {
+            assert_eq!(raw_http(port, "POST", path, &hdrs, b"{}").0, 403, "POST {path} Origin {origin}");
+        }
     }
     assert_eq!(session_count(&f), 1);
     let ok = [("X-ReSearch-Token", f.tok.as_str()), ("Origin", own_origin.as_str())];

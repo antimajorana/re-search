@@ -7,15 +7,19 @@
 #[allow(dead_code)]
 mod support;
 
+use agent::model_list::{list_models, models_url};
+use agent::responses::{parse_responses_stream, serialize_responses_request};
 use agent::{
-    resume_agent_loop, run_agent_loop, BearerSource, ChatGptConfig, ChatGptTransport, ResumeConfig, SecretKey,
-    SessionOutcome, Transport, TransportError, DEFAULT_MAX_TOKENS,
+    resume_agent_loop, run_agent_loop, BearerSource, ChatGptConfig, ChatGptTransport, ContentBlock, Message,
+    ModelRequest, ProviderKind, ResumeConfig, Role, SecretKey, SessionOutcome, StopReason, ToolSpec, Transport,
+    TransportError, TransportErrorKind, DEFAULT_MAX_TOKENS,
 };
 use chatgpt_auth::testkit::{MockAuth, Recorded, Reply};
 use ledger::Ledger;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use support::*;
 
 const TOKEN: &str = "chatgpt-access-token-SECRET-77";
@@ -221,19 +225,265 @@ fn response_failed_and_incomplete_end_the_turn_with_the_documented_code() {
         }
         other => panic!("{other:?}"),
     }
+    // Even with truncated function_call JSON, response.incomplete returns Err carrying max_output_tokens.
+    let truncated_call = json!({ "type": "function_call", "call_id": "c1", "name": "sympy_eval", "arguments": "{\"code\":" });
     let incomplete = sse(&[json!({ "type": "response.incomplete", "response": { "id": "r", "status": "incomplete",
-        "model": "gpt-test-sol", "incomplete_details": { "reason": "max_output_tokens" }, "output": [text_item("cut")] } })]);
-    let (out, _, _, _d) = run_one(incomplete, "chatgpt-wire-incomplete");
-    assert!(matches!(&out, SessionOutcome::Aborted { reason, .. } if reason.contains("max_tokens")), "{out:?}");
+        "model": "gpt-test-sol", "incomplete_details": { "reason": "max_output_tokens" },
+        "output": [text_item("cut"), truncated_call] } })]);
+    let parsed_err = parse_responses_stream(incomplete.clone(), TOKEN).unwrap_err();
+    assert!(parsed_err.message.contains("max_output_tokens"), "{parsed_err}");
+    assert_ne!(parsed_err.kind, TransportErrorKind::MalformedResponse);
+    let (out, events, _, _d) = run_one(incomplete, "chatgpt-wire-incomplete");
+    assert!(matches!(&out, SessionOutcome::Aborted { reason, .. } if reason.contains("max_output_tokens")), "{out:?}");
+    assert!(events.iter().any(|e| e.kind == "session.abort"));
+    assert!(!events.iter().any(|e| e.kind == "model.text"), "incomplete stream must not emit model.text");
 }
 
 #[test]
 fn only_openai_or_loopback_hosts_are_accepted() {
     let src: Arc<dyn BearerSource> = Arc::new(FixedToken(AtomicUsize::new(0)));
-    for bad in ["https://proxy.example", "http://api.openai.com", "https://api.openai.com.evil.example"] {
+    for bad in [
+        "https://proxy.example",
+        "http://api.openai.com",
+        "https://api.openai.com.evil.example",
+        "http://localhost:9",
+        "http://[::1]:9",
+        "https://api.openai.com/evil/prefix",
+        "http://127.0.0.1:9/evil",
+    ] {
         let cfg = ChatGptConfig { base_url: bad.into(), ..Default::default() };
-        assert!(ChatGptTransport::new(cfg, Arc::clone(&src)).is_err(), "{bad}");
+        let err = ChatGptTransport::new(cfg, Arc::clone(&src)).err().expect(bad);
+        assert_eq!(err.kind, TransportErrorKind::Config, "{bad}: {err}");
+    }
+    for ok_url in [
+        "https://api.openai.com",
+        "https://api.openai.com/v1",
+        "https://api.openai.com/v1/responses",
+        "http://127.0.0.1:9",
+        "http://127.0.0.1:9/v1",
+        "http://127.0.0.1:9/v1/responses",
+    ] {
+        ChatGptTransport::new(ChatGptConfig { base_url: ok_url.into(), ..Default::default() }, Arc::clone(&src))
+            .unwrap_or_else(|e| panic!("{ok_url}: {e}"));
     }
     let t = ChatGptTransport::new(ChatGptConfig::default(), src).unwrap();
     assert_eq!(t.info().endpoint, "https://api.openai.com/v1/responses");
+}
+
+#[test]
+fn tool_encoding_sets_strict_false_and_normalizes_array_items() {
+    let original_schema = json!({
+        "type": "object",
+        "properties": {
+            "quotes": { "type": "array" },
+            "withdrawn_arxiv_ids": { "type": "array" },
+            "retracted_dois": { "type": "array" },
+            "scores": { "type": "array", "items": { "type": "integer" } },
+            "nested": { "type": "object", "properties": { "tags": { "type": "array" } } }
+        }
+    });
+    let req = ModelRequest {
+        model: "gpt-test-sol".into(),
+        system: Some("sys".into()),
+        messages: vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: "hi".into() }] }],
+        tools: vec![ToolSpec { name: "tex_audit".into(), description: "audit".into(), input_schema: original_schema.clone() }],
+        max_tokens: DEFAULT_MAX_TOKENS,
+    };
+    let wire: Value = serde_json::from_slice(&serialize_responses_request(&req).unwrap()).unwrap();
+    let fns = wire["tools"][0]["tools"].as_array().unwrap();
+    assert_eq!(fns.len(), 1);
+    assert_eq!(fns[0]["strict"], json!(false));
+    let props = &fns[0]["parameters"]["properties"];
+    for k in ["quotes", "withdrawn_arxiv_ids", "retracted_dois"] {
+        assert_eq!(props[k]["items"], json!({ "type": "string" }), "{k}");
+    }
+    assert_eq!(props["scores"]["items"], json!({ "type": "integer" }));
+    assert_eq!(props["nested"]["properties"]["tags"]["items"], json!({ "type": "string" }));
+    // Input ToolSpec schema itself was not mutated.
+    assert!(req.tools[0].input_schema["properties"]["quotes"].get("items").is_none());
+}
+
+#[test]
+fn sse_error_events_bom_keepalive_unterminated_and_status_checks() {
+    // Error event with param and documented recovery hint.
+    let err_sse = sse(&[json!({
+        "type": "error",
+        "error": { "code": "subscription_sharing_unsupported_capability", "param": "tools[0].type" }
+    })]);
+    let err = parse_responses_stream(err_sse, TOKEN).unwrap_err();
+    assert!(err.message.contains("subscription_sharing_unsupported_capability"), "{err}");
+    assert!(err.message.contains("(param tools[0].type)"), "{err}");
+    assert!(err.message.contains("does not support"), "{err}");
+
+    // rate_limit_exceeded maps to RateLimit.
+    let rl_sse = sse(&[json!({ "type": "error", "code": "rate_limit_exceeded" })]);
+    let err = parse_responses_stream(rl_sse, TOKEN).unwrap_err();
+    assert_eq!(err.kind, TransportErrorKind::RateLimit);
+
+    // BOM + empty data: keepalive + properly terminated completed (with absent status) succeeds.
+    let mut bom_stream = "\u{FEFF}data:\n\ndata:   \n\n".as_bytes().to_vec();
+    bom_stream.extend_from_slice(&sse(&[json!({ "type": "response.completed", "response": {
+        "id": "r_bom", "model": "gpt-test-sol", "output": [text_item("ok")] } })]));
+    let resp = parse_responses_stream(bom_stream, TOKEN).unwrap();
+    assert_eq!(resp.id.as_deref(), Some("r_bom"));
+
+    // Unterminated trailing response.completed without blank line fails.
+    let unterminated = format!("event: response.completed\ndata: {}\n", completed("r_cut", json!([text_item("ok")])));
+    let err = parse_responses_stream(unterminated.into_bytes(), TOKEN).unwrap_err();
+    assert_eq!(err.kind, TransportErrorKind::MalformedResponse);
+    assert!(err.message.contains("without response.completed"), "{err}");
+
+    // response.completed with status != "completed" fails.
+    let bad_status = sse(&[json!({ "type": "response.completed", "response": {
+        "id": "r_bad", "status": "incomplete", "model": "gpt-test-sol", "output": [text_item("x")] } })]);
+    let err = parse_responses_stream(bad_status, TOKEN).unwrap_err();
+    assert_eq!(err.kind, TransportErrorKind::MalformedResponse);
+}
+
+#[test]
+fn token_scrubbing_in_sse_and_strict_http_error_sanitization() {
+    // Token echoed inside SSE stream is scrubbed from raw_body.
+    let echoed = sse(&[completed("r_echo", json!([text_item(&format!("echo {TOKEN} end"))]))]);
+    let resp = parse_responses_stream(echoed, TOKEN).unwrap();
+    let raw_text = String::from_utf8_lossy(&resp.raw_body);
+    assert!(!raw_text.contains(TOKEN), "{raw_text}");
+    assert!(raw_text.contains("[REDACTED]"), "{raw_text}");
+
+    // HTTP errors scrub TOKEN from raw_body and never leak raw message/detail/body text into err.message.
+    let replies = Arc::new(Mutex::new(std::collections::VecDeque::from(vec![
+        Reply::json(400, &json!({ "error": { "code": "invalid_request_error", "param": "input", "message": format!("bad {TOKEN} partial-secret") } })),
+        Reply::json(401, &json!({ "detail": format!("detail-leak {TOKEN}") })),
+        Reply { status: 500, content_type: "text/plain", body: format!("crash {TOKEN} raw-dump").into_bytes() },
+    ])));
+    let m = MockAuth::start(Arc::new(move |_| replies.lock().unwrap().pop_front().unwrap()));
+    let t = transport(&m.base, Arc::new(FixedToken(AtomicUsize::new(0))));
+    let prep = t.prepare_request(&ModelRequest {
+        model: "gpt-test-sol".into(),
+        system: None,
+        messages: vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: "hi".into() }] }],
+        tools: vec![],
+        max_tokens: DEFAULT_MAX_TOKENS,
+    }).unwrap();
+
+    let e400 = t.send_prepared(&prep).unwrap_err();
+    assert_eq!(e400.message, "HTTP 400 invalid_request_error (param input)");
+    assert!(!String::from_utf8_lossy(e400.raw_body.as_deref().unwrap()).contains(TOKEN));
+
+    let e401 = t.send_prepared(&prep).unwrap_err();
+    assert!(e401.message.contains("sign in again") && !e401.message.contains("detail-leak") && !e401.message.contains(TOKEN), "{e401}");
+    assert!(!String::from_utf8_lossy(e401.raw_body.as_deref().unwrap()).contains(TOKEN));
+
+    let e500 = t.send_prepared(&prep).unwrap_err();
+    assert_eq!(e500.message, "HTTP 500");
+    assert!(!String::from_utf8_lossy(e500.raw_body.as_deref().unwrap()).contains(TOKEN));
+}
+
+#[test]
+fn reactive_401_refresh_retries_once_and_skips_not_eligible() {
+    struct RefreshingToken {
+        refreshes: AtomicUsize,
+        failed_seen: Mutex<Vec<String>>,
+    }
+    impl BearerSource for RefreshingToken {
+        fn bearer(&self) -> Result<SecretKey, TransportError> {
+            SecretKey::new("old-tok-SECRET-1".into())
+        }
+        fn force_refresh(&self, failed_token: &str) -> Result<SecretKey, TransportError> {
+            self.refreshes.fetch_add(1, Ordering::SeqCst);
+            self.failed_seen.lock().unwrap().push(failed_token.to_string());
+            SecretKey::new("new-tok-SECRET-2".into())
+        }
+    }
+
+    let m = MockAuth::start(Arc::new(|r: &Recorded| {
+        if r.header("authorization") == Some("Bearer new-tok-SECRET-2") {
+            Reply { status: 200, content_type: "text/event-stream", body: sse(&[completed("r_ok", json!([text_item("refreshed")]))]) }
+        } else {
+            Reply::json(401, &json!({ "error": { "code": "subscription_sharing_invalid_user" } }))
+        }
+    }));
+    let src = Arc::new(RefreshingToken { refreshes: AtomicUsize::new(0), failed_seen: Mutex::new(Vec::new()) });
+    let t = ChatGptTransport::new(ChatGptConfig { base_url: m.base.clone(), ..Default::default() }, src.clone()).unwrap();
+    let prep = t.prepare_request(&ModelRequest {
+        model: "gpt-test-sol".into(),
+        system: None,
+        messages: vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: "hi".into() }] }],
+        tools: vec![],
+        max_tokens: DEFAULT_MAX_TOKENS,
+    }).unwrap();
+    let resp = t.send_prepared(&prep).unwrap();
+    assert_eq!(resp.id.as_deref(), Some("r_ok"));
+    assert_eq!(src.refreshes.load(Ordering::SeqCst), 1);
+    assert_eq!(src.failed_seen.lock().unwrap().as_slice(), ["old-tok-SECRET-1"]);
+    assert_eq!(m.requests().len(), 2);
+
+    // Non-recoverable subscription_sharing_user_not_eligible does NOT trigger force_refresh.
+    let m2 = MockAuth::start(Arc::new(|_| {
+        Reply::json(401, &json!({ "error": { "code": "subscription_sharing_user_not_eligible" } }))
+    }));
+    let src2 = Arc::new(RefreshingToken { refreshes: AtomicUsize::new(0), failed_seen: Mutex::new(Vec::new()) });
+    let t2 = ChatGptTransport::new(ChatGptConfig { base_url: m2.base.clone(), ..Default::default() }, src2.clone()).unwrap();
+    let err = t2.send_prepared(&prep).unwrap_err();
+    assert!(err.message.contains("subscription_sharing_user_not_eligible"), "{err}");
+    assert_eq!(src2.refreshes.load(Ordering::SeqCst), 0);
+    assert_eq!(m2.requests().len(), 1);
+
+    // If the retry also returns 401, stop after 1 retry and return scrubbed error.
+    let m3 = MockAuth::start(Arc::new(|_| {
+        Reply::json(401, &json!({ "error": { "code": "subscription_sharing_invalid_user", "message": "new-tok-SECRET-2" } }))
+    }));
+    let src3 = Arc::new(RefreshingToken { refreshes: AtomicUsize::new(0), failed_seen: Mutex::new(Vec::new()) });
+    let t3 = ChatGptTransport::new(ChatGptConfig { base_url: m3.base.clone(), ..Default::default() }, src3.clone()).unwrap();
+    let err = t3.send_prepared(&prep).unwrap_err();
+    assert_eq!(src3.refreshes.load(Ordering::SeqCst), 1);
+    assert_eq!(m3.requests().len(), 2);
+    assert!(!err.message.contains("new-tok-SECRET-2"), "{err}");
+    assert!(!String::from_utf8_lossy(err.raw_body.as_deref().unwrap()).contains("new-tok-SECRET-2"));
+}
+
+#[test]
+fn reasoning_is_parsed_not_replayed_and_refusal_sets_stop_reason() {
+    let reasoning = json!({ "type": "reasoning", "id": "rs_1", "summary": [{ "type": "summary_text", "text": "think step" }] });
+    let m = mock(vec![
+        sse(&[completed("r1", json!([reasoning, call_item()]))]),
+        sse(&[completed("r2", json!([text_item("done")]))]),
+    ]);
+    let dir = TempDir::new("chatgpt-wire-reason");
+    let t = transport(&m.base, Arc::new(FixedToken(AtomicUsize::new(0))));
+    let router = make_router(&dir.path, "s-reason", Arc::new(MockApprover::new(true)), Arc::new(MockEpoch::new(1, true)), Arc::new(AtomicUsize::new(0)));
+    let ledger = Ledger::open(&dir.path).unwrap();
+    let mut sink = RecordingSink::new();
+    let mut cfg = default_cfg("compute", true);
+    cfg.model = "gpt-test-sol".into();
+    let out = run_agent_loop(&t, &router, &ledger, &cfg, &mut sink).unwrap();
+    assert!(matches!(out, SessionOutcome::Completed { turns: 2, .. }), "{out:?}");
+    assert!(sink.events.iter().any(|(_, k, _)| k == "model.thinking"));
+    let turn2_input = bodies(&m)[1]["input"].as_array().unwrap().clone();
+    assert!(!turn2_input.iter().any(|i| i["type"] == json!("reasoning")), "reasoning must not be replayed: {turn2_input:?}");
+
+    // Refusal output part sets StopReason::Refusal.
+    let refusal = json!({ "type": "message", "id": "m_ref", "role": "assistant", "status": "completed",
+        "content": [{ "type": "refusal", "refusal": "cannot comply" }] });
+    let resp = parse_responses_stream(sse(&[completed("r_ref", json!([refusal]))]), TOKEN).unwrap();
+    assert_eq!(resp.stop_reason, StopReason::Refusal);
+    assert!(resp.content.iter().any(|b| matches!(b, ContentBlock::Text { text } if text == "cannot comply")));
+}
+
+#[test]
+fn models_url_enforces_chatgpt_host_and_strips_v1_responses() {
+    assert_eq!(
+        models_url(ProviderKind::ChatGpt, "https://api.openai.com/v1/responses").unwrap(),
+        "https://api.openai.com/v1/models"
+    );
+    assert_eq!(
+        models_url(ProviderKind::ChatGpt, "http://127.0.0.1:9/v1/responses").unwrap(),
+        "http://127.0.0.1:9/v1/models"
+    );
+    for bad in ["https://proxy.example", "http://localhost:9", "http://[::1]:9", "https://api.openai.com/evil/prefix"] {
+        let err = models_url(ProviderKind::ChatGpt, bad).unwrap_err();
+        assert_eq!(err.kind, TransportErrorKind::Config, "{bad}: {err}");
+    }
+    let err = list_models(ProviderKind::ChatGpt, "https://api.openai.com", None, Duration::from_millis(200)).unwrap_err();
+    assert_eq!(err.kind, TransportErrorKind::Config);
+    assert_eq!(err.message, "not signed in with ChatGPT");
 }

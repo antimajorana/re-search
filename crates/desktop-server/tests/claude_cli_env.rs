@@ -16,7 +16,7 @@ use std::time::Duration;
 fn env_credentials_refuse_the_turn_unless_explicitly_allowed() {
     clear_env_auth();
     std::env::set_var("ANTHROPIC_API_KEY", "dummy-not-a-key-0000");
-    let h = CliHarness::start();
+    let h = CliHarness::start_with(|cfg| cfg.connection_env = None);
     let sid = h.create_cli_session();
     h.fake.script(&[
         init_line(&expected_tools(&h.data), core_only()),

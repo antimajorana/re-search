@@ -5,7 +5,7 @@ use crate::sse::SseHub;
 use crate::state::DesktopState;
 use agent::{
     inspect_session_for_resume, resume_agent_loop, run_research_loop, AgentConfig, EventSink,
-    GuardrailConfig, ProviderKind, ResumeConfig, DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS,
+    GuardrailConfig, ProviderKind, ResumeConfig, SessionOutcome, DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_SYSTEM_PROMPT,
 };
 use ledger::AppendedEvent;
@@ -53,7 +53,7 @@ pub(crate) fn spawn_turn_thread(
     // A subscription-CLI turn's stop handle is registered before the thread exists, so a
     // stop sent right after the 202 reaches it (the turn checks it before starting anything).
     let registered = if let Some(kind) = on_cli_route {
-        match crate::cli_turn::Registered::new(&state, &session_id) {
+        match crate::cli_turn::Registered::new(&state, &session_id, kind) {
             Ok(r) => Some((r, kind)),
             Err(e) => {
                 if let Ok(mut active) = state.active_turns.lock() {
@@ -155,7 +155,7 @@ fn run_session_turn(
     let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
     let mut sink = SseEventSink::new(Arc::clone(&state.sse), session_id);
 
-    if existing.is_empty() {
+    let outcome = if existing.is_empty() {
         let guardrails = GuardrailConfig {
             verification_mode: req
                 .get("verification_mode")
@@ -185,7 +185,7 @@ fn run_session_turn(
             containment,
             contained,
         };
-        run_research_loop(&*transport, &router, &ledger, &cfg, &guardrails, &mut sink)?;
+        run_research_loop(&*transport, &router, &ledger, &cfg, &guardrails, &mut sink)?
     } else {
         let defs = router.registry().defs();
         let expected_defs: Vec<tools::ToolDef> = defs.iter().map(|d| (*d).clone()).collect();
@@ -206,10 +206,13 @@ fn run_session_turn(
             containment,
             contained,
         };
-        resume_agent_loop(&*transport, &router, &ledger, &cfg, &mut sink)?;
-    }
+        resume_agent_loop(&*transport, &router, &ledger, &cfg, &mut sink)?
+    };
 
-    Ok(sink.final_text)
+    match outcome {
+        SessionOutcome::Aborted { reason, .. } => Err(reason),
+        SessionOutcome::Completed { .. } | SessionOutcome::Refusal { .. } => Ok(sink.final_text),
+    }
 }
 
 struct WorkerEpochAdapter {

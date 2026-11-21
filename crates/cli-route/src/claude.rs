@@ -323,7 +323,7 @@ impl VendorCli for ClaudeCode {
             "env": core.env,
         }}});
         let bytes = serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?;
-        std::fs::write(path, bytes).map_err(|e| format!("could not write {}: {e}", path.display()))
+        crate::recorder::write_private_file(path, &bytes)
     }
 
     fn args(&self, model: &str, tool_config: &Path) -> Vec<String> {
@@ -483,6 +483,12 @@ mod tests {
         assert_eq!(v["mcpServers"].as_object().unwrap().len(), 1);
         assert_eq!(v["mcpServers"]["core"]["command"], "C:/bin/core.exe");
         assert_eq!(v["mcpServers"]["core"]["env"]["CORE_SESSION"], "s-1");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "expected 0600, got {mode:o}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

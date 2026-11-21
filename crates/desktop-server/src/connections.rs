@@ -132,6 +132,7 @@ fn generic_key_owner(state: &DesktopState) -> Option<ProviderKind> {
         .into_iter()
         .find_map(|n| state.env_var(n).and_then(|v| v.into_string().ok()).filter(|v| !v.trim().is_empty()))
         .and_then(|v| ProviderKind::parse(&v).ok())
+        .filter(|&p| p != ProviderKind::ChatGpt)
 }
 
 /// What a model-list call for one provider may do. List calls are made by the desktop on
@@ -159,6 +160,9 @@ fn override_reason(state: &DesktopState) -> String {
 
 /// This provider's own key (see [`ListAccess`]); `Ok(None)` when it has none.
 pub(crate) fn own_key(state: &DesktopState, p: ProviderKind, store: &ProviderKeyStore) -> Result<Option<SecretKey>, String> {
+    if p == ProviderKind::ChatGpt {
+        return Ok(None);
+    }
     let owned_generic: &[&str] = if generic_key_owner(state) == Some(p) { &GENERIC_KEY_ENV_VARS } else { &[] };
     for &name in owned_generic.iter().chain(p.own_key_env_vars()) {
         if let Some(val) = state.env_var(name).and_then(|v| v.into_string().ok()) {

@@ -366,7 +366,7 @@ pub fn handle_verify(state: &DesktopState, session_id: &str) -> ApiResult {
 
 /// Message when narration or side questions have no API provider to run on.
 pub const NEEDS_API_PROVIDER: &str = "Narrate proof and side questions need an API-key provider for now \
-     (Anthropic, OpenAI or Gemini); they cannot run on the Claude subscription route (claude-cli) yet. \
+     (Anthropic, OpenAI or Gemini); they cannot run on the subscription-CLI routes (claude-cli, antigravity) yet. \
      Connect an API key under Connect, or pick an API model in the model dropdown.";
 
 /// Provider and model for narration and side questions: the request's (the model picker's

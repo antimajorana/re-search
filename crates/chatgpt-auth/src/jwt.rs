@@ -22,6 +22,7 @@ pub enum IdTokenError {
     WrongIssuer,
     WrongAudience,
     Expired,
+    NotYetValid,
     MissingIssuedAt,
     WrongNonce,
     MissingSubject,
@@ -37,6 +38,7 @@ impl fmt::Display for IdTokenError {
             IdTokenError::WrongIssuer => "ID token issuer is not OpenAI's",
             IdTokenError::WrongAudience => "ID token was not issued to this app's client ID",
             IdTokenError::Expired => "ID token has expired",
+            IdTokenError::NotYetValid => "ID token is not valid yet",
             IdTokenError::MissingIssuedAt => "ID token has no issued-at time",
             IdTokenError::WrongNonce => "ID token nonce does not match this sign-in attempt",
             IdTokenError::MissingSubject => "ID token has no subject",
@@ -107,7 +109,12 @@ pub fn verify_id_token(
     if header.get("crit").is_some() {
         return Err(IdTokenError::Malformed);
     }
-    let (n, e) = find_key(jwks, header.get("kid").and_then(Value::as_str))?;
+    let kid = match header.get("kid") {
+        None => None,
+        Some(Value::String(s)) => Some(s.as_str()),
+        Some(_) => return Err(IdTokenError::Malformed),
+    };
+    let (n, e) = find_key(jwks, kid)?;
     let sig = b64url_decode(s).ok_or(IdTokenError::Malformed)?;
     let signing_input = &token.as_bytes()[..h.len() + 1 + p.len()];
     RsaPublicKeyComponents { n: &n, e: &e }
@@ -118,19 +125,34 @@ pub fn verify_id_token(
     if claims.get("iss").and_then(Value::as_str) != Some(issuer) {
         return Err(IdTokenError::WrongIssuer);
     }
-    let aud_ok = match claims.get("aud") {
-        Some(Value::String(a)) => a == client_id,
-        Some(Value::Array(list)) => list.iter().any(|a| a.as_str() == Some(client_id)),
-        _ => false,
+    let (aud_ok, multi_aud) = match claims.get("aud") {
+        Some(Value::String(a)) => (a == client_id, false),
+        Some(Value::Array(list)) => (list.iter().any(|a| a.as_str() == Some(client_id)), list.len() > 1),
+        _ => (false, false),
     };
-    // OIDC Core 3.1.3.7: with several audiences, `azp` (when present) must be this client.
-    let azp_ok = claims.get("azp").and_then(Value::as_str).is_none_or(|azp| azp == client_id);
+    let azp = match claims.get("azp") {
+        None => None,
+        Some(Value::String(s)) => Some(s.as_str()),
+        Some(_) => return Err(IdTokenError::WrongAudience),
+    };
+    // OIDC Core 3.1.3.7: with several audiences, `azp` is required and must be this client;
+    // whenever `azp` is present, it must also match this client.
+    let azp_ok = match azp {
+        Some(a) => a == client_id,
+        None => !multi_aud,
+    };
     if !aud_ok || !azp_ok {
         return Err(IdTokenError::WrongAudience);
     }
     let exp = claims.get("exp").and_then(Value::as_i64).ok_or(IdTokenError::Expired)?;
-    if exp + CLOCK_SKEW_S <= now_s {
+    if exp.saturating_add(CLOCK_SKEW_S) <= now_s {
         return Err(IdTokenError::Expired);
+    }
+    if let Some(nbf_val) = claims.get("nbf") {
+        let nbf = nbf_val.as_i64().ok_or(IdTokenError::Malformed)?;
+        if nbf.saturating_sub(CLOCK_SKEW_S) > now_s {
+            return Err(IdTokenError::NotYetValid);
+        }
     }
     if claims.get("iat").and_then(Value::as_i64).is_none() {
         return Err(IdTokenError::MissingIssuedAt);
@@ -141,7 +163,10 @@ pub fn verify_id_token(
     }
     let sub = claims.get("sub").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).ok_or(IdTokenError::MissingSubject)?;
     let verified_email = match (claims.get("email").and_then(Value::as_str), claims.get("email_verified")) {
-        (Some(e), Some(Value::Bool(true))) if !e.is_empty() => Some(e.chars().take(254).collect()),
+        (Some(e), Some(Value::Bool(true))) => {
+            let clean: String = e.chars().filter(|c| !c.is_control()).take(254).collect();
+            if clean.is_empty() { None } else { Some(clean) }
+        }
         _ => None,
     };
     Ok(IdClaims { sub: sub.to_string(), verified_email, exp })
@@ -202,5 +227,63 @@ mod tests {
         assert_eq!(check("a.b"), Err(IdTokenError::Malformed));
         // Messages never contain claim values.
         assert!(!IdTokenError::WrongAudience.to_string().contains("oaiapp"));
+    }
+
+    #[test]
+    fn adversarial_header_and_claim_cases() {
+        let good = id_claims(ISS, "oaiapp_1", "nonce-1", "sub-1", NOW + 600);
+        let with = |k: &str, v: Value| {
+            let mut c = good.clone();
+            c[k] = v;
+            sign_jwt(&c)
+        };
+
+        // azp mismatch and non-string azp.
+        assert_eq!(check(&with("azp", json!("oaiapp_other"))), Err(IdTokenError::WrongAudience));
+        assert_eq!(check(&with("azp", json!(123))), Err(IdTokenError::WrongAudience));
+        assert_eq!(check(&with("azp", Value::Null)), Err(IdTokenError::WrongAudience));
+
+        // Multi-aud requires matching azp (OIDC Core 3.1.3.7).
+        assert_eq!(check(&with("aud", json!(["oaiapp_1", "oaiapp_2"]))), Err(IdTokenError::WrongAudience));
+        let mut multi_ok = good.clone();
+        multi_ok["aud"] = json!(["oaiapp_1", "oaiapp_2"]);
+        multi_ok["azp"] = json!("oaiapp_1");
+        assert!(check(&sign_jwt(&multi_ok)).is_ok());
+
+        // nbf enforcement: future rejected, within skew accepted, non-int malformed.
+        assert_eq!(check(&with("nbf", json!(NOW + CLOCK_SKEW_S + 1))), Err(IdTokenError::NotYetValid));
+        assert!(check(&with("nbf", json!(NOW + CLOCK_SKEW_S))).is_ok());
+        assert_eq!(check(&with("nbf", json!("soon"))), Err(IdTokenError::Malformed));
+
+        // Missing iat.
+        let mut no_iat = good.clone();
+        no_iat.as_object_mut().unwrap().remove("iat");
+        assert_eq!(check(&sign_jwt(&no_iat)), Err(IdTokenError::MissingIssuedAt));
+
+        // crit header rejected.
+        let crit = sign_jwt_with_header(&json!({ "alg": "RS256", "kid": crate::testkit::TEST_KID, "crit": ["exp"] }), &good);
+        assert_eq!(check(&crit), Err(IdTokenError::Malformed));
+
+        // Non-string kid rejected as Malformed.
+        let bad_kid = sign_jwt_with_header(&json!({ "alg": "RS256", "kid": 42 }), &good);
+        assert_eq!(check(&bad_kid), Err(IdTokenError::Malformed));
+
+        // Multi-key JWKS without kid rejected as UnknownKey.
+        let mut two_keys = jwks();
+        let dup = two_keys["keys"][0].clone();
+        two_keys["keys"].as_array_mut().unwrap().push(dup);
+        let no_kid = sign_jwt_with_header(&json!({ "alg": "RS256" }), &good);
+        assert_eq!(verify_id_token(&no_kid, &two_keys, ISS, "oaiapp_1", "nonce-1", NOW), Err(IdTokenError::UnknownKey));
+
+        // exp == i64::MAX does not overflow.
+        let max_exp = with("exp", json!(i64::MAX));
+        assert_eq!(check(&max_exp).unwrap().exp, i64::MAX);
+
+        // Non-canonical base64url trailing bits in header rejected as Malformed.
+        assert_eq!(check("Zh.Zg.Zg"), Err(IdTokenError::Malformed));
+
+        // Control characters are stripped from verified_email.
+        let dirty_email = with("email", json!("user\r\n\x07@example.test\x1b"));
+        assert_eq!(check(&dirty_email).unwrap().verified_email.as_deref(), Some("user@example.test"));
     }
 }

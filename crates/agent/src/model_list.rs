@@ -68,7 +68,15 @@ pub fn models_url(provider: ProviderKind, base_url: &str) -> Result<String, Tran
             format!("{root}{b}/api/tags")
         }
         ProviderKind::ChatGpt => {
-            let b = base.strip_suffix("/v1").unwrap_or(base);
+            if !crate::responses::chatgpt_base_allowed(&v) {
+                return Err(config_err(
+                    "the ChatGPT plan route only talks to https://api.openai.com (or a loopback test server)",
+                ));
+            }
+            let b = base
+                .strip_suffix("/v1/responses")
+                .or_else(|| base.strip_suffix("/v1"))
+                .unwrap_or(base);
             format!("{root}{b}/v1/models")
         }
     })
@@ -83,31 +91,37 @@ pub fn list_models(
     timeout: Duration,
 ) -> Result<Vec<ListedModel>, TransportError> {
     let v = validate_base_url(base_url)?;
-    if provider == ProviderKind::ChatGpt && !crate::responses::chatgpt_base_allowed(&v) {
-        return Err(config_err("the ChatGPT plan route only talks to https://api.openai.com"));
-    }
     let url = models_url(provider, base_url)?;
     let secret = key.map(SecretKey::as_str).unwrap_or("");
     let keyless_ok = provider == ProviderKind::Ollama || (provider == ProviderKind::OpenAi && v.is_loopback_http);
     if secret.is_empty() && !keyless_ok {
-        return Err(config_err(format!("no API key configured for {}", provider.cli_name())));
+        let msg = if provider == ProviderKind::ChatGpt {
+            "not signed in with ChatGPT".to_string()
+        } else {
+            format!("no API key configured for {}", provider.cli_name())
+        };
+        return Err(config_err(msg));
     }
-    let bearer = format!("Bearer {secret}");
-    let mut headers: Vec<(&str, &str)> = Vec::new();
-    match provider {
-        ProviderKind::Anthropic => {
-            headers.push(("x-api-key", secret));
-            headers.push(("anthropic-version", crate::anthropic::ANTHROPIC_VERSION));
-        }
-        ProviderKind::Gemini => headers.push(("x-goog-api-key", secret)),
-        ProviderKind::OpenAi | ProviderKind::Ollama | ProviderKind::ChatGpt => {
-            if !secret.is_empty() {
-                headers.push(("Authorization", bearer.as_str()));
+    let mut bearer = format!("Bearer {secret}");
+    let raw_res = {
+        let mut headers: Vec<(&str, &str)> = Vec::new();
+        match provider {
+            ProviderKind::Anthropic => {
+                headers.push(("x-api-key", secret));
+                headers.push(("anthropic-version", crate::anthropic::ANTHROPIC_VERSION));
+            }
+            ProviderKind::Gemini => headers.push(("x-goog-api-key", secret)),
+            ProviderKind::OpenAi | ProviderKind::Ollama | ProviderKind::ChatGpt => {
+                if !secret.is_empty() {
+                    headers.push(("Authorization", bearer.as_str()));
+                }
             }
         }
-    }
-    let agent = build_ureq_agent(v.is_https, timeout.min(Duration::from_secs(10)), timeout);
-    let raw = get_json(&agent, &url, &headers, MAX_LIST_BYTES)?;
+        let agent = build_ureq_agent(v.is_https, timeout.min(Duration::from_secs(10)), timeout);
+        get_json(&agent, &url, &headers, MAX_LIST_BYTES)
+    };
+    zeroize::Zeroize::zeroize(&mut bearer);
+    let raw = raw_res?;
     let mut list = parse_model_list(provider, &raw).map_err(|_| TransportError {
         kind: TransportErrorKind::MalformedResponse,
         status: Some(200),
@@ -449,10 +463,25 @@ mod tests {
         assert_eq!(ids(&list), ["gpt-b", "gpt-a"]);
         assert_eq!(list[0].label, "GPT B");
         assert_eq!(models_url(ProviderKind::ChatGpt, "https://api.openai.com").unwrap(), "https://api.openai.com/v1/models");
+        assert_eq!(
+            models_url(ProviderKind::ChatGpt, "https://api.openai.com/v1/responses").unwrap(),
+            "https://api.openai.com/v1/models"
+        );
+        assert_eq!(
+            models_url(ProviderKind::ChatGpt, "http://127.0.0.1:9/v1/responses").unwrap(),
+            "http://127.0.0.1:9/v1/models"
+        );
+        for bad in ["https://proxy.example", "http://localhost:9", "http://[::1]:9", "https://api.openai.com/evil"] {
+            let err = models_url(ProviderKind::ChatGpt, bad).unwrap_err();
+            assert_eq!(err.kind, TransportErrorKind::Config, "{bad}: {err}");
+        }
         let t = Duration::from_millis(200);
         let k = SecretKey::new("tok".into()).unwrap();
         let err = list_models(ProviderKind::ChatGpt, "https://proxy.example", Some(&k), t).unwrap_err();
         assert_eq!(err.kind, TransportErrorKind::Config);
+        let err = list_models(ProviderKind::ChatGpt, "https://api.openai.com", None, t).unwrap_err();
+        assert_eq!(err.kind, TransportErrorKind::Config);
+        assert_eq!(err.message, "not signed in with ChatGPT");
     }
 
     #[test]

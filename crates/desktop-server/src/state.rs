@@ -15,9 +15,11 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 const UI_SETTINGS_FILE: &str = "ui_settings.json";
+static UI_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionMeta {
@@ -111,8 +113,10 @@ pub struct DesktopState {
     pub active_turns: Mutex<HashSet<String>>,
     pub pending_approvals: Mutex<HashMap<(String, String), Arc<PendingSlot>>>,
     pub ledger_write_lock: Mutex<()>,
-    /// Running subscription-CLI turns (`claude-cli`, `antigravity`), by session: their stop handles.
-    pub cli_turns: Mutex<HashMap<String, cli_route::StopHandle>>,
+    /// Serializes load-modify-save updates to `ui_settings.json`.
+    pub ui_settings_lock: Mutex<()>,
+    /// Running subscription-CLI turns (`claude-cli`, `antigravity`), by session: route kind + stop handle.
+    pub cli_turns: Mutex<HashMap<String, (crate::cli_turn::CliRouteKind, cli_route::StopHandle)>>,
     /// Model lists fetched from providers, kept for [`crate::model_catalog::CACHE_TTL`].
     pub catalog: crate::model_catalog::Catalog,
     /// `claude --version` output once a probe succeeded (a failed probe is not kept).
@@ -121,8 +125,8 @@ pub struct DesktopState {
     pub chatgpt: crate::chatgpt::ChatGptHub,
     /// `agy --version` output once a probe succeeded (a failed probe is not kept).
     pub agy_version: std::sync::OnceLock<String>,
-    /// `agy models`, kept for [`crate::model_catalog::CACHE_TTL`].
-    pub agy_models: Mutex<Option<crate::antigravity::AgyModelCache>>,
+    /// Generation-tagged `agy models` cache, kept for [`crate::model_catalog::CACHE_TTL`].
+    pub agy_models: Mutex<(u64, Option<crate::antigravity::AgyModelCache>)>,
 }
 
 impl DesktopState {
@@ -134,12 +138,13 @@ impl DesktopState {
             active_turns: Mutex::new(HashSet::new()),
             pending_approvals: Mutex::new(HashMap::new()),
             ledger_write_lock: Mutex::new(()),
+            ui_settings_lock: Mutex::new(()),
             cli_turns: Mutex::new(HashMap::new()),
             catalog: crate::model_catalog::Catalog::default(),
             claude_version: std::sync::OnceLock::new(),
             chatgpt,
             agy_version: std::sync::OnceLock::new(),
-            agy_models: Mutex::new(None),
+            agy_models: Mutex::new((0, None)),
         }
     }
 
@@ -172,12 +177,29 @@ impl DesktopState {
         denied
     }
 
+    /// Stop every running subscription-CLI turn of `kind` and deny its open approval cards.
+    pub fn stop_cli_turns_of(&self, kind: crate::cli_turn::CliRouteKind) -> usize {
+        let targets: Vec<(String, cli_route::StopHandle)> = match self.cli_turns.lock() {
+            Ok(map) => map
+                .iter()
+                .filter(|(_, (k, _))| *k == kind)
+                .map(|(sid, (_, h))| (sid.clone(), h.clone()))
+                .collect(),
+            Err(_) => return 0,
+        };
+        for (sid, h) in &targets {
+            h.stop();
+            self.deny_pending(sid, None, "supervisor: route acknowledgement withdrawn");
+        }
+        targets.len()
+    }
+
     /// Stop every running subscription-CLI turn (kills each CLI process tree), then wait up to
     /// five seconds for those turns to record `session.abort` and delete their `mcp.json`
     /// (the process may exit right after this, e.g. when the app window closes).
     pub fn stop_all_cli_turns(&self) {
         let handles: Vec<cli_route::StopHandle> = match self.cli_turns.lock() {
-            Ok(map) => map.values().cloned().collect(),
+            Ok(map) => map.values().map(|(_, h)| h.clone()).collect(),
             Err(_) => return,
         };
         if handles.is_empty() {
@@ -324,16 +346,33 @@ impl DesktopState {
             .unwrap_or_default()
     }
 
-    pub fn save_ui_settings(&self, settings: &UiSettings) -> Result<(), String> {
+    fn write_ui_settings_locked(&self, settings: &UiSettings) -> Result<(), String> {
         fs::create_dir_all(&self.cfg.data_dir).map_err(|e| format!("create data_dir failed: {e}"))?;
         let path = self.cfg.data_dir.join(UI_SETTINGS_FILE);
+        let seq = UI_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
         let tmp = self
             .cfg
             .data_dir
-            .join(format!(".ui_settings.tmp.{}", std::process::id()));
+            .join(format!(".ui_settings.tmp.{}.{seq}", std::process::id()));
         let mut bytes = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
         bytes.push(b'\n');
         write_private_file(&tmp, &path, &bytes)
+    }
+
+    pub fn save_ui_settings(&self, settings: &UiSettings) -> Result<(), String> {
+        let _guard = self.ui_settings_lock.lock().map_err(|_| "ui_settings lock poisoned".to_string())?;
+        self.write_ui_settings_locked(settings)
+    }
+
+    pub fn update_ui_settings<F>(&self, f: F) -> Result<UiSettings, String>
+    where
+        F: FnOnce(&mut UiSettings),
+    {
+        let _guard = self.ui_settings_lock.lock().map_err(|_| "ui_settings lock poisoned".to_string())?;
+        let mut ui = self.load_ui_settings();
+        f(&mut ui);
+        self.write_ui_settings_locked(&ui)?;
+        Ok(ui)
     }
 
     pub fn settings_json(&self) -> Result<Value, String> {
@@ -464,40 +503,8 @@ pub fn write_private_file(tmp: &Path, dst: &Path, bytes: &[u8]) -> Result<(), St
     Ok(())
 }
 
-/// Decodes standard or URL-safe base64 strings (whitespace ignored, optional `=` padding).
-pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
-    let mut out = Vec::with_capacity(input.len() * 3 / 4);
-    let mut buf: u32 = 0;
-    let mut bits: u8 = 0;
-    let mut ended = false;
-    for b in input.bytes() {
-        if b.is_ascii_whitespace() {
-            continue;
-        }
-        if b == b'=' {
-            ended = true;
-            continue;
-        }
-        if ended {
-            return Err("unexpected data after base64 padding".to_string());
-        }
-        let val: u32 = match b {
-            b'A'..=b'Z' => (b - b'A') as u32,
-            b'a'..=b'z' => (b - b'a' + 26) as u32,
-            b'0'..=b'9' => (b - b'0' + 52) as u32,
-            b'+' | b'-' => 62,
-            b'/' | b'_' => 63,
-            _ => return Err(format!("invalid base64 byte: 0x{b:02x}")),
-        };
-        buf = (buf << 6) | val;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push(((buf >> bits) & 0xff) as u8);
-        }
-    }
-    Ok(out)
-}
+pub use crate::upload_codec::decode_base64;
+pub(crate) use crate::upload_codec::{parse_multipart_files, UploadedFile};
 
 pub fn update_provider_roles_from_ui(roles: &mut RoleAssignment, ui: &UiSettings) {
     if let Some(p_raw) = &ui.default_provider {
@@ -512,65 +519,75 @@ pub fn update_provider_roles_from_ui(roles: &mut RoleAssignment, ui: &UiSettings
     }
 }
 
-pub(crate) type UploadedFile = (String, Vec<u8>);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli_turn::CliRouteKind;
 
-pub(crate) fn parse_multipart_files(
-    content_type: &str,
-    body: &[u8],
-) -> Result<Vec<UploadedFile>, (u16, String)> {
-    let boundary = content_type
-        .split(';')
-        .find_map(|p| p.trim().strip_prefix("boundary="))
-        .map(|b| b.trim().trim_matches('"').to_string())
-        .filter(|b| !b.is_empty())
-        .ok_or_else(|| (400, "multipart/form-data missing boundary".to_string()))?;
-    let sep = format!("--{boundary}").into_bytes();
-    let mut out = Vec::new();
-    let mut pos = 0usize;
-    while let Some(rel) = find_bytes(&body[pos..], &sep) {
-        let start = pos + rel + sep.len();
-        if start + 2 <= body.len() && &body[start..start + 2] == b"--" {
-            break;
-        }
-        let part_start = if start + 2 <= body.len() && &body[start..start + 2] == b"\r\n" {
-            start + 2
-        } else if start < body.len() && body[start] == b'\n' {
-            start + 1
-        } else {
-            start
+    fn test_state(dir: &Path) -> Arc<DesktopState> {
+        let cfg = DesktopConfig {
+            port: 0,
+            data_dir: dir.to_path_buf(),
+            workspace_root: None,
+            python: None,
+            worker_script: None,
+            api_base_override: None,
+            literature_endpoints: research_tools::LiteratureEndpoints::default(),
+            open_window: false,
+            print_url_json: false,
+            eval_timeout_s: 30,
+            core_exe: None,
+            claude_exe: None,
+            agy_exe: None,
+            connection_env: Some(std::collections::BTreeMap::new()),
+            chatgpt_test: None,
         };
-        let next = match find_bytes(&body[part_start..], &sep) {
-            Some(n) => part_start + n,
-            None => break,
-        };
-        let mut part = &body[part_start..next];
-        if part.ends_with(b"\r\n") {
-            part = &part[..part.len() - 2];
-        } else if part.ends_with(b"\n") {
-            part = &part[..part.len() - 1];
+        let chatgpt = crate::chatgpt::ChatGptHub::new(&cfg).unwrap();
+        Arc::new(DesktopState::new(cfg, AuthGuard::new(1).unwrap(), Arc::new(SseHub::new()), chatgpt))
+    }
+
+    #[test]
+    fn stop_cli_turns_of_only_stops_matching_route() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let st = test_state(tmp.path());
+        let claude_stop = cli_route::StopHandle::new();
+        let agy_stop = cli_route::StopHandle::new();
+        {
+            let mut m = st.cli_turns.lock().unwrap();
+            m.insert("s-claude".into(), (CliRouteKind::Claude, claude_stop.clone()));
+            m.insert("s-agy".into(), (CliRouteKind::Antigravity, agy_stop.clone()));
         }
-        if let Some(hdr_end) = find_bytes(part, b"\r\n\r\n") {
-            let hdrs = String::from_utf8_lossy(&part[..hdr_end]);
-            let data = &part[hdr_end + 4..];
-            for line in hdrs.lines() {
-                if line.to_ascii_lowercase().starts_with("content-disposition:") {
-                    for seg in line.split(';') {
-                        if let Some(val) = seg.trim().strip_prefix("filename=") {
-                            out.push((val.trim().trim_matches('"').to_string(), data.to_vec()));
-                            break;
-                        }
-                    }
-                }
+        assert_eq!(st.stop_cli_turns_of(CliRouteKind::Antigravity), 1);
+        assert!(agy_stop.is_stopped(), "antigravity turn must be stopped");
+        assert!(!claude_stop.is_stopped(), "claude turn must stay running");
+    }
+
+    #[test]
+    fn update_ui_settings_serializes_concurrent_updates() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let st = test_state(tmp.path());
+        st.update_ui_settings(|ui| {
+            ui.antigravity_ack = Some(AntigravityAck { acknowledged_ms: 1, notice_version: 1 });
+        })
+        .unwrap();
+        let s1 = Arc::clone(&st);
+        let s2 = Arc::clone(&st);
+        let t1 = std::thread::spawn(move || {
+            for i in 0..20 {
+                s1.update_ui_settings(|ui| ui.default_model = Some(format!("m-{i}"))).unwrap();
             }
-        }
-        pos = next;
+        });
+        let t2 = std::thread::spawn(move || {
+            for _ in 0..20 {
+                s2.update_ui_settings(|ui| ui.pinned_conventions = Some("conv".into())).unwrap();
+            }
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+        let ui = st.load_ui_settings();
+        assert!(ui.antigravity_ack.is_some(), "antigravity_ack must not be lost");
+        assert_eq!(ui.pinned_conventions.as_deref(), Some("conv"));
+        assert!(ui.default_model.is_some());
     }
-    Ok(out)
 }
 
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(0);
-    }
-    haystack.windows(needle.len()).position(|w| w == needle)
-}

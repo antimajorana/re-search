@@ -36,12 +36,15 @@ pub const USAGE: &str = "usage:
 
 environment (RE_SEARCH_* preferred, RESEARCH_CORE_* fallback):
   RE_SEARCH_ROUTE, RE_SEARCH_PROVIDER, RE_SEARCH_API_KEY, RE_SEARCH_API_BASE,
-  RE_SEARCH_PYTHON, RE_SEARCH_CLAUDE, RE_SEARCH_DATA, RE_SEARCH_WORKER_SCRIPT,
+  RE_SEARCH_PYTHON, RE_SEARCH_CLAUDE, RE_SEARCH_AGY, RE_SEARCH_DATA, RE_SEARCH_WORKER_SCRIPT,
   RE_SEARCH_CORE_EXE, RE_SEARCH_ARXIV_BASE, RE_SEARCH_INSPIRE_BASE, RE_SEARCH_CROSSREF_BASE,
   ANTHROPIC_API_KEY, OPENAI_API_KEY, OLLAMA_API_KEY, GEMINI_API_KEY, GOOGLE_API_KEY
   RE_SEARCH_ALLOW_CLAUDE_ENV_AUTH=1  start the Claude CLI route although ANTHROPIC_API_KEY,
       ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN or CLAUDE_CODE_USE_{BEDROCK,VERTEX,FOUNDRY}
-      is set (otherwise refused: the CLI would bill that instead of your Claude subscription)";
+      is set (otherwise refused: the CLI would bill that instead of your Claude subscription)
+  RE_SEARCH_ALLOW_AGY_ENV_AUTH=1  start the Antigravity CLI route although GEMINI_API_KEY,
+      GOOGLE_GEMINI_BASE_URL or AGY_ADC_AUTH is set (otherwise refused: the CLI may use an API
+      key, custom endpoint or ADC instead of your Google plan login)";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Route {

@@ -297,19 +297,39 @@ mod tests {
     fn desktop_app_gets_only_its_five_flags_and_never_a_token() {
         let data = Path::new("D:/data");
         let args = desktop_app_args(
-            &flags(&[("workspace", "W"), ("python", "P"), ("worker-script", "S"), ("port", "8123")]),
+            &flags(&[
+                ("workspace", "W"),
+                ("python", "P"),
+                ("worker-script", "S"),
+                ("port", "8123"),
+                ("core-exe", "C:/bin/core.exe"),
+                ("claude", "C:/bin/claude.exe"),
+                ("agy", "C:/bin/agy.exe"),
+            ]),
             data,
         )
         .unwrap();
         let args: Vec<String> = args.iter().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(
             args,
-            ["--data-dir", "D:/data", "--workspace", "W", "--python", "P", "--worker-script", "S", "--port", "8123"]
+            [
+                "--data-dir", "D:/data",
+                "--workspace", "W",
+                "--python", "P",
+                "--worker-script", "S",
+                "--port", "8123",
+                "--core-exe", "C:/bin/core.exe",
+                "--claude", "C:/bin/claude.exe",
+                "--agy", "C:/bin/agy.exe",
+            ]
         );
         assert!(!args.iter().any(|a| a.contains("token")));
 
         let only_data = desktop_app_args(&flags(&[]), data).unwrap();
         assert_eq!(only_data.len(), 2);
+
+        // Unknown flags fall back to the in-process server.
+        assert!(desktop_app_args(&flags(&[("agy", "C:/bin/agy.exe"), ("unknown-flag", "1")]), data).is_none());
     }
 
     #[test]

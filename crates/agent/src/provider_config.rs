@@ -191,10 +191,22 @@ impl ProviderKeyStore {
                 },
             );
         }
-        RedactedProviderConfigView {
-            providers,
-            roles: self.roles.clone(),
+        let mut roles = self.roles.clone();
+        for role in [
+            &mut roles.solver,
+            &mut roles.step_verifier,
+            &mut roles.full_verifier,
+            &mut roles.narrator,
+            &mut roles.strategist,
+            &mut roles.sidetalk,
+        ] {
+            if role.provider == ProviderKind::ChatGpt
+                || role.base_url.as_deref().is_some_and(|u| base_url_is_safe(u).is_err())
+            {
+                role.base_url = None;
+            }
         }
+        RedactedProviderConfigView { providers, roles }
     }
 }
 
@@ -230,9 +242,33 @@ fn base_url_is_safe(u: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate per-role base URLs: ChatGPT roles never take a custom base URL, and any other
+/// role's base URL must pass [`base_url_is_safe`].
+pub fn validate_roles(roles: &RoleAssignment) -> Result<(), String> {
+    for (name, role) in [
+        ("solver", &roles.solver),
+        ("step_verifier", &roles.step_verifier),
+        ("full_verifier", &roles.full_verifier),
+        ("narrator", &roles.narrator),
+        ("strategist", &roles.strategist),
+        ("sidetalk", &roles.sidetalk),
+    ] {
+        if role.provider == ProviderKind::ChatGpt && role.base_url.is_some() {
+            return Err(
+                "ChatGPT uses OpenAI's Sign in with ChatGPT endpoints; it does not take a custom base URL".into(),
+            );
+        }
+        if let Some(url) = &role.base_url {
+            base_url_is_safe(url).map_err(|reason| format!("invalid base_url for role `{name}`: {reason}"))?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presets::ModelEndpointSpec;
 
     #[test]
     fn base_url_must_not_carry_secrets_on_write_or_read() {
@@ -264,5 +300,57 @@ mod tests {
         .unwrap();
         let view = serde_json::to_string(&stored.redacted_view()).unwrap();
         assert!(!view.contains("secret"), "{view}");
+    }
+
+    #[test]
+    fn validate_roles_rejects_chatgpt_base_url_and_unsafe_urls() {
+        let mut roles = RoleAssignment::for_provider(ProviderKind::ChatGpt);
+        validate_roles(&roles).unwrap();
+
+        roles.solver.base_url = Some("https://api.openai.com".into());
+        let err = validate_roles(&roles).unwrap_err();
+        assert!(err.contains("Sign in with ChatGPT"), "{err}");
+
+        let mut roles = RoleAssignment::for_provider(ProviderKind::OpenAi);
+        roles.narrator.base_url = Some("https://proxy.example/v1".into());
+        validate_roles(&roles).unwrap();
+
+        roles.sidetalk = ModelEndpointSpec {
+            provider: ProviderKind::ChatGpt,
+            model: "gpt-5".into(),
+            base_url: Some("https://evil.example".into()),
+        };
+        assert!(validate_roles(&roles).is_err());
+
+        let mut roles = RoleAssignment::for_provider(ProviderKind::OpenAi);
+        roles.step_verifier.base_url = Some("https://user:secret@example.org/v1".into());
+        let err = validate_roles(&roles).unwrap_err();
+        assert!(err.contains("step_verifier"), "{err}");
+        assert!(!err.contains("secret"), "error must not echo the URL: {err}");
+    }
+
+    #[test]
+    fn redacted_view_sanitizes_role_base_urls() {
+        let mut store = ProviderKeyStore::default();
+        store.roles.solver = ModelEndpointSpec {
+            provider: ProviderKind::ChatGpt,
+            model: "gpt-5".into(),
+            base_url: Some("https://evil.example/v1".into()),
+        };
+        store.roles.full_verifier = ModelEndpointSpec {
+            provider: ProviderKind::OpenAi,
+            model: "gpt-4.1-mini".into(),
+            base_url: Some("https://user:secret@example.org/v1".into()),
+        };
+        store.roles.strategist = ModelEndpointSpec {
+            provider: ProviderKind::OpenAi,
+            model: "gpt-4.1-mini".into(),
+            base_url: Some("https://safe.example/v1".into()),
+        };
+        let view = store.redacted_view();
+        assert_eq!(view.roles.solver.base_url, None);
+        assert_eq!(view.roles.full_verifier.base_url, None);
+        assert_eq!(view.roles.strategist.base_url.as_deref(), Some("https://safe.example/v1"));
+        assert!(!serde_json::to_string(&view).unwrap().contains("secret"));
     }
 }

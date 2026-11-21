@@ -232,6 +232,16 @@ fn build_router() -> Result<Router, String> {
     Ok(Router::new(registry, policy, ledger, &session, approver))
 }
 
+/// Resolve the fixed caller identity for this server process: `antigravity:<session>` when
+/// `CORE_CALLER_ROUTE` is `"antigravity"`, and `claude-code-cli:<session>` otherwise.
+fn resolve_caller(session: &str, route_env: Option<&str>) -> String {
+    let route = match route_env {
+        Some("antigravity") => "antigravity",
+        _ => "claude-code-cli",
+    };
+    format!("{route}:{session}")
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let router = match build_router() {
@@ -244,11 +254,7 @@ async fn main() {
     // The route that started this server (it labels every tool call and is part of each
     // approval digest): `CORE_CALLER_ROUTE=antigravity` on the Antigravity route; anything
     // else, or nothing, is the Claude Code route as before.
-    let route = match std::env::var("CORE_CALLER_ROUTE").as_deref() {
-        Ok("antigravity") => "antigravity",
-        _ => "claude-code-cli",
-    };
-    let caller = format!("{route}:{}", router.session());
+    let caller = resolve_caller(router.session(), std::env::var("CORE_CALLER_ROUTE").ok().as_deref());
     let server = CoreServer { router, caller };
     match server.serve(rmcp::transport::io::stdio()).await {
         Ok(running) => {
@@ -263,4 +269,18 @@ async fn main() {
     }
     // Dropping the router drops the worker, which closes its job and kills
     // the Python process tree.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_caller;
+
+    #[test]
+    fn resolve_caller_maps_known_routes_and_defaults_unknown() {
+        assert_eq!(resolve_caller("s-1", Some("antigravity")), "antigravity:s-1");
+        assert_eq!(resolve_caller("s-1", Some("claude-code-cli")), "claude-code-cli:s-1");
+        assert_eq!(resolve_caller("s-1", None), "claude-code-cli:s-1");
+        assert_eq!(resolve_caller("s-1", Some("")), "claude-code-cli:s-1");
+        assert_eq!(resolve_caller("s-1", Some("something-else")), "claude-code-cli:s-1");
+    }
 }

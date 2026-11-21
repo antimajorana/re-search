@@ -60,7 +60,7 @@ pub fn b64url_encode(data: &[u8]) -> String {
     out
 }
 
-/// Strict base64url decoding (no padding, no whitespace, no `+` or `/`).
+/// Strict base64url decoding (no padding, no whitespace, no `+` or `/`, canonical zero trailing bits).
 pub fn b64url_decode(s: &str) -> Option<Vec<u8>> {
     if s.len() % 4 == 1 {
         return None;
@@ -82,6 +82,9 @@ pub fn b64url_decode(s: &str) -> Option<Vec<u8>> {
             bits -= 8;
             out.push((buf >> bits) as u8);
         }
+    }
+    if bits > 0 && (buf & ((1u32 << bits) - 1)) != 0 {
+        return None;
     }
     Some(out)
 }
@@ -162,8 +165,19 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+pub fn try_now_s() -> Result<i64, &'static str> {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "system clock is before the Unix epoch")?
+        .as_secs();
+    if secs == 0 {
+        return Err("system clock is not set");
+    }
+    i64::try_from(secs).map_err(|_| "system clock overflow")
+}
+
 pub fn now_s() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    try_now_s().unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -183,6 +197,19 @@ mod tests {
         }
         assert!(b64url_decode("ab+c").is_none());
         assert!(b64url_decode("abcde").is_none());
+        // Non-canonical non-zero trailing bits must be rejected ("Zg" = "f", "Zm8" = "fo").
+        assert_eq!(b64url_decode("Zg").as_deref(), Some(b"f".as_slice()));
+        assert!(b64url_decode("Zh").is_none());
+        assert!(b64url_decode("Zv").is_none());
+        assert_eq!(b64url_decode("Zm8").as_deref(), Some(b"fo".as_slice()));
+        assert!(b64url_decode("Zm9").is_none());
+        assert!(b64url_decode("Zm_").is_none());
+    }
+
+    #[test]
+    fn try_now_s_returns_positive_unix_time() {
+        let t = try_now_s().expect("clock should be after unix epoch");
+        assert!(t > 1_700_000_000);
     }
 
     #[test]

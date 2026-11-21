@@ -17,6 +17,7 @@ pub mod routes_tools;
 pub mod sse;
 pub mod state;
 pub mod turn_runner;
+mod upload_codec;
 
 use auth::AuthGuard;
 use http_srv::serve_loop;
@@ -95,6 +96,7 @@ impl RunningDesktopServer {
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Release);
         self.sse.shutdown();
+        self.state.chatgpt.auth.cancel_login();
         self.state.stop_all_cli_turns();
     }
 }

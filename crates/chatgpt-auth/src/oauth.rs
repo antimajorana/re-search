@@ -62,7 +62,7 @@ impl Endpoints {
     pub fn loopback_mock(base: &str) -> Result<Self, String> {
         let base = base.trim_end_matches('/');
         let rest = base.strip_prefix("http://127.0.0.1:").ok_or("test endpoints must be http://127.0.0.1:<port>")?;
-        if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        if !rest.bytes().all(|b| b.is_ascii_digit()) || rest.parse::<u16>().ok().filter(|p| *p > 0).is_none() {
             return Err("test endpoints must be http://127.0.0.1:<port>".into());
         }
         Ok(Self {
@@ -88,6 +88,7 @@ pub struct AuthorizeRequest<'a> {
     pub nonce: &'a str,
     pub code_challenge: &'a str,
     pub ext_agent_host_id: &'a str,
+    pub prompt_consent: bool,
 }
 
 /// The authorize URL. `agent_name_hint` is sent only with `dynamic_agent_client`. No
@@ -108,6 +109,9 @@ pub fn authorize_url(ep: &Endpoints, r: &AuthorizeRequest<'_>) -> String {
     ];
     if r.client_id == DYNAMIC_CLIENT_ID {
         pairs.push(("agent_name_hint", AGENT_NAME_HINT));
+    }
+    if r.prompt_consent {
+        pairs.push(("prompt", "consent"));
     }
     let q: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={}", url_encode(v))).collect();
     format!("{}?{}", ep.authorize, q.join("&"))
@@ -256,11 +260,14 @@ fn parse_token_response(body: &[u8]) -> Result<TokenResponse, OAuthError> {
 }
 
 fn token_call(ep: &Endpoints, pairs: &[(&str, &str)], cfg: HttpCfg) -> Result<TokenResponse, OAuthError> {
-    let (status, body) = post_form(&ep.token, pairs, cfg)?;
-    if status != 200 {
-        return Err(rejected(status, &body));
-    }
-    parse_token_response(&body)
+    let (status, mut body) = post_form(&ep.token, pairs, cfg)?;
+    let res = if status != 200 {
+        Err(rejected(status, &body))
+    } else {
+        parse_token_response(&body)
+    };
+    zeroize::Zeroize::zeroize(&mut body);
+    res
 }
 
 /// Authorization-code exchange (form-encoded, public client: no secret).
@@ -295,15 +302,62 @@ pub fn refresh(ep: &Endpoints, client_id: &str, refresh_token: &str, cfg: HttpCf
     )
 }
 
+fn url_origin(url: &str) -> Option<&str> {
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme != "https" && scheme != "http" {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.is_empty() || authority.contains('@') || authority.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return None;
+    }
+    Some(&url[..scheme.len() + 3 + authority.len()])
+}
+
+fn pin_revocation_endpoint(issuer: &str, candidate: &str) -> Option<String> {
+    if candidate.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return None;
+    }
+    let scheme_ok = candidate.starts_with("https://")
+        || (issuer.starts_with("http://127.0.0.1:") && candidate.starts_with("http://127.0.0.1:"));
+    if !scheme_ok {
+        return None;
+    }
+    let iss_origin = url_origin(issuer)?;
+    let cand_origin = url_origin(candidate)?;
+    if cand_origin != iss_origin {
+        return None;
+    }
+    let tail = &candidate[cand_origin.len()..];
+    if !tail.starts_with('/') {
+        return None;
+    }
+    Some(candidate.to_string())
+}
+
+/// Fetch `{issuer}/.well-known/openid-configuration` and return `revocation_endpoint`
+/// only when it matches `ep.issuer`'s exact scheme and authority.
+pub fn discover_revocation_endpoint(ep: &Endpoints, cfg: HttpCfg) -> Option<String> {
+    let url = format!("{}/.well-known/openid-configuration", ep.issuer.trim_end_matches('/'));
+    let mut resp = agent_for(&url, cfg).get(&url).call().ok()?;
+    if resp.status().as_u16() != 200 {
+        return None;
+    }
+    let bytes = resp.body_mut().with_config().limit(BODY_LIMIT).read_to_vec().ok()?;
+    let v: Value = serde_json::from_slice(&bytes).ok()?;
+    let raw = v.get("revocation_endpoint").and_then(Value::as_str)?;
+    pin_revocation_endpoint(&ep.issuer, raw)
+}
+
 /// Revoke the renewable session. HTTP 200 (even empty) is success.
 pub fn revoke(ep: &Endpoints, client_id: &str, refresh_token: &str, cfg: HttpCfg) -> Result<(), OAuthError> {
-    let (status, body) =
-        post_form(&ep.revoke, &[("token", refresh_token), ("token_type_hint", "refresh_token"), ("client_id", client_id)], cfg)?;
-    if status == 200 {
-        Ok(())
-    } else {
-        Err(rejected(status, &body))
-    }
+    let discovered = discover_revocation_endpoint(ep, cfg);
+    let url = discovered.as_deref().unwrap_or(&ep.revoke);
+    let (status, mut body) =
+        post_form(url, &[("token", refresh_token), ("token_type_hint", "refresh_token"), ("client_id", client_id)], cfg)?;
+    let res = if status == 200 { Ok(()) } else { Err(rejected(status, &body)) };
+    zeroize::Zeroize::zeroize(&mut body);
+    res
 }
 
 /// The issuer's JSON Web Key Set.
@@ -325,6 +379,9 @@ pub fn grants_plan(scope: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{MockAuth, Recorded, Reply};
+    use serde_json::json;
+    use std::sync::Arc;
 
     #[test]
     fn authorize_url_uses_documented_names_and_no_token_hint() {
@@ -336,6 +393,7 @@ mod tests {
             nonce: "no",
             code_challenge: "ch",
             ext_agent_host_id: "urn:uuid:00000000-0000-4000-8000-000000000000",
+            prompt_consent: false,
         };
         let u = authorize_url(&ep, &r);
         assert!(u.starts_with("https://auth.openai.com/api/accounts/authorize?response_type=code&client_id=dynamic_agent_client&"));
@@ -350,16 +408,74 @@ mod tests {
             assert!(u.contains(want), "{want} missing in {u}");
         }
         assert!(!u.contains("id_token_hint"));
+        assert!(!u.contains("prompt="));
         let again = authorize_url(&ep, &AuthorizeRequest { client_id: "oaiapp_x", ..r });
         assert!(!again.contains("agent_name_hint"), "hint only on first registration");
+        assert!(!again.contains("prompt="));
+        let consent = authorize_url(&ep, &AuthorizeRequest { client_id: "oaiapp_x", prompt_consent: true, ..r });
+        assert!(consent.contains("&prompt=consent"));
     }
 
     #[test]
     fn mock_endpoints_are_loopback_only() {
         assert!(Endpoints::loopback_mock("http://127.0.0.1:8080").is_ok());
-        for bad in ["https://127.0.0.1:1", "http://localhost:1", "http://127.0.0.1:1@evil", "http://10.0.0.1:1", "http://127.0.0.1:"] {
+        for bad in [
+            "https://127.0.0.1:1",
+            "http://localhost:1",
+            "http://127.0.0.1:1@evil",
+            "http://10.0.0.1:1",
+            "http://127.0.0.1:",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:99999",
+            "http://127.0.0.1:+8080",
+        ] {
             assert!(Endpoints::loopback_mock(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn revocation_discovery_pins_origin_and_falls_back() {
+        assert_eq!(
+            pin_revocation_endpoint("https://auth.openai.com", "https://auth.openai.com/oauth/revoke").as_deref(),
+            Some("https://auth.openai.com/oauth/revoke")
+        );
+        for bad in [
+            "http://auth.openai.com/oauth/revoke",
+            "https://auth.openai.com.evil.test/oauth/revoke",
+            "https://auth.openai.com@evil.test/oauth/revoke",
+            "https://evil.test/oauth/revoke",
+            "http://127.0.0.1:8080/oauth/revoke",
+            "https://auth.openai.com?x=1",
+        ] {
+            assert!(pin_revocation_endpoint("https://auth.openai.com", bad).is_none(), "{bad}");
+        }
+        assert!(pin_revocation_endpoint("http://127.0.0.1:8080", "http://127.0.0.1:8080/custom/revoke").is_some());
+        assert!(pin_revocation_endpoint("http://127.0.0.1:8080", "http://127.0.0.1:9090/custom/revoke").is_none());
+
+        // Live loopback test: same-origin discovered endpoint is used.
+        let mock = MockAuth::start(Arc::new(|r: &Recorded| match (r.method.as_str(), r.path.as_str()) {
+            ("GET", "/.well-known/openid-configuration") => {
+                let host = r.header("host").unwrap();
+                Reply::json(200, &json!({ "revocation_endpoint": format!("http://{host}/discovered/revoke") }))
+            }
+            ("POST", "/discovered/revoke") => Reply { status: 200, content_type: "application/json", body: Vec::new() },
+            _ => Reply::json(404, &json!({})),
+        }));
+        let ep = Endpoints::loopback_mock(&mock.base).unwrap();
+        revoke(&ep, "oaiapp_1", "rt-1", HttpCfg::default()).unwrap();
+        assert_eq!(mock.count("/discovered/revoke"), 1);
+
+        // Cross-origin discovered endpoint is rejected and falls back to ep.revoke.
+        let mock2 = MockAuth::start(Arc::new(|r: &Recorded| match (r.method.as_str(), r.path.as_str()) {
+            ("GET", "/.well-known/openid-configuration") => {
+                Reply::json(200, &json!({ "revocation_endpoint": "https://evil.example/steal" }))
+            }
+            ("POST", "/api/accounts/oauth/revoke") => Reply { status: 200, content_type: "application/json", body: Vec::new() },
+            _ => Reply::json(404, &json!({})),
+        }));
+        let ep2 = Endpoints::loopback_mock(&mock2.base).unwrap();
+        revoke(&ep2, "oaiapp_1", "rt-1", HttpCfg::default()).unwrap();
+        assert_eq!(mock2.count("/api/accounts/oauth/revoke"), 1);
     }
 
     #[test]
