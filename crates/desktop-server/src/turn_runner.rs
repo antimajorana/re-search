@@ -1,14 +1,14 @@
 //! Background solver turn runner, research router builder, and SSE EventSink.
 
 use crate::approver::UiApprover;
-use crate::sse::SseHub;
+pub(crate) use crate::session_view::{reconstruct_session_view, SseEventSink};
 use crate::state::DesktopState;
+use crate::turn_control::ApiTurnGuard;
 use agent::{
-    inspect_session_for_resume, resume_agent_loop, run_research_loop, AgentConfig, EventSink,
-    GuardrailConfig, ProviderKind, ResumeConfig, SessionOutcome, DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS,
-    DEFAULT_SYSTEM_PROMPT,
+    inspect_session_for_resume, resume_autonomous_research_loop, run_autonomous_research_loop, AgentConfig,
+    AutonomousConfig, AutonomousRoles, CancelToken, GuardrailConfig, ProviderKind,
+    ResumeConfig, SessionOutcome, DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS, RESEARCH_SYSTEM_PROMPT,
 };
-use ledger::AppendedEvent;
 use research_tools::{register_research_tools, research_policy, ResearchEnv};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -50,11 +50,11 @@ pub(crate) fn spawn_turn_thread(
         }
     };
 
-    // A subscription-CLI turn's stop handle is registered before the thread exists, so a
-    // stop sent right after the 202 reaches it (the turn checks it before starting anything).
-    let registered = if let Some(kind) = on_cli_route {
+    // Register stop handles before spawning the worker thread so an immediate `POST .../stop`
+    // after `202 Accepted` reaches both CLI and in-core API/ChatGPT turns.
+    let (registered_cli, registered_api) = if let Some(kind) = on_cli_route {
         match crate::cli_turn::Registered::new(&state, &session_id, kind) {
-            Ok(r) => Some((r, kind)),
+            Ok(r) => (Some((r, kind)), None),
             Err(e) => {
                 if let Ok(mut active) = state.active_turns.lock() {
                     active.remove(&session_id);
@@ -63,7 +63,15 @@ pub(crate) fn spawn_turn_thread(
             }
         }
     } else {
-        None
+        match ApiTurnGuard::new(&state, &session_id) {
+            Ok(g) => (None, Some(g)),
+            Err(e) => {
+                if let Ok(mut active) = state.active_turns.lock() {
+                    active.remove(&session_id);
+                }
+                return Err((500, e));
+            }
+        }
     };
 
     let thread_state = Arc::clone(&state);
@@ -71,13 +79,17 @@ pub(crate) fn spawn_turn_thread(
     std::thread::Builder::new()
         .name(format!("turn-{session_id}"))
         .spawn(move || {
-            let outcome = match &registered {
-                Some((reg, kind)) => {
+            let outcome = match (&registered_cli, &registered_api) {
+                (Some((reg, kind)), _) => {
                     crate::cli_turn::run_cli_turn(&thread_state, &thread_session, &req_json, &prompt, &reg.stop, *kind)
                 }
-                None => run_session_turn(&thread_state, &thread_session, &req_json, &prompt),
+                (_, Some(api_guard)) => {
+                    run_session_turn(&thread_state, &thread_session, &req_json, &prompt, &api_guard.cancel)
+                }
+                (None, None) => Err("missing turn registration".into()),
             };
-            drop(registered);
+            drop(registered_cli);
+            drop(registered_api);
             if let Ok(mut active) = thread_state.active_turns.lock() {
                 active.remove(&thread_session);
             }
@@ -112,7 +124,11 @@ fn run_session_turn(
     session_id: &str,
     req: &Value,
     prompt: &str,
+    cancel: &CancelToken,
 ) -> Result<String, String> {
+    if cancel.is_cancelled() {
+        return Err("stopped by user".into());
+    }
     let meta = state.load_meta(session_id);
     let ui = state.load_ui_settings();
     let provider_str = req
@@ -147,45 +163,86 @@ fn run_session_turn(
         .filter(|&n| n >= 1)
         .unwrap_or(DEFAULT_MAX_TOKENS);
 
-    let env = state.research_env_for_session(session_id)?;
+    let env = Arc::new(state.research_env_for_session(session_id)?);
     let transport = state.build_transport(provider, &model)?;
+    let resolve_role = |role_key: &str| -> Option<(Box<dyn agent::Transport>, String)> {
+        let obj = req
+            .get(role_key)
+            .or_else(|| ui.role_presets.as_ref().and_then(|p| p.get(role_key)))?;
+        let p = ProviderKind::parse(obj.get("provider")?.as_str()?).ok()?;
+        let m = p.resolve_model(obj.get("model").and_then(Value::as_str).unwrap_or(""));
+        if p == provider && m == model {
+            return None;
+        }
+        state.build_transport(p, &m).ok().map(|t| (t, m))
+    };
+    let v_built = resolve_role("full_verifier").or_else(|| resolve_role("verifier"));
+    let s_built = resolve_role("strategist");
+    let roles = AutonomousRoles {
+        verifier: v_built.as_ref().map(|(t, m)| (&**t as &dyn agent::Transport, m.as_str())),
+        strategist: s_built.as_ref().map(|(t, m)| (&**t as &dyn agent::Transport, m.as_str())),
+    };
+
     let (router, containment, contained) =
-        build_desktop_router(Arc::clone(state), Arc::new(env), session_id)?;
+        build_desktop_router(Arc::clone(state), Arc::clone(&env), session_id)?;
+    let caller = format!("agent:{}:{session_id}", transport.info().provider);
+    if let Ok(grants) = state.network_session_grants.lock() {
+        if let Some(g) = grants.get(&(session_id.to_string(), caller.clone())) {
+            router.seed_network_read_grant(&caller, g.clone());
+        }
+    }
+
+    let guardrails = GuardrailConfig {
+        verification_mode: req
+            .get("verification_mode")
+            .and_then(Value::as_bool)
+            .or_else(|| meta.as_ref().map(|m| m.verification_mode))
+            .unwrap_or(false),
+        calculation_mode: req
+            .get("calculation_mode")
+            .and_then(Value::as_bool)
+            .or_else(|| meta.as_ref().map(|m| m.calculation_mode))
+            .unwrap_or(false),
+        pinned_conventions: req
+            .get("pinned_conventions")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| meta.as_ref().and_then(|m| m.pinned_conventions.clone()))
+            .or(ui.pinned_conventions),
+        ..GuardrailConfig::default()
+    };
+    let auto_cfg = AutonomousConfig {
+        guardrails,
+        use_strategist: req.get("use_strategist").and_then(Value::as_bool).unwrap_or(false),
+        ..AutonomousConfig::default()
+    };
+
     let ledger = state.open_ledger()?;
     let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
     let mut sink = SseEventSink::new(Arc::clone(&state.sse), session_id);
 
     let outcome = if existing.is_empty() {
-        let guardrails = GuardrailConfig {
-            verification_mode: req
-                .get("verification_mode")
-                .and_then(Value::as_bool)
-                .or_else(|| meta.as_ref().map(|m| m.verification_mode))
-                .unwrap_or(false),
-            calculation_mode: req
-                .get("calculation_mode")
-                .and_then(Value::as_bool)
-                .or_else(|| meta.as_ref().map(|m| m.calculation_mode))
-                .unwrap_or(false),
-            pinned_conventions: req
-                .get("pinned_conventions")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .or_else(|| meta.as_ref().and_then(|m| m.pinned_conventions.clone()))
-                .or(ui.pinned_conventions),
-            ..GuardrailConfig::default()
-        };
         let cfg = AgentConfig {
             prompt: prompt.to_string(),
             model_requested,
             model,
-            system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
+            system_prompt: RESEARCH_SYSTEM_PROMPT.to_string(),
             max_turns,
             max_tokens,
             containment,
             contained,
         };
-        run_research_loop(&*transport, &router, &ledger, &cfg, &guardrails, &mut sink)?
+        run_autonomous_research_loop(
+            &*transport,
+            &roles,
+            &router,
+            &ledger,
+            &env,
+            &cfg,
+            &auto_cfg,
+            Some(cancel),
+            &mut sink,
+        )?
     } else {
         let defs = router.registry().defs();
         let expected_defs: Vec<tools::ToolDef> = defs.iter().map(|d| (*d).clone()).collect();
@@ -206,8 +263,24 @@ fn run_session_turn(
             containment,
             contained,
         };
-        resume_agent_loop(&*transport, &router, &ledger, &cfg, &mut sink)?
+        resume_autonomous_research_loop(
+            &*transport,
+            &roles,
+            &router,
+            &ledger,
+            &env,
+            &cfg,
+            &auto_cfg,
+            Some(cancel),
+            &mut sink,
+        )?
     };
+
+    if let Some(grant) = router.active_network_read_grant(&caller) {
+        if let Ok(mut grants) = state.network_session_grants.lock() {
+            grants.insert((session_id.to_string(), caller), grant);
+        }
+    }
 
     match outcome {
         SessionOutcome::Aborted { reason, .. } => Err(reason),
@@ -305,212 +378,9 @@ pub(crate) fn build_desktop_router(
     register_research_tools(&mut registry, env);
 
     let ledger = state.open_ledger()?;
-    let approver = Arc::new(UiApprover::new(state, containment.clone(), contained));
+    let approver = Arc::new(
+        UiApprover::new(state, containment.clone(), contained).with_session_network_grant(true),
+    );
     let router = Router::new(registry, research_policy(), ledger, session, approver);
     Ok((router, containment, contained))
-}
-
-pub(crate) struct SseEventSink {
-    sse: Arc<SseHub>,
-    session_id: String,
-    final_text: String,
-    tool_calls: std::collections::HashMap<String, (String, Value)>,
-}
-
-impl SseEventSink {
-    pub(crate) fn new(sse: Arc<SseHub>, session_id: &str) -> Self {
-        Self { sse, session_id: session_id.to_string(), final_text: String::new(), tool_calls: Default::default() }
-    }
-
-    pub(crate) fn final_text(&self) -> &str {
-        &self.final_text
-    }
-}
-
-/// The subscription-CLI routes (`cli_route`) feed the same SSE events as the API route;
-/// `vendor.builtin_tool` (Antigravity) goes out as a `session_event` the UI shows as a warning.
-impl cli_route::EventSink for SseEventSink {
-    fn on_event(&mut self, receipt: &AppendedEvent, kind: &str, data: &Value) -> Result<(), String> {
-        EventSink::on_event(self, receipt, kind, data)
-    }
-}
-
-impl EventSink for SseEventSink {
-    fn on_event(&mut self, receipt: &AppendedEvent, kind: &str, data: &Value) -> Result<(), String> {
-        match kind {
-            "model.text" => {
-                let text = data.get("text").and_then(Value::as_str).unwrap_or("");
-                self.final_text = text.to_string();
-                self.sse.emit(
-                    &self.session_id,
-                    "session_event",
-                    json!({ "seq": receipt.seq, "kind": kind, "data": data }),
-                );
-            }
-            "model.thinking" => {
-                let chars = data.get("chars").and_then(Value::as_u64).unwrap_or(0);
-                let redacted = data.get("redacted").and_then(Value::as_bool).unwrap_or(false);
-                let note = if redacted {
-                    format!("[redacted reasoning block: {chars} chars]\n")
-                } else {
-                    format!("[reasoning block: {chars} chars]\n")
-                };
-                self.sse.emit(
-                    &self.session_id,
-                    "thinking_delta",
-                    json!({ "seq": receipt.seq, "delta": note }),
-                );
-            }
-            "model.tool_use" => {
-                let cid = data.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-                let tname = data.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-                let targs = data.get("input").cloned().unwrap_or(Value::Null);
-                if !cid.is_empty() {
-                    self.tool_calls.insert(cid.clone(), (tname.clone(), targs.clone()));
-                }
-                self.sse.emit(
-                    &self.session_id,
-                    "tool_trace",
-                    json!({
-                        "seq": receipt.seq,
-                        "call_id": cid,
-                        "tool": tname,
-                        "args": targs,
-                        "status": "running",
-                    }),
-                );
-            }
-            "model.tool_result" => {
-                let ok = !data.get("is_error").and_then(Value::as_bool).unwrap_or(false);
-                let cid = data.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
-                let (tname, targs) = self
-                    .tool_calls
-                    .get(cid)
-                    .cloned()
-                    .unwrap_or_else(|| ("tool".to_string(), Value::Null));
-                self.sse.emit(
-                    &self.session_id,
-                    "tool_trace",
-                    json!({
-                        "seq": receipt.seq,
-                        "call_id": cid,
-                        "tool": tname,
-                        "args": targs,
-                        "output": data.get("text").and_then(Value::as_str).unwrap_or(""),
-                        "ok": ok,
-                        "status": if ok { "ok" } else { "error" },
-                    }),
-                );
-            }
-            "proof.entry" | "proof.supersede" | "proof.verification" => {
-                self.sse.emit(
-                    &self.session_id,
-                    "dag_updated",
-                    json!({ "seq": receipt.seq, "kind": kind, "payload": data }),
-                );
-            }
-            _ => {
-                self.sse.emit(
-                    &self.session_id,
-                    "session_event",
-                    json!({ "seq": receipt.seq, "kind": kind, "data": data }),
-                );
-            }
-        }
-        Ok(())
-    }
-}
-
-/// One warning line for a `vendor.builtin_tool` event.
-pub(crate) fn builtin_tool_warning(data: &Value) -> String {
-    let name: String = data.get("tool_name").and_then(Value::as_str).unwrap_or("?").chars().take(80).collect();
-    let state = data.get("state").and_then(Value::as_str).unwrap_or("");
-    let outcome = if data.get("denied_or_failed").and_then(Value::as_bool).unwrap_or(false) {
-        "reported denied or failed"
-    } else if state == "DONE" {
-        "reported finished"
-    } else {
-        "reported running"
-    };
-    format!(
-        "Warning: the Antigravity CLI's built-in tool `{name}` {outcome}. It is outside re:Search's tools, policy and approvals; re:Search only records what the CLI reported (vendor-sandboxed, not confined to re:Search tools)."
-    )
-}
-
-pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
-    let mut messages = Vec::new();
-    let mut traces = Vec::new();
-    let mut sources = Vec::new();
-    let mut pending_turn_traces: Vec<Value> = Vec::new();
-    let mut pending_thinking = String::new();
-    let mut tool_calls: std::collections::HashMap<String, (String, Value)> =
-        std::collections::HashMap::new();
-
-    for ev in events {
-        match ev.kind.as_str() {
-            "session.start" | "session.resume" => {
-                if let Some(prompt) = ev.payload.get("prompt").and_then(Value::as_str) {
-                    messages.push(json!({ "role": "user", "text": prompt, "seq": ev.seq }));
-                }
-            }
-            "model.thinking" => {
-                let chars = ev.payload.get("chars").and_then(Value::as_u64).unwrap_or(0);
-                pending_thinking.push_str(&format!("[reasoning block: {chars} chars]\n"));
-            }
-            "model.tool_use" => {
-                let cid = ev.payload.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-                let tname = ev.payload.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-                let targs = ev.payload.get("input").cloned().unwrap_or(Value::Null);
-                if !cid.is_empty() {
-                    tool_calls.insert(cid.clone(), (tname.clone(), targs.clone()));
-                }
-                traces.push(json!({
-                    "seq": ev.seq,
-                    "call_id": cid,
-                    "tool": tname,
-                    "args": targs,
-                    "status": "running",
-                }));
-            }
-            "model.tool_result" => {
-                let ok = !ev.payload.get("is_error").and_then(Value::as_bool).unwrap_or(false);
-                let cid = ev.payload.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
-                let (tname, targs) = tool_calls
-                    .get(cid)
-                    .cloned()
-                    .unwrap_or_else(|| ("tool".to_string(), Value::Null));
-                let item = json!({
-                    "seq": ev.seq,
-                    "call_id": cid,
-                    "tool": tname,
-                    "args": targs,
-                    "output": ev.payload.get("text").and_then(Value::as_str).unwrap_or(""),
-                    "ok": ok,
-                    "status": if ok { "ok" } else { "error" },
-                });
-                traces.push(item.clone());
-                pending_turn_traces.push(item);
-            }
-            "model.text" | "model.refusal" => {
-                if let Some(text) = ev.payload.get("text").and_then(Value::as_str) {
-                    messages.push(json!({
-                        "role": "assistant",
-                        "text": text,
-                        "seq": ev.seq,
-                        "thinking": std::mem::take(&mut pending_thinking),
-                        "tool_traces": std::mem::take(&mut pending_turn_traces),
-                    }));
-                }
-            }
-            "source.ingested" => {
-                sources.push(ev.payload.clone());
-            }
-            // Antigravity: a built-in tool of the CLI, outside re:Search's router. Shown, never hidden.
-            "vendor.builtin_tool" => {
-                messages.push(json!({ "role": "warning", "text": builtin_tool_warning(&ev.payload), "seq": ev.seq }));
-            }
-            _ => {}
-        }
-    }
-    (messages, traces, sources)
 }

@@ -50,12 +50,12 @@ pub fn arxiv_search_def() -> ToolDef {
     use policy::EffectClass;
     ToolDef {
         id: ARXIV_SEARCH.into(),
-        description: "Search arXiv metadata/BibTeX and optionally unpack .tar.gz LaTeX e-print sources.".into(),
+        description: "Search arXiv metadata/BibTeX (supports inline prefixes like `au:Matsui AND ti:split` or `cat:math-ph`, or bare arXiv IDs) and optionally unpack `.tar.gz`/`.gz` LaTeX e-print sources.".into(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "query": { "type": "string", "maxLength": 500 },
-                "field": { "type": "string", "enum": ["all", "title", "author", "abstract", "id"] },
+                "field": { "type": "string", "enum": ["all", "title", "author", "abstract", "category", "id"] },
                 "max_results": { "type": "integer", "minimum": 1, "maximum": 20 },
                 "include_source": { "type": "boolean" },
                 "section_filter": { "type": "string", "maxLength": 200 }
@@ -178,15 +178,7 @@ fn fetch_atom_feed(env: &ResearchEnv, req: &ArxivSearchRequest) -> Result<Vec<u8
         let enc = utf8_percent_encode(&id, NON_ALPHANUMERIC).to_string();
         format!("{base}/api/query?id_list={enc}&max_results={max_results}")
     } else {
-        let prefix = match req.field.as_deref().unwrap_or("all") {
-            "all" => "all",
-            "title" => "ti",
-            "author" => "au",
-            "abstract" => "abs",
-            other => return Err(format!("unsupported arXiv field `{other}`")),
-        };
-        let sanitized = sanitize_arxiv_query(q);
-        let search_expr = format!("{prefix}:{sanitized}");
+        let search_expr = build_arxiv_search_expr(req.field.as_deref(), q)?;
         let enc = utf8_percent_encode(&search_expr, NON_ALPHANUMERIC).to_string();
         format!("{base}/api/query?search_query={enc}&max_results={max_results}")
     };
@@ -194,11 +186,108 @@ fn fetch_atom_feed(env: &ResearchEnv, req: &ArxivSearchRequest) -> Result<Vec<u8
     fetch_bytes_allowlisted(&url, &env.network_endpoints, MAX_METADATA_BYTES)
 }
 
+const ARXIV_FIELD_PREFIXES: &[&str] = &[
+    "all:", "ti:", "au:", "abs:", "co:", "jr:", "cat:", "rn:", "id:",
+];
+
+fn build_arxiv_search_expr(field: Option<&str>, raw: &str) -> Result<String, String> {
+    let explicit_prefix = match field.unwrap_or("all") {
+        "all" => None,
+        "title" | "ti" => Some("ti"),
+        "author" | "au" => Some("au"),
+        "abstract" | "abs" => Some("abs"),
+        "category" | "cat" => Some("cat"),
+        other => return Err(format!("unsupported arXiv field `{other}`")),
+    };
+    let sanitized = sanitize_arxiv_query(raw);
+    if sanitized.is_empty() {
+        return Err("`query` must not be empty after sanitization".into());
+    }
+    let has_inline_prefix = query_has_field_prefix(&sanitized);
+    Ok(match explicit_prefix {
+        None if has_inline_prefix => sanitized,
+        None => format!("all:{sanitized}"),
+        Some(p) if has_inline_prefix && sanitized.to_ascii_lowercase().starts_with(&format!("{p}:")) => {
+            sanitized
+        }
+        Some(p) if has_inline_prefix => format!("{p}:({sanitized})"),
+        Some(p) => format!("{p}:{sanitized}"),
+    })
+}
+
+fn query_has_field_prefix(q: &str) -> bool {
+    q.split_whitespace().any(|tok| {
+        let trimmed = tok.trim_start_matches(['(', '"']);
+        let low = trimmed.to_ascii_lowercase();
+        ARXIV_FIELD_PREFIXES
+            .iter()
+            .any(|p| low.starts_with(p) && low.len() > p.len())
+    })
+}
+
+fn normalize_inline_prefix(tok: &str) -> String {
+    let leading_parens: String = tok.chars().take_while(|&c| c == '(').collect();
+    let rest = &tok[leading_parens.len()..];
+    let Some((head, tail)) = rest.split_once(':') else {
+        return tok.to_string();
+    };
+    if tail.is_empty() {
+        return tok.to_string();
+    }
+    let mapped = match head.to_ascii_lowercase().as_str() {
+        "author" => Some("au"),
+        "title" => Some("ti"),
+        "abstract" => Some("abs"),
+        "category" => Some("cat"),
+        "all" => Some("all"),
+        "ti" => Some("ti"),
+        "au" => Some("au"),
+        "abs" => Some("abs"),
+        "co" => Some("co"),
+        "jr" => Some("jr"),
+        "cat" => Some("cat"),
+        "rn" => Some("rn"),
+        "id" => Some("id"),
+        _ => None,
+    };
+    match mapped {
+        Some(p) => format!("{leading_parens}{p}:{tail}"),
+        None => tok.to_string(),
+    }
+}
+
 fn sanitize_arxiv_query(raw: &str) -> String {
-    raw.split_whitespace()
+    let quotes_even = raw.bytes().filter(|&b| b == b'"').count().is_multiple_of(2);
+    let mut depth = 0i32;
+    let mut parens_balanced = true;
+    for ch in raw.chars() {
+        if ch == '(' {
+            depth += 1;
+        } else if ch == ')' {
+            depth -= 1;
+            if depth < 0 {
+                parens_balanced = false;
+                break;
+            }
+        }
+    }
+    if depth != 0 {
+        parens_balanced = false;
+    }
+    let cleaned: String = raw
+        .chars()
+        .map(|ch| match ch {
+            '"' if !quotes_even => ' ',
+            '(' | ')' if !parens_balanced => ' ',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect();
+    cleaned
+        .split_whitespace()
         .map(|tok| match tok.to_ascii_uppercase().as_str() {
             "AND" | "OR" | "ANDNOT" => tok.to_ascii_uppercase(),
-            _ => tok.replace(['(', ')', '"'], " "),
+            _ => normalize_inline_prefix(tok),
         })
         .collect::<Vec<_>>()
         .join(" ")

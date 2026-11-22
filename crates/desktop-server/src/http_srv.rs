@@ -216,7 +216,10 @@ fn dispatch_api(
             write_api_res(&mut stream, handle_post_approval(state, id, call_id, &req.body));
         }
         ("POST", ["api", "sessions", id, "stop"]) => {
-            write_api_res(&mut stream, crate::cli_turn::handle_stop_turn(state, id));
+            write_api_res(&mut stream, crate::turn_control::handle_stop_turn(state, id));
+        }
+        ("POST", ["api", "workspace", "pick"]) => {
+            write_api_res(&mut stream, crate::workspace_ops::handle_pick_workspace(state));
         }
         ("POST", ["api", "sessions", id, "upload"]) => {
             let ct = req.header("content-type");
@@ -224,6 +227,12 @@ fn dispatch_api(
         }
         ("GET", ["api", "sessions", id, "workspace"]) => {
             write_api_res(&mut stream, handle_workspace(state, id, &req.query));
+        }
+        ("PUT", ["api", "sessions", id, "workspace"]) => {
+            write_api_res(
+                &mut stream,
+                crate::workspace_ops::handle_put_session_workspace(state, id, &req.body),
+            );
         }
         ("GET", ["api", "sessions", id, "workspace", "file"]) => {
             write_api_res(&mut stream, handle_workspace_file(state, id, &req.query));

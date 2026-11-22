@@ -92,6 +92,20 @@ export function sendMessage(id, payload) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/messages`, payload);
 }
 
+export function stopTurn(id) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/stop`, {});
+}
+
+export function pickWorkspaceFolder() {
+  return rawJson('POST', '/api/workspace/pick', {});
+}
+
+export function setSessionWorkspace(id, workspaceRoot) {
+  return rawJson('PUT', `/api/sessions/${encodeURIComponent(id)}/workspace`, {
+    workspace_root: workspaceRoot,
+  });
+}
+
 export function respondApproval(id, callId, payload) {
   return rawJson(
     'POST',
@@ -187,7 +201,9 @@ export function openSessionEvents(id, handlers) {
   const es = new EventSource(url);
   const eventTypes = [
     'session_event',
+    'text_delta',
     'thinking_delta',
+    'round_reset',
     'tool_trace',
     'approval_requested',
     'approval_resolved',

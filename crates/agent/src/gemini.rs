@@ -3,10 +3,10 @@
 use crate::http::{
     build_ureq_agent, config_err, malformed_response_err, post_json, scrub_bytes, validate_base_url, SecretKey,
 };
+use crate::stream_http::post_json_cancellable;
 use crate::transport::{
-    ContentBlock, Message, ModelRequest, ModelResponse, PreparedRequest, ProviderKind, Role, StopReason, ToolSpec,
-    Transport,
-    TransportError, TransportInfo, DEFAULT_GEMINI_BASE, DEFAULT_GEMINI_MODEL,
+    ContentBlock, Message, ModelRequest, ModelResponse, PreparedRequest, ProviderKind, Role, StopReason,
+    StreamObserver, ToolSpec, Transport, TransportError, TransportInfo, DEFAULT_GEMINI_BASE, DEFAULT_GEMINI_MODEL,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -107,6 +107,17 @@ impl Transport for GeminiTransport {
         let secret = self.key.as_str();
         let headers = [("x-goog-api-key", secret)];
         let raw = post_json(&self.agent, &self.endpoint, &headers, &prepared.body, secret)?;
+        parse_gemini_response(raw, secret)
+    }
+
+    fn send_prepared_streaming(
+        &self,
+        prepared: &PreparedRequest,
+        observer: &mut dyn StreamObserver,
+    ) -> Result<ModelResponse, TransportError> {
+        let secret = self.key.as_str();
+        let headers = [("x-goog-api-key", secret)];
+        let raw = post_json_cancellable(&self.agent, &self.endpoint, &headers, &prepared.body, secret, observer)?;
         parse_gemini_response(raw, secret)
     }
 }

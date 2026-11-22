@@ -350,10 +350,19 @@ pub fn handle_post_approval(
         .get("approved")
         .and_then(Value::as_bool)
         .ok_or_else(|| bad("`approved` boolean is required"))?;
-    state.resolve_pending(session_id, call_id, digest, approved)?;
+    let approve_for_session = val
+        .get("approve_for_session")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    state.resolve_pending(session_id, call_id, digest, approved, approve_for_session)?;
     Ok((
         200,
-        json!({ "ok": true, "call_id": call_id, "approved": approved }),
+        json!({
+            "ok": true,
+            "call_id": call_id,
+            "approved": approved,
+            "approve_for_session": approve_for_session,
+        }),
     ))
 }
 

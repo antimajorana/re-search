@@ -316,6 +316,11 @@ fn is_probable_tar(bytes: &[u8]) -> bool {
     stored_sum == unsigned_sum || (signed_sum >= 0 && stored_sum == signed_sum as u32)
 }
 
+const KNOWN_GZIP_INNER_EXTS: &[&str] = &[
+    "tex", "ltx", "sty", "cls", "bib", "bbl", "md", "markdown", "txt", "csv", "tsv", "json", "py",
+    "log", "yml", "yaml",
+];
+
 fn suggested_single_gzip_name(file_hint: &str) -> String {
     let base = file_hint.rsplit(['/', '\\']).next().unwrap_or(file_hint);
     let stripped = if base.len() > 3 && base.as_bytes()[base.len() - 3..].eq_ignore_ascii_case(b".gz") {
@@ -333,7 +338,10 @@ fn suggested_single_gzip_name(file_hint: &str) -> String {
     } else {
         trimmed.to_string()
     };
-    let candidate = if stem.contains('.') {
+    let has_known_ext = stem
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| KNOWN_GZIP_INNER_EXTS.contains(&ext.to_ascii_lowercase().as_str()));
+    let candidate = if has_known_ext {
         stem
     } else {
         format!("{stem}.tex")

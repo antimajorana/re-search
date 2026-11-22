@@ -23,6 +23,8 @@ let currentSessionId = null;
 let onPromptPick = null;
 let onNotify = null;
 let traceSeq = 0;
+let liveStreamText = '';
+let liveRenderPending = false;
 
 export function initStream(opts) {
   streamEl = document.getElementById('message-stream');
@@ -57,6 +59,8 @@ function scrollToBottom() {
 
 export function renderSessionStream(sessionId, sessionPayload) {
   currentSessionId = sessionId;
+  liveStreamText = '';
+  liveRenderPending = false;
   const inner = getInnerContainer();
   if (!inner) return;
   inner.innerHTML = '';
@@ -246,6 +250,96 @@ export function handleThinkingDelta(data) {
   scrollToBottom();
 }
 
+function ensureLiveAssistantBubble() {
+  const inner = clearHeroIfPresent();
+  if (!inner) return null;
+  let row = inner.querySelector('.msg-row.assistant[data-live="true"]');
+  if (!row) {
+    row = document.createElement('div');
+    row.className = 'msg-row assistant';
+    row.dataset.live = 'true';
+    row.innerHTML = `
+      <div class="msg-assistant">
+        <div class="assistant-avatar" aria-hidden="true">∑</div>
+        <div class="msg-assistant-body rich-prose"></div>
+      </div>
+    `;
+    inner.appendChild(row);
+  }
+  return row;
+}
+
+export function handleTextDelta(data) {
+  const delta = (data && (data.delta || data.text || '')) || '';
+  if (!delta) return;
+  liveStreamText += delta;
+  const row = ensureLiveAssistantBubble();
+  if (!row || liveRenderPending) return;
+  liveRenderPending = true;
+  const renderNow = () => {
+    liveRenderPending = false;
+    if (!streamEl) return;
+    const liveRow = streamEl.querySelector('.msg-row.assistant[data-live="true"]');
+    if (!liveRow) return;
+    const body = liveRow.querySelector('.msg-assistant-body');
+    if (body) renderRichInto(body, liveStreamText);
+    scrollToBottom();
+  };
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(renderNow);
+  } else {
+    renderNow();
+  }
+}
+
+export function handleRoundReset() {
+  liveStreamText = '';
+  liveRenderPending = false;
+  if (!streamEl) return;
+  for (const row of streamEl.querySelectorAll('.msg-row.assistant[data-live="true"]')) {
+    row.remove();
+  }
+}
+
+export function finalizeLiveAssistant(finalText) {
+  const text = (finalText && String(finalText).trim()) ? String(finalText) : liveStreamText;
+  liveStreamText = '';
+  liveRenderPending = false;
+  if (!streamEl) return;
+  const liveRow = streamEl.querySelector('.msg-row.assistant[data-live="true"]');
+  if (liveRow) {
+    delete liveRow.dataset.live;
+    if (text && text.trim()) {
+      const body = liveRow.querySelector('.msg-assistant-body');
+      if (body) renderRichInto(body, text);
+      scrollToBottom();
+    } else {
+      liveRow.remove();
+    }
+    return;
+  }
+  if (text && text.trim()) {
+    appendAssistantMessage(text);
+  }
+}
+
+export function finalizeLiveOnError() {
+  const partial = liveStreamText;
+  liveStreamText = '';
+  liveRenderPending = false;
+  if (!streamEl) return;
+  const liveRow = streamEl.querySelector('.msg-row.assistant[data-live="true"]');
+  if (liveRow) {
+    delete liveRow.dataset.live;
+    if (!partial || !partial.trim()) {
+      liveRow.remove();
+    } else {
+      const body = liveRow.querySelector('.msg-assistant-body');
+      if (body) renderRichInto(body, partial);
+    }
+  }
+}
+
 export function handleToolTrace(data) {
   const acc = ensureLiveThinkingAccordion();
   if (!acc || !data) return;
@@ -292,10 +386,13 @@ export function renderApprovalCard(req) {
   const toolId = String(req.tool_id || req.tool || 'tool');
   const digest = String(req.digest || '');
   const scope = String(req.scope || 'once');
+  const allowSessionApprove = Boolean(req.allow_session_approve);
   const containmentBadge =
     req.contained || scope === 'worker-session'
       ? '<span class="badge ok">CONTAINED AppContainer</span>'
-      : '<span class="badge warn">ONCE Approval</span>';
+      : allowSessionApprove
+        ? '<span class="badge accent">Literature Read</span>'
+        : '<span class="badge warn">ONCE Approval</span>';
 
   const editPreview = req.edit_preview || null;
   let previewHtml = '';
@@ -329,40 +426,55 @@ export function renderApprovalCard(req) {
     <div class="approval-preview">${previewHtml}</div>
     <div class="approval-actions">
       <button type="button" class="pill-btn sm approval-decline-btn">Decline</button>
-      <button type="button" class="pill-btn sm primary approval-approve-btn">Approve &amp; Run</button>
+      ${
+        allowSessionApprove
+          ? '<button type="button" class="pill-btn sm approval-once-btn">Approve Once</button>' +
+            '<button type="button" class="pill-btn sm primary approval-session-btn">Approve for Session</button>'
+          : '<button type="button" class="pill-btn sm primary approval-approve-btn">Approve &amp; Run</button>'
+      }
     </div>
   `;
 
-  const approveBtn = card.querySelector('.approval-approve-btn');
   const declineBtn = card.querySelector('.approval-decline-btn');
-  const submitDecision = async (approved) => {
+  const onceBtn = card.querySelector('.approval-once-btn');
+  const sessBtn = card.querySelector('.approval-session-btn');
+  const approveBtn = card.querySelector('.approval-approve-btn');
+  const allBtns = [declineBtn, onceBtn, sessBtn, approveBtn].filter(Boolean);
+
+  const submitDecision = async (approved, approveForSession = false) => {
     if (!currentSessionId) return;
-    approveBtn.disabled = true;
-    declineBtn.disabled = true;
+    for (const b of allBtns) b.disabled = true;
     try {
-      await api.respondApproval(currentSessionId, callId, { digest, approved });
-      resolveApprovalCard(callId, approved);
+      await api.respondApproval(currentSessionId, callId, {
+        digest,
+        approved,
+        approve_for_session: approveForSession,
+      });
+      resolveApprovalCard(callId, approved, approveForSession);
     } catch (err) {
-      approveBtn.disabled = false;
-      declineBtn.disabled = false;
+      for (const b of allBtns) b.disabled = false;
       if (typeof onNotify === 'function') onNotify(`Approval error: ${err.message}`);
     }
   };
-  approveBtn.addEventListener('click', () => submitDecision(true));
-  declineBtn.addEventListener('click', () => submitDecision(false));
+  declineBtn.addEventListener('click', () => submitDecision(false, false));
+  if (onceBtn) onceBtn.addEventListener('click', () => submitDecision(true, false));
+  if (sessBtn) sessBtn.addEventListener('click', () => submitDecision(true, true));
+  if (approveBtn) approveBtn.addEventListener('click', () => submitDecision(true, false));
 
   inner.appendChild(card);
   scrollToBottom();
 }
 
-export function resolveApprovalCard(callId, approved) {
+export function resolveApprovalCard(callId, approved, approveForSession = false) {
   if (!streamEl) return;
   const card = streamEl.querySelector(`.approval-card[data-call-id="${CSS.escape(String(callId || ''))}"]`);
   if (!card) return;
   const actions = card.querySelector('.approval-actions');
   if (actions) {
     actions.innerHTML = approved
-      ? '<span class="badge ok">Approved</span>'
+      ? approveForSession
+        ? '<span class="badge ok">Approved for session</span>'
+        : '<span class="badge ok">Approved</span>'
       : '<span class="badge err">Declined</span>';
   }
 }

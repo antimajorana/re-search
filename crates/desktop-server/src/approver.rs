@@ -7,7 +7,10 @@ use serde_json::json;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tools::canon::random_hex;
-use tools::{ApprovalReply, ApprovalRequest, ApprovalScope, Approver, APPROVAL_SCHEMA_VERSION, EVENT_SCHEMA_VERSION};
+use tools::{
+    ApprovalOutcome, ApprovalReply, ApprovalRequest, ApprovalScope, Approver, APPROVAL_SCHEMA_VERSION,
+    EVENT_SCHEMA_VERSION,
+};
 
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -15,6 +18,7 @@ pub struct UiApprover {
     pub state: Arc<DesktopState>,
     pub containment: String,
     pub contained: bool,
+    pub allow_session_network_grant: bool,
 }
 
 impl UiApprover {
@@ -23,7 +27,13 @@ impl UiApprover {
             state,
             containment,
             contained,
+            allow_session_network_grant: false,
         }
+    }
+
+    pub fn with_session_network_grant(mut self, allow: bool) -> Self {
+        self.allow_session_network_grant = allow;
+        self
     }
 
     fn compute_preview(&self, request: &ApprovalRequest) -> Option<EditPreview> {
@@ -39,8 +49,9 @@ impl UiApprover {
         request: &ApprovalRequest,
         scope: ApprovalScope,
         approved: bool,
+        approve_for_session: bool,
         reason: &str,
-    ) -> ApprovalReply {
+    ) -> ApprovalOutcome {
         let mut final_approved = approved;
         let mut final_reason = reason.to_string();
 
@@ -51,6 +62,7 @@ impl UiApprover {
                     "tool": &request.tool_id,
                     "digest": &request.digest,
                     "approved": approved,
+                    "approve_for_session": approve_for_session,
                     "reason": reason,
                     "scope": scope.as_str(),
                 });
@@ -70,21 +82,31 @@ impl UiApprover {
             }
         }
 
-        ApprovalReply {
-            approved: final_approved,
-            digest: request.digest.clone(),
-            by: final_reason,
+        ApprovalOutcome {
+            reply: ApprovalReply {
+                approved: final_approved,
+                digest: request.digest.clone(),
+                by: final_reason,
+            },
+            approve_for_session: final_approved && approve_for_session,
         }
     }
 }
 
 impl Approver for UiApprover {
     fn decide(&self, request: &ApprovalRequest) -> ApprovalReply {
+        self.decide_ext(request).reply
+    }
+
+    fn decide_ext(&self, request: &ApprovalRequest) -> ApprovalOutcome {
         if request.schema_version != APPROVAL_SCHEMA_VERSION {
-            return ApprovalReply {
-                approved: false,
-                digest: request.digest.clone(),
-                by: "approval request schema_version mismatch".to_string(),
+            return ApprovalOutcome {
+                reply: ApprovalReply {
+                    approved: false,
+                    digest: request.digest.clone(),
+                    by: "approval request schema_version mismatch".to_string(),
+                },
+                approve_for_session: false,
             };
         }
         let scope = match request.scope {
@@ -95,6 +117,7 @@ impl Approver for UiApprover {
                         request,
                         ApprovalScope::Once,
                         false,
+                        false,
                         "worker-session approval requested without active containment; failing closed",
                     );
                 }
@@ -104,10 +127,14 @@ impl Approver for UiApprover {
 
         let call_id = format!("ap-{}", random_hex(8));
         let edit_preview = self.compute_preview(request);
+        let allow_session_approve =
+            self.allow_session_network_grant && request.effect == policy::EffectClass::NetworkRead;
         let view = PendingApprovalView {
             call_id: call_id.clone(),
             session: request.session.clone(),
             tool_id: request.tool_id.clone(),
+            effect: request.effect.as_str().to_string(),
+            allow_session_approve,
             canonical_args: request.canonical_args.clone(),
             digest: request.digest.clone(),
             scope: scope.as_str().to_string(),
@@ -125,7 +152,7 @@ impl Approver for UiApprover {
         let key = (request.session.clone(), call_id.clone());
         {
             let Ok(mut map) = self.state.pending_approvals.lock() else {
-                return self.record_answer_and_reply(request, scope, false, "approval map lock poisoned");
+                return self.record_answer_and_reply(request, scope, false, false, "approval map lock poisoned");
             };
             map.insert(key.clone(), Arc::clone(&slot));
         }
@@ -140,7 +167,7 @@ impl Approver for UiApprover {
                 if let Ok(mut map) = self.state.pending_approvals.lock() {
                     map.remove(&key);
                 }
-                return self.record_answer_and_reply(request, scope, false, "approval slot lock poisoned");
+                return self.record_answer_and_reply(request, scope, false, false, "approval slot lock poisoned");
             };
             while guard.is_none() {
                 if self.state.sse.is_shutdown() {
@@ -164,23 +191,30 @@ impl Approver for UiApprover {
             map.remove(&key);
         }
 
-        let (approved, reason) = match decision {
+        let (approved, approve_for_session, reason) = match decision {
             Some(dec) if dec.digest == request.digest => {
                 if dec.approved {
-                    (true, format!("approved in desktop UI ({})", dec.responder))
+                    let sess_flag = dec.approve_for_session && allow_session_approve;
+                    let note = if sess_flag {
+                        format!("approved for session in desktop UI ({})", dec.responder)
+                    } else {
+                        format!("approved in desktop UI ({})", dec.responder)
+                    };
+                    (true, sess_flag, note)
                 } else if dec.responder == "desktop-ui" {
-                    (false, format!("denied in desktop UI ({})", dec.responder))
+                    (false, false, format!("denied in desktop UI ({})", dec.responder))
                 } else {
-                    // Denied by the server itself (caller gone, turn stopped), not by a person.
-                    (false, format!("denied: {}", dec.responder))
+                    (false, false, format!("denied: {}", dec.responder))
                 }
             }
-            Some(_) => (false, "approval digest mismatch; failing closed".to_string()),
-            None if self.state.sse.is_shutdown() => (false, "desktop server shutting down; denied".to_string()),
-            None => (false, "desktop approval timed out after 600s".to_string()),
+            Some(_) => (false, false, "approval digest mismatch; failing closed".to_string()),
+            None if self.state.sse.is_shutdown() => {
+                (false, false, "desktop server shutting down; denied".to_string())
+            }
+            None => (false, false, "desktop approval timed out after 600s".to_string()),
         };
 
-        let reply = self.record_answer_and_reply(request, scope, approved, &reason);
+        let outcome = self.record_answer_and_reply(request, scope, approved, approve_for_session, &reason);
         self.state.sse.emit(
             &request.session,
             "approval_resolved",
@@ -189,10 +223,11 @@ impl Approver for UiApprover {
                 "session": &request.session,
                 "tool_id": &request.tool_id,
                 "digest": &request.digest,
-                "approved": reply.approved,
-                "reason": &reply.by,
+                "approved": outcome.reply.approved,
+                "approve_for_session": outcome.approve_for_session,
+                "reason": &outcome.reply.by,
             }),
         );
-        reply
+        outcome
     }
 }

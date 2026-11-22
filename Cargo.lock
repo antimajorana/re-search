@@ -571,6 +571,7 @@ dependencies = [
  "tempfile",
  "tools",
  "ureq",
+ "windows",
  "worker",
 ]
 

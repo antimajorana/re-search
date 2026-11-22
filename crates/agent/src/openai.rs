@@ -3,9 +3,10 @@
 use crate::http::{
     build_ureq_agent, config_err, malformed_response_err, post_json, scrub_bytes, validate_base_url, SecretKey,
 };
+use crate::stream_http::{inject_stream_flag, post_json_cancellable, post_sse_streaming, SseFlavor};
 use crate::transport::{
-    ContentBlock, Message, ModelRequest, ModelResponse, PreparedRequest, ProviderKind, Role, StopReason, ToolSpec,
-    Transport, TransportError, TransportInfo, DEFAULT_OPENAI_BASE,
+    ContentBlock, Message, ModelRequest, ModelResponse, PreparedRequest, ProviderKind, Role, StopReason,
+    StreamObserver, ToolSpec, Transport, TransportError, TransportInfo, DEFAULT_OPENAI_BASE,
 };
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -16,6 +17,7 @@ pub struct OpenAiConfig {
     pub base_url: String,
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
+    pub stream: bool,
 }
 
 impl Default for OpenAiConfig {
@@ -24,7 +26,8 @@ impl Default for OpenAiConfig {
             provider: ProviderKind::OpenAi,
             base_url: DEFAULT_OPENAI_BASE.to_string(),
             connect_timeout: Duration::from_secs(15),
-            request_timeout: Duration::from_secs(180),
+            request_timeout: Duration::from_secs(600),
+            stream: false,
         }
     }
 }
@@ -45,6 +48,7 @@ pub struct OpenAiTransport {
     key: Option<SecretKey>,
     key_env: String,
     agent: ureq::Agent,
+    stream: bool,
 }
 
 impl OpenAiTransport {
@@ -96,6 +100,7 @@ impl OpenAiTransport {
             key,
             key_env: key_env.into(),
             agent,
+            stream: config.stream,
         })
     }
 }
@@ -122,9 +127,9 @@ impl Transport for OpenAiTransport {
     }
 
     fn prepare_request(&self, req: &ModelRequest) -> Result<PreparedRequest, TransportError> {
-        Ok(PreparedRequest {
-            body: serialize_openai_request(self.provider, req)?,
-        })
+        let raw = serialize_openai_request(self.provider, req)?;
+        let body = if self.stream { inject_stream_flag(raw) } else { raw };
+        Ok(PreparedRequest { body })
     }
 
     fn send_prepared(&self, prepared: &PreparedRequest) -> Result<ModelResponse, TransportError> {
@@ -138,6 +143,38 @@ impl Transport for OpenAiTransport {
             }
             None => {
                 let raw = post_json(&self.agent, &self.endpoint, &[], &prepared.body, "")?;
+                parse_openai_response(raw, "")
+            }
+        }
+    }
+
+    fn send_prepared_streaming(
+        &self,
+        prepared: &PreparedRequest,
+        observer: &mut dyn StreamObserver,
+    ) -> Result<ModelResponse, TransportError> {
+        match (&self.key, self.stream) {
+            (Some(key), true) => {
+                let secret = key.as_str();
+                let auth = format!("Bearer {secret}");
+                let headers = [("Authorization", auth.as_str()), ("Accept", "text/event-stream")];
+                let raw = post_sse_streaming(&self.agent, &self.endpoint, &headers, &prepared.body, secret, SseFlavor::OpenAiChat, observer)?;
+                parse_openai_response(raw, secret)
+            }
+            (None, true) => {
+                let headers = [("Accept", "text/event-stream")];
+                let raw = post_sse_streaming(&self.agent, &self.endpoint, &headers, &prepared.body, "", SseFlavor::OpenAiChat, observer)?;
+                parse_openai_response(raw, "")
+            }
+            (Some(key), false) => {
+                let secret = key.as_str();
+                let auth = format!("Bearer {secret}");
+                let headers = [("Authorization", auth.as_str())];
+                let raw = post_json_cancellable(&self.agent, &self.endpoint, &headers, &prepared.body, secret, observer)?;
+                parse_openai_response(raw, secret)
+            }
+            (None, false) => {
+                let raw = post_json_cancellable(&self.agent, &self.endpoint, &[], &prepared.body, "", observer)?;
                 parse_openai_response(raw, "")
             }
         }

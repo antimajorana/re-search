@@ -436,3 +436,18 @@ test('XSS and placeholder spoofing payloads are neutralized in Markdown and LaTe
   assert.ok(!texHtml.includes('\u0000'), 'Null bytes must be stripped from TeX output');
   assert.equal(escapeHtml('<>"&\''), '&lt;&gt;&quot;&amp;&#39;');
 });
+
+test('Stage 10 UI wiring: Stop button, live text_delta streaming, session literature approval, and in-place workspace attach', () => {
+  const indexHtml = fs.readFileSync(path.join(assetsDir, 'index.html'), 'utf8');
+  const streamJs = fs.readFileSync(path.join(assetsDir, 'stream.js'), 'utf8');
+  const composerJs = fs.readFileSync(path.join(assetsDir, 'composer.js'), 'utf8');
+  const appJs = fs.readFileSync(path.join(assetsDir, 'app.js'), 'utf8');
+  const apiJs = fs.readFileSync(path.join(assetsDir, 'api.js'), 'utf8');
+
+  assert.match(indexHtml, /id="composer-stop"/, 'Composer must render a Stop button');
+  assert.match(streamJs, /Approve for Session/, 'Literature approval card must offer Approve for Session');
+  assert.match(streamJs, /export function handleTextDelta/, 'Stream must handle incremental text_delta events');
+  assert.match(composerJs, /pickWorkspaceFolder/, 'Workspace button must invoke native folder picker endpoint');
+  assert.match(appJs, /setSessionWorkspace\(state\.activeSessionId/, 'Workspace attach must update active session in-place');
+  assert.match(apiJs, /'text_delta'/, 'EventSource client must subscribe to text_delta');
+});

@@ -3,14 +3,21 @@
 
 use crate::guardrails::materialize_proof_entries;
 use crate::runner::EVENT_VERSION;
-use crate::transport::{ContentBlock, Message, ModelRequest, Role, Transport};
+use crate::transport::{CancelToken, ContentBlock, Message, ModelRequest, Role, StreamObserver, Transport};
 use ledger::Ledger;
 use research_tools::{read_proof_dag, ProofStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const MAX_STRATEGIST_CONSULTATIONS: usize = 20;
-const STRATEGIST_MAX_TOKENS: u32 = 2048;
+const STRATEGIST_MAX_TOKENS: u32 = 4096;
+
+struct CancelOnlyObserver<'a>(Option<&'a CancelToken>);
+impl StreamObserver for CancelOnlyObserver<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.0.is_some_and(CancelToken::is_cancelled)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StrategistAdvice {
@@ -34,6 +41,17 @@ pub fn consult_strategist(
     session: &str,
     question: &str,
     model: &str,
+) -> Result<StrategistAdvice, String> {
+    consult_strategist_cancellable(transport, ledger, session, question, model, None)
+}
+
+pub fn consult_strategist_cancellable(
+    transport: &dyn Transport,
+    ledger: &Ledger,
+    session: &str,
+    question: &str,
+    model: &str,
+    cancel: Option<&CancelToken>,
 ) -> Result<StrategistAdvice, String> {
     if question.trim().is_empty() {
         return Err("strategist question must not be empty".into());
@@ -109,7 +127,8 @@ pub fn consult_strategist(
         )
         .map_err(|e| format!("failed to record strategist.request: {e}"))?;
 
-    let resp = transport.send_prepared(&prepared).map_err(|e| e.to_string())?;
+    let mut obs = CancelOnlyObserver(cancel);
+    let resp = transport.send_prepared_streaming(&prepared, &mut obs).map_err(|e| e.to_string())?;
     let resp_blob = ledger
         .put_blob(&resp.raw_body)
         .map_err(|e| format!("strategist response put_blob failed: {e}"))?;

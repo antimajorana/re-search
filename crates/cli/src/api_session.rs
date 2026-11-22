@@ -375,23 +375,45 @@ pub fn run_with_research(opts: &ApiRunOpts, res: &ResearchOpts) -> Result<i32, S
         opts.data_dir.display()
     );
 
+    let env = match &res.workspace_root {
+        Some(ws) => research_tools::ResearchEnv::with_workspace(&opts.data_dir, ws)
+            .map_err(|e| format!("invalid workspace: {e}"))?
+            .with_endpoints(res.literature_endpoints.clone()),
+        None => research_tools::ResearchEnv::new(&opts.data_dir)
+            .with_endpoints(res.literature_endpoints.clone()),
+    };
     let guardrails = agent::GuardrailConfig {
         verification_mode: res.verification_mode,
         calculation_mode: res.calculation_mode,
         pinned_conventions: res.pinned_conventions.clone(),
         ..agent::GuardrailConfig::default()
     };
+    let auto_cfg = agent::AutonomousConfig {
+        guardrails,
+        use_strategist: res.verification_mode,
+        ..agent::AutonomousConfig::default()
+    };
     let cfg = AgentConfig {
         prompt: opts.prompt.clone(),
         model_requested: opts.model_requested.clone(),
         model,
-        system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
+        system_prompt: agent::RESEARCH_SYSTEM_PROMPT.to_string(),
         max_turns: opts.max_turns,
         max_tokens: opts.max_tokens,
         containment: built.containment,
         contained: built.contained,
     };
-    let outcome = agent::run_research_loop(&*transport, &built.router, &rec.ledger, &cfg, &guardrails, &mut sink)?;
+    let outcome = agent::run_autonomous_research_loop(
+        &*transport,
+        &agent::AutonomousRoles::default(),
+        &built.router,
+        &rec.ledger,
+        &env,
+        &cfg,
+        &auto_cfg,
+        None,
+        &mut sink,
+    )?;
     eprintln!(
         "[supervisor] session {session} ended; see it with: re-search show {session} --data-dir \"{}\"",
         opts.data_dir.display()

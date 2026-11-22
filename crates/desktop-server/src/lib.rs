@@ -14,10 +14,13 @@ pub mod launcher;
 pub mod model_catalog;
 pub mod routes_session;
 pub mod routes_tools;
+mod session_view;
 pub mod sse;
 pub mod state;
+pub mod turn_control;
 pub mod turn_runner;
 mod upload_codec;
+pub mod workspace_ops;
 
 use auth::AuthGuard;
 use http_srv::serve_loop;
@@ -93,13 +96,13 @@ impl RunningDesktopServer {
         Ok(())
     }
 
-    /// Signals the accept loop and active SSE streams to stop, and kills the process tree
-    /// of every running Claude subscription (`claude-cli`) turn.
+    /// Signals the accept loop and active SSE streams to stop, cancels running API/ChatGPT
+    /// turns, and kills the process tree of every running subscription-CLI turn.
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Release);
         self.sse.shutdown();
         self.state.chatgpt.auth.cancel_login();
-        self.state.stop_all_cli_turns();
+        turn_control::stop_all_turns(&self.state);
     }
 }
 

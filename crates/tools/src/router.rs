@@ -1,14 +1,14 @@
 //! The router: the only path from a caller to a tool handler.
 
 use crate::approval::{
-    approval_digest, ApprovalRequest, ApprovalScope, ApprovalStore, Approver, SessionGrant, WorkerEpoch,
-    APPROVAL_SCHEMA_VERSION,
+    approval_digest, ApprovalRequest, ApprovalScope, ApprovalStore, Approver, NetworkReadGrant, SessionGrant,
+    WorkerEpoch, APPROVAL_SCHEMA_VERSION,
 };
 use crate::canon::{canonical_json, random_hex};
 use crate::registry::{check_args, CallCtx, Registry, ToolDef};
 use crate::EVENT_SCHEMA_VERSION;
 use ledger::Ledger;
-use policy::{Decision, Policy};
+use policy::{Decision, EffectClass, Policy};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 
@@ -27,8 +27,13 @@ pub enum CallOutcome {
 
 enum DispatchAuth<'a> {
     Allow,
-    Once { nonce: &'a str, bind_session_digest: Option<String> },
+    Once {
+        nonce: &'a str,
+        bind_session_digest: Option<String>,
+        bind_network_read_digest: Option<String>,
+    },
     Session(u64),
+    NetworkSession,
 }
 
 /// `WorkerSession` reuse is allowed only when the tool's epoch provider
@@ -72,6 +77,14 @@ impl Router {
 
     pub fn session(&self) -> &str {
         &self.session
+    }
+
+    pub fn seed_network_read_grant(&self, caller: &str, grant: NetworkReadGrant) {
+        self.store.bind_network_read_grant(caller, grant);
+    }
+
+    pub fn active_network_read_grant(&self, caller: &str) -> Option<NetworkReadGrant> {
+        self.store.matching_network_read_grant(caller, &self.policy.version)
     }
 
     fn record(&self, kind: &str, payload: Value) -> Result<(), String> {
@@ -181,6 +194,21 @@ impl Router {
                     }
                 }
 
+                if def.effect == EffectClass::NetworkRead {
+                    if let Some(grant) = self.store.matching_network_read_grant(caller, &self.policy.version) {
+                        self.record(
+                            "approval.session_reused",
+                            json!({
+                                "call_id": call_id,
+                                "grant_digest": grant.grant_digest,
+                                "granted_call_id": grant.granted_call_id,
+                                "effect": "network-read",
+                            }),
+                        )?;
+                        return self.dispatch_auth(caller, tool_id, args, DispatchAuth::NetworkSession, call_id);
+                    }
+                }
+
                 let nonce = random_hex(16);
                 let digest = approval_digest(
                     scope,
@@ -195,7 +223,7 @@ impl Router {
                     "approval.requested",
                     json!({ "call_id": call_id, "digest": digest, "scope": scope.as_str() }),
                 )?;
-                let reply = self.approver.decide(&ApprovalRequest {
+                let outcome = self.approver.decide_ext(&ApprovalRequest {
                     schema_version: APPROVAL_SCHEMA_VERSION,
                     session: self.session.clone(),
                     call_id: call_id.to_string(),
@@ -207,6 +235,7 @@ impl Router {
                     canonical_args: canonical.clone(),
                     policy_reason: response.reason.clone(),
                 });
+                let reply = outcome.reply;
                 if !reply.approved || reply.digest != digest {
                     let why = if reply.approved { "approver answered for a different digest" } else { "declined" };
                     self.record(
@@ -216,21 +245,32 @@ impl Router {
                     return self.finish_denied(call_id, &format!("approval: {why}"));
                 }
                 self.store.grant(&digest);
+                let effective_scope_str = if outcome.approve_for_session && def.effect == EffectClass::NetworkRead {
+                    "network-session"
+                } else {
+                    scope.as_str()
+                };
                 self.record(
                     "approval.granted",
                     json!({
                         "call_id": call_id,
                         "digest": digest,
-                        "scope": scope.as_str(),
+                        "scope": effective_scope_str,
                         "by": reply.by,
                     }),
                 )?;
                 let bind_session_digest = (scope == ApprovalScope::WorkerSession).then(|| digest.clone());
+                let bind_network_read_digest =
+                    (outcome.approve_for_session && def.effect == EffectClass::NetworkRead).then(|| digest.clone());
                 self.dispatch_auth(
                     caller,
                     tool_id,
                     args,
-                    DispatchAuth::Once { nonce: &nonce, bind_session_digest },
+                    DispatchAuth::Once {
+                        nonce: &nonce,
+                        bind_session_digest,
+                        bind_network_read_digest,
+                    },
                     call_id,
                 )
             }
@@ -272,7 +312,11 @@ impl Router {
                 DispatchAuth::Allow => {
                     return self.finish_denied(call_id, "approval: missing authorization");
                 }
-                DispatchAuth::Once { nonce, bind_session_digest } => {
+                DispatchAuth::Once {
+                    nonce,
+                    bind_session_digest,
+                    bind_network_read_digest,
+                } => {
                     let digest = approval_digest(
                         scope,
                         caller,
@@ -287,10 +331,45 @@ impl Router {
                         return self.finish_denied(call_id, "approval: no unused approval for exactly this call");
                     }
                     self.record("approval.consumed", json!({ "call_id": call_id, "digest": digest }))?;
+                    if def.effect == EffectClass::NetworkRead {
+                        if let Some(grant_digest) = bind_network_read_digest {
+                            self.record(
+                                "approval.session_bound",
+                                json!({
+                                    "call_id": call_id,
+                                    "grant_digest": grant_digest,
+                                    "effect": "network-read",
+                                }),
+                            )?;
+                            self.store.bind_network_read_grant(
+                                caller,
+                                NetworkReadGrant {
+                                    policy_version: self.policy.version.clone(),
+                                    grant_digest,
+                                    granted_call_id: call_id.to_string(),
+                                },
+                            );
+                        }
+                    }
                     let bind = (scope == ApprovalScope::WorkerSession)
                         .then_some(bind_session_digest)
                         .flatten();
                     (None, bind)
+                }
+                DispatchAuth::NetworkSession => {
+                    let valid = def.effect == EffectClass::NetworkRead
+                        && self
+                            .store
+                            .matching_network_read_grant(caller, &self.policy.version)
+                            .is_some();
+                    if !valid {
+                        self.record(
+                            "approval.rejected",
+                            json!({ "call_id": call_id, "effect": def.effect.as_str() }),
+                        )?;
+                        return self.finish_denied(call_id, "approval: network-read session grant is not valid");
+                    }
+                    (None, None)
                 }
                 DispatchAuth::Session(expected_ep) => {
                     let live = epoch_src.and_then(|e| e.live_epoch());
@@ -363,7 +442,11 @@ impl Router {
             caller,
             tool_id,
             args,
-            DispatchAuth::Once { nonce: nonce.unwrap_or(""), bind_session_digest: None },
+            DispatchAuth::Once {
+                nonce: nonce.unwrap_or(""),
+                bind_session_digest: None,
+                bind_network_read_digest: None,
+            },
             call_id,
         )
     }

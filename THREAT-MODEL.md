@@ -210,8 +210,9 @@ result.
   workspace that is this launch's data directory, contains it, or lies inside
   it, so that launch's `providers.json`, `ledger.db` and `blobs/` are not
   under its workspace root. CLI `--workspace`, the MCP server and the desktop
-  server (at launch and on `POST /api/sessions`) all go through it; the check
-  itself and the desktop route are tested. It compares against the data
+  server (at launch, on `POST /api/sessions`, and on in-place
+  `PUT /api/sessions/{id}/workspace`) all go through it; the check
+  itself and the desktop routes are tested. It compares against the data
   directory in use only: a workspace containing *another* re:Search data
   directory (for example the default `%LOCALAPPDATA%\re-search` while
   running with `--data-dir` elsewhere) is not refused. Archive
@@ -233,14 +234,20 @@ result.
   (`preview_workspace_edit`) and SHA-256 request digest, store pre-write file
   backups in `blobs/` (`"workspace.backup"`), and record `"approval.answered"`
   before modifying any workspace file.
-- **Literature queries ask every time (user decision, 2026-11-20).** The query
-  text of `arxiv_search` / `literature_search` is chosen by the model, so it is
-  a channel by which a manipulated model could carry workspace content to a
-  search host. Every model-initiated call is therefore approved per call
-  (`once` scope; there is no per-session reuse), and the console banner and the
-  desktop approval card show the full arguments, including the query, before
-  anything is sent. A refused call makes no network request (tested). Searches
-  the person types into the desktop UI's literature drawer
+- **Literature queries always ask first, with optional human session opt-in.**
+  The query text of `arxiv_search` / `literature_search` is chosen by the model,
+  so it is a channel by which a manipulated model could carry workspace content
+  to a search host. `policy::evaluate` hard-clamps `network-read` to `ask`, so
+  the first model-initiated literature lookup in a session always prompts the
+  human with the full arguments (including the query) before any network request
+  is made. On the desktop in-core route, the human may choose *Approve Once*
+  (single-use digest) or *Approve for Session* (`approve_for_session: true`),
+  which binds a `NetworkReadGrant` strictly for `EffectClass::NetworkRead` tools
+  under the same `(session_id, caller, policy_version)` (recorded as
+  `approval.session_bound` / `approval.session_reused`); `write-workspace` and
+  `execute-code` can never use a `NetworkReadGrant`, and grants never carry
+  across sessions or server restarts. A refused call makes no network request
+  (tested). Searches the person types into the desktop UI's literature drawer
   (`POST /api/sessions/{id}/literature`, token-protected) are human-authored and
   run without a second prompt.
 - **Allowlisted literature egress & deterministic `tex_audit`.** `arxiv_search`

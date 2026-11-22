@@ -10,10 +10,10 @@ A small, tamper-evident Rust research core and loopback desktop workbench for ma
 | --- | --- |
 | `crates/policy` | Pure allow / ask / deny engine (`ReadWorkspace`, `WriteWorkspace`, `NetworkRead`, `ExecuteCode`). No I/O; `serde` only. |
 | `crates/ledger` | Append-only, SHA-256 hash-chained SQLite event store (`PRAGMA user_version = 3`) and content-addressed blob directory. |
-| `crates/tools` | Tool registry, policy router, digest- and epoch-bound approvals. |
+| `crates/tools` | Tool registry, policy router, digest- and epoch-bound approvals (plus human opt-in session grants for `network-read` literature queries). |
 | `crates/research-tools` | Stage 6 tools: `fs_list`, `fs_read`, `doc_ingest`, `fs_write`, `latex_patch`, `latex_compile`, `tex_audit`, `arxiv_search`, `literature_search`, `ledger_append`, `ledger_supersede`, `ledger_query`, `check_expression_sanity`. |
 | `crates/worker` | Python worker (`sympy`, `mpmath`, `numpy`) under Windows `AppContainerSandbox` / `JobObjectSandbox`. |
-| `crates/agent` | Multi-provider HTTP transports (`Anthropic`, `OpenAI`, `Ollama`, `Gemini`, and the Responses-API `ChatGPT` plan route), Stage 7 guardrails, Step & Full Verifiers, Narrator, Side-Talk, and verified resume. |
+| `crates/agent` | Multi-provider streaming HTTP transports (`Anthropic`, `OpenAI`, `Ollama`, `Gemini`, and the Responses-API `ChatGPT` plan route), autonomous Solver–Verifier–Strategist research loop, Stage 7 guardrails, Step & Full Verifiers, Narrator, Side-Talk, and verified resume. |
 | `crates/export` | Verified counterfactual `fork`, structural branch `diff`, and `.tex`/`.html`/`.zip` `export`. |
 | `crates/desktop-server` | Loopback `127.0.0.1` HTTP + SSE desktop server (`std::net` + `httparse`, zero `tokio`), `UiApprover` diff broker, and embedded offline KaTeX UI. |
 | `crates/desktop-app` | `re-search-app`: the re:Search window. One process runs the desktop server and one locked-down WebView2 window (`wry` + `tao`, Windows only); the token is delivered in a request header, never in a URL. The only crate with GUI dependencies. |
@@ -45,7 +45,7 @@ cargo test -p cli --test contained_router -- --nocapture
 
 ## Desktop UI (`re-search-app`, `re-search desktop`, `re-search ui`)
 
-The local CSRF-protected desktop server offers offline KaTeX rendering, a live SSE proof-DAG inspector, LaTeX canvas, literature/sources drawer, counterfactual fork/diff, and isolated Side-Talk. There are two ways to show it:
+The local CSRF-protected desktop server offers offline KaTeX rendering, live token and reasoning streaming with a universal **Stop** button across all routes, an autonomous **Solver -> Independent Verifier -> Strategist -> Revise** loop when **Verifier** is toggled on, a native Windows folder picker attaching workspaces to the active session in-place (`PUT /api/sessions/{id}/workspace`), session-scoped opt-in approvals (*Approve for Session* vs *Approve Once*) for literature lookups, a live SSE proof-DAG inspector, LaTeX canvas, literature/sources drawer, counterfactual fork/diff, and isolated Side-Talk. There are two ways to show it:
 
 - **Its own window (Windows 11, WebView2 runtime).** `re-search-app.exe` starts the server and opens a window titled *re:Search*; closing the window stops the server. It needs no console and no browser (Microsoft Edge itself need not be installed, only the WebView2 Evergreen runtime). Only one instance runs per logon session; a second launch exits quietly. `re-search desktop` starts `re-search-app.exe` from its own directory when it is there and only `--data-dir`/`--workspace`/`--python`/`--worker-script`/`--port`/`--core-exe`/`--claude`/`--agy` were given; otherwise it behaves like `re-search ui`.
 - **The default browser.** `re-search ui` opens `http://127.0.0.1:<port>/?launch=…` in the default browser using a single-use, 60-second launch nonce (never the real API token); the first page load redeems it for the token in `<meta>` and sets the stream cookie, and any replay returns `403`.
@@ -99,7 +99,7 @@ A desktop session can run on the Claude subscription you are signed into in the 
 - **Narrate proof and side questions** need an in-core API-route provider (Anthropic, OpenAI, Gemini, Ollama, or signed-in ChatGPT): they use the model picked in the dropdown when it is on the API route; with a subscription-CLI model (`claude-cli` or `antigravity`) picked they use the first configured API provider, and say so when there is none.
 - **Prompt on stdin.** The prompt is written to the CLI's standard input, never put on its command line (both routes).
 - **Later turns.** The CLI keeps no state between turns (`--no-session-persistence`), so the second and later turns start with a delimited transcript of this session's earlier messages and final replies, read from the ledger (the most recent turns up to about 24,000 characters; the prompt says when older turns were left out). Tool calls and results are not replayed.
-- **Stop.** `POST /api/sessions/{id}/stop` (token required) kills the running turn's process tree and records `session.abort`; closing the app window does the same for every running turn.
+- **Stop.** `POST /api/sessions/{id}/stop` (token required; wired to the composer **Stop** button) cancels both subscription-CLI turns (killing the CLI process tree) and in-core API / ChatGPT turns (via cooperative `CancelToken`), denies open approval cards, and records `session.abort` (`"stopped": true`); closing the app window does the same for every running turn.
 
 ### Desktop sessions on your Google Antigravity plan (`antigravity`) — vendor-sandboxed, not confined to re:Search tools
 

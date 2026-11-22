@@ -474,31 +474,9 @@ pub fn sweep_all_tool_configs(state: &DesktopState) -> usize {
     })
 }
 
-/// `POST /api/sessions/{id}/stop`: kill the running subscription-CLI turn's process tree and
-/// deny its open approval cards. The turn records `session.abort`.
+/// `POST /api/sessions/{id}/stop`: delegates to [`crate::turn_control::handle_stop_turn`].
 pub fn handle_stop_turn(state: &DesktopState, session_id: &str) -> ApiResult {
-    validate_session_id(session_id).map_err(|e| (400, e.to_string()))?;
-    let handle = state
-        .cli_turns
-        .lock()
-        .map_err(|_| (500, "turn registry poisoned".to_string()))?
-        .get(session_id)
-        .map(|(_, h)| h.clone());
-    match handle {
-        Some(h) => {
-            h.stop();
-            let denied = state.deny_pending(session_id, None, "supervisor: turn stopped by the user");
-            Ok((200, json!({ "ok": true, "session": session_id, "stopped": true, "approvals_denied": denied })))
-        }
-        None => {
-            let running = state.active_turns.lock().map(|a| a.contains(session_id)).unwrap_or(false);
-            Err((409, if running {
-                "only subscription-CLI turns (claude-cli, antigravity) can be stopped".to_string()
-            } else {
-                format!("no turn is running for `{session_id}`")
-            }))
-        }
-    }
+    crate::turn_control::handle_stop_turn(state, session_id)
 }
 
 #[cfg(test)]

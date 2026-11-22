@@ -7,6 +7,8 @@
 //! [`tools::Router::try_call`], failing closed if the ledger cannot record.
 
 pub mod anthropic;
+pub mod autonomous;
+pub(crate) mod autonomous_prompts;
 pub mod gemini;
 pub mod guardrails;
 pub(crate) mod http;
@@ -20,6 +22,8 @@ pub mod resume;
 pub mod runner;
 pub mod sidetalk;
 pub mod strategist;
+pub(crate) mod stream_codecs;
+pub(crate) mod stream_http;
 pub mod transport;
 pub mod verifiers;
 pub(crate) mod wire;
@@ -27,6 +31,10 @@ pub(crate) mod wire;
 pub use anthropic::{
     resolve_api_model, AnthropicConfig, AnthropicTransport, SecretKey, ANTHROPIC_VERSION, DEFAULT_API_BASE,
     DEFAULT_API_MODEL,
+};
+pub use autonomous::{
+    resume_autonomous_research_loop, run_autonomous_research_loop, AutonomousConfig, AutonomousRoles,
+    DEFAULT_MAX_VERIFICATION_ROUNDS, RESEARCH_SYSTEM_PROMPT,
 };
 pub use gemini::{GeminiConfig, GeminiTransport};
 pub use guardrails::{
@@ -50,15 +58,16 @@ pub use runner::{
 };
 pub use sidetalk::{ask_sidetalk, read_sidetalk_thread, sidetalk_session_key, SideTalkTurn};
 pub use strategist::{
-    consult_strategist, count_strategist_consultations, mandatory_strategist_required,
+    consult_strategist, consult_strategist_cancellable, count_strategist_consultations, mandatory_strategist_required,
     StrategistAdvice, MAX_STRATEGIST_CONSULTATIONS,
 };
 pub use transport::{
-    ContentBlock, Message, ModelRequest, ModelResponse, PreparedRequest, ProviderKind, Role, StopReason, ToolSpec,
-    Transport, TransportError, TransportErrorKind, TransportInfo, DEFAULT_GEMINI_BASE, DEFAULT_GEMINI_MODEL,
-    DEFAULT_CHATGPT_BASE, DEFAULT_CHATGPT_MODEL, DEFAULT_OLLAMA_BASE, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE,
-    DEFAULT_OPENAI_MODEL,
+    CancelToken, ContentBlock, Message, ModelRequest, ModelResponse, NoopStreamObserver, PreparedRequest,
+    ProviderKind, Role, StopReason, StreamObserver, ToolSpec, Transport, TransportError, TransportErrorKind,
+    TransportInfo, DEFAULT_CHATGPT_BASE, DEFAULT_CHATGPT_MODEL, DEFAULT_GEMINI_BASE, DEFAULT_GEMINI_MODEL,
+    DEFAULT_OLLAMA_BASE, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE, DEFAULT_OPENAI_MODEL,
 };
 pub use verifiers::{
-    verify_full_solution, verify_step, VerificationIssue, VerificationReport, VerificationVerdict,
+    verify_full_solution, verify_full_solution_cancellable, verify_step, VerificationIssue, VerificationReport,
+    VerificationVerdict,
 };

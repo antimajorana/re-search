@@ -5,7 +5,11 @@ import {
   appendAssistantMessage,
   appendUserMessage,
   appendWarningLine,
+  finalizeLiveAssistant,
+  finalizeLiveOnError,
   finalizeLiveThinking,
+  handleRoundReset,
+  handleTextDelta,
   handleThinkingDelta,
   handleToolTrace,
   initStream,
@@ -68,6 +72,7 @@ async function boot() {
   initComposer({
     ensureSession: ensureActiveSession,
     onSendPrompt: handleSendPrompt,
+    onStopTurn: handleStopTurn,
     onAttachWorkspace: handleAttachWorkspace,
     onSourcesUpdated: (sid) => loadSessionSources(sid),
     onNotify: showToast,
@@ -287,6 +292,8 @@ async function selectSession(id) {
     }
     renderSessionStream(id, sess);
     applySession(id, sess);
+    setComposerBusy(false);
+    setStreamStatus(sess.pending_approvals && sess.pending_approvals.length > 0 ? 'Awaiting Approval' : 'Ready', sess.pending_approvals && sess.pending_approvals.length > 0 ? 'warn' : 'ok');
     await Promise.all([
       refreshWorkspaceFiles(id),
       refreshDag(id),
@@ -303,7 +310,15 @@ function connectSessionSse(id) {
     state.eventSource = null;
   }
   state.eventSource = api.openSessionEvents(id, {
+    text_delta: (d) => {
+      setStreamStatus('Streaming...', 'accent');
+      handleTextDelta(d);
+    },
     thinking_delta: (d) => handleThinkingDelta(d),
+    round_reset: () => {
+      setStreamStatus('Revising...', 'accent');
+      handleRoundReset();
+    },
     tool_trace: (d) => handleToolTrace(d),
     approval_requested: (d) => {
       setStreamStatus('Awaiting Approval', 'warn');
@@ -311,13 +326,10 @@ function connectSessionSse(id) {
     },
     approval_resolved: (d) => {
       setStreamStatus('Running', 'accent');
-      if (d) resolveApprovalCard(d.call_id, d.approved);
+      if (d) resolveApprovalCard(d.call_id, d.approved, Boolean(d.approve_for_session));
     },
     dag_updated: () => refreshDag(id),
     session_event: (d) => {
-      if (d && d.kind === 'model.response' && d.text) {
-        appendAssistantMessage(d.text);
-      }
       if (d && d.kind === 'vendor.builtin_tool') {
         appendWarningLine(builtinToolWarning(d.data || {}));
       }
@@ -327,9 +339,10 @@ function connectSessionSse(id) {
       setComposerBusy(false);
       setStreamStatus('Ready', 'ok');
       if (d && d.text) {
-        appendAssistantMessage(d.text);
+        finalizeLiveAssistant(d.text);
         await refreshSessionRoute(id);
       } else {
+        finalizeLiveAssistant('');
         await selectSession(id);
       }
       await refreshWorkspaceFiles(id);
@@ -337,9 +350,16 @@ function connectSessionSse(id) {
     },
     turn_error: (d) => {
       finalizeLiveThinking();
+      finalizeLiveOnError();
       setComposerBusy(false);
-      setStreamStatus('Error', 'err');
-      showToast(`Turn error: ${(d && (d.error || d.message)) || 'unknown failure'}`);
+      const rawErr = String((d && (d.error || d.message)) || 'unknown failure');
+      if (/stopped/i.test(rawErr)) {
+        setStreamStatus('Stopped', 'warn');
+        showToast('Turn stopped.');
+      } else {
+        setStreamStatus('Error', 'err');
+        showToast(`Turn error: ${rawErr}`);
+      }
       refreshSessionRoute(id);
     },
   });
@@ -368,18 +388,48 @@ async function refreshSessionRoute(id) {
 
 async function handleSendPrompt(sessionId, prompt, opts) {
   appendUserMessage(prompt);
+  setComposerBusy(true);
   setStreamStatus('Thinking...', 'accent');
   await api.sendMessage(sessionId, { prompt, ...opts });
   rememberForSession(sessionId, { provider: opts.provider, model: opts.model });
 }
 
+async function handleStopTurn() {
+  if (!state.activeSessionId) return;
+  try {
+    setStreamStatus('Stopping...', 'warn');
+    await api.stopTurn(state.activeSessionId);
+  } catch (err) {
+    showToast(`Could not stop turn: ${err.message}`);
+  }
+}
+
 async function handleAttachWorkspace(workspaceRoot) {
   if (!state.activeSessionId) {
-    await createAndSelectSession({ workspace_root: workspaceRoot });
+    const createdId = await createAndSelectSession({ workspace_root: workspaceRoot });
+    if (createdId) showToast(`Attached workspace: ${workspaceRoot}`);
     return;
   }
-  await createAndSelectSession({ title: 'Workspace Research', workspace_root: workspaceRoot });
-  showToast(`Attached workspace: ${workspaceRoot}`);
+  try {
+    const sess = await api.setSessionWorkspace(state.activeSessionId, workspaceRoot);
+    if (el.wsPill) {
+      if (sess && sess.workspace_root) {
+        el.wsPill.hidden = false;
+        el.wsPill.textContent = sess.workspace_root;
+        el.wsPill.title = sess.workspace_root;
+      } else {
+        el.wsPill.hidden = true;
+        el.wsPill.title = '';
+      }
+    }
+    await Promise.all([
+      refreshSessionList(),
+      refreshWorkspaceFiles(state.activeSessionId),
+    ]);
+    showToast(`Attached workspace: ${(sess && sess.workspace_root) || workspaceRoot}`);
+  } catch (err) {
+    showToast(`Could not attach workspace: ${err.message}`);
+  }
 }
 
 function wirePostMessageBridge() {

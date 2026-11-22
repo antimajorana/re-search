@@ -1,7 +1,8 @@
 //! In-core agent loop driving a [`crate::Transport`] and [`tools::Router`].
 
 use crate::transport::{
-    ContentBlock, Message, ModelRequest, ModelResponse, Role, StopReason, ToolSpec, Transport, TransportError,
+    CancelToken, ContentBlock, Message, ModelRequest, ModelResponse, Role, StopReason, StreamObserver, ToolSpec,
+    Transport, TransportError, TransportErrorKind,
 };
 use ledger::{AppendedEvent, Ledger};
 use serde_json::{json, Value};
@@ -10,8 +11,8 @@ use std::time::Instant;
 use tools::{CallOutcome, Router};
 
 pub const EVENT_VERSION: u32 = 1;
-pub const DEFAULT_MAX_TURNS: u32 = 16;
-pub const DEFAULT_MAX_TOKENS: u32 = 4096;
+pub const DEFAULT_MAX_TURNS: u32 = 32;
+pub const DEFAULT_MAX_TOKENS: u32 = 16_384;
 pub const DEFAULT_SYSTEM_PROMPT: &str = "Local re:Search core. `sympy_eval` runs Python/SymPy after the user approves \
     it (each call when uncontained; once per live worker session when sandboxed). `ledger_note` records an unverified \
     note. Results are computations, not verified claims.";
@@ -39,6 +40,10 @@ pub enum SessionOutcome {
 
 pub trait EventSink {
     fn on_event(&mut self, receipt: &AppendedEvent, kind: &str, data: &Value) -> Result<(), String>;
+
+    fn on_text_delta(&mut self, _delta: &str) {}
+
+    fn on_thinking_delta(&mut self, _delta: &str) {}
 }
 
 pub struct NoopSink;
@@ -67,7 +72,7 @@ impl<'a> Audit<'a> {
         Ok(receipt)
     }
 
-    fn flush_interleaved(&mut self) -> Result<(), String> {
+    pub(crate) fn flush_interleaved(&mut self) -> Result<(), String> {
         let cutoff = self.last_seq;
         let events = self
             .ledger
@@ -101,6 +106,34 @@ pub(crate) struct LoopParams<'a> {
     pub(crate) start_turn: u32,
     pub(crate) initial_messages: Vec<Message>,
     pub(crate) mask_keep_recent: Option<(usize, usize)>,
+    pub(crate) cancel: Option<&'a CancelToken>,
+    pub(crate) emit_end_event: bool,
+}
+
+pub(crate) struct LegResult {
+    pub(crate) outcome: SessionOutcome,
+    pub(crate) messages: Vec<Message>,
+    pub(crate) last_turn: u32,
+    pub(crate) last_text: String,
+}
+
+struct AuditStreamObserver<'b, 'a> {
+    audit: &'b mut Audit<'a>,
+    cancel: Option<&'b CancelToken>,
+}
+
+impl StreamObserver for AuditStreamObserver<'_, '_> {
+    fn on_text_delta(&mut self, delta: &str) {
+        self.audit.sink.on_text_delta(delta);
+    }
+
+    fn on_thinking_delta(&mut self, delta: &str) {
+        self.audit.sink.on_thinking_delta(delta);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.is_some_and(CancelToken::is_cancelled)
+    }
 }
 
 pub(crate) fn tool_defs_json(defs: &[&tools::ToolDef]) -> Vec<Value> {
@@ -173,6 +206,8 @@ pub fn run_agent_loop(
             start_turn: 1,
             initial_messages,
             mask_keep_recent: None,
+            cancel: None,
+            emit_end_event: true,
         },
     )
 }
@@ -183,6 +218,15 @@ pub(crate) fn run_turn_loop(
     audit: &mut Audit<'_>,
     params: LoopParams<'_>,
 ) -> Result<SessionOutcome, String> {
+    Ok(run_turn_leg(transport, router, audit, params)?.outcome)
+}
+
+pub(crate) fn run_turn_leg(
+    transport: &dyn Transport,
+    router: &Router,
+    audit: &mut Audit<'_>,
+    params: LoopParams<'_>,
+) -> Result<LegResult, String> {
     let info = transport.info();
     let caller = format!("agent:{}:{}", info.provider, audit.session);
     let tool_specs: Vec<ToolSpec> = router
@@ -201,6 +245,10 @@ pub(crate) fn run_turn_loop(
     for offset in 0..params.max_turns {
         let leg_turns = offset + 1;
         let turn = params.start_turn + offset;
+        if params.cancel.is_some_and(CancelToken::is_cancelled) {
+            let outcome = abort_stopped(audit, leg_turns)?;
+            return Ok(LegResult { outcome, messages, last_turn: turn, last_text: String::new() });
+        }
         let outgoing_messages = match params.mask_keep_recent {
             Some((keep, stride)) => crate::guardrails::mask_old_tool_outputs_stepped(&messages, keep, stride),
             None => messages.clone(),
@@ -214,7 +262,10 @@ pub(crate) fn run_turn_loop(
         };
         let prepared = match transport.prepare_request(&req) {
             Ok(p) => p,
-            Err(err) => return abort_on_transport(audit, leg_turns, turn, err),
+            Err(err) => {
+                let outcome = abort_on_transport(audit, leg_turns, turn, err)?;
+                return Ok(LegResult { outcome, messages, last_turn: turn, last_text: String::new() });
+            }
         };
         let req_blob = audit.put_blob(&prepared.body)?;
         audit.emit(
@@ -229,9 +280,20 @@ pub(crate) fn run_turn_loop(
         )?;
 
         let turn_start = Instant::now();
-        let resp = match transport.send_prepared(&prepared) {
+        let resp_res = {
+            let mut obs = AuditStreamObserver { audit, cancel: params.cancel };
+            transport.send_prepared_streaming(&prepared, &mut obs)
+        };
+        let resp = match resp_res {
             Ok(r) => r,
-            Err(err) => return abort_on_transport(audit, leg_turns, turn, err),
+            Err(err) if err.kind == TransportErrorKind::Cancelled => {
+                let outcome = abort_stopped(audit, leg_turns)?;
+                return Ok(LegResult { outcome, messages, last_turn: turn, last_text: String::new() });
+            }
+            Err(err) => {
+                let outcome = abort_on_transport(audit, leg_turns, turn, err)?;
+                return Ok(LegResult { outcome, messages, last_turn: turn, last_text: String::new() });
+            }
         };
         let duration_ms = turn_start.elapsed().as_millis() as u64;
 
@@ -256,6 +318,7 @@ pub(crate) fn run_turn_loop(
                 "model.refusal",
                 json!({ "turn": turn, "response_id": resp.id, "text": text }),
             )?;
+            let elapsed_ms = started.elapsed().as_millis() as u64;
             audit.emit(
                 "session.end",
                 json!({
@@ -263,41 +326,63 @@ pub(crate) fn run_turn_loop(
                     "stop_reason": "refusal",
                     "num_turns": leg_turns,
                     "last_turn": turn,
-                    "duration_ms": started.elapsed().as_millis() as u64,
+                    "duration_ms": elapsed_ms,
                 }),
             )?;
-            return Ok(SessionOutcome::Refusal { turns: leg_turns, text });
+            return Ok(LegResult {
+                outcome: SessionOutcome::Refusal { turns: leg_turns, text: text.clone() },
+                messages,
+                last_turn: turn,
+                last_text: text,
+            });
         }
 
         if let Some(reason) = validate_turn(&resp) {
-            return abort_session(audit, leg_turns, reason);
+            let outcome = abort_session(audit, leg_turns, reason)?;
+            return Ok(LegResult { outcome, messages, last_turn: turn, last_text: String::new() });
         }
 
         match resp.stop_reason {
             StopReason::EndTurn | StopReason::StopSequence => {
                 let stop_str = resp.stop_reason.as_str().to_string();
-                audit.emit(
-                    "session.end",
-                    json!({
-                        "outcome": "completed",
-                        "stop_reason": stop_str,
-                        "num_turns": leg_turns,
-                        "last_turn": turn,
-                        "duration_ms": started.elapsed().as_millis() as u64,
-                    }),
-                )?;
-                return Ok(SessionOutcome::Completed { turns: leg_turns, stop_reason: stop_str });
+                let last_text = collect_text(&resp.content);
+                let elapsed_ms = started.elapsed().as_millis() as u64;
+                messages.push(Message { role: Role::Assistant, content: resp.content });
+                if params.emit_end_event {
+                    audit.emit(
+                        "session.end",
+                        json!({
+                            "outcome": "completed",
+                            "stop_reason": stop_str,
+                            "num_turns": leg_turns,
+                            "last_turn": turn,
+                            "duration_ms": elapsed_ms,
+                        }),
+                    )?;
+                }
+                return Ok(LegResult {
+                    outcome: SessionOutcome::Completed { turns: leg_turns, stop_reason: stop_str },
+                    messages,
+                    last_turn: turn,
+                    last_text,
+                });
             }
             StopReason::ToolUse => {
                 if leg_turns == params.max_turns {
-                    return abort_session(
+                    let outcome = abort_session(
                         audit,
                         leg_turns,
                         format!("reached max_turns ({}) before model completed", params.max_turns),
-                    );
+                    )?;
+                    return Ok(LegResult { outcome, messages, last_turn: turn, last_text: String::new() });
                 }
                 messages.push(Message { role: Role::Assistant, content: resp.content.clone() });
-                let results = dispatch_tool_calls(audit, router, &caller, turn, &resp.content)?;
+                let results = dispatch_tool_calls(audit, router, &caller, turn, &resp.content, params.cancel)?;
+                if params.cancel.is_some_and(CancelToken::is_cancelled) {
+                    messages.push(Message { role: Role::User, content: results });
+                    let outcome = abort_stopped(audit, leg_turns)?;
+                    return Ok(LegResult { outcome, messages, last_turn: turn, last_text: String::new() });
+                }
                 messages.push(Message { role: Role::User, content: results });
             }
             StopReason::Refusal | StopReason::MaxTokens | StopReason::PauseTurn | StopReason::Other(_) => {
@@ -306,7 +391,19 @@ pub(crate) fn run_turn_loop(
         }
     }
 
-    abort_session(audit, params.max_turns, "agent loop exited unexpectedly".into())
+    let outcome = abort_session(audit, params.max_turns, "agent loop exited unexpectedly".into())?;
+    Ok(LegResult {
+        outcome,
+        messages,
+        last_turn: params.start_turn + params.max_turns.saturating_sub(1),
+        last_text: String::new(),
+    })
+}
+
+fn abort_stopped(audit: &mut Audit<'_>, turn: u32) -> Result<SessionOutcome, String> {
+    let reason = "stopped by user".to_string();
+    audit.emit("session.abort", json!({ "reason": reason, "stopped": true }))?;
+    Ok(SessionOutcome::Aborted { turns: turn, reason })
 }
 
 fn abort_on_transport(
@@ -413,18 +510,23 @@ fn dispatch_tool_calls(
     caller: &str,
     turn: u32,
     content: &[ContentBlock],
+    cancel: Option<&CancelToken>,
 ) -> Result<Vec<ContentBlock>, String> {
     let mut results = Vec::new();
     for block in content {
         let ContentBlock::ToolUse { id, name, input } = block else {
             continue;
         };
-        let outcome = router.try_call(caller, name, input)?;
-        audit.flush_interleaved()?;
-        let (is_error, content_text) = match outcome {
-            CallOutcome::Ok(val) => (false, tools::canon::canonical_json(&val)),
-            CallOutcome::Denied(why) => (true, format!("DENIED: {why}")),
-            CallOutcome::Error(why) => (true, format!("ERROR: {why}")),
+        let (is_error, content_text) = if cancel.is_some_and(CancelToken::is_cancelled) {
+            (true, "DENIED: stopped by user".to_string())
+        } else {
+            let outcome = router.try_call(caller, name, input)?;
+            audit.flush_interleaved()?;
+            match outcome {
+                CallOutcome::Ok(val) => (false, tools::canon::canonical_json(&val)),
+                CallOutcome::Denied(why) => (true, format!("DENIED: {why}")),
+                CallOutcome::Error(why) => (true, format!("ERROR: {why}")),
+            }
         };
         let (clipped, truncated) = clip_text(&content_text);
         audit.emit(

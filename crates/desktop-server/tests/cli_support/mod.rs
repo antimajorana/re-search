@@ -51,7 +51,7 @@ impl CliHarness {
         std::fs::create_dir_all(&ws).unwrap();
         std::fs::write(ws.join("notes.tex"), "old\n").unwrap();
         let fake = if agy { FakeCli::new_agy(tmp.path(), "fake-agy") } else { FakeCli::new(tmp.path(), "fake-cli") };
-        let mut cfg = test_cfg(&data, Some(ws.clone()), None, None);
+        let mut cfg = test_cfg(&data, Some(ws.clone()), Some(chatgpt_auth::testkit::closed_loopback_base()), None);
         if agy {
             cfg.agy_exe = Some(fake.exe.clone());
         } else {

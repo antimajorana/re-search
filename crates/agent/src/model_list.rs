@@ -147,6 +147,7 @@ pub fn describe_list_error(e: &TransportError) -> String {
         TransportErrorKind::Network => if e.message == "timeout" { "timeout" } else { "network" }.to_string(),
         TransportErrorKind::OversizedResponse => "oversized response".to_string(),
         TransportErrorKind::MalformedResponse => "unexpected response".to_string(),
+        TransportErrorKind::Cancelled => "cancelled".to_string(),
         TransportErrorKind::Config => e.message.clone(),
     }
 }

@@ -96,9 +96,25 @@ pub struct ApprovalReply {
     pub by: String,
 }
 
+/// Extended approval reply allowing an explicit human opt-in to session-scoped
+/// `EffectClass::NetworkRead` literature searches (`arxiv_search` / `literature_search`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalOutcome {
+    pub reply: ApprovalReply,
+    #[serde(default)]
+    pub approve_for_session: bool,
+}
+
 /// Asks a human, out of band. May block for as long as the human takes.
 pub trait Approver: Send + Sync {
     fn decide(&self, request: &ApprovalRequest) -> ApprovalReply;
+
+    fn decide_ext(&self, request: &ApprovalRequest) -> ApprovalOutcome {
+        ApprovalOutcome {
+            reply: self.decide(request),
+            approve_for_session: false,
+        }
+    }
 }
 
 /// An active approval bound to one live worker epoch for `(caller, tool_id)`.
@@ -111,11 +127,22 @@ pub struct SessionGrant {
     pub granted_call_id: String,
 }
 
-/// Granted single-use digests and active worker-session grants.
+/// An active human-approved session grant strictly for `EffectClass::NetworkRead`
+/// tools (`arxiv_search`, `literature_search`) within one `Router` session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkReadGrant {
+    pub policy_version: String,
+    pub grant_digest: String,
+    pub granted_call_id: String,
+}
+
+/// Granted single-use digests, active worker-session grants, and session-scoped
+/// `NetworkRead` grants.
 #[derive(Default)]
 pub struct ApprovalStore {
     granted: Mutex<HashSet<String>>,
     session_grants: Mutex<HashMap<(String, String), SessionGrant>>,
+    network_read_grants: Mutex<HashMap<String, NetworkReadGrant>>,
 }
 
 impl ApprovalStore {
@@ -130,6 +157,19 @@ impl ApprovalStore {
     /// True exactly once per granted digest.
     pub fn consume(&self, digest: &str) -> bool {
         self.granted.lock().unwrap().remove(digest)
+    }
+
+    pub fn matching_network_read_grant(&self, caller: &str, policy_version: &str) -> Option<NetworkReadGrant> {
+        let grants = self.network_read_grants.lock().unwrap();
+        let grant = grants.get(caller)?;
+        (grant.policy_version == policy_version).then(|| grant.clone())
+    }
+
+    pub fn bind_network_read_grant(&self, caller: &str, grant: NetworkReadGrant) {
+        self.network_read_grants
+            .lock()
+            .unwrap()
+            .insert(caller.to_string(), grant);
     }
 
     pub fn matching_session_grant(

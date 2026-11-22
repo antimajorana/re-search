@@ -20,10 +20,11 @@ use tools::{ApprovalScope, CallCtx, Registry, ToolDef, EVENT_SCHEMA_VERSION};
 pub const DOC_INGEST: &str = "doc_ingest";
 const MAX_SINGLE_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_INGEST_INPUT_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_EXCERPT_CHARS: usize = 12_000;
 
 const TEXT_EXTENSIONS: &[&str] = &[
-    "tex", "bib", "bbl", "sty", "cls", "md", "markdown", "txt", "csv", "tsv", "json", "py", "log",
-    "yml", "yaml",
+    "tex", "ltx", "bib", "bbl", "sty", "cls", "md", "markdown", "txt", "csv", "tsv", "json", "py",
+    "log", "yml", "yaml",
 ];
 
 #[derive(Debug, Clone)]
@@ -335,7 +336,7 @@ fn prepare_ingestion(
                 skipped_binary: Vec::new(),
                 page_count: None,
                 warning: None,
-                excerpt: take_chars(&display_text, 2_000),
+                excerpt: take_chars(&display_text, MAX_EXCERPT_CHARS),
             })
         }
         DetectedFormat::Pdf => prepare_pdf_ingestion(file_name, raw_bytes),
@@ -360,27 +361,32 @@ fn prepare_ingestion(
                     Ok(p)
                 }
                 ArchivePayload::SingleGzipText { suggested_name, text } => {
-                    let is_tex = suggested_name.to_ascii_lowercase().ends_with(".tex");
+                    let lower = suggested_name.to_ascii_lowercase();
+                    let is_tex = lower.ends_with(".tex") || lower.ends_with(".ltx");
                     let mut materialized = BTreeMap::new();
                     materialized.insert(suggested_name.clone(), text.clone());
-                    let display = match section_filter.filter(|_| is_tex) {
-                        Some(f) => {
-                            let filt = filter_tex_sections(&text, f);
-                            materialized.insert("__filtered__.tex".into(), filt.clone());
-                            filt
-                        }
-                        None => text,
+                    let mut assembled_rel = None;
+                    let display = if is_tex {
+                        let (asm_name, out_tex) = match section_filter {
+                            Some(f) => ("__filtered__.tex", filter_tex_sections(&text, f)),
+                            None => ("__assembled__.tex", text),
+                        };
+                        materialized.insert(asm_name.into(), out_tex.clone());
+                        assembled_rel = Some(asm_name.into());
+                        out_tex
+                    } else {
+                        text
                     };
                     Ok(PreparedIngestion {
                         format: "gz".into(),
                         status: "ok".into(),
                         materialized,
                         primary_rel: Some(suggested_name),
-                        assembled_rel: section_filter.filter(|_| is_tex).map(|_| "__filtered__.tex".into()),
+                        assembled_rel,
                         skipped_binary: Vec::new(),
                         page_count: None,
                         warning: None,
-                        excerpt: take_chars(&display, 2_000),
+                        excerpt: take_chars(&display, MAX_EXCERPT_CHARS),
                     })
                 }
             }
@@ -407,7 +413,7 @@ fn prepare_pdf_ingestion(file_name: &str, pdf_bytes: &[u8]) -> Result<PreparedIn
         skipped_binary: Vec::new(),
         page_count: Some(extracted.page_count),
         warning: extracted.warning,
-        excerpt: take_chars(&extracted.text, 2_000),
+        excerpt: take_chars(&extracted.text, MAX_EXCERPT_CHARS),
     })
 }
 
@@ -487,7 +493,7 @@ fn prepare_archive_files(
         skipped_binary,
         page_count: None,
         warning: None,
-        excerpt: take_chars(&excerpt_src, 2_000),
+        excerpt: take_chars(&excerpt_src, MAX_EXCERPT_CHARS),
     })
 }
 

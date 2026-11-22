@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 pub const DEFAULT_OPENAI_BASE: &str = "https://api.openai.com";
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4.1-mini";
@@ -258,6 +260,7 @@ pub enum TransportErrorKind {
     Network,
     MalformedResponse,
     OversizedResponse,
+    Cancelled,
 }
 
 impl TransportErrorKind {
@@ -270,6 +273,7 @@ impl TransportErrorKind {
             TransportErrorKind::Network => "network",
             TransportErrorKind::MalformedResponse => "malformed_response",
             TransportErrorKind::OversizedResponse => "oversized_response",
+            TransportErrorKind::Cancelled => "cancelled",
         }
     }
 }
@@ -281,6 +285,47 @@ pub struct TransportError {
     pub message: String,
     pub raw_body: Option<Vec<u8>>,
 }
+
+impl TransportError {
+    pub fn cancelled() -> Self {
+        Self {
+            kind: TransportErrorKind::Cancelled,
+            status: None,
+            message: "stopped by user".into(),
+            raw_body: None,
+        }
+    }
+}
+
+/// Thread-safe cooperative cancellation token shared with active model/verifier calls.
+#[derive(Debug, Clone, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+
+impl CancelToken {
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// Receives live token / reasoning deltas and reports cancellation during an in-flight model call.
+pub trait StreamObserver {
+    fn on_text_delta(&mut self, _delta: &str) {}
+    fn on_thinking_delta(&mut self, _delta: &str) {}
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+}
+
+pub struct NoopStreamObserver;
+impl StreamObserver for NoopStreamObserver {}
 
 impl fmt::Display for TransportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -297,4 +342,19 @@ pub trait Transport: Send + Sync {
     fn info(&self) -> TransportInfo;
     fn prepare_request(&self, req: &ModelRequest) -> Result<PreparedRequest, TransportError>;
     fn send_prepared(&self, prepared: &PreparedRequest) -> Result<ModelResponse, TransportError>;
+
+    fn send_prepared_streaming(
+        &self,
+        prepared: &PreparedRequest,
+        observer: &mut dyn StreamObserver,
+    ) -> Result<ModelResponse, TransportError> {
+        if observer.is_cancelled() {
+            return Err(TransportError::cancelled());
+        }
+        let resp = self.send_prepared(prepared)?;
+        if observer.is_cancelled() {
+            return Err(TransportError::cancelled());
+        }
+        Ok(resp)
+    }
 }

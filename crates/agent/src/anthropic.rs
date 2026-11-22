@@ -2,7 +2,10 @@
 
 pub use crate::http::SecretKey;
 use crate::http::{build_ureq_agent, post_json};
-use crate::transport::{ModelRequest, ModelResponse, PreparedRequest, Transport, TransportError, TransportInfo};
+use crate::stream_http::{inject_stream_flag, post_json_cancellable, post_sse_streaming, SseFlavor};
+use crate::transport::{
+    ModelRequest, ModelResponse, PreparedRequest, StreamObserver, Transport, TransportError, TransportInfo,
+};
 use crate::wire::{parse_response, serialize_request, validate_and_build_endpoint};
 use std::time::Duration;
 
@@ -23,6 +26,7 @@ pub struct AnthropicConfig {
     pub base_url: String,
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
+    pub stream: bool,
 }
 
 impl Default for AnthropicConfig {
@@ -30,7 +34,8 @@ impl Default for AnthropicConfig {
         Self {
             base_url: DEFAULT_API_BASE.to_string(),
             connect_timeout: Duration::from_secs(15),
-            request_timeout: Duration::from_secs(180),
+            request_timeout: Duration::from_secs(600),
+            stream: false,
         }
     }
 }
@@ -40,6 +45,7 @@ pub struct AnthropicTransport {
     key: SecretKey,
     key_env: String,
     agent: ureq::Agent,
+    stream: bool,
 }
 
 impl AnthropicTransport {
@@ -56,6 +62,7 @@ impl AnthropicTransport {
             key,
             key_env: key_env.into(),
             agent: build_ureq_agent(is_https, config.connect_timeout, config.request_timeout),
+            stream: config.stream,
         })
     }
 }
@@ -70,13 +77,35 @@ impl Transport for AnthropicTransport {
     }
 
     fn prepare_request(&self, req: &ModelRequest) -> Result<PreparedRequest, TransportError> {
-        Ok(PreparedRequest { body: serialize_request(req)? })
+        let raw = serialize_request(req)?;
+        let body = if self.stream { inject_stream_flag(raw) } else { raw };
+        Ok(PreparedRequest { body })
     }
 
     fn send_prepared(&self, prepared: &PreparedRequest) -> Result<ModelResponse, TransportError> {
         let secret = self.key.as_str();
         let headers = [("x-api-key", secret), ("anthropic-version", ANTHROPIC_VERSION)];
         let raw = post_json(&self.agent, &self.endpoint, &headers, &prepared.body, secret)?;
+        parse_response(raw, secret)
+    }
+
+    fn send_prepared_streaming(
+        &self,
+        prepared: &PreparedRequest,
+        observer: &mut dyn StreamObserver,
+    ) -> Result<ModelResponse, TransportError> {
+        let secret = self.key.as_str();
+        let raw = if self.stream {
+            let headers = [
+                ("x-api-key", secret),
+                ("anthropic-version", ANTHROPIC_VERSION),
+                ("Accept", "text/event-stream"),
+            ];
+            post_sse_streaming(&self.agent, &self.endpoint, &headers, &prepared.body, secret, SseFlavor::Anthropic, observer)?
+        } else {
+            let headers = [("x-api-key", secret), ("anthropic-version", ANTHROPIC_VERSION)];
+            post_json_cancellable(&self.agent, &self.endpoint, &headers, &prepared.body, secret, observer)?
+        };
         parse_response(raw, secret)
     }
 }

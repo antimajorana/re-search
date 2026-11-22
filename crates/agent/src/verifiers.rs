@@ -7,7 +7,7 @@
 
 use crate::guardrails::materialize_proof_entries;
 use crate::runner::EVENT_VERSION;
-use crate::transport::{ContentBlock, Message, ModelRequest, Role, StopReason, Transport};
+use crate::transport::{CancelToken, ContentBlock, Message, ModelRequest, Role, StopReason, StreamObserver, Transport};
 use ledger::Ledger;
 use research_tools::{
     format_deterministic_tex_audit_xml, read_proof_dag, run_tex_audit, AuditOptions, AuditReport,
@@ -17,7 +17,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
-const VERIFIER_MAX_TOKENS: u32 = 4096;
+const VERIFIER_MAX_TOKENS: u32 = 8192;
+
+struct CancelOnlyObserver<'a>(Option<&'a CancelToken>);
+impl StreamObserver for CancelOnlyObserver<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.0.is_some_and(CancelToken::is_cancelled)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -195,6 +202,7 @@ struct VerifierParams<'a> {
     entries_slice: &'a [ProofEntry],
     problem_prompt: &'a str,
     model: &'a str,
+    cancel: Option<&'a CancelToken>,
 }
 
 fn execute_verifier(
@@ -274,7 +282,8 @@ fn execute_verifier(
         )
         .map_err(|e| format!("failed to record verifier.request: {e}"))?;
 
-    let resp = transport.send_prepared(&prepared).map_err(|e| e.to_string())?;
+    let mut obs = CancelOnlyObserver(params.cancel);
+    let resp = transport.send_prepared_streaming(&prepared, &mut obs).map_err(|e| e.to_string())?;
     let resp_blob = ledger
         .put_blob(&resp.raw_body)
         .map_err(|e| format!("verifier response put_blob failed: {e}"))?;
@@ -363,6 +372,7 @@ pub fn verify_step(
             entries_slice: &slice,
             problem_prompt: &problem_prompt,
             model,
+            cancel: None,
         },
     )
 }
@@ -375,6 +385,17 @@ pub fn verify_full_solution(
     env: &ResearchEnv,
     session: &str,
     model: &str,
+) -> Result<VerificationReport, String> {
+    verify_full_solution_cancellable(transport, ledger, env, session, model, None)
+}
+
+pub fn verify_full_solution_cancellable(
+    transport: &dyn Transport,
+    ledger: &Ledger,
+    env: &ResearchEnv,
+    session: &str,
+    model: &str,
+    cancel: Option<&CancelToken>,
 ) -> Result<VerificationReport, String> {
     let (problem_prompt, entries) = load_problem_and_entries(ledger, session)?;
     let active: Vec<ProofEntry> = entries
@@ -400,6 +421,7 @@ pub fn verify_full_solution(
             entries_slice: &active,
             problem_prompt: &problem_prompt,
             model,
+            cancel,
         },
     )
 }

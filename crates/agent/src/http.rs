@@ -187,7 +187,7 @@ pub(crate) fn build_ureq_agent(
     ureq::Agent::new_with_config(builder.build())
 }
 
-fn map_ureq_error(err: ureq::Error, status: Option<u16>, secret: &str) -> TransportError {
+pub(crate) fn map_ureq_error(err: ureq::Error, status: Option<u16>, secret: &str) -> TransportError {
     let kind = match &err {
         ureq::Error::BodyExceedsLimit(_) | ureq::Error::LargeResponseHeader(_, _) => {
             TransportErrorKind::OversizedResponse

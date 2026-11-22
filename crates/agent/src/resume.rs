@@ -80,7 +80,7 @@ fn req_str<'a>(ev: &'a Event, field: &str) -> Result<&'a str, ResumeReject> {
         .ok_or_else(|| corrupt(format!("session `{}` seq {} missing `{field}`", ev.session, ev.seq)))
 }
 
-fn verify_and_read(
+pub(crate) fn verify_and_read(
     ledger: &Ledger,
     session: &str,
     expected_policy_version: &str,
@@ -321,7 +321,7 @@ fn collect_committed_tool_results(
     Ok(Some(ordered))
 }
 
-fn rehydrate_history(
+pub(crate) fn rehydrate_history(
     ledger: &Ledger,
     events: &[Event],
     target_provider: ProviderKind,
@@ -334,6 +334,11 @@ fn rehydrate_history(
             "session.start" | "session.resume" => {
                 active_provider = Some(ProviderKind::parse(req_str(ev, "provider")?).map_err(|e| corrupt(format!("seq {}: {e}", ev.seq)))?);
                 append_user_prompt(&mut history, req_str(ev, "prompt")?.to_string());
+            }
+            "autonomous.feedback" => {
+                if let Some(text) = ev.payload.get("text").and_then(Value::as_str) {
+                    append_user_prompt(&mut history, text.to_string());
+                }
             }
             "model.response" => {
                 let leg_provider = active_provider.ok_or_else(|| corrupt(format!("seq {} model.response before start", ev.seq)))?;
@@ -472,6 +477,8 @@ pub fn resume_agent_loop(
             start_turn: inspection.start_turn,
             initial_messages: messages,
             mask_keep_recent: None,
+            cancel: None,
+            emit_end_event: true,
         },
     )
 }

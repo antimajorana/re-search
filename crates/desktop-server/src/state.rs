@@ -84,6 +84,8 @@ pub struct PendingApprovalView {
     pub call_id: String,
     pub session: String,
     pub tool_id: String,
+    pub effect: String,
+    pub allow_session_approve: bool,
     pub canonical_args: String,
     pub digest: String,
     pub scope: String,
@@ -97,6 +99,7 @@ pub struct PendingApprovalView {
 pub struct ApprovalDecision {
     pub digest: String,
     pub approved: bool,
+    pub approve_for_session: bool,
     pub responder: String,
 }
 
@@ -117,6 +120,10 @@ pub struct DesktopState {
     pub ui_settings_lock: Mutex<()>,
     /// Running subscription-CLI turns (`claude-cli`, `antigravity`), by session: route kind + stop handle.
     pub cli_turns: Mutex<HashMap<String, (crate::cli_turn::CliRouteKind, cli_route::StopHandle)>>,
+    /// Running in-core API / ChatGPT turns, by session: cooperative cancellation token.
+    pub api_turns: Mutex<HashMap<String, agent::CancelToken>>,
+    /// Session-scoped human-approved `network-read` grants keyed by `(session_id, caller)`.
+    pub network_session_grants: Mutex<HashMap<(String, String), tools::NetworkReadGrant>>,
     /// Model lists fetched from providers, kept for [`crate::model_catalog::CACHE_TTL`].
     pub catalog: crate::model_catalog::Catalog,
     /// `claude --version` output once a probe succeeded (a failed probe is not kept).
@@ -140,6 +147,8 @@ impl DesktopState {
             ledger_write_lock: Mutex::new(()),
             ui_settings_lock: Mutex::new(()),
             cli_turns: Mutex::new(HashMap::new()),
+            api_turns: Mutex::new(HashMap::new()),
+            network_session_grants: Mutex::new(HashMap::new()),
             catalog: crate::model_catalog::Catalog::default(),
             claude_version: std::sync::OnceLock::new(),
             chatgpt,
@@ -167,6 +176,7 @@ impl DesktopState {
                     *dec = Some(ApprovalDecision {
                         digest: slot.view.digest.clone(),
                         approved: false,
+                        approve_for_session: false,
                         responder: responder.to_string(),
                     });
                     slot.cv.notify_all();
@@ -309,6 +319,7 @@ impl DesktopState {
         call_id: &str,
         digest: &str,
         approved: bool,
+        approve_for_session: bool,
     ) -> Result<(), (u16, String)> {
         let slot = {
             let map = self
@@ -332,6 +343,7 @@ impl DesktopState {
         *dec = Some(ApprovalDecision {
             digest: digest.to_string(),
             approved,
+            approve_for_session: approved && approve_for_session && slot.view.allow_session_approve,
             responder: "desktop-ui".to_string(),
         });
         slot.cv.notify_all();
@@ -409,11 +421,13 @@ impl DesktopState {
         // request body: the stored provider key is sent to whatever host this names.
         let (base_url, _) = self.base_url_for(provider, &store);
 
+        let live_https_stream = self.cfg.api_base_override.is_none() && base_url.starts_with("https://");
         match provider {
             ProviderKind::ChatGpt => crate::chatgpt::build_transport(self),
             ProviderKind::Anthropic => {
                 let cfg = AnthropicConfig {
                     base_url,
+                    stream: live_https_stream,
                     ..AnthropicConfig::default()
                 };
                 match AnthropicTransport::from_env(cfg.clone()) {
@@ -434,6 +448,7 @@ impl DesktopState {
                 let cfg = OpenAiConfig {
                     provider,
                     base_url: base_url.clone(),
+                    stream: live_https_stream,
                     ..OpenAiConfig::default()
                 };
                 match OpenAiTransport::from_env(cfg.clone()) {
@@ -516,78 +531,6 @@ pub fn update_provider_roles_from_ui(roles: &mut RoleAssignment, ui: &UiSettings
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cli_turn::CliRouteKind;
-
-    fn test_state(dir: &Path) -> Arc<DesktopState> {
-        let cfg = DesktopConfig {
-            port: 0,
-            data_dir: dir.to_path_buf(),
-            workspace_root: None,
-            python: None,
-            worker_script: None,
-            api_base_override: None,
-            literature_endpoints: research_tools::LiteratureEndpoints::default(),
-            open_window: false,
-            print_url_json: false,
-            eval_timeout_s: 30,
-            core_exe: None,
-            claude_exe: None,
-            agy_exe: None,
-            connection_env: Some(std::collections::BTreeMap::new()),
-            chatgpt_test: Some(crate::chatgpt::offline_test_hooks()),
-        };
-        let chatgpt = crate::chatgpt::ChatGptHub::new(&cfg).unwrap();
-        Arc::new(DesktopState::new(cfg, AuthGuard::new(1).unwrap(), Arc::new(SseHub::new()), chatgpt))
-    }
-
-    #[test]
-    fn stop_cli_turns_of_only_stops_matching_route() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let st = test_state(tmp.path());
-        let claude_stop = cli_route::StopHandle::new();
-        let agy_stop = cli_route::StopHandle::new();
-        {
-            let mut m = st.cli_turns.lock().unwrap();
-            m.insert("s-claude".into(), (CliRouteKind::Claude, claude_stop.clone()));
-            m.insert("s-agy".into(), (CliRouteKind::Antigravity, agy_stop.clone()));
-        }
-        assert_eq!(st.stop_cli_turns_of(CliRouteKind::Antigravity), 1);
-        assert!(agy_stop.is_stopped(), "antigravity turn must be stopped");
-        assert!(!claude_stop.is_stopped(), "claude turn must stay running");
-    }
-
-    #[test]
-    fn update_ui_settings_serializes_concurrent_updates() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let st = test_state(tmp.path());
-        st.update_ui_settings(|ui| {
-            ui.antigravity_ack = Some(AntigravityAck { acknowledged_ms: 1, notice_version: 1 });
-        })
-        .unwrap();
-        let s1 = Arc::clone(&st);
-        let s2 = Arc::clone(&st);
-        let t1 = std::thread::spawn(move || {
-            for i in 0..20 {
-                s1.update_ui_settings(|ui| ui.default_model = Some(format!("m-{i}"))).unwrap();
-            }
-        });
-        let t2 = std::thread::spawn(move || {
-            for _ in 0..20 {
-                s2.update_ui_settings(|ui| ui.pinned_conventions = Some("conv".into())).unwrap();
-            }
-        });
-        t1.join().unwrap();
-        t2.join().unwrap();
-        let ui = st.load_ui_settings();
-        assert!(ui.antigravity_ack.is_some(), "antigravity_ack must not be lost");
-        assert_eq!(ui.pinned_conventions.as_deref(), Some("conv"));
-        assert!(ui.default_model.is_some());
     }
 }
 

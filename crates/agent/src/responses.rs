@@ -20,9 +20,10 @@ use crate::http::{
     build_ureq_agent, config_err, malformed_response_err, post_json, scrub_bytes, scrub_text, validate_base_url,
     SecretKey, ValidatedBaseUrl,
 };
+use crate::stream_http::{post_sse_streaming, SseFlavor};
 use crate::transport::{
-    ContentBlock, Message, ModelRequest, ModelResponse, PreparedRequest, ProviderKind, Role, StopReason, ToolSpec,
-    Transport, TransportError, TransportErrorKind, TransportInfo, DEFAULT_CHATGPT_BASE,
+    ContentBlock, Message, ModelRequest, ModelResponse, PreparedRequest, ProviderKind, Role, StopReason,
+    StreamObserver, ToolSpec, Transport, TransportError, TransportErrorKind, TransportInfo, DEFAULT_CHATGPT_BASE,
 };
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
@@ -104,15 +105,54 @@ impl ChatGptTransport {
         Ok(Self { endpoint, source, agent })
     }
 
-    fn post_with_key(&self, body: &[u8], key: &SecretKey) -> Result<Vec<u8>, TransportError> {
+    fn post_with_key(
+        &self,
+        body: &[u8],
+        key: &SecretKey,
+        observer: Option<&mut dyn StreamObserver>,
+    ) -> Result<Vec<u8>, TransportError> {
         let secret = key.as_str();
         let mut auth = format!("Bearer {secret}");
         let res = {
             let headers = [("Authorization", auth.as_str()), ("Accept", "text/event-stream")];
-            post_json(&self.agent, &self.endpoint, &headers, body, secret)
+            match observer {
+                Some(obs) => post_sse_streaming(&self.agent, &self.endpoint, &headers, body, secret, SseFlavor::Responses, obs),
+                None => post_json(&self.agent, &self.endpoint, &headers, body, secret),
+            }
         };
         zeroize::Zeroize::zeroize(&mut auth);
         res
+    }
+
+    fn send_inner(
+        &self,
+        prepared: &PreparedRequest,
+        mut observer: Option<&mut dyn StreamObserver>,
+    ) -> Result<ModelResponse, TransportError> {
+        let key = self.source.bearer()?;
+        let secret = key.as_str();
+        match self.post_with_key(&prepared.body, &key, match observer.as_deref_mut() {
+            Some(o) => Some(&mut *o),
+            None => None,
+        }) {
+            Ok(raw) => parse_responses_stream(raw, secret),
+            Err(err) if err.kind == TransportErrorKind::Cancelled => Err(err),
+            Err(err) => {
+                let described = describe_http_error(err, secret);
+                if described.status == Some(401) && !is_user_not_eligible(&described) {
+                    if let Ok(fresh) = self.source.force_refresh(secret) {
+                        if fresh.as_str() != secret {
+                            let fresh_secret = fresh.as_str();
+                            let raw = self.post_with_key(&prepared.body, &fresh, observer).map_err(|e2| {
+                                if e2.kind == TransportErrorKind::Cancelled { e2 } else { describe_http_error(e2, fresh_secret) }
+                            })?;
+                            return parse_responses_stream(raw, fresh_secret);
+                        }
+                    }
+                }
+                Err(described)
+            }
+        }
     }
 }
 
@@ -138,26 +178,15 @@ impl Transport for ChatGptTransport {
     }
 
     fn send_prepared(&self, prepared: &PreparedRequest) -> Result<ModelResponse, TransportError> {
-        let key = self.source.bearer()?;
-        let secret = key.as_str();
-        match self.post_with_key(&prepared.body, &key) {
-            Ok(raw) => parse_responses_stream(raw, secret),
-            Err(err) => {
-                let described = describe_http_error(err, secret);
-                if described.status == Some(401) && !is_user_not_eligible(&described) {
-                    if let Ok(fresh) = self.source.force_refresh(secret) {
-                        if fresh.as_str() != secret {
-                            let fresh_secret = fresh.as_str();
-                            let raw = self
-                                .post_with_key(&prepared.body, &fresh)
-                                .map_err(|e2| describe_http_error(e2, fresh_secret))?;
-                            return parse_responses_stream(raw, fresh_secret);
-                        }
-                    }
-                }
-                Err(described)
-            }
-        }
+        self.send_inner(prepared, None)
+    }
+
+    fn send_prepared_streaming(
+        &self,
+        prepared: &PreparedRequest,
+        observer: &mut dyn StreamObserver,
+    ) -> Result<ModelResponse, TransportError> {
+        self.send_inner(prepared, Some(observer))
     }
 }
 

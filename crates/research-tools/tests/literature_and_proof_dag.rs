@@ -507,3 +507,90 @@ fn network_read_refused_by_human_makes_no_request() {
     }
     assert!(srv.seen_paths.lock().unwrap().is_empty(), "a refused search must not touch the network");
 }
+
+#[test]
+fn stage10_arxiv_inline_prefixes_single_gz_eprint_and_session_network_grant() {
+    let mut gz = GzEncoder::new(Vec::new(), Compression::fast());
+    gz.write_all(b"\\documentclass{article}\n\\begin{document}\n\\section{Intro}\nSpin chain.\n\\section{Split Property}\nBounded split entanglement entropy.\n\\end{document}").unwrap();
+    let single_gz = gz.finish().unwrap();
+    let atom_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/1109.5778v1</id><updated>2011-09-27T00:00:00Z</updated><published>2011-09-27T00:00:00Z</published>
+    <title>Boundedness of entanglement entropy and split property of quantum spin chains</title>
+    <summary>Split property holds when entanglement entropy is bounded.</summary>
+    <author><name>Taku Matsui</name></author><arxiv:primary_category term="math-ph"/>
+  </entry>
+</feed>"#
+        .to_string();
+    let srv = MockHttpServer::start(move |path, _| {
+        if path.starts_with("/api/query") {
+            return MockResp::ok("application/atom+xml", atom_xml.as_bytes().to_vec());
+        }
+        if path.starts_with("/e-print/1109.5778v1") {
+            return MockResp::ok("application/x-gzip", single_gz.clone());
+        }
+        if path.starts_with("/works") {
+            return MockResp::ok("application/json", br#"{"status":"ok","message":{"items":[]}}"#.to_vec());
+        }
+        MockResp::not_found()
+    });
+
+    struct SessionLitApprover(Mutex<usize>);
+    impl Approver for SessionLitApprover {
+        fn decide(&self, req: &ApprovalRequest) -> ApprovalReply {
+            ApprovalReply { approved: false, digest: req.digest.clone(), by: "unexpected".into() }
+        }
+        fn decide_ext(&self, req: &ApprovalRequest) -> tools::ApprovalOutcome {
+            let mut n = self.0.lock().unwrap();
+            *n += 1;
+            let is_net = req.effect == policy::EffectClass::NetworkRead;
+            tools::ApprovalOutcome {
+                reply: ApprovalReply { approved: is_net, digest: req.digest.clone(), by: "human-ui".into() },
+                approve_for_session: true,
+            }
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let ws = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let data_dir = tmp.path().join("data");
+    let env = Arc::new(
+        ResearchEnv::with_workspace(&data_dir, &ws)
+            .unwrap()
+            .with_endpoints(LiteratureEndpoints::loopback_mock(&srv.base_url).unwrap()),
+    );
+    let mut reg = Registry::new();
+    register_research_tools(&mut reg, env.clone());
+    let approver = Arc::new(SessionLitApprover(Mutex::new(0)));
+    let router = Router::new(reg, research_policy(), Ledger::open(&data_dir).unwrap(), "s-matsui01", approver.clone());
+
+    // 1. Inline `au:` + `ti:` query must NOT double-prefix `all:au:`, and single-file `.gz` with dot in ID gets `.tex` + `__filtered__.tex`.
+    let out1 = router
+        .try_call(
+            "agent:test",
+            ARXIV_SEARCH,
+            &json!({"query": "au:Matsui AND ti:split", "include_source": true, "section_filter": "Split"}),
+        )
+        .unwrap();
+    let papers = match out1 {
+        CallOutcome::Ok(v) => v["papers"].as_array().unwrap().clone(),
+        other => panic!("unexpected {other:?}"),
+    };
+    assert_eq!(papers.len(), 1);
+    assert!(papers[0]["source"]["primary_path"].as_str().unwrap().ends_with("/arxiv_1109.5778v1.tex"));
+    assert!(papers[0]["source"]["assembled_path"].as_str().unwrap().ends_with("/__filtered__.tex"));
+    assert!(papers[0]["source"]["excerpt"].as_str().unwrap().contains("Bounded split entanglement entropy"));
+    let seen = srv.seen_paths.lock().unwrap().clone();
+    assert!(seen[0].contains("search_query=au%3AMatsui%20AND%20ti%3Asplit"), "{seen:?}");
+    assert!(!seen[0].contains("all%3Aau"), "{seen:?}");
+
+    // 2. Subsequent `arxiv_search` and `literature_search` reuse the session grant without re-prompting, while `fs_write` still prompts (and is denied here).
+    assert_eq!(*approver.0.lock().unwrap(), 1);
+    assert!(matches!(router.try_call("agent:test", ARXIV_SEARCH, &json!({"query": "author:Matsui"})).unwrap(), CallOutcome::Ok(_)));
+    assert!(matches!(router.try_call("agent:test", LITERATURE_SEARCH, &json!({"source": "crossref", "query": "Matsui"})).unwrap(), CallOutcome::Ok(_)));
+    assert_eq!(*approver.0.lock().unwrap(), 1, "network-read grant reused across literature tools");
+    assert!(matches!(router.try_call("agent:test", "fs_write", &json!({"path": "x.tex", "content": "hi"})).unwrap(), CallOutcome::Denied(_)));
+    assert_eq!(*approver.0.lock().unwrap(), 2, "fs_write must never reuse network-read grant");
+}

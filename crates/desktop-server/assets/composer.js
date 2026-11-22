@@ -8,6 +8,7 @@ const MAX_FILE_BYTES = 10 * 1024 * 1024;
 let formEl = null;
 let inputEl = null;
 let sendEl = null;
+let stopEl = null;
 let uploadEl = null;
 let filesBoxEl = null;
 let workspaceBtn = null;
@@ -17,12 +18,15 @@ let wsDialogEl = null;
 let wsInputEl = null;
 let callbacks = {};
 let stagedFiles = [];
+let submitting = false;
+let turnRunning = false;
 
 export function initComposer(opts = {}) {
   callbacks = opts;
   formEl = document.getElementById('composer-pill');
   inputEl = document.getElementById('composer-input');
   sendEl = document.getElementById('composer-send');
+  stopEl = document.getElementById('composer-stop');
   uploadEl = document.getElementById('composer-upload-input');
   filesBoxEl = document.getElementById('composer-files');
   workspaceBtn = document.getElementById('workspace-attach-btn');
@@ -52,6 +56,19 @@ export function initComposer(opts = {}) {
     uploadEl.addEventListener('change', handleFileSelection);
   }
 
+  if (stopEl) {
+    stopEl.addEventListener('click', async () => {
+      if (typeof callbacks.onStopTurn === 'function') {
+        stopEl.disabled = true;
+        try {
+          await callbacks.onStopTurn();
+        } finally {
+          stopEl.disabled = false;
+        }
+      }
+    });
+  }
+
   for (const chip of [verifierChip, strategistChip]) {
     if (chip) {
       chip.addEventListener('click', () => {
@@ -77,8 +94,20 @@ export function setComposerPrompt(text, focusInput = true) {
   if (focusInput) inputEl.focus();
 }
 
+function syncButtons() {
+  if (sendEl) {
+    sendEl.disabled = submitting || turnRunning;
+    sendEl.hidden = turnRunning;
+  }
+  if (stopEl) {
+    stopEl.hidden = !turnRunning;
+    stopEl.disabled = false;
+  }
+}
+
 export function setComposerBusy(busy) {
-  if (sendEl) sendEl.disabled = !!busy;
+  turnRunning = !!busy;
+  syncButtons();
 }
 
 // Provider and model come from the single model dropdown (model_picker.js).
@@ -170,6 +199,7 @@ async function flushStagedUploads(sessionId) {
 }
 
 async function handleSubmit() {
+  if (submitting || turnRunning) return;
   const prompt = inputEl ? inputEl.value.trim() : '';
   if (!prompt && stagedFiles.length === 0) return;
   const currentChoice = () => (typeof callbacks.getModelChoice === 'function' ? callbacks.getModelChoice() : null);
@@ -185,8 +215,10 @@ async function handleSubmit() {
     return;
   }
 
+  let startedTurn = false;
   try {
-    setComposerBusy(true);
+    submitting = true;
+    syncButtons();
     const sessionId = await callbacks.ensureSession();
     if (!sessionId) return;
     // Selecting or creating the session may have changed which models it can use: check
@@ -210,12 +242,15 @@ async function handleSubmit() {
       resizeTextarea();
       if (typeof callbacks.onSendPrompt === 'function') {
         await callbacks.onSendPrompt(sessionId, prompt, getComposerOptions(choice));
+        startedTurn = true;
       }
     }
   } catch (err) {
     notify(`Send failed: ${err.message}`);
   } finally {
-    setComposerBusy(false);
+    submitting = false;
+    turnRunning = startedTurn;
+    syncButtons();
   }
 }
 
@@ -227,11 +262,28 @@ function wireWorkspaceModal() {
   const closeModal = () => {
     if (wsDialogEl) wsDialogEl.hidden = true;
   };
+  const openManualModal = () => {
+    if (wsDialogEl) {
+      wsDialogEl.hidden = false;
+      if (wsInputEl) wsInputEl.focus();
+    }
+  };
   if (workspaceBtn) {
-    workspaceBtn.addEventListener('click', () => {
-      if (wsDialogEl) {
-        wsDialogEl.hidden = false;
-        if (wsInputEl) wsInputEl.focus();
+    workspaceBtn.addEventListener('click', async () => {
+      workspaceBtn.disabled = true;
+      try {
+        const picked = await api.pickWorkspaceFolder();
+        if (picked && picked.supported) {
+          if (!picked.cancelled && picked.path && typeof callbacks.onAttachWorkspace === 'function') {
+            await callbacks.onAttachWorkspace(picked.path);
+          }
+          return;
+        }
+        openManualModal();
+      } catch {
+        openManualModal();
+      } finally {
+        workspaceBtn.disabled = false;
       }
     });
   }

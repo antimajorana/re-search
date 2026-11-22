@@ -338,5 +338,18 @@ pub fn filter_tex_sections(tex: &str, filter: &str) -> String {
         matched_blocks.push(cur_block);
     }
 
-    matched_blocks.join("\n")
+    if !matched_blocks.is_empty() {
+        return matched_blocks.join("\n");
+    }
+    // Fallback for short physics letters without matching `\section` headings: return
+    // paragraphs containing `needle`, or the full TeX if none match.
+    let paras: Vec<&str> = tex
+        .split("\n\n")
+        .filter(|p| p.to_ascii_lowercase().contains(&needle))
+        .collect();
+    if !paras.is_empty() {
+        paras.join("\n\n")
+    } else {
+        tex.to_string()
+    }
 }

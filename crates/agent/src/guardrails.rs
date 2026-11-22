@@ -425,6 +425,8 @@ pub fn run_research_loop(
             start_turn: 1,
             initial_messages,
             mask_keep_recent: Some((guardrails.step_mask_keep, guardrails.step_mask_stride)),
+            cancel: None,
+            emit_end_event: true,
         },
     )?;
 
