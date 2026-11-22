@@ -22,6 +22,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../assets/components.css"),
         }),
+        "/assets/workbench.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/workbench.css"),
+        }),
         "/assets/api.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/api.js"),
@@ -29,6 +33,14 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
         "/assets/math.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/math.js"),
+        }),
+        "/assets/trace_cards.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/trace_cards.js"),
+        }),
+        "/assets/workbench.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/workbench.js"),
         }),
         "/assets/stream.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",

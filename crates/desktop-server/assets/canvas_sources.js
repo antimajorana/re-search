@@ -24,10 +24,14 @@ let sidetalkInputEl = null;
 let currentSessionId = null;
 let notifyFn = () => {};
 let onSelectStepRef = () => {};
+let onCountsChange = () => {};
+let lastSourcesCount = 0;
+let lastSidetalkCount = 0;
 
 export function initSourcesAndSidetalk(opts = {}) {
   notifyFn = opts.onNotify || (() => {});
   onSelectStepRef = opts.onSelectStepRef || (() => {});
+  onCountsChange = opts.onCountsChange || (() => {});
   litFormEl = document.getElementById('literature-search-form');
   litSourceEl = document.getElementById('lit-source-select');
   litQueryEl = document.getElementById('lit-query-input');
@@ -135,6 +139,8 @@ export async function loadSessionSources(sessionId) {
   try {
     const sess = await api.getSession(sessionId);
     const sources = Array.isArray(sess && sess.sources) ? sess.sources : [];
+    lastSourcesCount = sources.length;
+    onCountsChange({ sources: lastSourcesCount, sidetalk: lastSidetalkCount });
     sourcesListEl.innerHTML = '';
     if (sources.length === 0) {
       sourcesListEl.innerHTML = '<div class="source-card" style="color:var(--ink-muted)">Upload .tex/.bib/.pdf/.tar.gz files via the composer or ingest arXiv e-prints above.</div>';
@@ -164,6 +170,8 @@ async function loadSidetalk(sessionId) {
   try {
     const data = await api.getSidetalk(sessionId);
     const turns = Array.isArray(data) ? data : data.turns || data.messages || [];
+    lastSidetalkCount = turns.length;
+    onCountsChange({ sources: lastSourcesCount, sidetalk: lastSidetalkCount });
     sidetalkStreamEl.innerHTML = '';
     if (turns.length === 0) {
       sidetalkStreamEl.innerHTML = '<div style="color:var(--ink-muted);font-size:13px;">Ask clarifying questions here without altering the verified proof chain.</div>';
@@ -190,6 +198,8 @@ async function handleSidetalkSubmit() {
     const answer = (resp && (resp.answer || resp.text || resp.a)) || '';
     if (pendingNode) pendingNode.remove();
     appendSidetalkPair(question, answer);
+    lastSidetalkCount += 1;
+    onCountsChange({ sources: lastSourcesCount, sidetalk: lastSidetalkCount });
   } catch (err) {
     if (pendingNode) pendingNode.remove();
     appendSidetalkPair(question, `Error: ${err.message}`);

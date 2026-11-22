@@ -75,6 +75,7 @@ test('Vendored KaTeX is 0.19.1 offline build', () => {
 test('CSS audit: starter-chip scoped to > span and no bare descendant span/div/* inside KaTeX containers', () => {
   const componentsCss = fs.readFileSync(path.join(assetsDir, 'components.css'), 'utf8');
   const layoutCss = fs.readFileSync(path.join(assetsDir, 'layout.css'), 'utf8');
+  const workbenchCss = fs.readFileSync(path.join(assetsDir, 'workbench.css'), 'utf8');
 
   assert.doesNotMatch(componentsCss, /\.starter-chip\s+span\b/, 'components.css must not have unscoped .starter-chip span');
   assert.match(componentsCss, /\.starter-chip\s*>\s*span\b/, 'components.css must scope .starter-chip > span');
@@ -88,10 +89,10 @@ test('CSS audit: starter-chip scoped to > span and no bare descendant span/div/*
 
   const katexContainers = [
     '.starter-chip', '.rich-prose', '.msg-bubble-user', '.msg-assistant-body',
-    '#latex-preview', '.dag-detail-card', '.paper-card', '.source-card', '#sidetalk-stream',
+    '#latex-preview', '.dag-detail-card', '.paper-card', '.source-card', '#sidetalk-stream', '.sc-latex',
   ];
 
-  for (const [name, css] of [['components.css', componentsCss], ['layout.css', layoutCss]]) {
+  for (const [name, css] of [['components.css', componentsCss], ['layout.css', layoutCss], ['workbench.css', workbenchCss]]) {
     const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
     const ruleHeads = stripped.split('}').map((r) => r.split('{')[0].trim()).filter(Boolean);
     for (const head of ruleHeads) {
@@ -450,4 +451,78 @@ test('Stage 10 UI wiring: Stop button, live text_delta streaming, session litera
   assert.match(composerJs, /pickWorkspaceFolder/, 'Workspace button must invoke native folder picker endpoint');
   assert.match(appJs, /setSessionWorkspace\(state\.activeSessionId/, 'Workspace attach must update active session in-place');
   assert.match(apiJs, /'text_delta'/, 'EventSource client must subscribe to text_delta');
+});
+
+test('Stage 11 Workbench UI: pipeline stepper, rigor presets, conventions popover, resizable Canvas, and XSS-safe trace/verdict cards', async () => {
+  const indexHtml = fs.readFileSync(path.join(assetsDir, 'index.html'), 'utf8');
+  const assetsRs = fs.readFileSync(path.join(crateRoot, 'src', 'assets.rs'), 'utf8');
+
+  assert.match(indexHtml, /id="pipeline-bar"/, 'Live multi-agent pipeline bar must exist');
+  assert.match(indexHtml, /data-rigor-preset="verified"/, 'Rigor segmented control must expose Verified preset');
+  assert.match(indexHtml, /data-rigor-preset="deep"/, 'Rigor segmented control must expose Deep preset');
+  assert.match(indexHtml, /id="conventions-popover"/, 'Quick Pinned Conventions popover must exist');
+  assert.match(indexHtml, /id="canvas-resizer"/, 'Right Canvas resizer handle must exist');
+  assert.match(indexHtml, /data-latex-mode="preview"/, 'LaTeX Canvas must expose Split/Edit/Preview modes');
+  assert.match(indexHtml, /id="session-search"/, 'Session filter input must exist');
+  assert.match(assetsRs, /"\/assets\/workbench\.css"/);
+  assert.match(assetsRs, /"\/assets\/trace_cards\.js"/);
+  assert.match(assetsRs, /"\/assets\/workbench\.js"/);
+
+  // Import trace_cards.js by mapping /assets/math.js cleanly via minimal DOM stub.
+  const traceSrc = fs
+    .readFileSync(path.join(assetsDir, 'trace_cards.js'), 'utf8')
+    .replace("'/assets/math.js'", JSON.stringify(pathToFileURL(path.join(assetsDir, 'math.js')).href));
+  const dataUrl = `data:text/javascript;base64,${Buffer.from(traceSrc, 'utf8').toString('base64')}`;
+  const traceMod = await import(dataUrl);
+
+  const prevDoc = globalThis.document;
+  try {
+    globalThis.document = {
+      createElement: (tag) => ({
+        tagName: tag.toUpperCase(),
+        className: '',
+        dataset: {},
+        innerHTML: '',
+        querySelector: () => null,
+      }),
+    };
+
+    const sympyCard = traceMod.buildStructuredTraceCard({
+      call_id: 'c1',
+      tool: 'sympy_eval',
+      status: 'ok',
+      args: { code: 'import sympy as sp\nx = sp.Symbol("<script>alert(1)</script>")' },
+      output: JSON.stringify({ ok: true, result: '2*pi + <img src=x onerror=alert(1)>' }),
+    });
+    assert.match(sympyCard.innerHTML, /SymPy \/ Python Sandbox/);
+    assert.match(sympyCard.innerHTML, /sc-result-row/);
+    assertNoXss(sympyCard.innerHTML);
+
+    const ledgerCard = traceMod.buildStructuredTraceCard({
+      call_id: 'c2',
+      tool: 'ledger_append',
+      status: 'ok',
+      args: { entry_type: 'derivation', summary: 'Check <script>evil()</script>', depends_on: ['e-1'] },
+      output: JSON.stringify({ entry_id: 'e-2' }),
+    });
+    assert.match(ledgerCard.innerHTML, /Proof Step · derivation/);
+    assert.match(ledgerCard.innerHTML, /Inspect e-2/);
+    assertNoXss(ledgerCard.innerHTML);
+
+    const verdictCard = traceMod.buildVerificationVerdictCard({
+      verified_status: 'unverified',
+      verification_rounds: 2,
+      verifications: [{
+        verdict: 'rejected',
+        target_entry_id: 'e-2',
+        summary: 'Sign mismatch <img src=x onerror=alert(2)>',
+        issues: [{ severity: 'major', entry_id: 'e-2', description: 'Missing <script>x</script> factor' }],
+      }],
+    });
+    assert.ok(verdictCard && verdictCard.className.includes('is-unverified'));
+    assert.match(verdictCard.innerHTML, /Unverified Draft/);
+    assertNoXss(verdictCard.innerHTML);
+  } finally {
+    globalThis.document = prevDoc;
+  }
 });

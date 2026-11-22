@@ -1,6 +1,8 @@
-// Center conversational stream: empty hero starters, Markdown+KaTeX turns, thinking traces, and live approval cards.
+// Center conversational stream: interactive quickstart + starter cards, Markdown+KaTeX turns,
+// structured scientific tool traces, Independent Verifier verdict cards, and live approval cards.
 import * as api from '/assets/api.js';
 import { escapeHtml, highlightPython, highlightUnifiedDiff, renderMathInContainer, renderRichInto } from '/assets/math.js';
+import { buildStructuredTraceCard, buildVerificationVerdictCard } from '/assets/trace_cards.js';
 
 const STARTER_PROMPTS = [
   {
@@ -15,6 +17,10 @@ const STARTER_PROMPTS = [
     title: 'Proof-DAG Step Verification',
     prompt: 'Derive the dispersion relation $\\omega(k) = \\sqrt{\\Delta^2 + (2t \\cos k)^2}$, append structured proof steps, and run deterministic verification.',
   },
+  {
+    title: 'Asymptotic Expansion & Sign Audit',
+    prompt: 'Expand $\\int_0^\\infty \\frac{k^2\\,dk}{\\sqrt{k^2 + m^2}\\,(e^{\\beta\\sqrt{k^2+m^2}} + 1)}$ at $\\beta m \\ll 1$, check leading coefficients numerically in Python, and record each step.',
+  },
 ];
 
 let streamEl = null;
@@ -22,15 +28,24 @@ let statusPillEl = null;
 let currentSessionId = null;
 let onPromptPick = null;
 let onNotify = null;
-let traceSeq = 0;
+let onInspectStep = null;
+let onOpenConnect = null;
+let onPickWorkspace = null;
+let onOpenConventions = null;
+let getSetupInfo = null;
 let liveStreamText = '';
 let liveRenderPending = false;
 
-export function initStream(opts) {
+export function initStream(opts = {}) {
   streamEl = document.getElementById('message-stream');
   statusPillEl = document.getElementById('stream-status-pill');
-  onPromptPick = opts && opts.onPromptPick ? opts.onPromptPick : null;
-  onNotify = opts && opts.onNotify ? opts.onNotify : null;
+  onPromptPick = opts.onPromptPick || null;
+  onNotify = opts.onNotify || null;
+  onInspectStep = opts.onInspectStep || null;
+  onOpenConnect = opts.onOpenConnect || null;
+  onPickWorkspace = opts.onPickWorkspace || null;
+  onOpenConventions = opts.onOpenConventions || null;
+  getSetupInfo = opts.getSetupInfo || null;
 }
 
 export function setStreamStatus(text, tone = '') {
@@ -86,7 +101,12 @@ export function renderSessionStream(sessionId, sessionPayload) {
     } else if (msg.role === 'warning') {
       appendWarningLine(msg.text || '');
     } else {
-      appendAssistantMessage(msg.text || msg.content || '', msg.thinking || '', msg.tool_traces || []);
+      appendAssistantMessage(
+        msg.text || msg.content || '',
+        msg.thinking || '',
+        msg.tool_traces || [],
+        msg
+      );
     }
   }
 
@@ -96,14 +116,66 @@ export function renderSessionStream(sessionId, sessionPayload) {
   scrollToBottom();
 }
 
+export function refreshEmptyHeroIfVisible() {
+  const inner = getInnerContainer();
+  if (!inner || !inner.querySelector('.empty-hero')) return;
+  inner.innerHTML = '';
+  renderEmptyHero(inner);
+}
+
+function basenameOfPath(p) {
+  if (!p) return '';
+  const parts = String(p).replace(/[\\/]+$/, '').split(/[\\/]/);
+  return parts[parts.length - 1] || String(p);
+}
+
 function renderEmptyHero(inner) {
+  const info = typeof getSetupInfo === 'function' ? (getSetupInfo() || {}) : {};
+  const connCount = Number(info.connectedCount) || 0;
+  const wsPath = String(info.workspaceRoot || '');
+  const hasConv = Boolean(info.hasConventions);
+
   const hero = document.createElement('div');
   hero.className = 'empty-hero';
   hero.innerHTML = `
     <h1>What are we deriving today?</h1>
-    <p>Verified symbolic algebra, arXiv LaTeX auditing, and hash-chained proof graphs — running locally with zero unverified shortcuts.</p>
+    <p>Agents propose, computations and independent verifiers decide — with sandboxed SymPy, arXiv TeX auditing, and a hash-chained Proof DAG.</p>
+    <div class="quickstart-strip">
+      <div class="quickstart-card">
+        <div class="quickstart-head">
+          <span>1. Model Provider</span>
+          <span class="badge ${connCount > 0 ? 'ok' : 'warn'}">${connCount > 0 ? `${connCount} ready` : 'Setup'}</span>
+        </div>
+        <div class="quickstart-desc">${connCount > 0 ? 'Provider connected. Choose your model next to Send or configure separate Verifier models.' : 'Connect ChatGPT, Claude Code, Anthropic/OpenAI/Gemini API, or local Ollama.'}</div>
+        <div><button type="button" class="pill-btn sm hero-connect-btn ${connCount > 0 ? '' : 'primary'}">${connCount > 0 ? 'Manage Providers' : 'Connect a Model'}</button></div>
+      </div>
+      <div class="quickstart-card">
+        <div class="quickstart-head">
+          <span>2. Paper Workspace</span>
+          <span class="badge ${wsPath ? 'ok' : ''}">${wsPath ? escapeHtml(basenameOfPath(wsPath)) : 'Optional'}</span>
+        </div>
+        <div class="quickstart-desc">${wsPath ? `Attached to ${escapeHtml(wsPath)}. Browse .tex/.bib files in the right Canvas.` : 'Attach a local folder to edit .tex manuscripts, audit citations, and save patches.'}</div>
+        <div><button type="button" class="pill-btn sm hero-ws-btn">${wsPath ? 'Switch Folder' : 'Attach Folder'}</button></div>
+      </div>
+      <div class="quickstart-card">
+        <div class="quickstart-head">
+          <span>3. Conventions &amp; Rigor</span>
+          <span class="badge ${hasConv ? 'ok' : 'accent'}">${hasConv ? 'Pinned' : 'Verified Loop'}</span>
+        </div>
+        <div class="quickstart-desc">${hasConv ? 'Custom metric/unit conventions active across Solver & Stateless Verifier.' : 'Pin metric signature, natural units, or Fourier conventions so signs stay exact.'}</div>
+        <div><button type="button" class="pill-btn sm hero-conv-btn">${hasConv ? 'Edit Conventions' : 'Pin Conventions'}</button></div>
+      </div>
+    </div>
     <div class="starter-grid"></div>
   `;
+
+  const connBtn = hero.querySelector('.hero-connect-btn');
+  const wsBtn = hero.querySelector('.hero-ws-btn');
+  const convBtn = hero.querySelector('.hero-conv-btn');
+  if (connBtn && typeof onOpenConnect === 'function') connBtn.addEventListener('click', onOpenConnect);
+  if (wsBtn && typeof onPickWorkspace === 'function') wsBtn.addEventListener('click', onPickWorkspace);
+  if (convBtn && typeof onOpenConventions === 'function') convBtn.addEventListener('click', onOpenConventions);
+
   const grid = hero.querySelector('.starter-grid');
   for (const item of STARTER_PROMPTS) {
     const btn = document.createElement('button');
@@ -158,7 +230,7 @@ export function appendWarningLine(text) {
   scrollToBottom();
 }
 
-export function appendAssistantMessage(text, thinkingText = '', toolTraces = []) {
+export function appendAssistantMessage(text, thinkingText = '', toolTraces = [], msgMeta = null) {
   const inner = clearHeroIfPresent();
   if (!inner) return;
   const row = document.createElement('div');
@@ -178,6 +250,12 @@ export function appendAssistantMessage(text, thinkingText = '', toolTraces = [])
     renderRichInto(wrap.querySelector('.msg-assistant-body'), text);
     row.appendChild(wrap);
   }
+
+  const verdictCard = buildVerificationVerdictCard(msgMeta, onInspectStep);
+  if (verdictCard) {
+    row.appendChild(verdictCard);
+  }
+
   inner.appendChild(row);
   scrollToBottom();
 }
@@ -195,15 +273,25 @@ function ensureLiveThinkingAccordion() {
   return acc;
 }
 
+function summarizeTraceCounts(toolTraces) {
+  const list = toolTraces || [];
+  if (list.length === 0) return 'Reasoning & agent log';
+  const sympy = list.filter((t) => (t.tool || t.tool_id) === 'sympy_eval').length;
+  const dag = list.filter((t) => /^ledger_/.test(t.tool || t.tool_id || '')).length;
+  const parts = [`${list.length} tool call${list.length === 1 ? '' : 's'}`];
+  if (sympy > 0) parts.push(`${sympy} SymPy`);
+  if (dag > 0) parts.push(`${dag} Proof step${dag === 1 ? '' : 's'}`);
+  return `Activity & reasoning (${parts.join(' · ')})`;
+}
+
 function buildThinkingAccordion(thinkingText, toolTraces) {
   const det = document.createElement('details');
   det.className = 'thinking-accordion';
-  const count = (toolTraces || []).length;
-  const label = count > 0 ? `Show thinking & tool trace (${count})` : 'Show thinking & tool trace';
+  const label = summarizeTraceCounts(toolTraces);
   det.innerHTML = `
     <summary>
       <span>${escapeHtml(label)}</span>
-      <span class="badge">Trace</span>
+      <span class="badge">Activity</span>
     </summary>
     <div class="thinking-body">
       <div class="thinking-notes">${escapeHtml(thinkingText || '')}</div>
@@ -212,32 +300,9 @@ function buildThinkingAccordion(thinkingText, toolTraces) {
   `;
   const list = det.querySelector('.trace-list');
   for (const tr of toolTraces || []) {
-    list.appendChild(buildTraceItem(tr));
+    list.appendChild(buildStructuredTraceCard(tr, { onInspectStep }));
   }
   return det;
-}
-
-function buildTraceItem(tr) {
-  traceSeq += 1;
-  const box = document.createElement('div');
-  box.className = 'trace-item';
-  const toolName = tr.tool || tr.tool_id || 'tool';
-  const status = tr.status || (tr.ok === false ? 'error' : 'ok');
-  const tone = status === 'error' || status === 'denied' ? 'err' : status === 'running' ? 'warn' : 'ok';
-  const inputStr = typeof tr.args === 'string' ? tr.args : JSON.stringify(tr.args || tr.input || {}, null, 2);
-  const outputStr = tr.output === undefined ? '' : typeof tr.output === 'string' ? tr.output : JSON.stringify(tr.output, null, 2);
-  box.innerHTML = `
-    <div class="trace-head">
-      <strong>${escapeHtml(toolName)}</strong>
-      <span class="badge ${tone}">${escapeHtml(status)}</span>
-    </div>
-    ${inputStr && inputStr !== '{}' && inputStr !== 'null' ? `<pre class="trace-io">${escapeHtml(inputStr)}</pre>` : ''}
-    ${outputStr ? `<pre class="trace-io">${escapeHtml(outputStr.slice(0, 1200))}</pre>` : ''}
-  `;
-  box.dataset.traceKey = tr.call_id || `t-${traceSeq}`;
-  box.dataset.toolName = toolName;
-  box.dataset.argsStr = inputStr;
-  return box;
 }
 
 export function handleThinkingDelta(data) {
@@ -301,7 +366,7 @@ export function handleRoundReset() {
   }
 }
 
-export function finalizeLiveAssistant(finalText) {
+export function finalizeLiveAssistant(finalText, msgMeta = null) {
   const text = (finalText && String(finalText).trim()) ? String(finalText) : liveStreamText;
   liveStreamText = '';
   liveRenderPending = false;
@@ -312,6 +377,8 @@ export function finalizeLiveAssistant(finalText) {
     if (text && text.trim()) {
       const body = liveRow.querySelector('.msg-assistant-body');
       if (body) renderRichInto(body, text);
+      const verdictCard = buildVerificationVerdictCard(msgMeta, onInspectStep);
+      if (verdictCard) liveRow.appendChild(verdictCard);
       scrollToBottom();
     } else {
       liveRow.remove();
@@ -319,7 +386,7 @@ export function finalizeLiveAssistant(finalText) {
     return;
   }
   if (text && text.trim()) {
-    appendAssistantMessage(text);
+    appendAssistantMessage(text, '', [], msgMeta);
   }
 }
 
@@ -355,7 +422,7 @@ export function handleToolTrace(data) {
       merged.args = existing.dataset.argsStr;
     }
   }
-  const item = buildTraceItem(merged);
+  const item = buildStructuredTraceCard(merged, { onInspectStep });
   if (existing) {
     existing.replaceWith(item);
   } else {
@@ -363,7 +430,7 @@ export function handleToolTrace(data) {
   }
   const summarySpan = acc.querySelector('summary > span');
   if (summarySpan) {
-    summarySpan.textContent = `Show thinking & tool trace (${list.children.length})`;
+    summarySpan.textContent = `Activity & reasoning (${list.children.length} tool call${list.children.length === 1 ? '' : 's'})`;
   }
   scrollToBottom();
 }

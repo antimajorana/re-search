@@ -87,7 +87,7 @@ export async function refreshWorkspaceFiles(sessionId) {
     if (texFiles.length === 0) {
       const opt = document.createElement('option');
       opt.value = '';
-      opt.textContent = 'No .tex/.bib files';
+      opt.textContent = 'draft.tex (scratch)';
       fileSelectEl.appendChild(opt);
       return;
     }

@@ -288,3 +288,95 @@ fn approve_for_session_persists_across_turns_of_same_session_only() {
     assert!(turn2_done);
     srv.shutdown();
 }
+
+#[test]
+fn workbench_assets_and_session_verification_telemetry_served_accurately() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    let srv = start_desktop_server(test_cfg(&data_dir, None, None, None)).unwrap();
+    let port = srv.addr.port();
+    let tok = srv.info.token.clone();
+    let hdr = [("X-ReSearch-Token", tok.as_str())];
+
+    for (asset_path, expected_ct) in [
+        ("/assets/workbench.css", "text/css"),
+        ("/assets/trace_cards.js", "application/javascript"),
+        ("/assets/workbench.js", "application/javascript"),
+    ] {
+        let (st, hdrs, bytes) = raw_http(port, "GET", asset_path, &[], b"");
+        assert_eq!(st, 200, "expected 200 for {asset_path}");
+        assert!(!bytes.is_empty(), "{asset_path} must not be empty");
+        assert!(
+            hdrs.iter().any(|(k, v)| k == "content-type" && v.contains(expected_ct)),
+            "wrong content-type for {asset_path}: {hdrs:?}"
+        );
+    }
+
+    let (_, _, raw) = raw_http(port, "POST", "/api/sessions", &hdr, br#"{"title":"Verified Session"}"#);
+    let sid = serde_json::from_slice::<Value>(&raw).unwrap()["id"].as_str().unwrap().to_string();
+
+    {
+        let ledger = Ledger::open(&data_dir).unwrap();
+        ledger
+            .append_with_hash(&sid, "session.start", 1, &json!({ "prompt": "Derive gap", "model": "claude-opus-4-6" }))
+            .unwrap();
+        ledger
+            .append_with_hash(
+                &sid,
+                "model.response",
+                1,
+                &json!({ "model": "claude-opus-4-6", "usage": { "input_tokens": 120, "output_tokens": 80 } }),
+            )
+            .unwrap();
+        ledger
+            .append_with_hash(&sid, "model.text", 1, &json!({ "text": "Gap is $2|\\Delta|$." }))
+            .unwrap();
+        ledger
+            .append_with_hash(
+                &sid,
+                "proof.entry",
+                1,
+                &json!({ "entry_id": "e-1", "entry_type": "final_answer", "status": "accepted", "summary": "Gap 2|Delta|" }),
+            )
+            .unwrap();
+        ledger
+            .append_with_hash(
+                &sid,
+                "proof.verification",
+                1,
+                &json!({ "target_entry_id": "e-1", "verdict": "accepted", "summary": "Checked algebraically." }),
+            )
+            .unwrap();
+        ledger
+            .append_with_hash(
+                &sid,
+                "session.end",
+                1,
+                &json!({ "outcome": "completed", "verification_rounds": 1, "verified_entry_id": "e-1" }),
+            )
+            .unwrap();
+    }
+
+    let (st_get, _, get_raw) = raw_http(port, "GET", &format!("/api/sessions/{sid}"), &hdr, b"");
+    assert_eq!(st_get, 200);
+    let sess: Value = serde_json::from_slice(&get_raw).unwrap();
+    assert_eq!(sess["stats"]["proof_entries"], 1);
+    assert_eq!(sess["stats"]["verified_status"], "verified");
+    assert_eq!(sess["stats"]["verification_rounds"], 1);
+    assert_eq!(sess["stats"]["input_tokens"], 120);
+    assert_eq!(sess["stats"]["output_tokens"], 80);
+    assert_eq!(sess["messages"][1]["verified_status"], "verified");
+    assert_eq!(sess["messages"][1]["verified_entry_id"], "e-1");
+    assert_eq!(sess["messages"][1]["verifications"][0]["verdict"], "accepted");
+
+    let (st_list, _, list_raw) = raw_http(port, "GET", "/api/sessions", &hdr, b"");
+    assert_eq!(st_list, 200);
+    let list_val: Value = serde_json::from_slice(&list_raw).unwrap();
+    let row = list_val["sessions"].as_array().unwrap().iter().find(|s| s["id"] == sid).unwrap();
+    assert_eq!(row["stats"]["verified_status"], "verified");
+    assert_eq!(row["stats"]["proof_entries"], 1);
+
+    srv.shutdown();
+}

@@ -1,4 +1,5 @@
-// Main entry controller: wires left rail, Connect panel, model picker, center stream, SSE live updates, Canvas tabs, and postMessage bridge.
+// Main entry controller: wires left rail, Connect panel, model picker, live pipeline bar,
+// center stream, SSE live updates, resizable Canvas tabs, and postMessage bridge.
 import * as api from '/assets/api.js';
 import { escapeHtml } from '/assets/math.js';
 import {
@@ -13,6 +14,7 @@ import {
   handleThinkingDelta,
   handleToolTrace,
   initStream,
+  refreshEmptyHeroIfVisible,
   renderApprovalCard,
   renderSessionStream,
   resolveApprovalCard,
@@ -39,10 +41,24 @@ import {
   loadSessionSources,
   refreshSourcesAndSidetalk,
 } from '/assets/canvas_sources.js';
+import {
+  applySessionTelemetry,
+  finishLivePipeline,
+  getWorkbenchSnapshot,
+  initWorkbench,
+  refreshConnectionBadge,
+  refreshConventionsState,
+  startLivePipeline,
+  updateCanvasTabCounts,
+  updatePipelineFromEvent,
+} from '/assets/workbench.js';
 
 const state = {
   sessions: [],
   activeSessionId: null,
+  activeWorkspaceRoot: '',
+  sessionQuery: '',
+  tabCounts: { dag: 0, sources: 0, sidetalk: 0 },
   eventSource: null,
   theme: 'light',
 };
@@ -51,22 +67,50 @@ const el = {};
 
 document.addEventListener('DOMContentLoaded', boot);
 
+function basenameOf(p) {
+  if (!p) return '';
+  const parts = String(p).replace(/[\\/]+$/, '').split(/[\\/]/);
+  return parts[parts.length - 1] || String(p);
+}
+
 async function boot() {
   cacheElements();
   restoreTheme();
   wireShellControls();
   wireCanvasTabs();
   wirePostMessageBridge();
+
+  const inspectStepInCanvas = (stepId) => {
+    activateCanvasTab('tab-dag');
+    selectNodeById(stepId);
+  };
+
   initConnect({
     onNotify: showToast,
-    // A key was saved or removed, or an address changed: re-read the model list.
-    onChanged: () => loadModels(true),
+    onChanged: async () => {
+      await Promise.all([loadModels(true), refreshConnectionBadge(false), refreshConventionsState()]);
+      refreshEmptyHeroIfVisible();
+    },
   });
   initModelPicker({ onNotify: showToast, onOpenConnect: openConnect });
 
   initStream({
     onPromptPick: (prompt) => setComposerPrompt(prompt, true),
     onNotify: showToast,
+    onInspectStep: inspectStepInCanvas,
+    onOpenConnect: openConnect,
+    onPickWorkspace: () => {
+      const btn = document.getElementById('workspace-attach-btn');
+      if (btn) btn.click();
+    },
+    onOpenConventions: () => {
+      const btn = document.getElementById('conventions-btn');
+      if (btn) btn.click();
+    },
+    getSetupInfo: () => ({
+      ...getWorkbenchSnapshot(),
+      workspaceRoot: state.activeWorkspaceRoot,
+    }),
   });
 
   initComposer({
@@ -83,6 +127,10 @@ async function boot() {
 
   initLatexCanvas({ onNotify: showToast });
   initDagCanvas({
+    onDagCount: (n) => {
+      state.tabCounts.dag = n;
+      updateCanvasTabCounts(state.tabCounts);
+    },
     onForkCreated: async (newId) => {
       await refreshSessionList();
       await selectSession(newId);
@@ -96,16 +144,16 @@ async function boot() {
   });
   initSourcesAndSidetalk({
     onNotify: showToast,
-    onSelectStepRef: (stepId) => {
-      activateCanvasTab('tab-dag');
-      selectNodeById(stepId);
+    onSelectStepRef: inspectStepInCanvas,
+    onCountsChange: ({ sources, sidetalk }) => {
+      state.tabCounts.sources = sources;
+      state.tabCounts.sidetalk = sidetalk;
+      updateCanvasTabCounts(state.tabCounts);
     },
   });
 
   const launchToken = await api.initAuth();
   if (!launchToken) {
-    // Opened without the launch token (new tab, bookmark, typed URL): every API call would be
-    // refused. Say so instead of showing an app that looks empty.
     document.body.innerHTML =
       '<div style="max-width:34rem;margin:18vh auto;padding:0 1.5rem;font:16px/1.5 system-ui,sans-serif">' +
       '<h1 style="font-size:1.4rem">This tab has no launch token</h1>' +
@@ -113,13 +161,18 @@ async function boot() {
       '(<code>re-search desktop</code> or the Start menu shortcut), or switch back to the window it opened.</p></div>';
     return;
   }
-  await checkHealth();
-  await loadModels(false);
-  await refreshSessionList();
+
+  initWorkbench({
+    onNotify: showToast,
+    onConnectionsUpdated: () => refreshEmptyHeroIfVisible(),
+  });
+
+  await Promise.all([checkHealth(), loadModels(false), refreshSessionList()]);
 
   if (state.sessions.length > 0) {
     await selectSession(state.sessions[0].id);
   } else {
+    syncWorkspaceIndicators('');
     renderSessionStream(null, { messages: [] });
   }
 }
@@ -129,9 +182,11 @@ function cacheElements() {
   el.railToggle = document.getElementById('rail-toggle');
   el.canvasToggle = document.getElementById('canvas-toggle');
   el.newBtn = document.getElementById('new-research-btn');
+  el.sessionSearch = document.getElementById('session-search');
   el.sessionList = document.getElementById('session-list');
   el.sessionTitle = document.getElementById('active-session-title');
   el.wsPill = document.getElementById('active-workspace-pill');
+  el.wsBtn = document.getElementById('workspace-attach-btn');
   el.healthBadge = document.getElementById('health-badge');
   el.themeToggle = document.getElementById('theme-toggle');
 }
@@ -172,20 +227,25 @@ function wireShellControls() {
   if (el.newBtn) {
     el.newBtn.addEventListener('click', () => createAndSelectSession({}));
   }
+  if (el.sessionSearch) {
+    el.sessionSearch.addEventListener('input', () => {
+      state.sessionQuery = el.sessionSearch.value.trim().toLowerCase();
+      renderSessionList();
+    });
+  }
+  if (el.wsPill) {
+    el.wsPill.style.cursor = 'pointer';
+    el.wsPill.addEventListener('click', () => {
+      if (el.wsBtn) el.wsBtn.click();
+    });
+  }
 }
 
 function wireCanvasTabs() {
-  const tabs = [
-    ['tab-latex', 'panel-latex'],
-    ['tab-dag', 'panel-dag'],
-    ['tab-sources', 'panel-sources'],
-    ['tab-sidetalk', 'panel-sidetalk'],
-  ];
-  for (const [tabId] of tabs) {
+  const tabs = ['tab-latex', 'tab-dag', 'tab-sources', 'tab-sidetalk'];
+  for (const tabId of tabs) {
     const btn = document.getElementById(tabId);
-    if (btn) {
-      btn.addEventListener('click', () => activateCanvasTab(tabId));
-    }
+    if (btn) btn.addEventListener('click', () => activateCanvasTab(tabId));
   }
 }
 
@@ -237,20 +297,78 @@ async function refreshSessionList() {
 function renderSessionList() {
   if (!el.sessionList) return;
   el.sessionList.innerHTML = '';
-  for (const s of state.sessions) {
+  const q = state.sessionQuery;
+  const filtered = q
+    ? state.sessions.filter((s) => {
+        const hay = `${s.title || ''} ${s.id || ''} ${s.workspace_root || ''} ${(s.stats && s.stats.model) || ''}`.toLowerCase();
+        return hay.includes(q);
+      })
+    : state.sessions;
+
+  if (filtered.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'padding:10px 12px;font-size:12px;color:var(--ink-muted);';
+    empty.textContent = q ? 'No sessions match filter.' : 'No research sessions yet.';
+    el.sessionList.appendChild(empty);
+    return;
+  }
+
+  for (const s of filtered) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = `session-item${s.id === state.activeSessionId ? ' is-active' : ''}`;
-    const forkTag = s.parent_session ? '<span class="badge">Fork</span>' : '';
+    const stats = s.stats || {};
+    const badges = [];
+    if (stats.verified_status === 'verified') {
+      badges.push('<span class="mini-pill ok" title="Independently verified">✓</span>');
+    } else if (stats.verified_status === 'unverified') {
+      badges.push('<span class="mini-pill warn" title="Unverified draft">!</span>');
+    }
+    if ((Number(stats.proof_entries) || 0) > 0) {
+      badges.push(`<span class="mini-pill" title="Proof-DAG steps">${Number(stats.proof_entries)}</span>`);
+    }
+    if (s.parent_session) {
+      badges.push('<span class="mini-pill">Fork</span>');
+    }
+    const metaParts = [];
+    if (stats.model) metaParts.push(stats.model);
+    if (s.workspace_root) metaParts.push(basenameOf(s.workspace_root));
+    if (metaParts.length === 0) metaParts.push(s.id);
+
     btn.innerHTML = `
       <div class="session-title-row">
         <span class="session-item-title">${escapeHtml(s.title || s.id)}</span>
-        ${forkTag}
+        <span class="session-badges">${badges.join('')}</span>
       </div>
-      <div class="session-item-meta"><span>${escapeHtml(s.id)}</span></div>
+      <div class="session-item-meta"><span>${escapeHtml(metaParts.join(' · '))}</span></div>
     `;
     btn.addEventListener('click', () => selectSession(s.id));
     el.sessionList.appendChild(btn);
+  }
+}
+
+function syncWorkspaceIndicators(wsRoot) {
+  state.activeWorkspaceRoot = wsRoot || '';
+  if (el.wsPill) {
+    if (wsRoot) {
+      el.wsPill.hidden = false;
+      el.wsPill.textContent = wsRoot;
+      el.wsPill.title = `${wsRoot} (click to switch workspace folder)`;
+    } else {
+      el.wsPill.hidden = true;
+      el.wsPill.title = '';
+    }
+  }
+  if (el.wsBtn) {
+    if (wsRoot) {
+      el.wsBtn.textContent = `Workspace: ${basenameOf(wsRoot)}`;
+      el.wsBtn.setAttribute('aria-pressed', 'true');
+      el.wsBtn.title = `Attached workspace: ${wsRoot} (click to switch)`;
+    } else {
+      el.wsBtn.textContent = 'Workspace';
+      el.wsBtn.setAttribute('aria-pressed', 'false');
+      el.wsBtn.title = 'Attach local workspace directory';
+    }
   }
 }
 
@@ -280,20 +398,13 @@ async function selectSession(id) {
   try {
     const sess = await api.getSession(id);
     if (el.sessionTitle) el.sessionTitle.textContent = sess.title || id;
-    if (el.wsPill) {
-      if (sess.workspace_root) {
-        el.wsPill.hidden = false;
-        el.wsPill.textContent = sess.workspace_root;
-        el.wsPill.title = sess.workspace_root;
-      } else {
-        el.wsPill.hidden = true;
-        el.wsPill.title = '';
-      }
-    }
+    syncWorkspaceIndicators(sess.workspace_root || '');
     renderSessionStream(id, sess);
     applySession(id, sess);
+    applySessionTelemetry(sess.stats, Array.isArray(sess.messages) && sess.messages.length > 0);
     setComposerBusy(false);
-    setStreamStatus(sess.pending_approvals && sess.pending_approvals.length > 0 ? 'Awaiting Approval' : 'Ready', sess.pending_approvals && sess.pending_approvals.length > 0 ? 'warn' : 'ok');
+    const hasPending = sess.pending_approvals && sess.pending_approvals.length > 0;
+    setStreamStatus(hasPending ? 'Awaiting Approval' : 'Ready', hasPending ? 'warn' : 'ok');
     await Promise.all([
       refreshWorkspaceFiles(id),
       refreshDag(id),
@@ -312,14 +423,22 @@ function connectSessionSse(id) {
   state.eventSource = api.openSessionEvents(id, {
     text_delta: (d) => {
       setStreamStatus('Streaming...', 'accent');
+      updatePipelineFromEvent('solver_stream', d);
       handleTextDelta(d);
     },
-    thinking_delta: (d) => handleThinkingDelta(d),
-    round_reset: () => {
+    thinking_delta: (d) => {
+      updatePipelineFromEvent('thinking_delta', d);
+      handleThinkingDelta(d);
+    },
+    round_reset: (d) => {
       setStreamStatus('Revising...', 'accent');
+      updatePipelineFromEvent('round_reset', d);
       handleRoundReset();
     },
-    tool_trace: (d) => handleToolTrace(d),
+    tool_trace: (d) => {
+      updatePipelineFromEvent('tool_trace', d);
+      handleToolTrace(d);
+    },
     approval_requested: (d) => {
       setStreamStatus('Awaiting Approval', 'warn');
       renderApprovalCard(d);
@@ -328,8 +447,12 @@ function connectSessionSse(id) {
       setStreamStatus('Running', 'accent');
       if (d) resolveApprovalCard(d.call_id, d.approved, Boolean(d.approve_for_session));
     },
-    dag_updated: () => refreshDag(id),
+    dag_updated: (d) => {
+      updatePipelineFromEvent('dag_updated', d);
+      refreshDag(id);
+    },
     session_event: (d) => {
+      updatePipelineFromEvent('session_event', d);
       if (d && d.kind === 'vendor.builtin_tool') {
         appendWarningLine(builtinToolWarning(d.data || {}));
       }
@@ -338,15 +461,28 @@ function connectSessionSse(id) {
       finalizeLiveThinking();
       setComposerBusy(false);
       setStreamStatus('Ready', 'ok');
-      if (d && d.text) {
-        finalizeLiveAssistant(d.text);
-        await refreshSessionRoute(id);
-      } else {
-        finalizeLiveAssistant('');
-        await selectSession(id);
+      try {
+        const sess = await api.getSession(id);
+        const msgs = Array.isArray(sess && sess.messages) ? sess.messages : [];
+        const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+        if (d && d.text) {
+          finalizeLiveAssistant(d.text, lastMsg && lastMsg.role === 'assistant' ? lastMsg : null);
+          if (state.activeSessionId === id) applySession(id, sess);
+        } else if (state.activeSessionId === id) {
+          renderSessionStream(id, sess);
+          applySession(id, sess);
+        }
+        finishLivePipeline('ok', sess && sess.stats);
+      } catch {
+        finalizeLiveAssistant((d && d.text) || '');
+        finishLivePipeline('ok', null);
       }
-      await refreshWorkspaceFiles(id);
-      await refreshDag(id);
+      await Promise.all([
+        refreshSessionList(),
+        refreshWorkspaceFiles(id),
+        refreshDag(id),
+        loadSessionSources(id),
+      ]);
     },
     turn_error: (d) => {
       finalizeLiveThinking();
@@ -355,9 +491,11 @@ function connectSessionSse(id) {
       const rawErr = String((d && (d.error || d.message)) || 'unknown failure');
       if (/stopped/i.test(rawErr)) {
         setStreamStatus('Stopped', 'warn');
+        finishLivePipeline('stopped', null);
         showToast('Turn stopped.');
       } else {
         setStreamStatus('Error', 'err');
+        finishLivePipeline('error', null);
         showToast(`Turn error: ${rawErr}`);
       }
       refreshSessionRoute(id);
@@ -365,7 +503,6 @@ function connectSessionSse(id) {
   });
 }
 
-// Same wording as the server's transcript view (turn_runner::builtin_tool_warning).
 function builtinToolWarning(data) {
   const name = String(data.tool_name || '?').slice(0, 80);
   const outcome = data.denied_or_failed
@@ -374,15 +511,13 @@ function builtinToolWarning(data) {
   return `Warning: the Antigravity CLI's built-in tool \`${name}\` ${outcome}. It is outside re:Search's tools, policy and approvals; re:Search only records what the CLI reported (vendor-sandboxed, not confined to re:Search tools).`;
 }
 
-// After a turn the session may now be bound to a route (or, after a turn refused before
-// it started, still unbound): let the model dropdown follow the server's answer.
 async function refreshSessionRoute(id) {
   if (state.activeSessionId !== id) return;
   try {
     const sess = await api.getSession(id);
     if (state.activeSessionId === id) applySession(id, sess);
   } catch {
-    // Keep the dropdown as it is; the server still refuses a send on the wrong route.
+    // Keep dropdown state
   }
 }
 
@@ -390,6 +525,7 @@ async function handleSendPrompt(sessionId, prompt, opts) {
   appendUserMessage(prompt);
   setComposerBusy(true);
   setStreamStatus('Thinking...', 'accent');
+  startLivePipeline(opts);
   await api.sendMessage(sessionId, { prompt, ...opts });
   rememberForSession(sessionId, { provider: opts.provider, model: opts.model });
 }
@@ -412,16 +548,8 @@ async function handleAttachWorkspace(workspaceRoot) {
   }
   try {
     const sess = await api.setSessionWorkspace(state.activeSessionId, workspaceRoot);
-    if (el.wsPill) {
-      if (sess && sess.workspace_root) {
-        el.wsPill.hidden = false;
-        el.wsPill.textContent = sess.workspace_root;
-        el.wsPill.title = sess.workspace_root;
-      } else {
-        el.wsPill.hidden = true;
-        el.wsPill.title = '';
-      }
-    }
+    syncWorkspaceIndicators((sess && sess.workspace_root) || workspaceRoot);
+    refreshEmptyHeroIfVisible();
     await Promise.all([
       refreshSessionList(),
       refreshWorkspaceFiles(state.activeSessionId),

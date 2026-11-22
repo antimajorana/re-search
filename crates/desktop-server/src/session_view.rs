@@ -193,11 +193,78 @@ pub(crate) fn builtin_tool_warning(data: &Value) -> String {
     )
 }
 
+pub(crate) fn summarize_session_events(events: &[ledger::Event]) -> Value {
+    let mut proof_entries = 0u64;
+    let mut accepted_entries = 0u64;
+    let mut verification_rounds = 0u64;
+    let mut input_tokens = 0u64;
+    let mut output_tokens = 0u64;
+    let mut model = String::new();
+    let mut verified_status = "none";
+
+    for ev in events {
+        match ev.kind.as_str() {
+            "session.start" | "session.resume" => {
+                if let Some(m) = ev.payload.get("model").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                    model = m.to_string();
+                }
+            }
+            "model.response" => {
+                if let Some(m) = ev.payload.get("model").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                    model = m.to_string();
+                }
+                if let Some(u) = ev.payload.get("usage") {
+                    input_tokens += u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
+                    output_tokens += u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
+                }
+            }
+            "proof.entry" => {
+                proof_entries += 1;
+                if ev.payload.get("status").and_then(Value::as_str) == Some("accepted") {
+                    accepted_entries += 1;
+                }
+            }
+            "proof.verification" => {
+                verification_rounds += 1;
+                match ev.payload.get("verdict").and_then(Value::as_str) {
+                    Some("accepted") => {
+                        accepted_entries = accepted_entries.max(1);
+                        verified_status = "verified";
+                    }
+                    Some("rejected") => {
+                        verified_status = "unverified";
+                    }
+                    _ => {}
+                }
+            }
+            "session.end" => {
+                if ev.payload.get("outcome").and_then(Value::as_str) == Some("completed_unverified") {
+                    verified_status = "unverified";
+                } else if ev.payload.get("verified_entry_id").and_then(Value::as_str).is_some() {
+                    verified_status = "verified";
+                }
+            }
+            _ => {}
+        }
+    }
+
+    json!({
+        "proof_entries": proof_entries,
+        "accepted_entries": accepted_entries,
+        "verification_rounds": verification_rounds,
+        "verified_status": verified_status,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "model": model,
+    })
+}
+
 pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
     let mut messages: Vec<Value> = Vec::new();
     let mut traces = Vec::new();
     let mut sources = Vec::new();
     let mut pending_turn_traces: Vec<Value> = Vec::new();
+    let mut pending_verifications: Vec<Value> = Vec::new();
     let mut pending_thinking = String::new();
     let mut tool_calls: HashMap<String, (String, Value)> = HashMap::new();
 
@@ -256,6 +323,7 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                         "seq": ev.seq,
                         "thinking": std::mem::take(&mut pending_thinking),
                         "tool_traces": std::mem::take(&mut pending_turn_traces),
+                        "verifications": std::mem::take(&mut pending_verifications),
                     }));
                 }
             }
@@ -263,10 +331,36 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                 let verdict = ev.payload.get("verdict").and_then(Value::as_str).unwrap_or("");
                 let summary = ev.payload.get("summary").and_then(Value::as_str).unwrap_or("");
                 let target = ev.payload.get("target_entry_id").and_then(Value::as_str).unwrap_or("");
-                pending_thinking.push_str(&format!("[Verifier {verdict} `{target}`: {summary}]\n"));
+                let line = format!("[Verifier {verdict} `{target}`: {summary}]\n");
+                let v_obj = json!({
+                    "seq": ev.seq,
+                    "verdict": verdict,
+                    "target_entry_id": target,
+                    "summary": summary,
+                    "issues": ev.payload.get("issues").cloned().unwrap_or_else(|| json!([])),
+                });
+                if let Some(last) = messages.last_mut().filter(|m| m.get("role").and_then(Value::as_str) == Some("assistant")) {
+                    let cur = last.get("thinking").and_then(Value::as_str).unwrap_or("");
+                    last["thinking"] = json!(format!("{cur}{line}"));
+                    if let Some(arr) = last.get_mut("verifications").and_then(Value::as_array_mut) {
+                        arr.push(v_obj);
+                    } else {
+                        last["verifications"] = json!([v_obj]);
+                    }
+                    last["verified_status"] = json!(if verdict == "accepted" { "verified" } else { "unverified" });
+                } else {
+                    pending_thinking.push_str(&line);
+                    pending_verifications.push(v_obj);
+                }
             }
             "strategist.consult" => {
-                pending_thinking.push_str("[Research Strategist consulted]\n");
+                let note = "[Research Strategist consulted]\n";
+                if let Some(last) = messages.last_mut().filter(|m| m.get("role").and_then(Value::as_str) == Some("assistant")) {
+                    let cur = last.get("thinking").and_then(Value::as_str).unwrap_or("");
+                    last["thinking"] = json!(format!("{cur}{note}"));
+                } else {
+                    pending_thinking.push_str(note);
+                }
             }
             "autonomous.feedback" => {
                 if messages.last().and_then(|m| m.get("role")).and_then(Value::as_str) == Some("assistant") {
@@ -279,6 +373,11 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                             combined.append(&mut pending_turn_traces);
                             pending_turn_traces = combined;
                         }
+                        if let Some(old_vers) = prev.get("verifications").and_then(Value::as_array) {
+                            let mut combined = old_vers.clone();
+                            combined.append(&mut pending_verifications);
+                            pending_verifications = combined;
+                        }
                         pending_thinking.push_str("[Draft sent back for revision after Verifier check]\n");
                     }
                 }
@@ -288,6 +387,20 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                     if let Some(last) = messages.last_mut().filter(|m| m.get("role").and_then(Value::as_str) == Some("assistant")) {
                         let cur = last.get("text").and_then(Value::as_str).unwrap_or("");
                         last["text"] = json!(format!("{banner}\n{cur}"));
+                        last["verified_status"] = json!("unverified");
+                    }
+                }
+            }
+            "session.end" => {
+                if let Some(last) = messages.last_mut().filter(|m| m.get("role").and_then(Value::as_str) == Some("assistant")) {
+                    if let Some(rounds) = ev.payload.get("verification_rounds").and_then(Value::as_u64) {
+                        last["verification_rounds"] = json!(rounds);
+                    }
+                    if let Some(vid) = ev.payload.get("verified_entry_id").and_then(Value::as_str) {
+                        last["verified_entry_id"] = json!(vid);
+                        last["verified_status"] = json!("verified");
+                    } else if ev.payload.get("outcome").and_then(Value::as_str) == Some("completed_unverified") {
+                        last["verified_status"] = json!("unverified");
                     }
                 }
             }

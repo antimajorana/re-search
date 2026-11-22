@@ -1,5 +1,6 @@
 //! Session, SSE, approval, fork, diff, and provider-settings REST handlers.
 
+use crate::session_view::summarize_session_events;
 use crate::sse::stream_session_sse;
 use crate::state::{now_ms, update_provider_roles_from_ui, DesktopState, ForkInfo, SessionMeta};
 use crate::turn_runner::{reconstruct_session_view, spawn_turn_thread};
@@ -103,6 +104,7 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
         let updated_ms = events.last().map(|e| e.ts_ms).unwrap_or(created_ms);
         let (route, _) = crate::cli_turn::session_route(meta.as_ref(), &events);
         let is_agy = route.as_str() == Some(crate::state::ANTIGRAVITY_ROUTE);
+        let stats = summarize_session_events(&events);
         sessions.push(json!({
             "id": id,
             "title": title,
@@ -112,6 +114,7 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
             "workspace_root": workspace_root,
             "parent_session": parent_session,
             "event_count": events.len(),
+            "stats": stats,
             "created_ms": created_ms,
             "updated_ms": updated_ms,
         }));
@@ -239,6 +242,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
         .read_session(session_id)
         .map_err(|e| internal(e.to_string()))?;
     let (messages, traces, sources) = reconstruct_session_view(&events);
+    let stats = summarize_session_events(&events);
     let title = meta
         .as_ref()
         .map(|m| m.title.clone())
@@ -297,6 +301,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
             "messages": messages,
             "traces": traces,
             "sources": sources,
+            "stats": stats,
             "pending_approvals": pending,
         }),
     ))

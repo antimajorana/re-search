@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/assets/tokens.css">
   <link rel="stylesheet" href="/assets/layout.css">
   <link rel="stylesheet" href="/assets/components.css">
+  <link rel="stylesheet" href="/assets/workbench.css">
 </head>
 <body>
   <div id="app-shell" data-rail-open="true" data-canvas-open="true">
@@ -23,10 +24,13 @@
         <span id="health-badge" class="badge">Local</span>
       </div>
       <div class="rail-new-wrap">
-        <button id="new-research-btn" type="button" class="pill-btn wide">
+        <button id="new-research-btn" type="button" class="pill-btn wide" title="Start a fresh research session">
           <span aria-hidden="true">+</span>
           <span>New research</span>
         </button>
+      </div>
+      <div class="rail-search-wrap">
+        <input id="session-search" class="text-input" type="search" placeholder="Filter sessions (Ctrl+K)..." aria-label="Filter sessions">
       </div>
       <div class="rail-section-label">Sessions &amp; Forks</div>
       <nav id="session-list" aria-label="Session threads"></nav>
@@ -36,11 +40,11 @@
       </div>
     </aside>
 
-    <!-- Center Conversational Stream & Floating Gemini Composer -->
+    <!-- Center Conversational Stream, Live Pipeline Bar & Composer -->
     <main id="center-stage">
       <header class="stage-topbar">
         <div class="topbar-left">
-          <button id="rail-toggle" type="button" class="icon-btn" title="Toggle session rail" aria-label="Toggle left rail">
+          <button id="rail-toggle" type="button" class="icon-btn" title="Toggle session rail (Ctrl+B)" aria-label="Toggle left rail">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
             </svg>
@@ -50,25 +54,82 @@
         </div>
         <div class="topbar-right">
           <span id="stream-status-pill" class="badge">Ready</span>
-          <button id="canvas-toggle" type="button" class="pill-btn sm" aria-expanded="true" aria-controls="canvas-drawer">Canvas</button>
+          <button id="canvas-toggle" type="button" class="pill-btn sm" title="Toggle Research Canvas (Ctrl+\)" aria-expanded="true" aria-controls="canvas-drawer">Canvas</button>
         </div>
       </header>
+
+      <!-- Live Multi-Agent Pipeline & Session Telemetry Bar -->
+      <div id="pipeline-bar" role="status" aria-label="Multi-agent verification pipeline" hidden>
+        <div class="pipeline-steps">
+          <span class="pipeline-step" data-stage="solver" data-state="idle" title="Solver drafts derivations and executes sandboxed SymPy / arXiv tools">
+            <span class="pipeline-dot" aria-hidden="true"></span>
+            <span>Solver</span>
+          </span>
+          <span class="pipeline-arrow" aria-hidden="true">→</span>
+          <span class="pipeline-step" data-stage="ledger" data-state="idle" title="Typed assumptions, derivations, computations, and results recorded in SHA-256 Proof DAG">
+            <span class="pipeline-dot" aria-hidden="true"></span>
+            <span>Proof DAG</span>
+          </span>
+          <span class="pipeline-arrow" aria-hidden="true">→</span>
+          <span class="pipeline-step" data-stage="verifier" data-state="idle" title="Independent stateless Verifier audits every active Proof-DAG step and LaTeX citation">
+            <span class="pipeline-dot" aria-hidden="true"></span>
+            <span>Verifier</span>
+          </span>
+          <span class="pipeline-arrow" aria-hidden="true">→</span>
+          <span class="pipeline-step" data-stage="strategist" data-state="idle" title="Research Strategist diagnoses rejected derivations and plans revision">
+            <span class="pipeline-dot" aria-hidden="true"></span>
+            <span>Strategist</span>
+          </span>
+        </div>
+        <div class="pipeline-meta">
+          <span id="pipeline-timer" hidden>00:00</span>
+          <span id="pipeline-round-badge" class="badge" hidden></span>
+        </div>
+      </div>
 
       <section id="message-stream" aria-live="polite" aria-label="Research conversation stream"></section>
 
       <div class="composer-dock">
+        <!-- Quick Pinned Conventions & Rigor Detail Popover -->
+        <div id="conventions-popover" role="region" aria-label="Pinned conventions and verification options" hidden>
+          <div class="conventions-pop-head">
+            <strong style="font-size:13.5px;">Pinned Mathematical &amp; Physics Conventions</strong>
+            <button id="conventions-close-btn" type="button" class="icon-btn" aria-label="Close conventions">✕</button>
+          </div>
+          <div style="font-size:12px;color:var(--ink-secondary);margin-bottom:6px;">
+            Injected into both the Solver and the Independent Verifier on every round so signs, units, and Fourier factors stay consistent.
+          </div>
+          <textarea id="quick-conventions-input" class="text-input" rows="3" maxlength="2000" placeholder="e.g. Metric signature (-,+,+,+), natural units \hbar = c = 1, periodic boundary conditions..."></textarea>
+          <div id="conventions-presets" class="conventions-presets"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;border-top:1px solid var(--border-subtle);padding-top:10px;">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              <span style="font-size:12px;color:var(--ink-muted);">Active agents:</span>
+              <button id="verifier-chip" type="button" class="chip-toggle" aria-pressed="true" title="Run stateless Verifier + Calculation guardrail before accepting final answer">Verifier</button>
+              <button id="strategist-chip" type="button" class="chip-toggle" aria-pressed="false" title="Consult Research Strategist to plan repairs if Verifier rejects a round">Strategist</button>
+            </div>
+            <div style="display:flex;gap:6px;">
+              <button id="conventions-clear-btn" type="button" class="pill-btn sm">Clear</button>
+              <button id="conventions-save-btn" type="button" class="pill-btn sm primary">Save Conventions</button>
+            </div>
+          </div>
+        </div>
+
         <form id="composer-pill" autocomplete="off">
           <div id="composer-files" class="upload-chips" hidden></div>
-          <textarea id="composer-input" rows="1" placeholder="Ask a derivation, verify an identity, or attach .tex / .pdf sources..."></textarea>
+          <textarea id="composer-input" rows="1" placeholder="Ask a derivation, run SymPy, or audit arXiv TeX..."></textarea>
           <div class="composer-bar">
             <div class="composer-left">
-              <label class="upload-label" title="Upload up to 5 files (max 10 MiB each)">
+              <label class="upload-label" title="Attach up to 5 local .tex, .bib, .pdf, or archive files (max 10 MiB each)">
                 <input id="composer-upload-input" class="sr-only-input" type="file" multiple accept=".tex,.bib,.pdf,.md,.txt,.csv,.json,.py,.zip,.tgz,.gz">
-                <span>Attach files</span>
+                <span>Attach</span>
               </label>
-              <button id="workspace-attach-btn" type="button" class="chip-toggle" title="Attach local workspace directory">Workspace</button>
-              <button id="verifier-chip" type="button" class="chip-toggle" aria-pressed="true" title="Toggle verification gate">Verifier</button>
-              <button id="strategist-chip" type="button" class="chip-toggle" aria-pressed="false" title="Toggle research strategist">Strategist</button>
+              <button id="workspace-attach-btn" type="button" class="chip-toggle" title="Attach or switch local paper directory">Workspace</button>
+              <button id="conventions-btn" type="button" class="chip-toggle" aria-pressed="false" title="Pin metric signature, units, or notation conventions">Conventions</button>
+              <div id="mode-preset-group" class="segmented-group" role="group" aria-label="Verification rigor mode">
+                <button type="button" class="seg-btn" data-rigor-preset="direct" aria-pressed="false" title="Direct mode: single-pass Solver + tools without post-turn Verifier gate">Direct</button>
+                <button type="button" class="seg-btn is-active" data-rigor-preset="verified" aria-pressed="true" title="Verified mode: Solver + Calculation Guard + Independent Stateless Verifier (up to 3 rounds)">✓ Verified</button>
+                <button type="button" class="seg-btn" data-rigor-preset="deep" aria-pressed="false" title="Deep Research mode: Solver + Independent Verifier + Research Strategist repair">✦ Deep</button>
+              </div>
             </div>
             <div class="composer-right">
               <span id="composer-route-note" class="route-note" hidden></span>
@@ -76,12 +137,12 @@
                 <option value="">Loading models...</option>
               </select>
               <button id="composer-connect" type="button" class="pill-btn sm" title="Connect a model provider" hidden>Connect</button>
-              <button id="composer-stop" type="button" title="Stop active turn" aria-label="Stop active turn" hidden>
+              <button id="composer-stop" type="button" title="Stop active turn immediately" aria-label="Stop active turn" hidden>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                   <rect x="5" y="5" width="14" height="14" rx="2.5"/>
                 </svg>
               </button>
-              <button id="composer-send" type="submit" title="Send prompt" aria-label="Send prompt">
+              <button id="composer-send" type="submit" title="Send prompt (Enter)" aria-label="Send prompt">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                   <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
                 </svg>
@@ -92,34 +153,55 @@
       </div>
     </main>
 
-    <!-- Right Slide-Over Gemini Canvas -->
-    <aside id="canvas-drawer" aria-label="Gemini research canvas">
+    <!-- Right Resizable Research Canvas -->
+    <aside id="canvas-drawer" aria-label="Research workbench canvas">
+      <div id="canvas-resizer" title="Drag to resize Canvas (double-click to reset)" aria-hidden="true"></div>
       <div class="canvas-header">
         <div class="canvas-tabs" role="tablist" aria-label="Canvas views">
           <button id="tab-latex" class="canvas-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="panel-latex">LaTeX</button>
-          <button id="tab-dag" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-dag">Proof DAG</button>
-          <button id="tab-sources" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-sources">Sources</button>
-          <button id="tab-sidetalk" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-sidetalk">Side-Talk</button>
+          <button id="tab-dag" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-dag">
+            <span>Proof DAG</span><span id="tab-dag-count" class="tab-count" hidden>0</span>
+          </button>
+          <button id="tab-sources" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-sources">
+            <span>Sources</span><span id="tab-sources-count" class="tab-count" hidden>0</span>
+          </button>
+          <button id="tab-sidetalk" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-sidetalk">
+            <span>Side-Talk</span><span id="tab-sidetalk-count" class="tab-count" hidden>0</span>
+          </button>
         </div>
+        <button id="canvas-wide-btn" type="button" class="icon-btn" title="Toggle wide Canvas view" aria-label="Toggle wide Canvas view" aria-pressed="false">⇔</button>
       </div>
 
       <div class="canvas-body">
         <!-- Tab 1: LaTeX Manuscript Canvas -->
-        <section id="panel-latex" class="canvas-panel is-active" role="tabpanel" aria-labelledby="tab-latex">
+        <section id="panel-latex" class="canvas-panel is-active" data-latex-view="split" role="tabpanel" aria-labelledby="tab-latex">
           <div class="panel-toolbar">
-            <select id="latex-file-select" class="compact-select" aria-label="Select TeX or Bib file" style="max-width:150px"></select>
-            <button id="latex-save-btn" type="button" class="pill-btn sm">Save Patch</button>
-            <button id="tex-audit-btn" type="button" class="pill-btn sm">TeX Audit</button>
-            <button id="export-tex-btn" type="button" class="pill-btn sm">.tex</button>
-            <button id="export-html-btn" type="button" class="pill-btn sm">.html</button>
-            <button id="export-zip-btn" type="button" class="pill-btn sm primary">.zip</button>
+            <div class="toolbar-row">
+              <div class="toolbar-group">
+                <select id="latex-file-select" class="compact-select" aria-label="Select TeX or Bib file" style="min-width:126px;max-width:168px">
+                  <option value="">draft.tex (scratch)</option>
+                </select>
+                <button id="latex-save-btn" type="button" class="pill-btn sm" title="Save manuscript edits to workspace">Save</button>
+                <button id="tex-audit-btn" type="button" class="pill-btn sm" title="Check \ref{}, \cite{}, and retracted references">TeX Audit</button>
+              </div>
+              <div class="toolbar-group">
+                <div class="segmented-group" role="group" aria-label="Manuscript layout">
+                  <button type="button" class="seg-btn is-active" data-latex-mode="split" aria-pressed="true">Split</button>
+                  <button type="button" class="seg-btn" data-latex-mode="editor" aria-pressed="false">Edit</button>
+                  <button type="button" class="seg-btn" data-latex-mode="preview" aria-pressed="false">Preview</button>
+                </div>
+                <button id="export-tex-btn" type="button" class="pill-btn sm" title="Export session report as LaTeX (.tex)">.tex</button>
+                <button id="export-html-btn" type="button" class="pill-btn sm" title="Export interactive report (.html)">.html</button>
+                <button id="export-zip-btn" type="button" class="pill-btn sm primary" title="Export reproducible bundle (.zip)">.zip</button>
+              </div>
+            </div>
           </div>
           <div class="latex-split">
-            <div class="tex-pane">
+            <div class="tex-pane tex-pane-editor">
               <div class="pane-caption"><span>Manuscript Editor</span><span id="latex-line-count">0 lines</span></div>
               <textarea id="latex-editor" spellcheck="false" placeholder="Select a workspace .tex/.bib file or write LaTeX here..."></textarea>
             </div>
-            <div class="tex-pane">
+            <div class="tex-pane tex-pane-preview">
               <div class="pane-caption"><span>Live KaTeX Preview</span></div>
               <div id="latex-preview" class="rich-prose"></div>
             </div>
@@ -130,16 +212,16 @@
         <!-- Tab 2: Proof Graph & Ledger Canvas -->
         <section id="panel-dag" class="canvas-panel" role="tabpanel" aria-labelledby="tab-dag">
           <div class="panel-toolbar">
-            <button id="dag-verify-btn" type="button" class="pill-btn sm primary">Verify Chain</button>
-            <button id="dag-fork-btn" type="button" class="pill-btn sm">Fork Branch</button>
-            <button id="dag-narrate-btn" type="button" class="pill-btn sm">Narrate Proof</button>
+            <button id="dag-verify-btn" type="button" class="pill-btn sm primary" title="Verify SHA-256 event hash chain and content-addressed blobs">Verify Chain</button>
+            <button id="dag-fork-btn" type="button" class="pill-btn sm" title="Branch this session at a proof step with a modified assumption">Fork Branch</button>
+            <button id="dag-narrate-btn" type="button" class="pill-btn sm" title="Synthesize a clean prose derivation sheet from accepted DAG steps">Narrate Proof</button>
             <span id="dag-verify-badge" class="badge" hidden></span>
           </div>
           <div class="dag-layout">
             <div id="dag-fork-bar" class="dag-detail-card" hidden>
               <div class="form-row">
                 <label for="fork-assumption-input">Counterfactual assumption (forking at seq <span id="fork-seq-label">latest</span>)</label>
-                <input id="fork-assumption-input" class="text-input" type="text" placeholder="Optional modified assumption...">
+                <input id="fork-assumption-input" class="text-input" type="text" placeholder="Optional modified assumption (e.g. set \mu \neq 0 or open boundary conditions)...">
               </div>
               <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end;">
                 <button id="fork-cancel-btn" type="button" class="pill-btn sm">Cancel</button>
@@ -149,7 +231,7 @@
             <div class="dag-canvas-box">
               <svg id="proof-dag-svg" viewBox="0 0 420 260" aria-label="Proof dependency graph"></svg>
             </div>
-            <div id="dag-node-detail" class="dag-detail-card">Select a proof node to inspect LaTeX, dependencies, and verification status.</div>
+            <div id="dag-node-detail" class="dag-detail-card">Select a proof node above to inspect its LaTeX equation, dependencies, and verification status.</div>
             <div id="dag-diff-panel" class="dag-detail-card" hidden></div>
           </div>
         </section>
@@ -165,7 +247,7 @@
                   <option value="crossref">Crossref</option>
                   <option value="semantic_scholar">Semantic Scholar</option>
                 </select>
-                <input id="lit-query-input" class="text-input" type="text" placeholder="Query papers, arXiv ID, or DOI...">
+                <input id="lit-query-input" class="text-input" type="text" placeholder="Query papers, au:Author, arXiv ID, or DOI...">
                 <button id="lit-search-btn" type="submit" class="pill-btn sm primary">Search</button>
               </div>
               <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;">
@@ -177,7 +259,7 @@
                   <option value="id">arXiv ID</option>
                 </select>
                 <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
-                  <input id="lit-include-source" type="checkbox"> Include .tar.gz TeX
+                  <input id="lit-include-source" type="checkbox"> Ingest TeX bundle
                 </label>
                 <input id="lit-section-filter" class="text-input" type="text" placeholder="Section filter..." style="width:128px;height:28px;">
               </div>
@@ -192,7 +274,7 @@
         <section id="panel-sidetalk" class="canvas-panel" role="tabpanel" aria-labelledby="tab-sidetalk">
           <div class="sidetalk-layout">
             <div style="padding:8px 12px;border-bottom:1px solid var(--border-subtle);font-size:12px;color:var(--ink-muted);">
-              Isolated side channel — questions here never mutate the main derivation ledger.
+              Isolated side channel — clarify notation, check intuition, or ask about `e-1` steps without mutating the main Proof Ledger.
             </div>
             <div id="sidetalk-stream"></div>
             <form id="sidetalk-form" class="sidetalk-composer" autocomplete="off">
@@ -212,20 +294,20 @@
         <h2 id="settings-title">Connect a model</h2>
         <button id="settings-close-btn" type="button" class="icon-btn" aria-label="Close Connect">✕</button>
       </div>
-      <p class="connect-intro">Connect any one of these, then pick a model in the box next to Send.</p>
+      <p class="connect-intro">Connect any provider below (API key, ChatGPT sign-in, Claude Code subscription, or local Ollama), then pick a model next to Send.</p>
       <div id="connect-list" class="connect-list" aria-live="polite"></div>
       <details id="connect-advanced" class="connect-advanced">
-        <summary>Advanced</summary>
+        <summary>Advanced: Role Models, Custom Endpoints &amp; Conventions</summary>
         <form id="settings-form" class="form-grid" autocomplete="off">
           <div id="advanced-base-urls" class="form-grid"></div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
             <div class="form-row">
-              <label for="set-role-verifier">Verifier Role Model</label>
-              <input id="set-role-verifier" class="text-input" type="text" placeholder="Optional preset">
+              <label for="set-role-verifier">Independent Verifier Model (optional)</label>
+              <input id="set-role-verifier" class="text-input" type="text" placeholder="Defaults to Solver model">
             </div>
             <div class="form-row">
-              <label for="set-role-strategist">Strategist Role Model</label>
-              <input id="set-role-strategist" class="text-input" type="text" placeholder="Optional preset">
+              <label for="set-role-strategist">Research Strategist Model (optional)</label>
+              <input id="set-role-strategist" class="text-input" type="text" placeholder="Defaults to Solver model">
             </div>
           </div>
           <div class="form-row">
@@ -240,7 +322,7 @@
     </div>
   </div>
 
-  <!-- Non-blocking Workspace Attach Modal -->
+  <!-- Non-blocking Workspace Attach Modal (fallback when native OS picker is unavailable) -->
   <div id="workspace-dialog" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title" hidden>
     <div class="modal-card" style="width:min(440px, 94vw);">
       <div class="modal-header">
@@ -250,7 +332,7 @@
       <form id="workspace-form" class="form-grid" autocomplete="off">
         <div class="form-row">
           <label for="workspace-path-input">Local directory path</label>
-          <input id="workspace-path-input" class="text-input" type="text" placeholder="/path/to/paper-workspace">
+          <input id="workspace-path-input" class="text-input" type="text" placeholder="C:\path\to\paper-workspace">
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;">
           <button id="workspace-cancel-btn" type="button" class="pill-btn">Cancel</button>

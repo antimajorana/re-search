@@ -64,13 +64,18 @@ function latestSeq() {
 
 export async function refreshDag(sessionId) {
   currentSessionId = sessionId;
-  if (!sessionId || !svgEl) return;
+  if (!sessionId || !svgEl) return 0;
   try {
     const dag = await api.getDag(sessionId);
     currentDag = dag;
     renderDagSvg(dag);
+    const count = Array.isArray(dag && dag.entries) ? dag.entries.length : 0;
+    if (typeof callbacks.onDagCount === 'function') callbacks.onDagCount(count);
+    return count;
   } catch {
     renderEmptySvg('No proof graph recorded yet.');
+    if (typeof callbacks.onDagCount === 'function') callbacks.onDagCount(0);
+    return 0;
   }
 }
 
