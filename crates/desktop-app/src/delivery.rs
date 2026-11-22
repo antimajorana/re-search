@@ -3,8 +3,8 @@
 //!
 //! 1. **Header path.** The first navigation is `GET <base_url>/` with the token in the
 //!    `X-ReSearch-Token` request header. The server then writes the token into the page's
-//!    `<meta name="re-search-csrf">` (and sets the stream cookie), exactly as for the
-//!    `?token=` launch URL of `re-search ui`.
+//!    `<meta name="re-search-csrf">` (and sets the stream cookie), matching the
+//!    single-use `?launch=` nonce flow of `re-search ui`.
 //! 2. **Probe.** WebView2 can drop the header silently (the navigation still "succeeds"
 //!    and shows the server's 403 body). After the first load finishes (or a timeout) a
 //!    probe script reports only `ok` / `no-token` / `elsewhere`, never the token itself.

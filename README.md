@@ -33,7 +33,7 @@ cargo test -p policy -p ledger -p tools -p research-tools -p agent -p chatgpt-au
 
 The Sign in with ChatGPT flow tests (`chatgpt-auth` `tests/flow.rs` DPAPI suite, desktop-server `tests/chatgpt_route.rs`) run against a loopback mock of OpenAI's auth and API hosts (no network, no browser) and need Windows, because tokens are stored with DPAPI; non-Windows unit/integration tests verify fail-closed refusal and pure OAuth/JWT/callback logic on Linux too.
 
-The subscription-CLI routes are tested with scripted fake CLIs (`cli_route::testkit`, compiled with `rustc` at test time); the desktop-server tests that spawn a CLI inside a Windows Job Object (`claude_cli_route`, `claude_cli_env`, `claude_cli_guards`, and the four turn-spawning tests in `antigravity_route`) run on Windows only, while the remaining `antigravity_route` gate/env/model/label tests run on both Linux and Windows.
+The subscription-CLI routes are tested with scripted fake CLIs (`cli_route::testkit`, compiled with `rustc` at test time); the desktop-server tests that spawn a CLI inside a Windows Job Object (`claude_cli_route`, `claude_cli_env`, `claude_cli_guards`, and the four turn-spawning tests in `antigravity_route`) run on Windows only, while the remaining `antigravity_route` gate/env/model/label tests run on both Linux and Windows. Desktop Markdown/LaTeX/CSS rendering and XSS escaping are tested against the vendored offline KaTeX `0.19.1` bundle via `node --test crates/desktop-server/tests/math_render.test.mjs` (also run by `cargo test -p desktop-server --test ui_math`).
 
 Windows AppContainer containment probes require **Windows 11 + Python (SymPy and NumPy)**:
 
@@ -48,7 +48,7 @@ cargo test -p cli --test contained_router -- --nocapture
 The local CSRF-protected desktop server offers offline KaTeX rendering, a live SSE proof-DAG inspector, LaTeX canvas, literature/sources drawer, counterfactual fork/diff, and isolated Side-Talk. There are two ways to show it:
 
 - **Its own window (Windows 11, WebView2 runtime).** `re-search-app.exe` starts the server and opens a window titled *re:Search*; closing the window stops the server. It needs no console and no browser (Microsoft Edge itself need not be installed, only the WebView2 Evergreen runtime). Only one instance runs per logon session; a second launch exits quietly. `re-search desktop` starts `re-search-app.exe` from its own directory when it is there and only `--data-dir`/`--workspace`/`--python`/`--worker-script`/`--port`/`--core-exe`/`--claude`/`--agy` were given; otherwise it behaves like `re-search ui`.
-- **The default browser.** `re-search ui` opens `http://127.0.0.1:<port>/?token=…` in the default browser, as before.
+- **The default browser.** `re-search ui` opens `http://127.0.0.1:<port>/?launch=…` in the default browser using a single-use, 60-second launch nonce (never the real API token); the first page load redeems it for the token in `<meta>` and sets the stream cookie, and any replay returns `403`.
 
 ```bash
 cargo build -p desktop-app -p cli          # target/debug/re-search-app.exe and re-search.exe

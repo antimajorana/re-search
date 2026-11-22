@@ -262,19 +262,24 @@ result.
   Credentials and checks, per request:
   - *Host.* Every request must carry a loopback `Host` (`127.0.0.1[:port]` or
     `localhost[:port]`), which defeats DNS-rebinding pages.
-  - *Two secrets per launch.* A 256-bit `getrandom` **token** and a separate
-    256-bit **stream cookie** value. `re-search ui` opens the browser at
-    `/?token=…`; the `re-search-app` window instead requests `/` with the
-    token in the `X-ReSearch-Token` request header (see below). Only a load
-    of `/` that already carries a valid token (query or header) gets the token
-    written into the page (`<meta>` tag), and it sets the
-    `HttpOnly; SameSite=Strict` cookie `__research_stream_<port>`. A page on
-    another origin cannot attach that header to a navigation, and a `fetch`
-    carrying it needs a CORS preflight the server never grants.
-    The UI removes the token from the address bar and keeps it in
-    `sessionStorage` (per origin, port included, per tab). A reload carries
-    only the cookie and is served the page *without* the token, so the cookie
-    can never be exchanged for the token; `/` without either answers 403.
+  - *Three secrets per launch.* A 256-bit `getrandom` **token**, a separate
+    256-bit **stream cookie** value, and a separate single-use 256-bit
+    **launch nonce** (60 s TTL). `re-search ui` opens the browser at
+    `/?launch=…` (never with the live API token; `/?token=…` is rejected with
+    403); the `re-search-app` window instead requests `/` with the token in the
+    `X-ReSearch-Token` request header (see below). Only a load of `/` carrying
+    a valid header token or redeeming the unconsumed, unexpired launch nonce
+    gets the token written into the page (`<meta>` tag) and sets the
+    `HttpOnly; SameSite=Strict` cookie `__research_stream_<port>`. The nonce is
+    consumed atomically on the first matching load (wrong guesses do not burn
+    it; replays and expired nonces answer 403, and the nonce is never accepted
+    on `/api/` routes). A page on another origin cannot attach the header to a
+    navigation, and a `fetch` carrying it needs a CORS preflight the server
+    never grants. The UI strips `launch`/`token` from the address bar and keeps
+    the token in `sessionStorage` (per origin, port included, per tab). A
+    reload carries only the cookie and is served the page *without* the token,
+    so the cookie can never be exchanged for the token; `/` without a valid
+    header, fresh nonce, or cookie answers 403.
   - *Every `/api/` route except `GET /api/health`* (which returns only `ok`
     and the version) requires the token in the `X-ReSearch-Token` or
     `Authorization: Bearer` header, compared in constant time; otherwise 401.
@@ -322,7 +327,12 @@ result.
     `user@`, a query string, a fragment or a backslash, is refused, and a
     stored value that fails the same check is not echoed.
   - KaTeX `0.19.1` is served offline from the binary; the UI loads nothing
-    from the network.
+    from the network. Markdown/LaTeX rendering (`math.js`) strips NUL bytes,
+    passes all untrusted prose, TeX commands, and link URLs through
+    `escapeHtml` (allowing only `http(s)://` links), and is tested against the
+    vendored KaTeX bundle by `tests/math_render.test.mjs` (`tests/ui_math.rs`);
+    visual rendering inside the Windows WebView2 window is not verified from
+    Linux.
 
 ## The desktop window (`re-search-app`, `crates/desktop-app`)
 
@@ -977,10 +987,11 @@ event, session API `confinement`/`route_label`, this file, README).
 - **Supervisor & LaTeX compiler run in the user's logon context.** While the
   Python worker runs inside the zero-capability AppContainer on Windows, host
   supervisor operations (`fs_read`, approved `fs_write`/`latex_patch`, approved
-  `latex_compile` invoking `pdflatex`/`latexmk` with `-no-shell-escape`, and
-  allowlisted literature HTTP calls) execute as the `re-search` user, and any
-  uncontained local process running as the same OS user shares access to
-  `providers.json`, loopback ports, and environment memory.
+  `latex_compile` invoking `pdflatex`/`latexmk` with `-no-shell-escape`,
+  `openin_any=p`, `openout_any=p`, and `shell_escape`/`shell_escape_commands`
+  removed, and allowlisted literature HTTP calls) execute as the `re-search`
+  user, and any uncontained local process running as the same OS user shares
+  access to `providers.json`, loopback ports, and environment memory.
 - **The desktop token is as powerful as your provider keys.** Whoever holds
   the token can change a provider's saved `base_url` and then start a turn,
   which sends that provider's stored key to the new host; it can also attach
@@ -1015,22 +1026,33 @@ event, session API `confinement`/`route_label`, this file, README).
   it back. `Cargo.lock` also lists MPL-2.0 crates (`cssparser`, `selectors`,
   and others) that `wry` uses only on Linux and macOS; they are never
   compiled on Windows.
-- **Where the desktop token is exposed (`re-search ui`, and `re-search
-  desktop` when it falls back).** It is in the launch URL, which
-  appears on the command line of the browser process that is started (and of
-  `cmd.exe` when the default browser is used), readable by other accounts on
-  Linux via `/proc` and by programs running as you on Windows, and possibly
-  in browser history, although the UI removes it from the address bar on
-  load. With `--print-url-json true` the URL and token are also written to
-  stdout. It then lives in the page's `sessionStorage`. Any program running
-  as you that can read the browser profile or process memory can obtain it.
-  The server speaks plain HTTP on loopback.
-- **An approved LaTeX compile can read files outside the workspace.**
-  `latex_compile` runs with `-no-shell-escape`, but TeX's own file-read
-  restrictions (`openin_any`) are left at the distribution's default, so a
-  `.tex` file can `\input` any file you can read, including a data
-  directory's `providers.json`, and place it in the PDF or log. Compiling
-  always asks first; read what will be compiled.
+- **Where the desktop launch credential is exposed (`re-search ui`, and
+  `re-search desktop` when it falls back).** `re-search ui` no longer places
+  the live API token in the launch URL; it opens `/?launch=<nonce>` using a
+  single-use, 60-second launch nonce (`/?token=` is rejected). Once the
+  browser redeems it on first load (or after 60 s), the URL in browser history
+  or process command lines (`cmd.exe` / browser argv) is dead (replays return
+  403). Residual exposure: a local process able to read command-line arguments
+  (via `/proc` on Linux or process inspection as the same user on Windows)
+  during the brief window *before* the browser redeems the nonce could race it
+  to obtain the token; `--print-url-json true` still writes the token to
+  stdout; and after redemption the token lives in the page's `sessionStorage`
+  (readable by same-user processes inspecting the browser profile or memory).
+  The server speaks plain HTTP on loopback. The Windows `launcher.rs` path and
+  WebView2 visual KaTeX rendering were not run on Windows after these changes
+  and must be re-gated on Windows.
+- **Approved LaTeX compilation relies on TeX's `openin_any=p` / `openout_any=p`
+  enforcement.** `latex_compile` runs `pdflatex`/`latexmk` with
+  `-no-shell-escape`, sets `openin_any=p` and `openout_any=p` (paranoid mode:
+  forbids reading or writing absolute paths or `..` parent paths outside the
+  working directory / TEXMF), and removes `shell_escape`,
+  `shell_escape_commands`, and provider API-key variables from the child
+  environment (verified with the Unix mock compiler on Linux; the mock test is
+  `cfg(unix)` and real TeX Live/MiKTeX enforcement on Windows is not verified
+  here). Because the compiler runs outside AppContainer as your OS user, any
+  bug or distribution-specific bypass of `openin_any=p` would still run with
+  your user permissions; compiling always asks first, so read what will be
+  compiled.
 - **Literature endpoints can be redirected to loopback.** The HTTPS host
   allowlist is fixed, but `--arxiv-base` / `--inspire-base` /
   `--crossref-base` and the matching `RE_SEARCH_*_BASE` environment variables
