@@ -3,12 +3,11 @@
 
 use ledger::Ledger;
 use research_tools::{
-    register_research_tools, research_policy, research_tool_defs, resolve_sources_session_id,
-    strip_verbatim_prefix, strip_verbatim_str, validate_session_id, LiteratureEndpoints,
-    ResearchEnv, SandboxRoot, FS_LIST, FS_READ, RESEARCH_POLICY_VERSION,
+    is_symlink_or_junction, register_research_tools, research_policy, research_tool_defs,
+    resolve_sources_session_id, strip_verbatim_prefix, strip_verbatim_str, validate_session_id,
+    LiteratureEndpoints, ResearchEnv, SandboxError, SandboxRoot, FS_LIST, FS_READ,
+    RESEARCH_POLICY_VERSION, TEX_AUDIT,
 };
-#[cfg(unix)]
-use research_tools::SandboxError;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -236,6 +235,107 @@ fn f2_traversal_ads_nul_and_symlink_escapes_rejected() {
             }
             other => panic!("expected Ok listing, got {other:?}"),
         }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = is_symlink_or_junction;
+
+        let make_junction = |link: &Path, target: &Path| {
+            let out = std::process::Command::new("cmd")
+                .creation_flags(0x0800_0000)
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .expect("run cmd mklink /J");
+            assert!(
+                out.status.success(),
+                "mklink /J {} -> {} failed: {}",
+                link.display(),
+                target.display(),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+
+        // 1. Escaping NTFS directory junction pointing outside workspace.
+        make_junction(&ws.join("junc_out"), &outside);
+        let jmeta = fs::symlink_metadata(ws.join("junc_out")).unwrap();
+        assert!(is_symlink_or_junction(&ws.join("junc_out"), &jmeta));
+        assert!(matches!(
+            sandbox.resolve_existing(SandboxRoot::Workspace, "s-1", "junc_out", false),
+            Err(SandboxError::EscapesRoot(_))
+        ));
+        assert!(matches!(
+            sandbox.resolve_existing(SandboxRoot::Workspace, "s-1", "junc_out/secret.tex", false),
+            Err(SandboxError::EscapesRoot(_))
+        ));
+        let res = sandbox.resolve_for_write(SandboxRoot::Workspace, "s-1", "junc_out/missing_dir/new.tex");
+        assert!(matches!(res, Err(SandboxError::EscapesRoot(_))));
+        assert!(!outside.join("missing_dir").exists(), "must fail before creating outside dir!");
+
+        // Optional Windows file symlink check when Developer Mode / SeCreateSymbolicLinkPrivilege is active.
+        if std::os::windows::fs::symlink_file(outside.join("secret.tex"), ws.join("escape_file.tex")).is_ok() {
+            assert!(matches!(
+                sandbox.resolve_existing(SandboxRoot::Workspace, "s-1", "escape_file.tex", false),
+                Err(SandboxError::EscapesRoot(_))
+            ));
+            assert!(matches!(
+                sandbox.resolve_for_write(SandboxRoot::Workspace, "s-1", "escape_file.tex"),
+                Err(SandboxError::EscapesRoot(_))
+            ));
+        }
+
+        // 2. Broken NTFS junction (target deleted after creation) and intra-workspace junction loop.
+        let vanished = tmp.path().join("vanished_target");
+        fs::create_dir_all(&vanished).unwrap();
+        make_junction(&ws.join("broken_junc"), &vanished);
+        fs::remove_dir_all(&vanished).unwrap();
+        assert!(matches!(
+            sandbox.resolve_existing(SandboxRoot::Workspace, "s-1", "broken_junc", false),
+            Err(SandboxError::EscapesRoot(_))
+        ));
+        assert!(matches!(
+            sandbox.resolve_for_write(SandboxRoot::Workspace, "s-1", "broken_junc/new.tex"),
+            Err(SandboxError::EscapesRoot(_))
+        ));
+
+        fs::create_dir_all(ws.join("sub")).unwrap();
+        fs::write(ws.join("sub").join("inner.tex"), "inner").unwrap();
+        make_junction(&ws.join("junc_sub"), &ws.join("sub"));
+        make_junction(&ws.join("sub").join("loop_root"), &ws);
+        assert!(matches!(
+            sandbox.resolve_for_write(SandboxRoot::Workspace, "s-1", "junc_sub/new.tex"),
+            Err(SandboxError::EscapesRoot(_))
+        ));
+
+        let router = build_router(env.clone(), "s-looptest");
+        let list_res = router
+            .try_call("agent:test", FS_LIST, &json!({"recursive": true}))
+            .unwrap();
+        match list_res {
+            CallOutcome::Ok(v) => {
+                let paths: Vec<&str> = v["entries"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|e| e["path"].as_str().unwrap())
+                    .collect();
+                assert!(paths.contains(&"ok.tex"));
+                assert!(paths.contains(&"sub/inner.tex"));
+                assert!(!paths.contains(&"junc_out"), "escaping junction must be hidden");
+                assert!(!paths.contains(&"broken_junc"), "broken junction must be hidden");
+                assert!(!paths.contains(&"junc_sub/inner.tex"), "must not recurse through junction");
+                assert!(!paths.contains(&"sub/loop_root/ok.tex"), "must not recurse through loop junction");
+                assert!(!paths.contains(&"escape_file.tex"), "escaping file symlink must be hidden");
+            }
+            other => panic!("expected Ok listing, got {other:?}"),
+        }
+
+        // Verify tex_audit also skips intra-root loop junctions cleanly without infinite recursion.
+        let audit_res = router.try_call("agent:test", TEX_AUDIT, &json!({})).unwrap();
+        assert!(matches!(audit_res, CallOutcome::Ok(_)), "tex_audit failed: {audit_res:?}");
     }
 }
 

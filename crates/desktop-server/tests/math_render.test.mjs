@@ -80,6 +80,12 @@ test('CSS audit: starter-chip scoped to > span and no bare descendant span/div/*
   assert.match(componentsCss, /\.starter-chip\s*>\s*span\b/, 'components.css must scope .starter-chip > span');
   assert.match(componentsCss, /\.starter-chip\s*>\s*strong\b/, 'components.css must scope .starter-chip > strong');
 
+  // Topbar regression check: long Windows workspace paths must ellipsize inside #active-workspace-pill
+  // without crushing #active-session-title or colliding with .topbar-right (Ready / Canvas).
+  assert.match(layoutCss, /\.topbar-left\s*\{[^}]*overflow:\s*hidden/s, '.topbar-left must clip overflow');
+  assert.match(layoutCss, /\.topbar-right\s*\{[^}]*flex-shrink:\s*0/s, '.topbar-right must not shrink under long paths');
+  assert.match(layoutCss, /#active-workspace-pill\s*\{[^}]*text-overflow:\s*ellipsis/s, '#active-workspace-pill must ellipsize long paths');
+
   const katexContainers = [
     '.starter-chip', '.rich-prose', '.msg-bubble-user', '.msg-assistant-body',
     '#latex-preview', '.dag-detail-card', '.paper-card', '.source-card', '#sidetalk-stream',

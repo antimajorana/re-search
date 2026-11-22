@@ -125,6 +125,25 @@ pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
+/// Returns `true` if `meta` (from `fs::symlink_metadata(path)`) is a symbolic link or,
+/// on Windows, an NTFS directory junction / mount point (`IO_REPARSE_TAG_MOUNT_POINT`).
+pub fn is_symlink_or_junction(path: &Path, meta: &Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+            return fs::read_link(path).is_ok();
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = path;
+    false
+}
+
 fn is_windows_reserved_stem(seg: &str) -> bool {
     let stem = seg.split('.').next().unwrap_or("");
     matches!(
@@ -270,7 +289,7 @@ impl WorkspaceSandbox {
                     let next = cur.join(seg);
                     match fs::symlink_metadata(&next) {
                         Ok(lmeta) => {
-                            if lmeta.file_type().is_symlink() {
+                            if is_symlink_or_junction(&next, &lmeta) {
                                 return Err(SandboxError::EscapesRoot(format!("symlink at `{seg}`")));
                             }
                             if !lmeta.is_dir() {
@@ -319,7 +338,7 @@ impl WorkspaceSandbox {
                 }
             })?;
             let canon_next = fs::canonicalize(&next).map_err(|e| {
-                if lmeta.file_type().is_symlink() {
+                if is_symlink_or_junction(&next, &lmeta) {
                     SandboxError::EscapesRoot(format!("broken or escaping symlink `{norm_rel}`: {e}"))
                 } else {
                     SandboxError::NotFound(norm_rel.clone())
@@ -359,7 +378,7 @@ impl WorkspaceSandbox {
             }
             match fs::symlink_metadata(&next) {
                 Ok(lmeta) => {
-                    if lmeta.file_type().is_symlink() {
+                    if is_symlink_or_junction(&next, &lmeta) {
                         return Err(SandboxError::EscapesRoot(format!("symlink forbidden in `{norm_rel}`")));
                     }
                     let canon_next = fs::canonicalize(&next).map_err(|e| SandboxError::EscapesRoot(e.to_string()))?;
@@ -405,7 +424,7 @@ impl WorkspaceSandbox {
             let next = cur.join(dir);
             match fs::symlink_metadata(&next) {
                 Ok(meta) => {
-                    if meta.file_type().is_symlink() || !meta.is_dir() {
+                    if is_symlink_or_junction(&next, &meta) || !meta.is_dir() {
                         return Err(SandboxError::EscapesRoot(format!("unsafe parent `{dir}`")));
                     }
                 }
@@ -438,7 +457,7 @@ impl WorkspaceSandbox {
                 return Err(SandboxError::EscapesRoot("parent directory escaped root before rename".into()));
             }
             if let Ok(meta) = fs::symlink_metadata(&target) {
-                if meta.file_type().is_symlink() || meta.is_dir() {
+                if is_symlink_or_junction(&target, &meta) || meta.is_dir() {
                     return Err(SandboxError::EscapesRoot(format!(
                         "refusing to overwrite symlink or directory `{file_name}`"
                     )));

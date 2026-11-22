@@ -11,7 +11,6 @@ use serde_json::json;
 use std::fs;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-#[cfg(unix)]
 use std::time::Duration;
 use tempfile::TempDir;
 use tools::approval::{ApprovalReply, ApprovalRequest, Approver};
@@ -219,6 +218,47 @@ fn f5_backup_restore_fail_closed_patch_exactness_and_symlink_safety() {
         assert_eq!(fs::read_to_string(outside.join("ext.tex")).unwrap(), "OUTSIDE");
     }
 
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        fs::create_dir_all(ws.join("sub_in")).unwrap();
+        for (link, target) in [
+            (ws.join("junc_dir"), outside.clone()),
+            (ws.join("junc_in"), ws.join("sub_in")),
+        ] {
+            let out = std::process::Command::new("cmd")
+                .creation_flags(0x0800_0000)
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&target)
+                .output()
+                .expect("mklink /J");
+            assert!(out.status.success(), "mklink /J failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        for bad in [
+            "../outside.tex",
+            "C:\\Windows\\win.ini",
+            "junc_dir/new.tex",
+            "junc_dir/ext.tex",
+            "junc_in/new.tex",
+        ] {
+            let r = router
+                .try_call("agent:test", FS_WRITE, &json!({"path": bad, "content": "x"}))
+                .unwrap();
+            assert!(matches!(r, CallOutcome::Error(_)), "expected write error for `{bad}`");
+        }
+        let patch_junc = router
+            .try_call(
+                "agent:test",
+                LATEX_PATCH,
+                &json!({"path": "junc_dir/ext.tex", "search": "OUTSIDE", "replace": "PWNED"}),
+            )
+            .unwrap();
+        assert!(matches!(patch_junc, CallOutcome::Error(_)));
+        assert_eq!(fs::read_to_string(outside.join("ext.tex")).unwrap(), "OUTSIDE");
+        assert!(!ws.join("sub_in/new.tex").exists());
+    }
+
     // 4. FAIL-CLOSED BACKUP TEST: block blob shard creation for current `main.tex` bytes so
     // `put_blob` fails during backup -> verify `fs_write` aborts and disk file is 100% untouched!
     let current_bytes = fs::read(ws.join("main.tex")).unwrap();
@@ -301,64 +341,76 @@ fn f5_latex_compile_missing_compiler_mock_script_flags_env_scrub_and_timeout() {
         CallOutcome::Error(_)
     ));
 
-    // 3. Mock executable compiler script on Unix testing safe flags, key scrubbing, PDF output, log errors, and timeout.
-    #[cfg(unix)]
+    // 3. Cross-platform mock compiler binary (compiled with `rustc`) testing safe flags,
+    //    `openin_any=p` / `openout_any=p`, `shell_escape*` + API key scrubbing, PDF output,
+    //    log diagnostics, junction escape refusal, and timeout termination.
     {
-        use std::os::unix::fs::PermissionsExt;
         fs::write(ws.join("fail.tex"), "\\badmacro\n").unwrap();
         fs::write(ws.join("hang.tex"), "sleep\n").unwrap();
 
-        let script_path = tmp.path().join("pdflatex");
-        let script = r#"#!/bin/sh
-set -eu
-# Verify mandatory safe flags are present, TeX env is hardened, and API keys are scrubbed
-case " $* " in
-  *" -interaction=nonstopmode "*) ;;
-  *) echo "missing nonstopmode" >&2; exit 91 ;;
-esac
-case " $* " in
-  *" -halt-on-error "*) ;;
-  *) echo "missing halt-on-error" >&2; exit 92 ;;
-esac
-case " $* " in
-  *" -no-shell-escape "*) ;;
-  *) echo "missing no-shell-escape" >&2; exit 93 ;;
-esac
-if [ -n "${ANTHROPIC_API_KEY:-}" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
-  echo "leaked api key!" >&2
-  exit 94
-fi
-if [ "${openin_any:-}" != "p" ]; then
-  echo "expected openin_any=p, got '${openin_any:-}'" >&2
-  exit 95
-fi
-if [ "${openout_any:-}" != "p" ]; then
-  echo "expected openout_any=p, got '${openout_any:-}'" >&2
-  exit 96
-fi
-if [ -n "${shell_escape:-}" ]; then
-  echo "leaked shell_escape='${shell_escape}'" >&2
-  exit 97
-fi
-if [ -n "${shell_escape_commands:-}" ]; then
-  echo "leaked shell_escape_commands='${shell_escape_commands}'" >&2
-  exit 98
-fi
-for last; do true; done
-stem="${last%.tex}"
-if [ "$last" = "hang.tex" ]; then
-  exec sleep 2
-fi
-if [ "$last" = "fail.tex" ]; then
-  printf "! Undefined control sequence.\nl.42 \\\\badmacro\n" > "${stem}.log"
-  exit 1
-fi
-printf "LaTeX Warning: Reference \`eq:1' on page 1 undefined on input line 12.\n" > "${stem}.log"
-printf "%%PDF-1.4 mock\n" > "${stem}.pdf"
-exit 0
+        let mock_src = tmp.path().join("mock_pdflatex.rs");
+        let mock_bin = tmp.path().join(format!("pdflatex{}", std::env::consts::EXE_SUFFIX));
+        let rust_src = r#"
+use std::{env, fs, process, thread, time::Duration};
+fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    for req in ["-interaction=nonstopmode", "-halt-on-error", "-no-shell-escape", "-file-line-error"] {
+        if !args.iter().any(|a| a == req) {
+            eprintln!("missing mandatory flag {req}: {args:?}");
+            process::exit(91);
+        }
+    }
+    for k in [
+        "RE_SEARCH_API_KEY", "RESEARCH_CORE_API_KEY", "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OLLAMA_API_KEY",
+    ] {
+        if env::var_os(k).is_some() {
+            eprintln!("leaked key env {k}");
+            process::exit(94);
+        }
+    }
+    if env::var("openin_any").as_deref() != Ok("p") {
+        eprintln!("bad openin_any={:?}", env::var_os("openin_any"));
+        process::exit(95);
+    }
+    if env::var("openout_any").as_deref() != Ok("p") {
+        eprintln!("bad openout_any={:?}", env::var_os("openout_any"));
+        process::exit(96);
+    }
+    for k in ["shell_escape", "shell_escape_commands"] {
+        if env::var_os(k).is_some() {
+            eprintln!("leaked {k}");
+            process::exit(97);
+        }
+    }
+    if env::var("max_print_line").as_deref() != Ok("1000") {
+        eprintln!("bad max_print_line={:?}", env::var_os("max_print_line"));
+        process::exit(99);
+    }
+    let last = args.last().cloned().unwrap_or_default();
+    if last == "hang.tex" {
+        thread::sleep(Duration::from_secs(5));
+        process::exit(0);
+    }
+    let stem = last.strip_suffix(".tex").unwrap_or(&last);
+    if last == "fail.tex" {
+        fs::write(format!("{stem}.log"), "! Undefined control sequence.\nl.42 \\badmacro\n").unwrap();
+        process::exit(1);
+    }
+    fs::write(format!("{stem}.log"), "LaTeX Warning: Reference `eq:1' on page 1 undefined on input line 12.\n").unwrap();
+    fs::write(format!("{stem}.pdf"), "%PDF-1.4 mock\n").unwrap();
+}
 "#;
-        fs::write(&script_path, script).unwrap();
-        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(&mock_src, rust_src).unwrap();
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let comp = std::process::Command::new(rustc)
+            .args(["--edition", "2021"])
+            .arg(&mock_src)
+            .arg("-o")
+            .arg(&mock_bin)
+            .output()
+            .expect("compile mock_pdflatex with rustc");
+        assert!(comp.status.success(), "rustc failed: {}", String::from_utf8_lossy(&comp.stderr));
 
         struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
         impl EnvGuard {
@@ -387,16 +439,19 @@ exit 0
 
         let _env_guard = EnvGuard::set(&[
             ("ANTHROPIC_API_KEY", "sk-ant-should-not-leak"),
+            ("OPENAI_API_KEY", "sk-openai-should-not-leak"),
+            ("GEMINI_API_KEY", "ai-gemini-should-not-leak"),
+            ("RE_SEARCH_API_KEY", "rs-generic-should-not-leak"),
             ("openin_any", "a"),
             ("openout_any", "a"),
             ("shell_escape", "1"),
-            ("shell_escape_commands", "sh"),
+            ("shell_escape_commands", "cmd"),
         ]);
         let mock_env = Arc::new(
             ResearchEnv::with_workspace(tmp.path().join("data2"), &ws)
                 .unwrap()
-                .with_latex_compiler(&script_path)
-                .with_latex_timeout(Duration::from_millis(120)),
+                .with_latex_compiler(&mock_bin)
+                .with_latex_timeout(Duration::from_millis(200)),
         );
         let mock_approver = RecordingApprover::new(mock_env.clone(), true);
         let mut reg2 = Registry::new();
@@ -422,6 +477,27 @@ exit 0
                 }
                 other => panic!("unexpected {other:?} for engine={engine}"),
             }
+        }
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let outside_tex = tmp.path().join("outside_compile");
+            fs::create_dir_all(&outside_tex).unwrap();
+            fs::write(outside_tex.join("escape.tex"), "hi\n").unwrap();
+            let out = std::process::Command::new("cmd")
+                .creation_flags(0x0800_0000)
+                .args(["/C", "mklink", "/J"])
+                .arg(ws.join("junc_compile"))
+                .arg(&outside_tex)
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            let junc_res = router2
+                .try_call("agent:test", LATEX_COMPILE, &json!({"path": "junc_compile/escape.tex"}))
+                .unwrap();
+            assert!(matches!(junc_res, CallOutcome::Error(_)), "expected error, got {junc_res:?}");
+            assert!(!outside_tex.join("escape.pdf").exists());
         }
 
         let err_res = router2

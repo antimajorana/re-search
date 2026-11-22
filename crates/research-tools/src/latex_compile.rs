@@ -4,7 +4,9 @@
 //! strips `shell_escape` / `shell_escape_commands` and provider API keys from the child env,
 //! and returns structured `.log` diagnostics or `"compiler_not_found"`.
 
-use crate::sandbox::{strip_verbatim_prefix, validate_rel_workspace_path, WorkspaceSandbox};
+use crate::sandbox::{
+    is_symlink_or_junction, strip_verbatim_prefix, validate_rel_workspace_path, WorkspaceSandbox,
+};
 use crate::ResearchEnv;
 use policy::EffectClass;
 use regex::Regex;
@@ -107,7 +109,7 @@ pub fn run_latex_compile(env: &ResearchEnv, args: &Value) -> Result<Value, Strin
     for comp in &rel_components[..rel_components.len() - 1] {
         let next = cur.join(comp);
         let meta = fs::symlink_metadata(&next).map_err(|e| format!("cannot access `{comp}`: {e}"))?;
-        if meta.file_type().is_symlink() || !meta.is_dir() {
+        if is_symlink_or_junction(&next, &meta) || !meta.is_dir() {
             return Err(format!("unsafe directory component `{comp}`"));
         }
         cur = fs::canonicalize(&next).map_err(|e| e.to_string())?;
@@ -118,7 +120,7 @@ pub fn run_latex_compile(env: &ResearchEnv, args: &Value) -> Result<Value, Strin
     let tex_target = cur.join(file_name);
     let tex_meta = fs::symlink_metadata(&tex_target)
         .map_err(|_| format!("target `.tex` file `{rel_path}` does not exist"))?;
-    if tex_meta.file_type().is_symlink() || !tex_meta.is_file() {
+    if is_symlink_or_junction(&tex_target, &tex_meta) || !tex_meta.is_file() {
         return Err(format!("target `{rel_path}` must be a regular non-symlink file"));
     }
     let tex_canon = fs::canonicalize(&tex_target).map_err(|e| e.to_string())?;
@@ -217,7 +219,7 @@ pub fn run_latex_compile(env: &ResearchEnv, args: &Value) -> Result<Value, Strin
     let pdf_candidate = cur.join(format!("{stem}.pdf"));
     let pdf_rel_path = if !timed_out && last_exit == Some(0) {
         match fs::symlink_metadata(&pdf_candidate) {
-            Ok(m) if m.is_file() && !m.file_type().is_symlink() => {
+            Ok(m) if m.is_file() && !is_symlink_or_junction(&pdf_candidate, &m) => {
                 let mut pdf_comps = rel_components[..rel_components.len() - 1].to_vec();
                 pdf_comps.push(format!("{stem}.pdf"));
                 Some(pdf_comps.join("/"))

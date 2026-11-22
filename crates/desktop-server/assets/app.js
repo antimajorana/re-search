@@ -279,8 +279,10 @@ async function selectSession(id) {
       if (sess.workspace_root) {
         el.wsPill.hidden = false;
         el.wsPill.textContent = sess.workspace_root;
+        el.wsPill.title = sess.workspace_root;
       } else {
         el.wsPill.hidden = true;
+        el.wsPill.title = '';
       }
     }
     renderSessionStream(id, sess);

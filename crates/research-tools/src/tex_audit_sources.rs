@@ -1,6 +1,6 @@
 //! Source file walker and session ledger/JSON withdrawal & retraction scanners for `tex_audit`.
 
-use crate::sandbox::{strip_verbatim_prefix, WorkspaceSandbox};
+use crate::sandbox::{is_symlink_or_junction, strip_verbatim_prefix, WorkspaceSandbox};
 use crate::tex_scan::{base_arxiv_id, normalize_doi, normalize_ws, strip_latex_comments};
 use ledger::Ledger;
 use serde_json::Value;
@@ -47,7 +47,7 @@ pub(crate) fn collect_text_files(
         }
         let path = entry.path();
         let Ok(meta) = fs::symlink_metadata(&path) else { continue };
-        if meta.file_type().is_symlink() {
+        if is_symlink_or_junction(&path, &meta) {
             continue;
         }
         let Ok(canon) = fs::canonicalize(&path) else { continue };

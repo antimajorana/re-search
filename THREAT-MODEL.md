@@ -204,7 +204,8 @@ result.
 - **Workspace path sandboxing & bounded ingestion (`crates/research-tools`).**
   `WorkspaceSandbox` canonicalizes paths strictly inside the attached
   `workspace_root` and `sessions/<id>/sources`, rejecting `..`, NUL bytes,
-  alternate data streams and symlinks escaping root. The sandbox has no
+  alternate data streams, symlinks, and Windows NTFS directory junctions
+  escaping root. The sandbox has no
   per-file deny-list; instead `ResearchEnv::with_workspace` refuses to attach a
   workspace that is this launch's data directory, contains it, or lies inside
   it, so that launch's `providers.json`, `ledger.db` and `blobs/` are not
@@ -329,10 +330,10 @@ result.
   - KaTeX `0.19.1` is served offline from the binary; the UI loads nothing
     from the network. Markdown/LaTeX rendering (`math.js`) strips NUL bytes,
     passes all untrusted prose, TeX commands, and link URLs through
-    `escapeHtml` (allowing only `http(s)://` links), and is tested against the
-    vendored KaTeX bundle by `tests/math_render.test.mjs` (`tests/ui_math.rs`);
-    visual rendering inside the Windows WebView2 window is not verified from
-    Linux.
+    `escapeHtml` (allowing only `http(s)://` links), is tested against the
+    vendored KaTeX bundle by `tests/math_render.test.mjs` (`tests/ui_math.rs`),
+    and has been visually verified inside `re-search-app` on Windows 11
+    (WebView2 158; `cargo test` itself opens no WebView2 display window).
 
 ## The desktop window (`re-search-app`, `crates/desktop-app`)
 
@@ -718,9 +719,12 @@ exactly as on the API-key route; the session records `route: "api"`,
   the holding process dies, so nothing is judged by PID or age and no lock is
   ever taken over from a live holder. A waiter fails closed with "another
   ChatGPT sign-in operation is in progress" after a 10 s wait. The file is
-  never deleted and its content is ignored. Unit-tested on Windows (exclusion,
-  release on drop, leftover files of any content); not run on Linux, and not
-  tested with two real processes. If sign-out cannot take the lock, nothing
+  never deleted and its content is ignored. Tested on Windows both in-process
+  (exclusion, release on drop, leftover files of any content) and across two
+  real OS processes (`tests/vault_lock_multiprocess.rs`: exclusion, 10 s
+  fail-closed timeout, kernel release on abrupt process termination,
+  fail-closed sign-out preserving `credentials.dpapi`, and single shared DPAPI
+  refresh across racing processes). If sign-out cannot take the lock, nothing
   is deleted and the answer says the sign-in is still on this computer. Status reads (Connect panel, sign-in polling)
   take neither lock. On HTTP 401 from Responses, the transport calls
   `force_refresh` and retries once (if the token changed). On a transient
@@ -929,11 +933,9 @@ event, session API `confinement`/`route_label`, this file, README).
   Headless page says, and that `--disable-slash-commands` (documented for print
   mode) is accepted with it; that the inline `--settings` JSON survives Windows
   command-line quoting as one argument; the exit code when a built-in is
-  soft-denied (documented as 0); whether `agy models` and `--version` (run
+  soft-denied (documented as 0); and whether `agy models` and `--version` (run
   after acknowledgement) trigger a self-update (observed once, 1.5.13 →
-  1.5.14); and the Windows-only `JobObjectSandbox` tests (`claude_cli_*` and
-  the four turn-spawning tests in `antigravity_route`) plus Windows clippy
-  after the review fixes.
+  1.5.14).
 
 ## Remaining limits & gaps
 
@@ -1038,21 +1040,24 @@ event, session API `confinement`/`route_label`, this file, README).
   to obtain the token; `--print-url-json true` still writes the token to
   stdout; and after redemption the token lives in the page's `sessionStorage`
   (readable by same-user processes inspecting the browser profile or memory).
-  The server speaks plain HTTP on loopback. The Windows `launcher.rs` path and
-  WebView2 visual KaTeX rendering were not run on Windows after these changes
-  and must be re-gated on Windows.
+  The server speaks plain HTTP on loopback. Header-token authentication and
+  visual KaTeX rendering in `re-search-app` (WebView2 158) and the
+  `re-search ui --no-open --print-url-json` `/?launch=<nonce>` redemption flow
+  are verified on Windows 11; the live `cmd /C start` default-browser spawn in
+  `launcher.rs` is compiled on Windows (and disabled under `#[cfg(test)]`)
+  without opening a browser in automated tests.
 - **Approved LaTeX compilation relies on TeX's `openin_any=p` / `openout_any=p`
   enforcement.** `latex_compile` runs `pdflatex`/`latexmk` with
   `-no-shell-escape`, sets `openin_any=p` and `openout_any=p` (paranoid mode:
   forbids reading or writing absolute paths or `..` parent paths outside the
   working directory / TEXMF), and removes `shell_escape`,
   `shell_escape_commands`, and provider API-key variables from the child
-  environment (verified with the Unix mock compiler on Linux; the mock test is
-  `cfg(unix)` and real TeX Live/MiKTeX enforcement on Windows is not verified
-  here). Because the compiler runs outside AppContainer as your OS user, any
-  bug or distribution-specific bypass of `openin_any=p` would still run with
-  your user permissions; compiling always asks first, so read what will be
-  compiled.
+  environment (verified on both Linux and Windows with a `rustc`-compiled mock
+  `pdflatex` binary in `write_and_compile.rs`; real TeX Live/MiKTeX enforcement
+  of `openin_any=p` / `openout_any=p` on Windows is not verified here). Because
+  the compiler runs outside AppContainer as your OS user, any bug or
+  distribution-specific bypass of `openin_any=p` would still run with your user
+  permissions; compiling always asks first, so read what will be compiled.
 - **Literature endpoints can be redirected to loopback.** The HTTPS host
   allowlist is fixed, but `--arxiv-base` / `--inspire-base` /
   `--crossref-base` and the matching `RE_SEARCH_*_BASE` environment variables
@@ -1072,10 +1077,15 @@ event, session API `confinement`/`route_label`, this file, README).
 - **Literature queries go to third parties once approved.** After you approve
   a query, its text is sent to the search host and recorded in the ledger;
   read the query before approving.
-- **Symlink escapes are tested on Unix only.** The workspace sandbox's
-  symlink-escape tests are `#[cfg(unix)]`; on Windows the `..`, absolute-path,
-  drive, alternate-data-stream and reserved-name rejections are tested, but
-  symlink and junction escapes are not.
+- **Unprivileged Windows symbolic links vs NTFS junctions in tests.** On
+  Windows, `sandbox_and_fs.rs` and `write_and_compile.rs` unconditionally test
+  `..`, absolute-path, drive, alternate-data-stream, reserved-name, and NTFS
+  directory junction escapes (escaping, broken, and intra-workspace loop
+  junctions across `WorkspaceSandbox`, `fs_list`, `fs_write`, `latex_patch`,
+  `latex_compile`, and `tex_audit`). Creating Windows file/directory symbolic
+  links (`symlink_file`) requires Developer Mode or
+  `SeCreateSymbolicLinkPrivilege` and runs opportunistically when permitted on
+  Windows (and unconditionally under `#[cfg(unix)]`).
 - **Heuristic & LLM checks are not formal kernel proofs.** `sympy_eval`,
   `check_expression_sanity`, `tex_audit`, and LLM Step/Full Verifiers catch many
   algebraic and citation errors, not formal theorem-prover guarantees.

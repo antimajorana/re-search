@@ -1,6 +1,8 @@
 //! Sandboxed directory listing (`fs_list`) and bounded UTF-8 file reading (`fs_read`).
 
-use crate::sandbox::{sanitize_rel_components, SandboxError, SandboxRoot, WorkspaceSandbox};
+use crate::sandbox::{
+    is_symlink_or_junction, sanitize_rel_components, SandboxError, SandboxRoot, WorkspaceSandbox,
+};
 use crate::ResearchEnv;
 use policy::EffectClass;
 use regex::RegexBuilder;
@@ -188,7 +190,7 @@ fn walk_dir_entries(
         }
         let raw_path = entry.path();
         let Ok(raw_meta) = fs::symlink_metadata(&raw_path) else { continue };
-        let is_symlink = raw_meta.file_type().is_symlink();
+        let is_symlink = is_symlink_or_junction(&raw_path, &raw_meta);
         let Ok(canon_entry) = fs::canonicalize(&raw_path) else {
             continue; // skip broken symlinks
         };

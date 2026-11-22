@@ -155,7 +155,7 @@ fn copy_dir_no_symlinks(base_src: &Path, cur_src: &Path, dst_root: &Path) -> Res
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-        if meta.file_type().is_symlink() {
+        if research_tools::is_symlink_or_junction(&path, &meta) {
             continue;
         }
         let canon = fs::canonicalize(&path).map_err(|e| e.to_string())?;

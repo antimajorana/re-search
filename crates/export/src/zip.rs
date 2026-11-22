@@ -96,7 +96,7 @@ fn collect_sources_into_map(
     for entry in items {
         let path = entry.path();
         let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-        if meta.file_type().is_symlink() {
+        if research_tools::is_symlink_or_junction(&path, &meta) {
             continue;
         }
         if meta.is_dir() {

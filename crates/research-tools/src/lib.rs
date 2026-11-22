@@ -42,8 +42,8 @@ pub use proof_dag::{
     ProofEntry, ProofStatus, LEDGER_APPEND, LEDGER_QUERY, LEDGER_SUPERSEDE,
 };
 pub use sandbox::{
-    resolve_sources_session_id, strip_verbatim_prefix, strip_verbatim_str, validate_session_id,
-    RootKind, SandboxError, SandboxRoot, WorkspaceSandbox,
+    is_symlink_or_junction, resolve_sources_session_id, strip_verbatim_prefix, strip_verbatim_str,
+    validate_session_id, RootKind, SandboxError, SandboxRoot, WorkspaceSandbox,
 };
 pub use sanity::{check_expression_sanity_def, CHECK_EXPRESSION_SANITY};
 pub use tex_audit::{

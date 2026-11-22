@@ -134,12 +134,20 @@ body {
   flex-shrink: 0;
 }
 
-.topbar-left,
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .topbar-right {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-width: 0;
+  flex-shrink: 0;
 }
 
 .session-heading {
@@ -151,6 +159,18 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: 55%;
+}
+
+#active-workspace-pill {
+  display: inline-block;
+  min-width: 0;
+  max-width: 220px;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 #message-stream {

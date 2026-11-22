@@ -245,7 +245,7 @@ fn collect_source_names(root: &std::path::Path, dir: &std::path::Path, out: &mut
         }
         let path = entry.path();
         let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
-        if meta.file_type().is_symlink() {
+        if research_tools::is_symlink_or_junction(&path, &meta) {
             continue;
         }
         if meta.is_dir() {
