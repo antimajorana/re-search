@@ -204,10 +204,11 @@ function appendSidetalkPair(question, answer) {
   const card = document.createElement('div');
   card.className = 'source-card';
   card.innerHTML = `
-    <div style="font-weight:600;margin-bottom:6px;">${escapeHtml(question)}</div>
+    <div class="sidetalk-q rich-prose" style="font-weight:600;margin-bottom:6px;"></div>
     <div class="sidetalk-ans rich-prose" style="font-size:13px;"></div>
     <div class="sidetalk-refs" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"></div>
   `;
+  renderRichInto(card.querySelector('.sidetalk-q'), question);
   renderRichInto(card.querySelector('.sidetalk-ans'), answer);
   const refsBox = card.querySelector('.sidetalk-refs');
   const stepMatches = Array.from(new Set((String(answer).match(/\be-\d+\b/g) || [])));

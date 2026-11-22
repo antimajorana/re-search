@@ -238,7 +238,11 @@ function selectNode(entry) {
       <button id="node-verify-step-btn" type="button" class="pill-btn sm">Verify Step</button>
     </div>
   `;
-  const latexOrDetails = entry.latex ? `$$\n${entry.latex}\n$$\n${entry.details || ''}` : (entry.details || '');
+  const rawLatex = String(entry.latex || '').trim();
+  const wrappedLatex = rawLatex
+    ? (/^(\$\$|\\\[|\\begin\{)/.test(rawLatex) ? rawLatex : `$$\n${rawLatex}\n$$`)
+    : '';
+  const latexOrDetails = wrappedLatex ? `${wrappedLatex}\n\n${entry.details || ''}` : (entry.details || '');
   renderRichInto(detailEl.querySelector('.node-latex-body'), latexOrDetails);
   const stepBtn = detailEl.querySelector('#node-verify-step-btn');
   if (stepBtn) {
@@ -299,7 +303,7 @@ function renderBranchDiff(diff) {
   diffPanelEl.innerHTML = `
     <strong>Branch Diff: ${escapeHtml(diff.base_session || '')} -> ${escapeHtml(diff.target_session || '')}</strong>
     <div style="font-size:12px;color:var(--ink-secondary);margin:4px 0;">
-      Shared prefix: ${diff.shared_prefix_len ?? 0} · Divergence seq: ${diff.divergence_seq ?? 'none'}
+      Shared prefix: ${escapeHtml(String(diff.shared_prefix_len ?? 0))} · Divergence seq: ${escapeHtml(String(diff.divergence_seq ?? 'none'))}
     </div>
     <pre class="trace-io">${escapeHtml(diff.summary_diff || '')}</pre>
   `;

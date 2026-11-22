@@ -168,11 +168,11 @@ function renderAuditReport(report) {
   const ok = Boolean(report.ok);
   const headerBadge = ok
     ? '<span class="badge ok">TeX Audit Clean</span>'
-    : `<span class="badge err">${report.blocker_count || 0} blockers, ${report.error_count || 0} errors</span>`;
+    : `<span class="badge err">${Number(report.blocker_count) || 0} blockers, ${Number(report.error_count) || 0} errors</span>`;
   const summary = `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
       ${headerBadge}
-      <span style="color:var(--ink-muted);font-size:11.5px;">${report.files_scanned || 0} files · ${report.labels_indexed || 0} labels · ${report.bib_keys_indexed || 0} bib keys</span>
+      <span style="color:var(--ink-muted);font-size:11.5px;">${Number(report.files_scanned) || 0} files · ${Number(report.labels_indexed) || 0} labels · ${Number(report.bib_keys_indexed) || 0} bib keys</span>
     </div>
   `;
   if (issues.length === 0) {

@@ -1,6 +1,6 @@
 // Center conversational stream: empty hero starters, Markdown+KaTeX turns, thinking traces, and live approval cards.
 import * as api from '/assets/api.js';
-import { escapeHtml, highlightPython, highlightUnifiedDiff, renderRichInto } from '/assets/math.js';
+import { escapeHtml, highlightPython, highlightUnifiedDiff, renderMathInContainer, renderRichInto } from '/assets/math.js';
 
 const STARTER_PROMPTS = [
   {
@@ -114,7 +114,7 @@ function renderEmptyHero(inner) {
     grid.appendChild(btn);
   }
   inner.appendChild(hero);
-  import('/assets/math.js').then((m) => m.renderMathInContainer(hero));
+  renderMathInContainer(hero);
 }
 
 function clearHeroIfPresent() {
