@@ -211,6 +211,7 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
             .and_then(Value::as_str)
             .map(str::to_string)
             .or(ui.default_model),
+        reasoning_effort: agent::normalize_reasoning_effort(val.get("reasoning_effort").and_then(Value::as_str)),
         created_ms: now_ms(),
         fork_info: None,
         archived: false,
@@ -429,6 +430,7 @@ pub fn handle_fork(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRe
         model_preset: parent_meta.as_ref().and_then(|m| m.model_preset.clone()),
         default_provider: parent_meta.as_ref().and_then(|m| m.default_provider.clone()),
         default_model: parent_meta.as_ref().and_then(|m| m.default_model.clone()),
+        reasoning_effort: parent_meta.as_ref().and_then(|m| m.reasoning_effort.clone()),
         route: parent_meta.as_ref().and_then(|m| m.route.clone()),
         created_ms: now_ms(),
         fork_info: Some(ForkInfo {

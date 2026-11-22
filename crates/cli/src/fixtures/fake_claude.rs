@@ -8,6 +8,7 @@ const KNOWN_FLAGS: &[(&str, bool)] = &[
     ("-p", false),
     ("--print", false),
     ("--model", true),
+    ("--effort", true),
     ("--output-format", true),
     ("--verbose", false),
     ("--tools", true),

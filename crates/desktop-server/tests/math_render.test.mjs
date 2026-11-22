@@ -474,10 +474,16 @@ test('Stage 11 Workbench UI: pipeline stepper, rigor presets, conventions popove
   assert.match(assetsRs, /"\/assets\/workbench\.js"/);
   assert.match(assetsRs, /"\/assets\/session_rail\.js"/);
 
-  // Import trace_cards.js by mapping /assets/math.js cleanly via minimal DOM stub.
+  // Import trace_cards.js by mapping /assets/math.js and /assets/source_links.js cleanly.
+  const mathUrl = JSON.stringify(pathToFileURL(path.join(assetsDir, 'math.js')).href);
+  const srcLinksCode = fs
+    .readFileSync(path.join(assetsDir, 'source_links.js'), 'utf8')
+    .replace("'/assets/math.js'", mathUrl);
+  const srcLinksDataUrl = JSON.stringify(`data:text/javascript;base64,${Buffer.from(srcLinksCode, 'utf8').toString('base64')}`);
   const traceSrc = fs
     .readFileSync(path.join(assetsDir, 'trace_cards.js'), 'utf8')
-    .replace("'/assets/math.js'", JSON.stringify(pathToFileURL(path.join(assetsDir, 'math.js')).href));
+    .replace("'/assets/math.js'", mathUrl)
+    .replace("'/assets/source_links.js'", srcLinksDataUrl);
   const dataUrl = `data:text/javascript;base64,${Buffer.from(traceSrc, 'utf8').toString('base64')}`;
   const traceMod = await import(dataUrl);
 
@@ -528,7 +534,35 @@ test('Stage 11 Workbench UI: pipeline stepper, rigor presets, conventions popove
     assert.ok(verdictCard && verdictCard.className.includes('is-unverified'));
     assert.match(verdictCard.innerHTML, /Unverified Draft/);
     assertNoXss(verdictCard.innerHTML);
+
+    // Stage 12 literature card links + XSS neutralization
+    const litCard = traceMod.buildStructuredTraceCard({
+      call_id: 'c3',
+      tool: 'arxiv_search',
+      status: 'ok',
+      args: { query: 'kitaev' },
+      output: JSON.stringify({
+        papers: [
+          {
+            id: '2301.12345v1',
+            title: 'Kitaev Chain <script>x</script>',
+            url: 'javascript:alert(1)',
+            doi: '10.1103/PhysRevB.1.1',
+          },
+        ],
+      }),
+    });
+    assert.match(litCard.innerHTML, /https:\/\/arxiv\.org\/abs\/2301\.12345v1/);
+    assert.match(litCard.innerHTML, /https:\/\/doi\.org\/10\.1103\/PhysRevB\.1\.1/);
+    assertNoXss(litCard.innerHTML);
   } finally {
     globalThis.document = prevDoc;
+  }
+
+  for (const id of ['effort-popover', 'composer-effort-btn', 'composer-subagent-btn', 'settings-tab-subagents', 'settings-tab-guide', 'source-reader-dialog']) {
+    assert.match(indexHtml, new RegExp(`id="${id}"`), `Missing #${id} in index.html`);
+  }
+  for (const a of ['/assets/modals.css', '/assets/effort_picker.js', '/assets/subagents.js', '/assets/guide.js', '/assets/source_links.js']) {
+    assert.ok(assetsRs.includes(a), `Missing static asset registration ${a}`);
   }
 });

@@ -19,7 +19,7 @@ use wry::{NewWindowResponse, PageLoadEvent, WebContext, WebView, WebViewBuilder}
 static ICON_32: &[u8] = include_bytes!("../assets/icon-32.rgba");
 static ICON_256: &[u8] = include_bytes!("../assets/icon-256.rgba");
 
-pub const WINDOW_TITLE: &str = "re:Search";
+pub const WINDOW_TITLE: &str = "reSearch";
 const FIRST_LOAD_TIMEOUT: Duration = Duration::from_secs(10);
 const STEP_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_EVAL_TIMEOUT_S: u64 = 120;
@@ -96,7 +96,12 @@ fn build_webview(
         .with_devtools(std::env::var_os("RE_SEARCH_DEVTOOLS").is_some_and(|v| v == "1"))
         .with_url_and_headers(format!("{base_url}/"), headers)
         .with_navigation_handler(move |url| rules::is_allowed_navigation(&url, &nav_base))
-        .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+        .with_new_window_req_handler(|url, _| {
+            if rules::is_allowed_external_source_url(&url) {
+                crate::win32::open_external_source_url(&url);
+            }
+            NewWindowResponse::Deny
+        })
         .with_download_started_handler(move |url, path| allow_download(&url, path, &dl_base))
         .with_on_page_load_handler(move |event, url| {
             if matches!(event, PageLoadEvent::Finished) {

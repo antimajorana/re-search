@@ -188,6 +188,7 @@ pub fn default_cfg(prompt: &str, contained: bool) -> AgentConfig {
         max_tokens: DEFAULT_MAX_TOKENS,
         containment: if contained { "appcontainer".into() } else { "none".into() },
         contained,
+        reasoning_effort: None,
     }
 }
 

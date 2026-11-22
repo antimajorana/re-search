@@ -81,6 +81,7 @@ fn every_api_route_except_health_requires_the_token() {
         "/api/connections/chatgpt/login".to_string(),
         "/api/models".to_string(),
         "/api/models?refresh=1".to_string(),
+        "/api/subagents".to_string(),
         "/api/no-such-route".to_string(),
         // Path tricks must not reach an open route: only the exact `/api/health` is open.
         "/api/health/".to_string(),
@@ -111,6 +112,9 @@ fn every_api_route_except_health_requires_the_token() {
         ("DELETE", s.clone()),
         ("POST", format!("{s}/archive")),
         ("DELETE", format!("{s}/grants")),
+        ("POST", "/api/subagents".to_string()),
+        ("POST", "/api/subagents/draft".to_string()),
+        ("DELETE", "/api/subagents/s-custom".to_string()),
         ("PATCH", s.clone()),
         ("OPTIONS", "/api/sessions".to_string()),
         // A mutation aimed at a cookie route is still a mutation.

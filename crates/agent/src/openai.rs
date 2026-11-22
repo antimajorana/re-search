@@ -194,6 +194,13 @@ fn serialize_openai_request(provider: ProviderKind, req: &ModelRequest) -> Resul
     match provider {
         ProviderKind::OpenAi => {
             obj.insert("max_completion_tokens".into(), json!(req.max_tokens));
+            if let Some(effort) = crate::transport::normalize_reasoning_effort(req.reasoning_effort.as_deref()) {
+                let mapped = match effort.as_str() {
+                    "xhigh" | "max" => "high",
+                    other => other,
+                };
+                obj.insert("reasoning_effort".into(), json!(mapped));
+            }
         }
         ProviderKind::Ollama => {
             obj.insert("max_tokens".into(), json!(req.max_tokens));

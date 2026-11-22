@@ -103,6 +103,7 @@ pub fn run(opts: &RunOpts) -> Result<i32, String> {
         tool_config: &tool_config,
         core: &core,
         model: &opts.model,
+        reasoning_effort: None,
         prompt: &opts.prompt,
         tool_defs: &tools.defs,
         policy_version: &tools.policy_version,

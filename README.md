@@ -1,8 +1,64 @@
-# re:Search
+# reSearch
 
-A small, tamper-evident Rust research core and loopback desktop workbench for mathematics and theoretical physics. Symbolic/numerical checks run inside a zero-capability Windows 11 AppContainer sandbox (`sympy_eval`), while workspace inspection, document ingestion, arXiv/literature lookup, deterministic TeX/citation auditing, hash-chained proof graphs, counterfactual forking, reproducible exports, and the embedded Gemini-inspired desktop UI are orchestrated by the core supervisor.
+A small, tamper-evident Rust research core and loopback desktop workbench for mathematics and theoretical physics. Symbolic/numerical checks run inside a zero-capability Windows 11 AppContainer sandbox (`sympy_eval`), while workspace inspection, document ingestion, arXiv/literature lookup, deterministic TeX/citation auditing, hash-chained proof graphs, counterfactual forking, reproducible exports, and the embedded desktop UI are orchestrated by the core supervisor.
 
 **Read [THREAT-MODEL.md](THREAT-MODEL.md) for what AppContainer contains, how CSRF/workspace approvals work, and what remains outside the boundary.**
+
+## How reSearch Is Designed (Architecture & Logic)
+
+reSearch separates reasoning, policy, durable state, and execution into four isolated layers so a model can never silently execute arbitrary code or mutate your local files:
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│ 1. Desktop Shell & Loopback Server (desktop-app + desktop-server)          │
+│    WebView2 locked to 127.0.0.1 (header CSRF + Origin) · Offline KaTeX UI  │
+│    Model Picker + Effort Mini-Window · Subagent Builder · Source Reader    │
+└───────────────────────────────────┬────────────────────────────────────────┘
+                                    │ spawns / supervises turn
+┌───────────────────────────────────▼────────────────────────────────────────┐
+│ 2. Agent & Multi-Role Verification Loop (agent / cli-route)                │
+│    Direct  │ Verified (Solver → Calc Guard → Stateless Verifier, ≤3x)      │
+│    Deep    │ + Research Strategist error diagnosis & revision plan         │
+│    Routes  │ In-core API (Anthropic/OpenAI/ChatGPT/Gemini/Ollama) or CLI   │
+└───────────────┬──────────────────────────────────────────┬─────────────────┘
+                │ every tool call goes through Router      │ append-only events
+┌───────────────▼──────────────────────────┐   ┌───────────▼─────────────────┐
+│ 3. Fail-Closed Policy & Approval Router  │   │ 4. SHA-256 Proof-DAG Ledger │
+│    policy (Allow / Ask / Deny clamps)    │   │    SQLite v3 + Blob Store   │
+│    Per-call or Approve-for-Session UI    │   │    Hash-chained & exportable│
+└───────────────┬──────────────────────────┘   └─────────────────────────────┘
+                │ sympy_eval only (EffectClass::ExecuteCode)
+┌───────────────▼────────────────────────────────────────────────────────────┐
+│ 5. Windows 11 Zero-Capability AppContainer Python Sandbox (worker)         │
+│    No network · No user files/DPAPI/env · Kill-on-close Job Object         │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1. Agents in reSearch (Built-in + Custom Subagents)
+- **Solver:** The primary research agent (`RESEARCH_SYSTEM_PROMPT`). Reads attached workspace files or ingested papers, runs Python/SymPy calculations in the sandbox, records typed steps in the Proof DAG (`ledger_append`), and patches `.tex` manuscripts.
+- **Step Verifier:** Stateless auditor inspecting an individual Proof-DAG node together with its `depends_on` ancestors and deterministic `tex_audit` XML.
+- **Full Solution Verifier:** Stateless end-of-round auditor invoked automatically in **Verified** and **Deep** modes (up to 3 rounds). It starts with a clean context (no Solver chain-of-thought) to catch missing assumptions, sign errors, or broken references and produce concrete counterexamples.
+- **Research Strategist:** Advisory recovery planner invoked automatically in **Deep** mode when the Verifier rejects a draft, suggesting structural repairs before the Solver revises.
+- **Proof Narrator:** Synthesizes an exposition/derivation sheet from accepted Proof-DAG steps (`Proof DAG -> Narrate Proof`).
+- **Side-Talk Assistant:** Answers questions about notation, conventions, or specific `e-N` steps inside Canvas -> **Side-Talk** on a separate ledger thread without mutating the main Proof DAG.
+- **Subagent Builder & Custom User Subagents:** Inside **Settings -> Subagents**, you can describe a specialist workflow in plain English and invoke the built-in **Subagent Builder Agent** (`POST /api/subagents/draft`) to draft a specialist system prompt, tool focus (`full_research`, `compute`, or `read_only`), default rigor, and reasoning effort. Saved custom subagents are stored locally in `<data_dir>/subagents.json` and always execute inside the exact same `v0.4-research` policy, sandbox, and human approval boundaries.
+
+### 2. Why Tool & Computation Approvals Appear ("Agents Propose, Humans Decide")
+- **Policy Clamps:** `crates/policy` hard-clamps `ExecuteCode` (`sympy_eval`), `WriteWorkspace` (`fs_write`, `latex_patch`, `latex_compile`), and `NetworkRead` (`arxiv_search`, `literature_search`) so they can never default to silent auto-execution.
+- **Defense in Depth:** Even though `sympy_eval` runs inside an isolated Windows 11 AppContainer with zero network and zero access to your personal files or credentials, requiring explicit consent at the start of a chat prevents prompt injections (for example inside an external paper or TeX file) from silently burning compute or altering workspace files.
+- **Zero-Friction Session Continuity (`Approve for Session`):** On the first sandboxed `sympy_eval`, literature lookup, or workspace write in a chat, clicking **Approve for Session** records an in-memory session grant (`DELETE /api/sessions/{id}/grants` via the topbar `Session allowed: ... ×` pill revokes it anytime) so subsequent calls in that chat run uninterrupted.
+
+### 3. Model Selection, Reasoning Effort & Automatic Model Discovery
+- **Reasoning Effort Mini-Window:** Picking a model automatically opens a compact secondary popover (re-openable anytime via `Effort: ...`) to choose `Default`, `Low`, `Medium`, `High`, `Extra High`, or `Max`. The core translates this cleanly per provider (`output_config.effort` on Anthropic Messages, `reasoning_effort` on OpenAI Chat Completions, `reasoning.effort` on ChatGPT Responses, `thinkingConfig.thinkingLevel` on Gemini, and `--effort` on `claude`/`agy` CLIs), omitting the field whenever `Default` is selected.
+- **Automatic Live Model Discovery:** `GET /api/models` caches provider lists for 10 minutes (`?refresh=1` forces a refresh). The UI automatically checks on expiry / window focus and marks newly released provider models with `✦ New`.
+
+### 4. Direct Academic Source Links & In-App Source Reader
+- Literature search results, tool trace citations, and ingested session sources display direct clickable links (`Open Paper ↗`, `PDF ↗`, `DOI ↗`) strictly validated against an HTTPS academic allowlist (`arxiv.org`, `doi.org`, `inspirehep.net`, `semanticscholar.org`, `crossref.org`) so external links open safely in your OS handler without ever letting the WebView2 window navigate off `127.0.0.1`.
+- Ingested archives and manuscripts in Canvas -> **Sources** also provide a **Read Source** viewer modal (`GET /api/sessions/{id}/workspace/file?root=sources&path=...`) with Rendered KaTeX and Raw text views.
+
+### 5. App Architecture: Desktop Lifecycle & Cryptography
+- **Tamper-Evident Ledger & Tombstone Deletion:** Every prompt, model response, tool call, approval decision, and Proof-DAG node is SHA-256 hash-chained (`re-search.event.v1`). Deleting a chat hides it via a local `meta.json` tombstone while keeping local workspace files untouched and preserving append-only ledger integrity.
+- **Counterfactual Forking & Export:** `re-search fork` and Proof DAG branching clone history up to sequence `N` with a modified assumption; `export` packages `.tex`, `.html`, or reproducible `.zip` bundles.
 
 ## Layout
 
@@ -47,7 +103,7 @@ cargo test -p cli --test contained_router -- --nocapture
 
 The local CSRF-protected desktop server offers offline KaTeX rendering, live token and reasoning streaming with a universal **Stop** button across all routes, an autonomous **Solver -> Independent Verifier -> Strategist -> Revise** loop when **Verifier** is toggled on, a native Windows folder picker attaching workspaces to the active session in-place (`PUT /api/sessions/{id}/workspace`), session-scoped opt-in approvals (*Approve for Session* vs *Approve Once*) for literature lookups, a live SSE proof-DAG inspector, LaTeX canvas, literature/sources drawer, counterfactual fork/diff, and isolated Side-Talk. There are two ways to show it:
 
-- **Its own window (Windows 11, WebView2 runtime).** `re-search-app.exe` starts the server and opens a window titled *re:Search*; closing the window stops the server. It needs no console and no browser (Microsoft Edge itself need not be installed, only the WebView2 Evergreen runtime). Only one instance runs per logon session; a second launch exits quietly. `re-search desktop` starts `re-search-app.exe` from its own directory when it is there and only `--data-dir`/`--workspace`/`--python`/`--worker-script`/`--port`/`--core-exe`/`--claude`/`--agy` were given; otherwise it behaves like `re-search ui`.
+- **Its own window (Windows 11, WebView2 runtime).** `re-search-app.exe` starts the server and opens a window titled *reSearch*; closing the window stops the server. It needs no console and no browser (Microsoft Edge itself need not be installed, only the WebView2 Evergreen runtime). Only one instance runs per logon session; a second launch exits quietly. `re-search desktop` starts `re-search-app.exe` from its own directory when it is there and only `--data-dir`/`--workspace`/`--python`/`--worker-script`/`--port`/`--core-exe`/`--claude`/`--agy` were given; otherwise it behaves like `re-search ui`.
 - **The default browser.** `re-search ui` opens `http://127.0.0.1:<port>/?launch=…` in the default browser using a single-use, 60-second launch nonce (never the real API token); the first page load redeems it for the token in `<meta>` and sets the stream cookie, and any replay returns `403`.
 
 ```bash
@@ -65,7 +121,7 @@ Useful headless/automation flags: `--port PORT`, `--no-open true`, `--print-url-
 
 ### Connecting a model and picking one
 
-Open **Connect** (bottom of the left rail). It lists every way re:Search can reach a model, each with a green *Connected* badge or one thing to do:
+Open **Settings & Guide -> Providers** (bottom of the left rail; shortcut name on Windows: `reSearch`). It lists every way reSearch can reach a model, each with a green *Connected* badge or one thing to do:
 
 | Provider | How to connect | What re:Search checks |
 | --- | --- | --- |

@@ -152,7 +152,17 @@ fn serialize_gemini_request(expected_model: &str, req: &ModelRequest) -> Result<
             json!([{ "functionDeclarations": req.tools.iter().map(encode_tool).collect::<Vec<_>>() }]),
         );
     }
-    obj.insert("generationConfig".into(), json!({ "maxOutputTokens": req.max_tokens }));
+    let mut gen_cfg = serde_json::Map::new();
+    gen_cfg.insert("maxOutputTokens".into(), json!(req.max_tokens));
+    if let Some(effort) = crate::transport::normalize_reasoning_effort(req.reasoning_effort.as_deref()) {
+        let level = match effort.as_str() {
+            "low" => "LOW",
+            "medium" => "MEDIUM",
+            _ => "HIGH",
+        };
+        gen_cfg.insert("thinkingConfig".into(), json!({ "thinkingLevel": level }));
+    }
+    obj.insert("generationConfig".into(), Value::Object(gen_cfg));
 
     serde_json::to_vec(&Value::Object(obj))
         .map_err(|e| config_err(format!("failed to serialize Gemini request: {e}")))

@@ -330,6 +330,12 @@ impl VendorCli for ClaudeCode {
         claude_args(model, &tool_config.to_string_lossy())
     }
 
+    fn args_with_effort(&self, model: &str, tool_config: &Path, effort: Option<&str>) -> Vec<String> {
+        let mut out = self.args(model, tool_config);
+        crate::vendor::push_effort_flag(&mut out, effort);
+        out
+    }
+
     fn prepare(&self, cmd: &mut Command) {
         // Not a nested session of whatever Claude Code may have started re:Search.
         cmd.env_remove("CLAUDECODE").env_remove("CLAUDE_CODE_ENTRYPOINT");
@@ -505,5 +511,23 @@ mod tests {
         assert!(ClaudeCode.check_handshake(&two, &expected).is_err());
         assert!(ClaudeCode.is_model_activity(&json!({ "type": "assistant" })));
         assert!(!ClaudeCode.is_model_activity(&json!({ "type": "system", "subtype": "hook" })));
+    }
+
+    #[test]
+    fn effort_flag_is_appended_when_set_and_matches_captured_help() {
+        let none = ClaudeCode.args_with_effort("sonnet", Path::new("C:/d/mcp.json"), None);
+        assert!(!none.iter().any(|a| a == "--effort"), "{none:?}");
+
+        let def = ClaudeCode.args_with_effort("sonnet", Path::new("C:/d/mcp.json"), Some("default"));
+        assert!(!def.iter().any(|a| a == "--effort"), "{def:?}");
+
+        let high = ClaudeCode.args_with_effort("sonnet", Path::new("C:/d/mcp.json"), Some("high"));
+        let pos = high.iter().position(|a| a == "--effort").unwrap();
+        assert_eq!(high[pos + 1], "high");
+
+        let help = help_options();
+        let (takes_value, desc) = help.get("--effort").expect("--effort documented in captured claude --help");
+        assert!(*takes_value);
+        assert!(desc.contains("high") && desc.contains("max"), "{desc}");
     }
 }

@@ -29,6 +29,7 @@ pub struct AgentConfig {
     pub max_tokens: u32,
     pub containment: String,
     pub contained: bool,
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +104,7 @@ pub(crate) struct LoopParams<'a> {
     pub(crate) system_prompt: &'a str,
     pub(crate) max_turns: u32,
     pub(crate) max_tokens: u32,
+    pub(crate) reasoning_effort: Option<&'a str>,
     pub(crate) start_turn: u32,
     pub(crate) initial_messages: Vec<Message>,
     pub(crate) mask_keep_recent: Option<(usize, usize)>,
@@ -203,6 +205,7 @@ pub fn run_agent_loop(
             system_prompt: &cfg.system_prompt,
             max_turns: cfg.max_turns,
             max_tokens: cfg.max_tokens,
+            reasoning_effort: cfg.reasoning_effort.as_deref(),
             start_turn: 1,
             initial_messages,
             mask_keep_recent: None,
@@ -259,6 +262,7 @@ pub(crate) fn run_turn_leg(
             messages: outgoing_messages,
             tools: tool_specs.clone(),
             max_tokens: params.max_tokens,
+            reasoning_effort: params.reasoning_effort.map(str::to_string),
         };
         let prepared = match transport.prepare_request(&req) {
             Ok(p) => p,

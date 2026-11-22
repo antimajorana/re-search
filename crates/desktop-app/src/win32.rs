@@ -5,6 +5,10 @@ use windows::core::{w, HSTRING};
 use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
+#[cfg(not(test))]
+use windows::Win32::UI::Shell::ShellExecuteW;
+#[cfg(not(test))]
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK, MB_SETFOREGROUND};
 
 /// Groups the window and taskbar button under one identity. Must run before any window exists.
@@ -38,6 +42,21 @@ pub fn error_box(text: &str) {
     let text = HSTRING::from(text);
     // SAFETY: valid wide strings that outlive the call; no owner window.
     unsafe {
-        MessageBoxW(None, &text, w!("re:Search"), MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+        MessageBoxW(None, &text, w!("reSearch"), MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+    }
+}
+
+/// Opens a vetted external academic source URL in the user's OS handler when clicked
+/// from inside the WebView2 UI (no-op under `cfg(test)`).
+pub fn open_external_source_url(url: &str) {
+    if crate::rules::is_allowed_external_source_url(url) {
+        #[cfg(not(test))]
+        {
+            let target = HSTRING::from(url);
+            // SAFETY: valid NUL-terminated wide strings; URL is verified HTTPS allowlisted.
+            unsafe {
+                let _ = ShellExecuteW(None, w!("open"), &target, None, None, SW_SHOWNORMAL);
+            }
+        }
     }
 }

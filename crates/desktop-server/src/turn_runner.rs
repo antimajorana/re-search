@@ -131,6 +131,8 @@ fn run_session_turn(
     }
     let meta = state.load_meta(session_id);
     let ui = state.load_ui_settings();
+    let (reasoning_effort, subagent) =
+        crate::subagents::resolve_turn_options(state, session_id, req, meta.clone());
     let provider_str = req
         .get("provider")
         .and_then(Value::as_str)
@@ -216,15 +218,20 @@ fn run_session_turn(
     let mut sink = SseEventSink::new(Arc::clone(&state.sse), session_id);
 
     let outcome = if existing.is_empty() {
+        let system_prompt = match &subagent {
+            Some(sa) => crate::subagents::apply_subagent_to_system_prompt(RESEARCH_SYSTEM_PROMPT, sa),
+            None => RESEARCH_SYSTEM_PROMPT.to_string(),
+        };
         let cfg = AgentConfig {
             prompt: prompt.to_string(),
             model_requested,
             model,
-            system_prompt: RESEARCH_SYSTEM_PROMPT.to_string(),
+            system_prompt,
             max_turns,
             max_tokens,
             containment,
             contained,
+            reasoning_effort,
         };
         run_autonomous_research_loop(
             &*transport,
@@ -247,8 +254,12 @@ fn run_session_turn(
             &expected_defs,
         )
         .map_err(|e| e.to_string())?;
+        let eff_prompt = match &subagent {
+            Some(sa) => crate::subagents::apply_subagent_to_turn_prompt(sa, prompt),
+            None => prompt.to_string(),
+        };
         let cfg = ResumeConfig {
-            prompt: prompt.to_string(),
+            prompt: eff_prompt,
             model_requested,
             model,
             system_prompt: None,
@@ -256,6 +267,7 @@ fn run_session_turn(
             max_tokens,
             containment,
             contained,
+            reasoning_effort,
         };
         resume_autonomous_research_loop(
             &*transport,

@@ -325,6 +325,18 @@ fn dispatch_api(
         ("GET", ["api", "models"]) => {
             write_api_res(&mut stream, crate::model_catalog::handle_models(state, &req.query));
         }
+        ("GET", ["api", "subagents"]) => {
+            write_api_res(&mut stream, crate::routes_subagents::handle_list_subagents(state));
+        }
+        ("POST", ["api", "subagents"]) => {
+            write_api_res(&mut stream, crate::routes_subagents::handle_create_subagent(state, &req.body));
+        }
+        ("POST", ["api", "subagents", "draft"]) => {
+            write_api_res(&mut stream, crate::routes_subagents::handle_draft_subagent(state, &req.body));
+        }
+        ("DELETE", ["api", "subagents", id]) => {
+            write_api_res(&mut stream, crate::routes_subagents::handle_delete_subagent(state, id));
+        }
         _ => write_json(
             &mut stream,
             404,

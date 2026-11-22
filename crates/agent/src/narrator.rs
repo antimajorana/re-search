@@ -115,6 +115,7 @@ pub fn narrate_session(
         }],
         tools: Vec::new(),
         max_tokens: NARRATOR_MAX_TOKENS,
+        reasoning_effort: None,
     };
     let prepared = transport.prepare_request(&req).map_err(|e| e.to_string())?;
     let req_blob = ledger

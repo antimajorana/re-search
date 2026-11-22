@@ -421,6 +421,12 @@ impl VendorCli for Antigravity {
         agy_args(model)
     }
 
+    fn args_with_effort(&self, model: &str, _tool_config: &Path, effort: Option<&str>) -> Vec<String> {
+        let mut out = agy_args(model);
+        crate::vendor::push_effort_flag(&mut out, effort);
+        out
+    }
+
     fn stdin_payload(&self, prompt: &str) -> Vec<u8> {
         user_event(prompt)
     }

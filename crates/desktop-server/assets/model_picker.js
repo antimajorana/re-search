@@ -8,6 +8,7 @@
 import * as api from '/assets/api.js';
 
 const CONNECT_VALUE = '__connect__';
+const REFRESH_VALUE = '__refresh__';
 const PLACEHOLDER_VALUE = '__none__';
 const CLI_ROUTE_ID = 'claude-cli';
 const AGY_ROUTE_ID = 'antigravity';
@@ -15,6 +16,7 @@ const AGY_ROUTE_ID = 'antigravity';
 const LEDGER_ROUTES = { 'claude-code-cli': CLI_ROUTE_ID, antigravity: AGY_ROUTE_ID };
 const GLOBAL_KEY = 're-search-model-choice';
 const SESSION_KEY = 're-search-model-by-session';
+const KNOWN_MODELS_KEY = 're-search-known-models';
 const MAX_REMEMBERED_SESSIONS = 200;
 
 let selectEl = null;
@@ -28,6 +30,8 @@ let sessionId = null;
 let sessionRouteNote = '';
 let loading = null;
 let connectBtn = null;
+let newModelKeys = new Set();
+let pollTimer = null;
 // Route the active session is bound to: CLI_ROUTE_ID, AGY_ROUTE_ID, 'api', or null.
 let routeLock = null;
 
@@ -98,11 +102,29 @@ export function initModelPicker(opts = {}) {
   };
   selectEl.addEventListener('focus', maybeReload);
   selectEl.addEventListener('mousedown', maybeReload);
+  window.addEventListener('focus', () => {
+    if (Date.now() - loadedAt > ttlMs) loadModels(true);
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && Date.now() - loadedAt > ttlMs) loadModels(true);
+  });
+  if (!pollTimer) {
+    pollTimer = setInterval(() => {
+      if (!document.hidden && loadedAt > 0 && Date.now() - loadedAt >= ttlMs) {
+        loadModels(true);
+      }
+    }, 60_000);
+  }
   selectEl.addEventListener('change', () => {
     const value = selectEl.value;
     if (value === CONNECT_VALUE) {
       render();
       openConnect();
+      return;
+    }
+    if (value === REFRESH_VALUE) {
+      render();
+      loadModels(true).then(() => notify('Model lists refreshed from connected providers.'));
       return;
     }
     const [gi, mi] = value.split(':').map((n) => Number.parseInt(n, 10));
@@ -115,8 +137,37 @@ export function initModelPicker(opts = {}) {
     choice = { provider: g.id, model: m.id };
     writeStore(GLOBAL_KEY, choice);
     updateNote();
+    if (typeof callbacks.onModelSelected === 'function') {
+      callbacks.onModelSelected({ ...choice, label: m.label || m.id });
+    }
   });
   render();
+}
+
+function detectNewlyDiscoveredModels(fetchedGroups) {
+  const known = readStore(KNOWN_MODELS_KEY, {});
+  const nextKnown = { ...known };
+  const announcements = [];
+  for (const g of fetchedGroups || []) {
+    const models = Array.isArray(g.models) ? g.models : [];
+    if (!g.id || models.length === 0) continue;
+    const prevList = Array.isArray(known[g.id]) ? known[g.id] : null;
+    const ids = models.map((m) => String(m.id || '')).filter(Boolean);
+    if (prevList) {
+      const prevSet = new Set(prevList);
+      const added = ids.filter((id) => !prevSet.has(id));
+      for (const id of added) newModelKeys.add(`${g.id}::${id}`);
+      if (added.length > 0 && !g.stale) {
+        const preview = added.slice(0, 2).join(', ') + (added.length > 2 ? ` (+${added.length - 2} more)` : '');
+        announcements.push(`${g.label || g.id}: ${preview}`);
+      }
+    }
+    nextKnown[g.id] = Array.from(new Set([...(prevList || []), ...ids])).slice(-200);
+  }
+  writeStore(KNOWN_MODELS_KEY, nextKnown);
+  if (announcements.length > 0) {
+    notify(`New models available — ${announcements.join('; ')}`);
+  }
 }
 
 // Load (or reload) the list; `refresh` asks the server to bypass its cache.
@@ -129,6 +180,7 @@ export function loadModels(refresh = false) {
       groups = Array.isArray(data && data.providers) ? data.providers : [];
       if (data && Number.isFinite(data.cache_ttl_s) && data.cache_ttl_s > 0) ttlMs = data.cache_ttl_s * 1000;
       loadedAt = Date.now();
+      detectNewlyDiscoveredModels(groups);
       // Say so once (at start or on an explicit refresh), not on every background reload.
       for (const g of groups.filter((x) => x.error && (first || refresh))) {
         const shown = g.source === 'fallback' ? 'a built-in list' : 'the last list';
@@ -249,7 +301,9 @@ function render() {
     og.label = !usable ? `${name} (not available in this session)` : g.stale ? `${name} (saved list)` : name;
     og.disabled = !usable;
     models.forEach((m, mi) => {
-      const opt = new Option(String(m.label || m.id), `${gi}:${mi}`);
+      const isNew = newModelKeys.has(`${g.id}::${m.id}`);
+      const label = `${String(m.label || m.id)}${isNew ? ' ✦ New' : ''}`;
+      const opt = new Option(label, `${gi}:${mi}`);
       opt.title = String(m.id);
       if (current && current.group === g && current.model === m) opt.selected = true;
       og.append(opt);
@@ -258,6 +312,7 @@ function render() {
   });
   const more = document.createElement('optgroup');
   more.label = 'More';
+  if (hasModels) more.append(new Option('Refresh model lists...', REFRESH_VALUE));
   more.append(new Option(hasModels ? 'Connect another provider...' : 'Open Connect...', CONNECT_VALUE));
   selectEl.append(more);
   if (!current) selectEl.value = PLACEHOLDER_VALUE;

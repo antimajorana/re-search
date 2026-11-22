@@ -9,8 +9,8 @@ fn main() {
     }
     let mut res = winresource::WindowsResource::new();
     res.set_icon("assets/re-search.ico")
-        .set("FileDescription", "re:Search")
-        .set("ProductName", "re:Search")
+        .set("FileDescription", "reSearch")
+        .set("ProductName", "reSearch")
         .set("InternalName", "re-search-app");
     if let Err(e) = res.compile() {
         println!("cargo:warning=re-search-app: executable icon not embedded ({e})");

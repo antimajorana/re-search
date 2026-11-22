@@ -79,6 +79,7 @@ fn resume_cfg(prompt: &str, model: &str, max_turns: u32, contained: bool) -> Res
         max_tokens: DEFAULT_MAX_TOKENS,
         containment: if contained { "appcontainer".into() } else { "none".into() },
         contained,
+        reasoning_effort: None,
     }
 }
 

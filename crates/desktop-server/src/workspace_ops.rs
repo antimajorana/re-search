@@ -82,7 +82,7 @@ fn win_pick_folder_sta() -> Result<Option<String>, String> {
         dialog
             .SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR | FOS_PATHMUSTEXIST)
             .map_err(|e| format!("SetOptions failed: {e}"))?;
-        let _ = dialog.SetTitle(&HSTRING::from("Attach Workspace Folder - re:Search"));
+        let _ = dialog.SetTitle(&HSTRING::from("Attach Workspace Folder - reSearch"));
 
         if let Err(err) = dialog.Show(None) {
             if err.code() == ERROR_CANCELLED.to_hresult() {

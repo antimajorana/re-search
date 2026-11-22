@@ -422,6 +422,7 @@ pub fn run_research_loop(
             system_prompt: &system_prompt,
             max_turns: cfg.max_turns,
             max_tokens: cfg.max_tokens,
+            reasoning_effort: cfg.reasoning_effort.as_deref(),
             start_turn: 1,
             initial_messages,
             mask_keep_recent: Some((guardrails.step_mask_keep, guardrails.step_mask_stride)),

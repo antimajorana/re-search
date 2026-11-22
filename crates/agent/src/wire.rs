@@ -42,6 +42,10 @@ pub(crate) fn serialize_request(req: &ModelRequest) -> Result<Vec<u8>, Transport
         "messages".into(),
         Value::Array(req.messages.iter().map(encode_message).collect()),
     );
+    if let Some(effort) = crate::transport::normalize_reasoning_effort(req.reasoning_effort.as_deref()) {
+        let mapped = if effort == "xhigh" { "max" } else { effort.as_str() };
+        obj.insert("output_config".into(), json!({ "effort": mapped }));
+    }
     serde_json::to_vec(&Value::Object(obj))
         .map_err(|e| config_err(format!("failed to serialize request: {e}")))
 }

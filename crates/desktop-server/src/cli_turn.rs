@@ -356,6 +356,8 @@ pub(crate) fn run_cli_turn(
     let core_exe = resolve_core_exe(&state.cfg)?;
     let meta = state.load_meta(session_id);
     let model = pick_model(req, meta.as_ref(), kind)?;
+    let (reasoning_effort, subagent) =
+        crate::subagents::resolve_turn_options(state, session_id, req, meta);
     let research = Arc::new(state.research_env_for_session(session_id)?);
 
     let ledger = state.open_ledger()?;
@@ -366,7 +368,11 @@ pub(crate) fn run_cli_turn(
     if !existing.is_empty() {
         ledger.verify_session(session_id).map_err(|e| format!("cannot continue session `{session_id}`: {e}"))?;
     }
-    let replay = build_prompt(&prior_turns(&existing), message, DEFAULT_HISTORY_BUDGET);
+    let eff_msg = match &subagent {
+        Some(sa) => crate::subagents::apply_subagent_to_turn_prompt(sa, message),
+        None => message.to_string(),
+    };
+    let replay = build_prompt(&prior_turns(&existing), &eff_msg, DEFAULT_HISTORY_BUDGET);
 
     validate_session_id(session_id).map_err(|e| e.to_string())?;
     let sdir = state.session_dir(session_id)?;
@@ -429,6 +435,7 @@ pub(crate) fn run_cli_turn(
         tool_config: &tool_config,
         core: &core,
         model: &model,
+        reasoning_effort: reasoning_effort.as_deref(),
         prompt: &replay.prompt,
         tool_defs: &tools.defs,
         policy_version: &tools.policy_version,

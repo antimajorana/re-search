@@ -412,8 +412,8 @@ export async function refreshConnectionBadge(refresh = false) {
   const btn = document.getElementById('settings-btn');
   if (btn) {
     btn.innerHTML = connectedCount > 0
-      ? `<span class="conn-dot ok" aria-hidden="true"></span><span>Connect (${connectedCount})</span>`
-      : `<span class="conn-dot warn" aria-hidden="true"></span><span>Connect model</span>`;
+      ? `<span class="conn-dot ok" aria-hidden="true"></span><span>Settings (${connectedCount})</span>`
+      : `<span class="conn-dot warn" aria-hidden="true"></span><span>Settings &amp; Connect</span>`;
   }
   if (typeof callbacks.onConnectionsUpdated === 'function') {
     callbacks.onConnectionsUpdated(connectedCount);

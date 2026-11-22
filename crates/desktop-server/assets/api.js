@@ -135,6 +135,13 @@ export function getWorkspace(id, relPath) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/workspace${qs}`);
 }
 
+export function readSourceFile(id, relPath) {
+  return rawJson(
+    'GET',
+    `/api/sessions/${encodeURIComponent(id)}/workspace/file?root=sources&path=${encodeURIComponent(relPath)}`
+  );
+}
+
 export function patchLatex(id, payload) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/latex/patch`, payload);
 }
@@ -202,6 +209,22 @@ export function connectionAction(id, action, method = 'POST') {
 // Models the user can pick now, grouped by connected provider (server-cached 10 minutes).
 export function getModels(refresh = false) {
   return rawJson('GET', `/api/models${refresh ? '?refresh=1' : ''}`);
+}
+
+export function listSubagents() {
+  return rawJson('GET', '/api/subagents');
+}
+
+export function createSubagent(payload) {
+  return rawJson('POST', '/api/subagents', payload);
+}
+
+export function deleteSubagent(id) {
+  return rawJson('DELETE', `/api/subagents/${encodeURIComponent(id)}`);
+}
+
+export function draftSubagent(payload) {
+  return rawJson('POST', '/api/subagents/draft', payload);
 }
 
 export function exportUrl(id, format) {

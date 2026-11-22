@@ -12,12 +12,17 @@ import {
   applySession, getModelChoice, initModelPicker, loadModels, noModelReason, rememberForSession,
 } from '/assets/model_picker.js';
 import { initConnect, openConnect } from '/assets/connect.js';
+import {
+  applySessionEffort, initEffortPicker, openEffortWindow, rememberEffortForSession, setReasoningEffort,
+} from '/assets/effort_picker.js';
+import { renderGuide } from '/assets/guide.js';
+import { initSubagents, loadSubagents } from '/assets/subagents.js';
 import { initLatexCanvas, refreshWorkspaceFiles } from '/assets/canvas_latex.js';
 import { initDagCanvas, refreshDag, selectNodeById } from '/assets/canvas_dag.js';
 import { initSourcesAndSidetalk, loadSessionSources, refreshSourcesAndSidetalk } from '/assets/canvas_sources.js';
 import {
   applySessionTelemetry, finishLivePipeline, getWorkbenchSnapshot, initWorkbench,
-  refreshConnectionBadge, refreshConventionsState, startLivePipeline,
+  refreshConnectionBadge, refreshConventionsState, setRigorPreset, startLivePipeline,
   updateCanvasTabCounts, updatePipelineFromEvent,
 } from '/assets/workbench.js';
 import {
@@ -61,12 +66,33 @@ async function boot() {
 
   initConnect({
     onNotify: showToast,
+    onRefreshModels: () => loadModels(true),
+    onTabOpened: (tab) => {
+      if (tab === 'subagents') loadSubagents();
+      else if (tab === 'guide') renderGuide();
+    },
     onChanged: async () => {
       await Promise.all([loadModels(true), refreshConnectionBadge(false), refreshConventionsState()]);
       refreshEmptyHeroIfVisible();
     },
   });
-  initModelPicker({ onNotify: showToast, onOpenConnect: openConnect });
+  initEffortPicker({ getModelChoice });
+  initSubagents({
+    onNotify: showToast,
+    getModelChoice,
+    onOpenSubagentsTab: () => openConnect('subagents'),
+    onActivated: (sa) => {
+      if (sa.rigor) setRigorPreset(sa.rigor);
+      if (sa.reasoning_effort) setReasoningEffort(sa.reasoning_effort);
+      showToast(`Active subagent: ${sa.name}`);
+    },
+  });
+  renderGuide();
+  initModelPicker({
+    onNotify: showToast,
+    onOpenConnect: () => openConnect('providers'),
+    onModelSelected: (c) => openEffortWindow(c),
+  });
 
   initStream({
     onPromptPick: (prompt) => setComposerPrompt(prompt, true),
@@ -132,7 +158,7 @@ async function boot() {
   }
 
   initWorkbench({ onNotify: showToast, onConnectionsUpdated: () => refreshEmptyHeroIfVisible() });
-  await Promise.all([checkHealth(), loadModels(false), refreshSessionList()]);
+  await Promise.all([checkHealth(), loadModels(false), refreshSessionList(), loadSubagents()]);
 
   const firstActive = state.sessions.find((s) => !s.archived);
   if (firstActive) await selectSession(firstActive.id);
@@ -387,6 +413,7 @@ async function selectSession(id) {
     renderSessionGrantsPill(el.grantsPill, sess.session_grants || []);
     renderSessionStream(id, sess);
     applySession(id, sess);
+    applySessionEffort(id, sess);
     applySessionTelemetry(sess.stats, Array.isArray(sess.messages) && sess.messages.length > 0);
     const isRunning = Boolean(sess.running);
     const hasPending = sess.pending_approvals && sess.pending_approvals.length > 0;
@@ -510,6 +537,7 @@ async function handleSendPrompt(sessionId, prompt, opts) {
   startLivePipeline(opts);
   await api.sendMessage(sessionId, { prompt, ...opts });
   rememberForSession(sessionId, { provider: opts.provider, model: opts.model });
+  rememberEffortForSession(sessionId, opts.reasoning_effort);
   refreshSessionList();
 }
 

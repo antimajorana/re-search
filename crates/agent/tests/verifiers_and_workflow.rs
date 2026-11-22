@@ -139,6 +139,7 @@ fn runner_and_resume_use_router_policy_version() {
         max_tokens: DEFAULT_MAX_TOKENS,
         containment: "none".into(),
         contained: false,
+        reasoning_effort: None,
     };
     let mut sink2 = support::RecordingSink::new();
     let out2 = resume_agent_loop(&t2, &router, &ledger, &rcfg, &mut sink2).unwrap();

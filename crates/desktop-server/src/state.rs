@@ -34,6 +34,8 @@ pub struct SessionMeta {
     pub model_preset: Option<String>,
     pub default_provider: Option<String>,
     pub default_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
     pub created_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork_info: Option<ForkInfo>,

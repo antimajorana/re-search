@@ -169,6 +169,7 @@ fn streamed_turn_with_one_tool_call_then_resume() {
         max_tokens: DEFAULT_MAX_TOKENS,
         containment: "appcontainer".into(),
         contained: true,
+        reasoning_effort: None,
     };
     let out = resume_agent_loop(&t, &router, &ledger, &rcfg, &mut sink).unwrap();
     assert!(matches!(out, SessionOutcome::Completed { .. }), "{out:?}");
@@ -288,6 +289,7 @@ fn tool_encoding_sets_strict_false_and_normalizes_array_items() {
         messages: vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: "hi".into() }] }],
         tools: vec![ToolSpec { name: "tex_audit".into(), description: "audit".into(), input_schema: original_schema.clone() }],
         max_tokens: DEFAULT_MAX_TOKENS,
+        reasoning_effort: None,
     };
     let wire: Value = serde_json::from_slice(&serialize_responses_request(&req).unwrap()).unwrap();
     let fns = wire["tools"][0]["tools"].as_array().unwrap();
@@ -363,6 +365,7 @@ fn token_scrubbing_in_sse_and_strict_http_error_sanitization() {
         messages: vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: "hi".into() }] }],
         tools: vec![],
         max_tokens: DEFAULT_MAX_TOKENS,
+        reasoning_effort: None,
     }).unwrap();
 
     let e400 = t.send_prepared(&prep).unwrap_err();
@@ -410,6 +413,7 @@ fn reactive_401_refresh_retries_once_and_skips_not_eligible() {
         messages: vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: "hi".into() }] }],
         tools: vec![],
         max_tokens: DEFAULT_MAX_TOKENS,
+        reasoning_effort: None,
     }).unwrap();
     let resp = t.send_prepared(&prep).unwrap();
     assert_eq!(resp.id.as_deref(), Some("r_ok"));

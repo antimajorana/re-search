@@ -110,6 +110,7 @@ fn minimal_request(model: &str) -> ModelRequest {
         messages: vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: "hi".into() }] }],
         tools: vec![],
         max_tokens: 64,
+        reasoning_effort: None,
     }
 }
 
@@ -287,6 +288,7 @@ fn openai_wire_serialization_tool_roundtrip_and_resumed_trailing_user_order() {
             }),
         }],
         max_tokens: 512,
+        reasoning_effort: None,
     };
 
     let prepared = transport.prepare_request(&req).unwrap();
@@ -326,6 +328,7 @@ fn openai_wire_serialization_tool_roundtrip_and_resumed_trailing_user_order() {
         }],
         tools: vec![],
         max_tokens: 32,
+        reasoning_effort: None,
     };
     let no_text_json: Value = serde_json::from_slice(&transport.prepare_request(&no_text_req).unwrap().body).unwrap();
     assert_eq!(no_text_json["messages"][0]["content"], Value::Null);

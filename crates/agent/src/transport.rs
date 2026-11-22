@@ -195,6 +195,16 @@ pub struct ToolSpec {
     pub input_schema: Value,
 }
 
+/// Canonicalize an optional reasoning effort level (`low` | `medium` | `high` | `xhigh` | `max`).
+/// Empty, `"default"`, or unknown values return `None` so wire transports omit the parameter.
+pub fn normalize_reasoning_effort(raw: Option<&str>) -> Option<String> {
+    let trimmed = raw?.trim().to_ascii_lowercase();
+    match trimmed.as_str() {
+        "low" | "medium" | "high" | "xhigh" | "max" => Some(trimmed),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelRequest {
     pub model: String,
@@ -202,6 +212,8 @@ pub struct ModelRequest {
     pub messages: Vec<Message>,
     pub tools: Vec<ToolSpec>,
     pub max_tokens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

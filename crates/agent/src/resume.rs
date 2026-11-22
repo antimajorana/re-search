@@ -57,6 +57,7 @@ pub struct ResumeConfig {
     pub max_tokens: u32,
     pub containment: String,
     pub contained: bool,
+    pub reasoning_effort: Option<String>,
 }
 
 struct TaggedMessage {
@@ -474,6 +475,7 @@ pub fn resume_agent_loop(
             system_prompt: &system_prompt,
             max_turns: cfg.max_turns,
             max_tokens: cfg.max_tokens,
+            reasoning_effort: cfg.reasoning_effort.as_deref(),
             start_turn: inspection.start_turn,
             initial_messages: messages,
             mask_keep_recent: None,

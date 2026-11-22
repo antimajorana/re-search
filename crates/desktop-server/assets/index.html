@@ -4,13 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="re-search-csrf" content="">
-  <title>re:Search — Scientific Research Workstation</title>
+  <title>reSearch — Scientific Research Workstation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024'%3E%3Cdefs%3E%3CclipPath id='o'%3E%3Ccircle cx='600' cy='432' r='262'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect width='1024' height='1024' rx='227' fill='%2312142b'/%3E%3Ccircle cx='600' cy='432' r='262' fill='%23ff6b3d'/%3E%3Ccircle cx='431' cy='602' r='262' fill='%234d63ff'/%3E%3Ccircle cx='431' cy='602' r='262' fill='%23f0ecff' clip-path='url(%23o)'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/vendor/katex/katex.min.css">
   <link rel="stylesheet" href="/assets/tokens.css">
   <link rel="stylesheet" href="/assets/layout.css">
   <link rel="stylesheet" href="/assets/components.css">
   <link rel="stylesheet" href="/assets/workbench.css">
+  <link rel="stylesheet" href="/assets/modals.css">
 </head>
 <body>
   <div id="app-shell" data-rail-open="true" data-canvas-open="true">
@@ -19,7 +20,7 @@
       <div class="rail-header">
         <span class="brand-lockup">
           <span class="brand-dot" aria-hidden="true"></span>
-          <span>re:Search</span>
+          <span>reSearch</span>
         </span>
         <span id="health-badge" class="badge">Local</span>
       </div>
@@ -42,7 +43,7 @@
       </div>
       <nav id="session-list" aria-label="Session threads"></nav>
       <div class="rail-footer">
-        <button id="settings-btn" type="button" class="pill-btn sm" aria-haspopup="dialog" aria-controls="settings-dialog">Connect</button>
+        <button id="settings-btn" type="button" class="pill-btn sm" aria-haspopup="dialog" aria-controls="settings-dialog">Settings &amp; Guide</button>
         <button id="theme-toggle" type="button" class="icon-btn" title="Toggle light or dark theme" aria-label="Toggle theme">Theme</button>
       </div>
     </aside>
@@ -132,6 +133,18 @@
           </div>
         </div>
 
+        <!-- Secondary Smaller Window for Choosing Model Reasoning Effort -->
+        <div id="effort-popover" role="dialog" aria-label="Select reasoning effort" hidden>
+          <div class="effort-pop-head">
+            <div>
+              <div class="effort-pop-title">Reasoning Effort</div>
+              <div id="effort-model-label" class="effort-pop-model">Current model</div>
+            </div>
+            <button id="effort-close-btn" type="button" class="icon-btn" aria-label="Close effort window">✕</button>
+          </div>
+          <div id="effort-options-grid" class="effort-grid"></div>
+        </div>
+
         <form id="composer-pill" autocomplete="off">
           <div id="composer-files" class="upload-chips" hidden></div>
           <textarea id="composer-input" rows="1" placeholder="Ask a derivation, run SymPy, or audit arXiv TeX..."></textarea>
@@ -151,9 +164,11 @@
             </div>
             <div class="composer-right">
               <span id="composer-route-note" class="route-note" hidden></span>
+              <button id="composer-subagent-btn" type="button" class="chip-toggle" aria-pressed="false" title="Active agent (Solver or custom specialist subagent)">Agent: Solver</button>
               <select id="composer-model" class="compact-select model-picker" aria-label="Model for the next message" title="Model for the next message">
                 <option value="">Loading models...</option>
               </select>
+              <button id="composer-effort-btn" type="button" class="effort-trigger-btn" title="Choose reasoning effort for the selected model">Effort: Default</button>
               <button id="composer-connect" type="button" class="pill-btn sm" title="Connect a model provider" hidden>Connect</button>
               <button id="composer-stop" type="button" class="stop-pill-btn" title="Stop active turn immediately (Esc)" aria-label="Stop active turn" hidden>
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -306,38 +321,145 @@
     </aside>
   </div>
 
-  <!-- Connect panel: one row per provider (from /api/connections); advanced settings folded away -->
+  <!-- Settings modal: Providers, Custom Subagents + Builder Agent, In-App User Guide, and Advanced -->
   <div id="settings-dialog" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
-    <div class="modal-card">
+    <div class="modal-card modal-wide">
       <div class="modal-header">
-        <h2 id="settings-title">Connect a model</h2>
-        <button id="settings-close-btn" type="button" class="icon-btn" aria-label="Close Connect">✕</button>
+        <h2 id="settings-title">reSearch Settings &amp; Guide</h2>
+        <button id="settings-close-btn" type="button" class="icon-btn" aria-label="Close Settings">✕</button>
       </div>
-      <p class="connect-intro">Connect any provider below (API key, ChatGPT sign-in, Claude Code subscription, or local Ollama), then pick a model next to Send.</p>
-      <div id="connect-list" class="connect-list" aria-live="polite"></div>
-      <details id="connect-advanced" class="connect-advanced">
-        <summary>Advanced: Role Models, Custom Endpoints &amp; Conventions</summary>
-        <form id="settings-form" class="form-grid" autocomplete="off">
-          <div id="advanced-base-urls" class="form-grid"></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-            <div class="form-row">
-              <label for="set-role-verifier">Independent Verifier Model (optional)</label>
-              <input id="set-role-verifier" class="text-input" type="text" placeholder="Defaults to Solver model">
+      <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+        <button id="settings-tab-providers" type="button" class="settings-tab-btn is-active" data-settings-tab="providers" role="tab" aria-selected="true">Providers</button>
+        <button id="settings-tab-subagents" type="button" class="settings-tab-btn" data-settings-tab="subagents" role="tab" aria-selected="false">Subagents</button>
+        <button id="settings-tab-guide" type="button" class="settings-tab-btn" data-settings-tab="guide" role="tab" aria-selected="false">User Guide</button>
+        <button id="settings-tab-advanced" type="button" class="settings-tab-btn" data-settings-tab="advanced" role="tab" aria-selected="false">Advanced</button>
+      </div>
+
+      <div id="settings-panel-providers" class="settings-tab-panel is-active" data-settings-panel="providers" role="tabpanel">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <p class="connect-intro" style="margin:0;">Connect any provider below, then pick a model &amp; effort next to Send. New models are detected automatically.</p>
+          <button id="refresh-models-btn" type="button" class="pill-btn sm" title="Fetch latest model lists from connected providers">Refresh models</button>
+        </div>
+        <div id="connect-list" class="connect-list" aria-live="polite"></div>
+      </div>
+
+      <div id="settings-panel-subagents" class="settings-tab-panel" data-settings-panel="subagents" role="tabpanel">
+        <div class="subagent-builder-box">
+          <div class="subagent-section-head">
+            <h3>Create Custom Subagent with AI Agent</h3>
+            <span class="badge">Builder Agent</span>
+          </div>
+          <form id="subagent-draft-form" style="display:flex;gap:8px;flex-wrap:wrap;" autocomplete="off">
+            <input id="subagent-goal-input" class="text-input" type="text" placeholder="Describe your specialist (e.g. Lattice QFT loop integral checker using SymPy)..." style="flex:1;min-width:220px;">
+            <button id="subagent-draft-btn" type="submit" class="pill-btn sm primary">Generate with AI Agent</button>
+          </form>
+          <form id="subagent-save-form" class="form-grid" autocomplete="off">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+              <div class="form-row">
+                <label for="subagent-name-input">Subagent Name</label>
+                <input id="subagent-name-input" class="text-input" type="text" placeholder="e.g. Tensor Contraction Checker" maxlength="80">
+              </div>
+              <div class="form-row">
+                <label for="subagent-desc-input">Short Role Summary</label>
+                <input id="subagent-desc-input" class="text-input" type="text" placeholder="What this specialist checks or focuses on..." maxlength="300">
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+              <div class="form-row">
+                <label for="subagent-tools-select">Tool Focus</label>
+                <select id="subagent-tools-select" class="compact-select">
+                  <option value="full_research">Full Research</option>
+                  <option value="compute">SymPy &amp; Proof DAG</option>
+                  <option value="read_only">Read &amp; Audit Only</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label for="subagent-effort-select">Default Effort</label>
+                <select id="subagent-effort-select" class="compact-select">
+                  <option value="">Default</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="xhigh">Extra High</option>
+                  <option value="max">Max</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label for="subagent-rigor-select">Default Rigor</label>
+                <select id="subagent-rigor-select" class="compact-select">
+                  <option value="">Keep current</option>
+                  <option value="direct">Direct</option>
+                  <option value="verified">Verified</option>
+                  <option value="deep">Deep</option>
+                </select>
+              </div>
             </div>
             <div class="form-row">
-              <label for="set-role-strategist">Research Strategist Model (optional)</label>
-              <input id="set-role-strategist" class="text-input" type="text" placeholder="Defaults to Solver model">
+              <label for="subagent-prompt-input">Specialist Instructions</label>
+              <textarea id="subagent-prompt-input" class="text-input" rows="3" maxlength="6000" placeholder="System instructions for this subagent..."></textarea>
             </div>
+            <div style="display:flex;justify-content:flex-end;gap:8px;">
+              <button id="subagent-form-reset" type="button" class="pill-btn sm">Clear</button>
+              <button id="subagent-save-btn" type="submit" class="pill-btn sm primary">Save Subagent</button>
+            </div>
+          </form>
+        </div>
+        <div class="subagent-section-head"><h3>Your Custom Subagents</h3></div>
+        <div id="custom-subagents-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+        <div class="subagent-section-head"><h3>Built-in reSearch Agents</h3></div>
+        <div id="builtin-agents-list" class="builtin-grid"></div>
+      </div>
+
+      <div id="settings-panel-guide" class="settings-tab-panel" data-settings-panel="guide" role="tabpanel">
+        <div id="settings-guide-content"></div>
+      </div>
+
+      <div id="settings-panel-advanced" class="settings-tab-panel" data-settings-panel="advanced" role="tabpanel">
+        <details id="connect-advanced" class="connect-advanced" open>
+          <summary>Role Models, Custom Endpoints &amp; Conventions</summary>
+          <form id="settings-form" class="form-grid" autocomplete="off">
+            <div id="advanced-base-urls" class="form-grid"></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div class="form-row">
+                <label for="set-role-verifier">Independent Verifier Model (optional)</label>
+                <input id="set-role-verifier" class="text-input" type="text" placeholder="Defaults to Solver model">
+              </div>
+              <div class="form-row">
+                <label for="set-role-strategist">Research Strategist Model (optional)</label>
+                <input id="set-role-strategist" class="text-input" type="text" placeholder="Defaults to Solver model">
+              </div>
+            </div>
+            <div class="form-row">
+              <label for="set-conventions">Pinned Conventions (max 2000 chars)</label>
+              <textarea id="set-conventions" class="text-input" rows="3" maxlength="2000" placeholder="Metric signature (-,+,+,+), natural units hbar = c = 1..."></textarea>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
+              <button id="settings-save-btn" type="submit" class="pill-btn primary">Save advanced settings</button>
+            </div>
+          </form>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- In-App Source Reader Modal -->
+  <div id="source-reader-dialog" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="source-reader-title" hidden>
+    <div class="modal-card modal-wide">
+      <div class="modal-header">
+        <h2 id="source-reader-title">Source Reader</h2>
+        <button id="source-reader-close" type="button" class="icon-btn" aria-label="Close Source Reader">✕</button>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <select id="source-reader-file" class="compact-select" aria-label="Source file" style="max-width:260px;"></select>
+          <div class="segmented-group" role="group" aria-label="Source view mode">
+            <button id="source-reader-mode-rendered" type="button" class="seg-btn is-active">Rendered</button>
+            <button id="source-reader-mode-raw" type="button" class="seg-btn">Raw</button>
           </div>
-          <div class="form-row">
-            <label for="set-conventions">Pinned Conventions (max 2000 chars)</label>
-            <textarea id="set-conventions" class="text-input" rows="3" maxlength="2000" placeholder="Metric signature (-,+,+,+), natural units hbar = c = 1..."></textarea>
-          </div>
-          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px;">
-            <button id="settings-save-btn" type="submit" class="pill-btn primary">Save advanced settings</button>
-          </div>
-        </form>
-      </details>
+        </div>
+        <div id="source-reader-ext-links" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+      </div>
+      <div id="source-reader-body"></div>
     </div>
   </div>
 

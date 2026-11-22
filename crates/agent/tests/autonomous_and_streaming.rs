@@ -150,6 +150,7 @@ fn autonomous_loop_rejects_consults_strategist_revises_accepts_and_resumes_lossl
         max_tokens: DEFAULT_MAX_TOKENS,
         containment: "test".into(),
         contained: false,
+        reasoning_effort: None,
     };
     let auto_cfg = AutonomousConfig {
         guardrails: GuardrailConfig { verification_mode: true, calculation_mode: true, ..Default::default() },
@@ -195,6 +196,7 @@ fn autonomous_loop_rejects_consults_strategist_revises_accepts_and_resumes_lossl
         max_tokens: DEFAULT_MAX_TOKENS,
         containment: "test".into(),
         contained: false,
+        reasoning_effort: None,
     };
     let out2 = resume_autonomous_research_loop(
         &solver_leg2,
@@ -249,6 +251,7 @@ fn autonomous_loop_emits_warning_instead_of_discarding_when_verifier_rounds_exha
         max_tokens: DEFAULT_MAX_TOKENS,
         containment: "test".into(),
         contained: false,
+        reasoning_effort: None,
     };
     let auto_cfg = AutonomousConfig {
         guardrails: GuardrailConfig { verification_mode: true, ..Default::default() },
@@ -336,6 +339,7 @@ fn chatgpt_streaming_delivers_live_deltas_and_cancel_token_aborts_promptly() {
         max_tokens: DEFAULT_MAX_TOKENS,
         containment: "test".into(),
         contained: false,
+        reasoning_effort: None,
     };
     let mut sink = RecordingSink::default();
     let out = run_autonomous_research_loop(

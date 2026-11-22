@@ -111,6 +111,7 @@ fn minimal_req(model: &str) -> ModelRequest {
         messages: vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: "hi".into() }] }],
         tools: vec![],
         max_tokens: 64,
+        reasoning_effort: None,
     }
 }
 
@@ -305,6 +306,7 @@ fn gemini_wire_roundtrip_thought_signature_parameters_json_schema_and_header_aut
             }),
         }],
         max_tokens: 256,
+        reasoning_effort: None,
     };
 
     let prepared = transport.prepare_request(&req).unwrap();
@@ -391,6 +393,7 @@ fn gemini_refusals_malformed_function_call_http_errors_and_scrubbing() {
         }],
         tools: vec![],
         max_tokens: 64,
+        reasoning_effort: None,
     };
     let t_local = GeminiTransport::new(
         GeminiConfig::default(),
@@ -496,6 +499,7 @@ fn repeated_tool_use_id_across_turns_resolves_per_turn_function_response_name() 
         ],
         tools: vec![],
         max_tokens: 256,
+        reasoning_effort: None,
     };
     let prepared = transport.prepare_request(&req).unwrap();
     let wire: Value = serde_json::from_slice(&prepared.body).unwrap();

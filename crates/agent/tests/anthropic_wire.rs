@@ -276,6 +276,7 @@ fn wire_request_response_roundtrip_with_thinking_tool_use_and_tool_result() {
             input_schema: json!({ "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"] }),
         }],
         max_tokens: 1024,
+        reasoning_effort: None,
     };
 
     let prepared = transport.prepare_request(&req).unwrap();
@@ -344,6 +345,7 @@ fn wire_request_response_roundtrip_with_thinking_tool_use_and_tool_result() {
         messages: vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: "ping".into() }] }],
         tools: vec![],
         max_tokens: 16,
+        reasoning_effort: None,
     };
     let min_prep = transport.prepare_request(&min_req).unwrap();
     let min_json: Value = serde_json::from_slice(&min_prep.body).unwrap();
@@ -361,6 +363,7 @@ fn http_errors_malformed_responses_redirects_and_secret_scrubbing() {
         messages: vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: "hi".into() }] }],
         tools: vec![],
         max_tokens: 64,
+        reasoning_effort: None,
     };
 
     // 401 Auth + secret reflection scrubbed from raw_body and error message.

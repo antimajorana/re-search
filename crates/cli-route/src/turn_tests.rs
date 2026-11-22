@@ -94,6 +94,7 @@ fn make_spec<'a>(
         tool_config,
         core,
         model: "m",
+        reasoning_effort: None,
         prompt: "hi",
         tool_defs: &[],
         policy_version: "v0",
@@ -285,4 +286,22 @@ fn model_activity_before_init_mentions_init_handshake() {
         other => panic!("expected Aborted, got {other:?}"),
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn turn_spec_forwards_reasoning_effort_into_claude_and_antigravity_args() {
+    use crate::antigravity::Antigravity;
+    use crate::claude::ClaudeCode;
+
+    let mcp = PathBuf::from("C:/d/mcp.json");
+    let claude_none = ClaudeCode.args_with_effort("sonnet", &mcp, None);
+    let claude_eff = ClaudeCode.args_with_effort("sonnet", &mcp, Some("xhigh"));
+    assert!(!claude_none.iter().any(|a| a == "--effort"));
+    assert!(claude_eff.windows(2).any(|w| w == ["--effort", "xhigh"]), "{claude_eff:?}");
+
+    let agy = Antigravity::new();
+    let agy_none = agy.args_with_effort("m", &mcp, None);
+    let agy_eff = agy.args_with_effort("m", &mcp, Some("medium"));
+    assert!(!agy_none.iter().any(|a| a == "--effort"));
+    assert!(agy_eff.windows(2).any(|w| w == ["--effort", "medium"]), "{agy_eff:?}");
 }

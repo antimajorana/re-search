@@ -1,6 +1,8 @@
 // Floating Gemini composer pill: auto-resizing textarea, <=5 file / 10 MiB Base64 upload, workspace picker, toggles; the model comes from model_picker.js.
 import * as api from '/assets/api.js';
 import { escapeHtml } from '/assets/math.js';
+import { closeEffortWindow, getReasoningEffort } from '/assets/effort_picker.js';
+import { getActiveSubagent } from '/assets/subagents.js';
 
 const MAX_FILES = 5;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -74,7 +76,20 @@ export function initComposer(opts = {}) {
   if (topbarStopEl) topbarStopEl.addEventListener('click', triggerStop);
 
   document.addEventListener('keydown', (ev) => {
-    if (ev.key !== 'Escape' || !turnRunning) return;
+    if (ev.key !== 'Escape') return;
+    const effortPop = document.getElementById('effort-popover');
+    if (effortPop && !effortPop.hidden) {
+      ev.preventDefault();
+      closeEffortWindow();
+      return;
+    }
+    const readerOpen = document.getElementById('source-reader-dialog');
+    if (readerOpen && !readerOpen.hidden) {
+      ev.preventDefault();
+      readerOpen.hidden = true;
+      return;
+    }
+    if (!turnRunning) return;
     const settingsOpen = document.getElementById('settings-dialog');
     const wsOpen = document.getElementById('workspace-dialog');
     const convOpen = document.getElementById('conventions-popover');
@@ -134,12 +149,16 @@ export function setComposerBusy(busy) {
 export function getComposerOptions(choice) {
   const verifyOn = Boolean(verifierChip && verifierChip.getAttribute('aria-pressed') === 'true');
   const stratOn = Boolean(strategistChip && strategistChip.getAttribute('aria-pressed') === 'true');
+  const effort = getReasoningEffort();
+  const subagent = getActiveSubagent();
   return {
     provider: choice.provider,
     model: choice.model,
     verification_mode: verifyOn,
     calculation_mode: verifyOn,
     use_strategist: stratOn,
+    reasoning_effort: effort || 'default',
+    subagent_id: subagent ? subagent.id : undefined,
   };
 }
 

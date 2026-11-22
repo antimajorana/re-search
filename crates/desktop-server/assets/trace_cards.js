@@ -2,6 +2,7 @@
 // and Independent Verifier verdict banners. Every untrusted field is passed through escapeHtml()
 // or DOM textContent — never raw HTML.
 import { escapeHtml, highlightPython, renderRichInto } from '/assets/math.js';
+import { linksForPaper, renderSourceLinkChips } from '/assets/source_links.js';
 
 let seqCounter = 0;
 
@@ -100,7 +101,13 @@ function formatLiteratureCard(toolName, argsObj, outObj, rawOut) {
     const top = items.slice(0, 3).map((it) => {
       const id = it.arxiv_id || it.id || '';
       const title = it.title || it.primary_path || 'Entry';
-      return `<li>${id ? `<code>${escapeHtml(String(id))}</code> ` : ''}${escapeHtml(String(title).slice(0, 120))}</li>`;
+      const links = linksForPaper({ ...it, source: src });
+      const primary = links[0];
+      const titleHtml = primary
+        ? `<a class="paper-title-link" href="${escapeHtml(primary.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(String(title).slice(0, 120))} ↗</a>`
+        : escapeHtml(String(title).slice(0, 120));
+      const extraChips = links.length > 1 ? `<div class="sc-hit-links">${renderSourceLinkChips(links.slice(0, 3))}</div>` : '';
+      return `<li>${id ? `<code>${escapeHtml(String(id))}</code> ` : ''}${titleHtml}${extraChips}</li>`;
     }).join('');
     hitsHtml = `<div class="sc-meta-line">${items.length} result${items.length === 1 ? '' : 's'} returned</div>${top ? `<ul class="sc-hit-list">${top}</ul>` : ''}`;
   } else if (outObj && outObj.source_id) {

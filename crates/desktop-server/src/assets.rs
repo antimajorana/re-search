@@ -26,6 +26,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../assets/workbench.css"),
         }),
+        "/assets/modals.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/modals.css"),
+        }),
         "/assets/api.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/api.js"),
@@ -57,6 +61,22 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
         "/assets/model_picker.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/model_picker.js"),
+        }),
+        "/assets/effort_picker.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/effort_picker.js"),
+        }),
+        "/assets/subagents.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/subagents.js"),
+        }),
+        "/assets/guide.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/guide.js"),
+        }),
+        "/assets/source_links.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/source_links.js"),
         }),
         "/assets/connect.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",

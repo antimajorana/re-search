@@ -53,7 +53,14 @@ fn every_flag_we_pass_is_in_the_captured_help_of_the_tested_cli() {
     assert!(help["--output-format"].contains("stream-json"));
     assert!(help["--settings"].contains("inline"));
     assert!(help["--sandbox"].contains("sandbox"));
+    assert!(help["--effort"].contains("xhigh"));
     assert!(include_str!("../fixtures/agy_help_1_5_14.txt").contains("agy --version: 1.5.14"));
+
+    let no_eff = Antigravity::new().args_with_effort("m", Path::new("C:/d/mcp.json"), None);
+    assert!(!no_eff.iter().any(|a| a == "--effort"));
+    let xhigh = Antigravity::new().args_with_effort("m", Path::new("C:/d/mcp.json"), Some("xhigh"));
+    let pos = xhigh.iter().position(|a| a == "--effort").unwrap();
+    assert_eq!(xhigh[pos + 1], "xhigh");
 }
 
 #[test]

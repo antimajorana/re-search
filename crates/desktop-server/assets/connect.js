@@ -18,6 +18,7 @@ let callbacks = {};
 let lastFocus = null;
 let connections = [];
 let signinPoll = null;
+let activeTab = 'providers';
 
 function make(tag, cls, text) {
   const node = document.createElement(tag);
@@ -34,8 +35,23 @@ export function initConnect(opts = {}) {
   const openBtn = document.getElementById('settings-btn');
   const closeBtn = document.getElementById('settings-close-btn');
   const form = document.getElementById('settings-form');
-  if (openBtn) openBtn.addEventListener('click', () => openConnect());
+  const refreshModelsBtn = document.getElementById('refresh-models-btn');
+  if (openBtn) openBtn.addEventListener('click', () => openConnect('providers'));
   if (closeBtn) closeBtn.addEventListener('click', closeConnect);
+  for (const btn of document.querySelectorAll('[data-settings-tab]')) {
+    btn.addEventListener('click', () => switchSettingsTab(btn.getAttribute('data-settings-tab')));
+  }
+  if (refreshModelsBtn) {
+    refreshModelsBtn.addEventListener('click', async () => {
+      refreshModelsBtn.disabled = true;
+      try {
+        if (typeof callbacks.onRefreshModels === 'function') await callbacks.onRefreshModels();
+        notify('Model lists refreshed from connected providers.');
+      } finally {
+        refreshModelsBtn.disabled = false;
+      }
+    });
+  }
   if (dialogEl) {
     dialogEl.addEventListener('keydown', (ev) => {
       if (ev.key === 'Escape') closeConnect();
@@ -47,10 +63,24 @@ export function initConnect(opts = {}) {
   if (form) form.addEventListener('submit', saveAdvanced);
 }
 
-export async function openConnect() {
+export function switchSettingsTab(tab = 'providers') {
+  activeTab = tab;
+  for (const btn of document.querySelectorAll('[data-settings-tab]')) {
+    const match = btn.getAttribute('data-settings-tab') === tab;
+    btn.classList.toggle('is-active', match);
+    btn.setAttribute('aria-selected', match ? 'true' : 'false');
+  }
+  for (const panel of document.querySelectorAll('[data-settings-panel]')) {
+    panel.classList.toggle('is-active', panel.getAttribute('data-settings-panel') === tab);
+  }
+  if (typeof callbacks.onTabOpened === 'function') callbacks.onTabOpened(tab);
+}
+
+export async function openConnect(tab = 'providers') {
   if (!dialogEl) return;
   lastFocus = document.activeElement;
   dialogEl.hidden = false;
+  switchSettingsTab(tab || activeTab || 'providers');
   const closeBtn = document.getElementById('settings-close-btn');
   if (closeBtn) closeBtn.focus();
   await Promise.all([refreshConnections(true), loadAdvanced()]);

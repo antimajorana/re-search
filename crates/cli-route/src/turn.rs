@@ -85,6 +85,7 @@ pub struct TurnSpec<'a> {
     pub tool_config: &'a Path,
     pub core: &'a CoreLaunch,
     pub model: &'a str,
+    pub reasoning_effort: Option<&'a str>,
     /// Written to the CLI's stdin (framed by [`VendorCli::stdin_payload`]), then stdin is
     /// closed. Never put in argv.
     pub prompt: &'a str,
@@ -143,7 +144,7 @@ pub fn run_turn(
     }
 
     let expected: Vec<String> = spec.tool_defs.iter().map(|d| vendor.tool_name(&d.id)).collect();
-    let args = vendor.args(spec.model, spec.tool_config);
+    let args = vendor.args_with_effort(spec.model, spec.tool_config, spec.reasoning_effort);
     let mut start = json!({
         "route": vendor.route(),
         "provenance": PROVENANCE,

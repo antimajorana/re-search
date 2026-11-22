@@ -210,6 +210,7 @@ pub fn run(opts: &ApiRunOpts) -> Result<i32, String> {
         max_tokens: opts.max_tokens,
         containment: built.containment,
         contained: built.contained,
+        reasoning_effort: None,
     };
     let outcome = run_agent_loop(&*transport, &built.router, &rec.ledger, &cfg, &mut sink)?;
     eprintln!(
@@ -305,6 +306,7 @@ pub fn resume(opts: &ApiResumeOpts) -> Result<i32, String> {
         max_tokens: opts.max_tokens,
         containment: built.containment,
         contained: built.contained,
+        reasoning_effort: None,
     };
     let outcome = resume_agent_loop(&*transport, &built.router, &rec.ledger, &cfg, &mut sink)?;
     eprintln!(
@@ -402,6 +404,7 @@ pub fn run_with_research(opts: &ApiRunOpts, res: &ResearchOpts) -> Result<i32, S
         max_tokens: opts.max_tokens,
         containment: built.containment,
         contained: built.contained,
+        reasoning_effort: None,
     };
     let outcome = agent::run_autonomous_research_loop(
         &*transport,
@@ -507,6 +510,7 @@ pub fn resume_with_research(opts: &ApiResumeOpts, res: &ResearchOpts) -> Result<
         max_tokens: opts.max_tokens,
         containment: built.containment,
         contained: built.contained,
+        reasoning_effort: None,
     };
     let outcome = resume_agent_loop(&*transport, &built.router, &rec.ledger, &cfg, &mut sink)?;
     eprintln!(

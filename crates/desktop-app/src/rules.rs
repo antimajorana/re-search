@@ -18,6 +18,41 @@ pub fn is_allowed_navigation(url: &str, base_url: &str) -> bool {
     }
 }
 
+const ALLOWED_EXTERNAL_HOSTS: &[&str] = &[
+    "arxiv.org",
+    "export.arxiv.org",
+    "doi.org",
+    "dx.doi.org",
+    "inspirehep.net",
+    "semanticscholar.org",
+    "www.semanticscholar.org",
+    "crossref.org",
+    "api.crossref.org",
+    "chatgpt.com",
+];
+
+/// `true` only for safe `https://` links pointing to trusted academic / reference hosts
+/// so `target="_blank"` source links can open externally while WebView2 navigation stays
+/// strictly pinned to the loopback server.
+pub fn is_allowed_external_source_url(url: &str) -> bool {
+    if url.is_empty()
+        || url.len() > 2048
+        || url.chars().any(|c| c.is_ascii_control() || c.is_ascii_whitespace() || c == '\\')
+    {
+        return false;
+    }
+    let Some(after_scheme) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let end_auth = after_scheme.find(['/', '?', '#']).unwrap_or(after_scheme.len());
+    let authority = &after_scheme[..end_auth];
+    if authority.is_empty() || authority.contains('@') || authority.contains(':') {
+        return false;
+    }
+    let host = authority.to_ascii_lowercase();
+    ALLOWED_EXTERNAL_HOSTS.contains(&host.as_str())
+}
+
 /// `true` only for `<base_url>/api/sessions/<id>/export[?query]`, the one download the UI
 /// starts. `<id>` must look like a re:Search session id (`[a-z0-9._-]`, not `.`/`..`).
 pub fn is_allowed_export(url: &str, base_url: &str) -> bool {
@@ -193,5 +228,35 @@ mod tests {
         std::fs::create_dir(dir.join("folder.tex")).unwrap();
         assert_eq!(unique_download_path(dir, "folder.tex").unwrap(), dir.join("folder (1).tex"));
         assert_eq!(std::fs::read_to_string(dir.join("proof.zip")).unwrap(), "old");
+    }
+
+    #[test]
+    fn allowed_external_source_urls_are_strictly_https_and_allowlisted() {
+        for ok in [
+            "https://arxiv.org/abs/2301.12345",
+            "https://arxiv.org/pdf/2301.12345",
+            "https://doi.org/10.1103/PhysRevD.100.012345",
+            "https://inspirehep.net/literature/123456",
+            "https://www.semanticscholar.org/paper/abc",
+            "https://ARXIV.ORG/abs/hep-th/9901001",
+            "https://chatgpt.com/settings/usage",
+        ] {
+            assert!(is_allowed_external_source_url(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "http://arxiv.org/abs/2301.12345",
+            "file:///C:/Windows/win.ini",
+            "javascript:alert(1)",
+            "https://evil.example/abs/2301.12345",
+            "https://arxiv.org.evil.example/abs/1",
+            "https://user@arxiv.org/abs/1",
+            "https://arxiv.org:8443/abs/1",
+            "https://arxiv.org/abs/1\n",
+            "https://arxiv.org/abs/1\\2",
+            "http://127.0.0.1:43123/",
+        ] {
+            assert!(!is_allowed_external_source_url(bad), "{bad}");
+        }
     }
 }

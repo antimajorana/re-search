@@ -1,7 +1,8 @@
 // Tabs 3 & 4: Literature & Sources Canvas (arXiv/INSPIRE/Crossref/S2) and isolated Side-Talk Canvas.
 import * as api from '/assets/api.js';
-import { escapeHtml, renderRichInto } from '/assets/math.js';
+import { escapeHtml, renderLatexDocumentPreview, renderRichInto } from '/assets/math.js';
 import { getModelChoice } from '/assets/model_picker.js';
+import { linksForIngestedSource, linksForPaper, renderSourceLinkChips } from '/assets/source_links.js';
 
 // The model picker's current {provider, model}. On the Claude subscription route the
 // server picks the first connected API provider (narration and side questions need one).
@@ -56,6 +57,7 @@ export function initSourcesAndSidetalk(opts = {}) {
       await handleSidetalkSubmit();
     });
   }
+  wireSourceReaderModal();
 }
 
 export async function refreshSourcesAndSidetalk(sessionId) {
@@ -107,15 +109,21 @@ function renderLiteratureHits(items) {
     const meta = [item.id || item.arxiv_id, item.doi ? `DOI ${item.doi}` : '', item.year].filter(Boolean).join(' · ');
     const bibtex = item.bibtex || '';
     const sections = item.source && Array.isArray(item.source.sections) ? item.source.sections : [];
+    const activeSrc = item.source && typeof item.source === 'string' ? item.source : (litSourceEl ? litSourceEl.value : '');
+    const links = linksForPaper({ ...item, source: activeSrc });
+    const titleHtml = links[0]
+      ? `<a class="paper-title-link" href="${escapeHtml(links[0].url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title || 'Untitled')} ↗</a>`
+      : escapeHtml(item.title || 'Untitled');
 
     card.innerHTML = `
       ${withdrawn ? '<div class="retraction-banner">Warning: Withdrawn or Retracted Publication — blocked from unflagged citation</div>' : ''}
-      <div style="font-weight:600;margin-bottom:3px;">${escapeHtml(item.title || 'Untitled')}</div>
+      <div style="font-weight:600;margin-bottom:3px;">${titleHtml}</div>
       <div style="font-size:12px;color:var(--ink-secondary);margin-bottom:4px;">${escapeHtml(authors)}</div>
       <div style="font-size:11.5px;color:var(--ink-muted);margin-bottom:8px;">${escapeHtml(meta)}</div>
       ${item.abstract_text ? `<div style="font-size:12px;color:var(--ink-secondary);margin-bottom:8px;">${escapeHtml(item.abstract_text.slice(0, 320))}${item.abstract_text.length > 320 ? '…' : ''}</div>` : ''}
       ${sections.length ? `<div style="font-size:11.5px;margin-bottom:8px;"><strong>TeX sections:</strong> ${sections.map((s) => `<code>${escapeHtml(s)}</code>`).join(' ')}</div>` : ''}
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        ${renderSourceLinkChips(links)}
         ${bibtex ? '<button type="button" class="pill-btn sm copy-bib-btn">Copy BibTeX</button>' : ''}
       </div>
     `;
@@ -149,15 +157,26 @@ export async function loadSessionSources(sessionId) {
     for (const src of sources) {
       const card = document.createElement('div');
       card.className = 'source-card';
-      const files = Array.isArray(src.files) ? src.files.join(', ') : '';
+      const rawFiles = Array.isArray(src.files) ? src.files : [];
+      const readableFiles = Array.from(new Set([src.assembled_path, src.primary_path, ...rawFiles].filter(Boolean)));
+      const files = rawFiles.join(', ');
+      const extLinks = linksForIngestedSource(src);
       card.innerHTML = `
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
           <strong>${escapeHtml(src.primary_path || src.origin || src.source_id || 'source')}</strong>
           <span class="badge">${escapeHtml(src.format || src.status || 'ingested')}</span>
         </div>
+        ${src.origin && src.origin !== src.primary_path ? `<div style="font-size:11.5px;color:var(--ink-secondary);margin-top:3px;">Origin: <code>${escapeHtml(src.origin)}</code></div>` : ''}
         ${files ? `<div style="font-size:11.5px;color:var(--ink-muted);margin-top:4px;">Files: ${escapeHtml(files)}</div>` : ''}
-        ${src.raw_blob ? `<div style="font-family:var(--font-mono);font-size:11px;color:var(--ink-muted);margin-top:3px;">blob ${escapeHtml(src.raw_blob.slice(0, 14))}…</div>` : ''}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;">
+          ${readableFiles.length ? '<button type="button" class="pill-btn sm primary read-source-btn">Read Source</button>' : ''}
+          ${renderSourceLinkChips(extLinks)}
+        </div>
       `;
+      const readBtn = card.querySelector('.read-source-btn');
+      if (readBtn) {
+        readBtn.addEventListener('click', () => openSourceReader(sessionId, src, readableFiles, extLinks));
+      }
       sourcesListEl.appendChild(card);
     }
   } catch {
@@ -232,4 +251,73 @@ function appendSidetalkPair(question, answer) {
   }
   sidetalkStreamEl.appendChild(card);
   sidetalkStreamEl.scrollTop = sidetalkStreamEl.scrollHeight;
+}
+
+let readerState = { sessionId: null, files: [], currentPath: '', text: '', mode: 'rendered', links: [] };
+
+function wireSourceReaderModal() {
+  const dlg = document.getElementById('source-reader-dialog');
+  const closeBtn = document.getElementById('source-reader-close');
+  const fileSel = document.getElementById('source-reader-file');
+  const modeRender = document.getElementById('source-reader-mode-rendered');
+  const modeRaw = document.getElementById('source-reader-mode-raw');
+  if (closeBtn && dlg) closeBtn.addEventListener('click', () => { dlg.hidden = true; });
+  if (dlg) dlg.addEventListener('click', (ev) => { if (ev.target === dlg) dlg.hidden = true; });
+  if (fileSel) {
+    fileSel.addEventListener('change', () => loadSourceReaderFile(fileSel.value));
+  }
+  const setMode = (m) => {
+    readerState.mode = m;
+    if (modeRender) modeRender.classList.toggle('is-active', m === 'rendered');
+    if (modeRaw) modeRaw.classList.toggle('is-active', m === 'raw');
+    renderReaderContent();
+  };
+  if (modeRender) modeRender.addEventListener('click', () => setMode('rendered'));
+  if (modeRaw) modeRaw.addEventListener('click', () => setMode('raw'));
+}
+
+async function openSourceReader(sessionId, src, files, extLinks) {
+  const dlg = document.getElementById('source-reader-dialog');
+  const titleEl = document.getElementById('source-reader-title');
+  const fileSel = document.getElementById('source-reader-file');
+  const linksEl = document.getElementById('source-reader-ext-links');
+  if (!dlg) return;
+  readerState = { sessionId, files, currentPath: files[0] || '', text: '', mode: 'rendered', links: extLinks || [] };
+  if (titleEl) titleEl.textContent = src.origin || src.primary_path || src.source_id || 'Source Reader';
+  if (linksEl) linksEl.innerHTML = renderSourceLinkChips(extLinks);
+  if (fileSel) {
+    fileSel.innerHTML = '';
+    for (const f of files) fileSel.append(new Option(f, f));
+    fileSel.value = readerState.currentPath;
+  }
+  dlg.hidden = false;
+  await loadSourceReaderFile(readerState.currentPath);
+}
+
+async function loadSourceReaderFile(relPath) {
+  const bodyEl = document.getElementById('source-reader-body');
+  if (!relPath || !readerState.sessionId || !bodyEl) return;
+  readerState.currentPath = relPath;
+  bodyEl.innerHTML = '<div style="color:var(--ink-muted);font-size:13px;">Loading source...</div>';
+  try {
+    const data = await api.readSourceFile(readerState.sessionId, relPath);
+    readerState.text = (data && (data.content || data.text)) || '';
+    renderReaderContent();
+  } catch (err) {
+    bodyEl.innerHTML = `<div class="badge err">Could not read file: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function renderReaderContent() {
+  const bodyEl = document.getElementById('source-reader-body');
+  if (!bodyEl) return;
+  const text = readerState.text || '';
+  if (readerState.mode === 'raw' || /\.(bib|csv|tsv|json|py|log|yml|yaml|sty|cls)$/i.test(readerState.currentPath)) {
+    bodyEl.innerHTML = `<pre class="source-raw-pre">${escapeHtml(text)}</pre>`;
+    return;
+  }
+  bodyEl.innerHTML = '<div class="rich-prose"></div>';
+  const target = bodyEl.firstElementChild;
+  if (/\.(tex|ltx)$/i.test(readerState.currentPath)) renderLatexDocumentPreview(target, text);
+  else renderRichInto(target, text);
 }

@@ -62,10 +62,11 @@ pub use strategist::{
     StrategistAdvice, MAX_STRATEGIST_CONSULTATIONS,
 };
 pub use transport::{
-    CancelToken, ContentBlock, Message, ModelRequest, ModelResponse, NoopStreamObserver, PreparedRequest,
-    ProviderKind, Role, StopReason, StreamObserver, ToolSpec, Transport, TransportError, TransportErrorKind,
-    TransportInfo, DEFAULT_CHATGPT_BASE, DEFAULT_CHATGPT_MODEL, DEFAULT_GEMINI_BASE, DEFAULT_GEMINI_MODEL,
-    DEFAULT_OLLAMA_BASE, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE, DEFAULT_OPENAI_MODEL,
+    normalize_reasoning_effort, CancelToken, ContentBlock, Message, ModelRequest, ModelResponse,
+    NoopStreamObserver, PreparedRequest, ProviderKind, Role, StopReason, StreamObserver, ToolSpec,
+    Transport, TransportError, TransportErrorKind, TransportInfo, DEFAULT_CHATGPT_BASE,
+    DEFAULT_CHATGPT_MODEL, DEFAULT_GEMINI_BASE, DEFAULT_GEMINI_MODEL, DEFAULT_OLLAMA_BASE,
+    DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_BASE, DEFAULT_OPENAI_MODEL,
 };
 pub use verifiers::{
     verify_full_solution, verify_full_solution_cancellable, verify_step, VerificationIssue, VerificationReport,

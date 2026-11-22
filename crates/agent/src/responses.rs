@@ -217,6 +217,10 @@ pub fn serialize_responses_request(req: &ModelRequest) -> Result<Vec<u8>, Transp
             }]),
         );
     }
+    if let Some(effort) = crate::transport::normalize_reasoning_effort(req.reasoning_effort.as_deref()) {
+        let mapped = if effort == "max" { "xhigh" } else { effort.as_str() };
+        obj.insert("reasoning".into(), json!({ "effort": mapped }));
+    }
     obj.insert("store".into(), json!(false));
     obj.insert("stream".into(), json!(true));
     serde_json::to_vec(&Value::Object(obj)).map_err(|e| config_err(format!("failed to serialize request: {e}")))

@@ -49,6 +49,10 @@ pub trait VendorCli: Send + Sync {
     fn write_tool_config(&self, path: &Path, core: &CoreLaunch) -> Result<(), String>;
     /// Command-line arguments. The prompt is never among them: it goes on stdin.
     fn args(&self, model: &str, tool_config: &Path) -> Vec<String>;
+    /// Command-line arguments including an optional reasoning `--effort` level.
+    fn args_with_effort(&self, model: &str, tool_config: &Path, _effort: Option<&str>) -> Vec<String> {
+        self.args(model, tool_config)
+    }
     /// The exact bytes written to the CLI's stdin for `prompt` (stdin is closed after them).
     /// Default: the prompt text itself.
     fn stdin_payload(&self, prompt: &str) -> Vec<u8> {
@@ -74,4 +78,30 @@ pub trait VendorCli: Send + Sync {
     fn is_model_activity(&self, line: &Value) -> bool;
     /// Map one output line to zero or more `(kind, data)` ledger events.
     fn map_line(&self, line: &Value) -> Vec<(String, Value)>;
+}
+
+/// Canonical CLI `--effort` level (`low` | `medium` | `high` | `xhigh` | `max`), or `None` to omit.
+pub fn normalize_effort(raw: Option<&str>) -> Option<&'static str> {
+    let raw = raw?.trim();
+    if raw.eq_ignore_ascii_case("low") {
+        Some("low")
+    } else if raw.eq_ignore_ascii_case("medium") {
+        Some("medium")
+    } else if raw.eq_ignore_ascii_case("high") {
+        Some("high")
+    } else if raw.eq_ignore_ascii_case("xhigh") {
+        Some("xhigh")
+    } else if raw.eq_ignore_ascii_case("max") {
+        Some("max")
+    } else {
+        None
+    }
+}
+
+/// Append `--effort <level>` when `effort` normalizes to a supported CLI level.
+pub fn push_effort_flag(args: &mut Vec<String>, effort: Option<&str>) {
+    if let Some(level) = normalize_effort(effort) {
+        args.push("--effort".into());
+        args.push(level.into());
+    }
 }

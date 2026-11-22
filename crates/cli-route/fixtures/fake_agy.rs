@@ -71,6 +71,7 @@ const KNOWN_FLAGS: &[(&str, bool)] = &[
     ("--input-format", true),
     ("--output-format", true),
     ("--model", true),
+    ("--effort", true),
     ("--sandbox", false),
     ("--disable-slash-commands", false),
     ("--settings", true),
