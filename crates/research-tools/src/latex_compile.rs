@@ -1,6 +1,8 @@
 //! Approval-gated local LaTeX compilation (`latex_compile`, `EffectClass::ExecuteCode`).
 //! Uses hardcoded non-negotiable safe flags (`-no-shell-escape`, `-interaction=nonstopmode`,
-//! `-halt-on-error`) and returns structured `.log` diagnostics or `"compiler_not_found"`.
+//! `-halt-on-error`), forces paranoid TeX file-access mode (`openin_any=p`, `openout_any=p`),
+//! strips `shell_escape` / `shell_escape_commands` and provider API keys from the child env,
+//! and returns structured `.log` diagnostics or `"compiler_not_found"`.
 
 use crate::sandbox::{strip_verbatim_prefix, validate_rel_workspace_path, WorkspaceSandbox};
 use crate::ResearchEnv;
@@ -151,7 +153,14 @@ pub fn run_latex_compile(env: &ResearchEnv, args: &Value) -> Result<Value, Strin
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .env("max_print_line", "1000");
+            .env("max_print_line", "1000")
+            // Force TeX paranoid file-access mode (`p`) so `\input` / `\openin` / `\openout`
+            // refuse absolute paths and `..` parent traversal outside `work_dir`/TEXMF,
+            // and strip shell-escape env overrides alongside `-no-shell-escape`.
+            .env("openin_any", "p")
+            .env("openout_any", "p")
+            .env_remove("shell_escape")
+            .env_remove("shell_escape_commands");
         for k in SCRUBBED_KEY_ENVS {
             cmd.env_remove(k);
         }

@@ -131,37 +131,22 @@ pub struct ChatGptAuth {
 impl ChatGptAuth {
     pub fn new(data_dir: impl Into<PathBuf>, opts: Options) -> Self {
         Self {
-            data_dir: data_dir.into(),
-            opts,
-            lock: Mutex::new(()),
-            note: Mutex::new(None),
-            attempt: Mutex::new(None),
-            login_gen: AtomicU64::new(0),
+            data_dir: data_dir.into(), opts, lock: Mutex::new(()),
+            note: Mutex::new(None), attempt: Mutex::new(None), login_gen: AtomicU64::new(0),
         }
     }
 
-    pub fn endpoints(&self) -> &Endpoints {
-        &self.opts.endpoints
-    }
-
-    pub fn data_dir(&self) -> &Path {
-        &self.data_dir
-    }
+    pub fn endpoints(&self) -> &Endpoints { &self.opts.endpoints }
+    pub fn data_dir(&self) -> &Path { &self.data_dir }
 
     /// Monotonic counter incremented on completed sign-in or sign-out.
-    pub fn login_generation(&self) -> u64 {
-        self.login_gen.load(Ordering::Acquire)
-    }
+    pub fn login_generation(&self) -> u64 { self.login_gen.load(Ordering::Acquire) }
 
     fn set_note(&self, n: Option<String>) {
-        if let Ok(mut g) = self.note.lock() {
-            *g = n;
-        }
+        if let Ok(mut g) = self.note.lock() { *g = n; }
     }
 
-    fn note(&self) -> Option<String> {
-        self.note.lock().ok().and_then(|g| g.clone())
-    }
+    fn note(&self) -> Option<String> { self.note.lock().ok().and_then(|g| g.clone()) }
 
     pub fn status(&self) -> AuthStatus {
         let off = |message: String| AuthStatus { supported: vault::supported(), signed_in: false, plan_enabled: false, account: None, message };
@@ -320,18 +305,18 @@ impl ChatGptAuth {
 
     /// Best-effort revocation of `rt`: discovery once, then up to `attempts` tries
     /// (retrying network and 5xx failures), all inside `budget`. Callers hold no lock.
-    fn revoke_bounded(&self, client_id: &str, rt: &Secret, attempts: u32, budget: Duration) -> bool {
+    fn revoke_bounded(ep: &Endpoints, http: HttpCfg, backoff: Duration, client_id: &str, rt: &Secret, attempts: u32, budget: Duration) -> bool {
         let deadline = Instant::now() + budget;
         let left = || deadline.saturating_duration_since(Instant::now());
-        let url = oauth::revocation_url(&self.opts.endpoints, self.opts.http.capped(budget / 3));
+        let url = oauth::revocation_url(ep, http.capped(budget / 3));
         for attempt in 0..attempts {
             if left().is_zero() {
                 return false;
             }
-            match oauth::revoke_at(&url, client_id, rt.as_str(), self.opts.http.capped(left())) {
+            match oauth::revoke_at(&url, client_id, rt.as_str(), http.capped(left())) {
                 Ok(()) => return true,
                 Err(e) if e.is_transient() && attempt + 1 < attempts => {
-                    std::thread::sleep((self.opts.revoke_backoff * (attempt + 1)).min(left()));
+                    std::thread::sleep((backoff * (attempt + 1)).min(left()));
                 }
                 Err(_) => return false,
             }
@@ -366,7 +351,9 @@ impl ChatGptAuth {
             let copy = creds.and_then(|c| c.refresh_token.clone().map(|rt| (c.client_id.clone(), Secret::new(rt))));
             (copy, deleted)
         };
-        let revoked = to_revoke.map(|(client_id, rt)| self.revoke_bounded(&client_id, &rt, 3, self.opts.revoke_budget));
+        let revoked = to_revoke.map(|(client_id, rt)| {
+            Self::revoke_bounded(&self.opts.endpoints, self.opts.http, self.opts.revoke_backoff, &client_id, &rt, 3, self.opts.revoke_budget)
+        });
         let message = match (revoked, deleted) {
             (_, Err(e)) => e,
             (Some(false), Ok(())) => "Signed out on this computer, but ChatGPT did not confirm the revocation. You can disconnect re:Search in ChatGPT Settings.".into(),
@@ -377,15 +364,11 @@ impl ChatGptAuth {
     }
 
     pub fn cancel_login(&self) {
-        if let Some(a) = self.attempt.lock().ok().and_then(|mut g| g.take()) {
-            a.cancel();
-        }
+        if let Some(a) = self.attempt.lock().ok().and_then(|mut g| g.take()) { a.cancel(); }
     }
 
     /// The current (or last) attempt.
-    pub fn login_attempt(&self) -> Option<Arc<Attempt>> {
-        self.attempt.lock().ok().and_then(|g| g.clone())
-    }
+    pub fn login_attempt(&self) -> Option<Arc<Attempt>> { self.attempt.lock().ok().and_then(|g| g.clone()) }
 
     /// The authorize URL of the pending attempt (for "Open in browser").
     pub fn pending_authorize_url(&self) -> Option<String> {
@@ -468,13 +451,21 @@ impl ChatGptAuth {
         let res = self.accept_tokens(&tr, client_id, p, attempt);
         if res.is_err() {
             // The exchange succeeded but its tokens are discarded (cancelled attempt, other
-            // account, failed ID token, storage error): revoke the fresh grant, best effort
-            // and bounded, with every lock released. `tr` is zeroized when dropped.
+            // account, failed ID token, storage error): revoke the fresh grant asynchronously,
+            // best effort and bounded, with every lock released. `tr` is zeroized when dropped.
             if let Some(rt) = &tr.refresh_token {
-                self.revoke_bounded(client_id, rt, 1, DISCARD_REVOKE_BUDGET.min(self.opts.revoke_budget));
+                self.spawn_discard_revoke(client_id, rt);
             }
         }
         res
+    }
+
+    fn spawn_discard_revoke(&self, client_id: &str, rt: &Secret) {
+        let (ep, http, budget) = (self.opts.endpoints.clone(), self.opts.http, DISCARD_REVOKE_BUDGET.min(self.opts.revoke_budget));
+        let (client_id, rt) = (client_id.to_string(), rt.clone());
+        let _ = std::thread::Builder::new().name("chatgpt-revoke-discard".into()).spawn(move || {
+            let _ = Self::revoke_bounded(&ep, http, Duration::ZERO, &client_id, &rt, 1, budget);
+        });
     }
 
     fn accept_tokens(&self, tr: &oauth::TokenResponse, client_id: &str, p: &Pending, attempt: &Attempt) -> Result<bool, String> {
@@ -573,5 +564,33 @@ mod tests {
         // ...but never an expired (or nearly expired) token.
         assert!(refresh_due(&creds(now - 3600, now + EXPIRY_SKEW_S, Some(now + 100)), now));
         assert!(refresh_due(&creds(now - 3600, now - 5, Some(now + 100)), now));
+    }
+
+    #[test]
+    fn discard_revoke_is_non_blocking_and_hits_endpoint() {
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let d2 = Arc::clone(&done);
+        let mock = crate::testkit::MockAuth::start(Arc::new(move |r| match (r.method.as_str(), r.path.as_str()) {
+            ("POST", "/api/accounts/oauth/revoke") => {
+                std::thread::sleep(Duration::from_millis(400));
+                d2.store(true, Ordering::Release);
+                crate::testkit::Reply { status: 200, content_type: "application/json", body: Vec::new() }
+            }
+            _ => crate::testkit::Reply { status: 404, content_type: "application/json", body: Vec::new() },
+        }));
+        let opts = Options { endpoints: Endpoints::loopback_mock(&mock.base).unwrap(), ..Options::default() };
+        let auth = ChatGptAuth::new(PathBuf::from("."), opts);
+        let t0 = Instant::now();
+        auth.spawn_discard_revoke("oaiapp_test", &Secret::new("rt-discard".into()));
+        assert!(t0.elapsed() < Duration::from_millis(150), "discard revoke blocked for {:?}", t0.elapsed());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !done.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        assert!(done.load(Ordering::Acquire), "revoke endpoint did not finish within 2s");
+        let rv: Vec<_> = mock.requests().into_iter().filter(|r| r.path == "/api/accounts/oauth/revoke").collect();
+        assert_eq!(rv.len(), 1);
+        assert_eq!(rv[0].form("token").as_deref(), Some("rt-discard"));
+        assert_eq!(rv[0].form("client_id").as_deref(), Some("oaiapp_test"));
     }
 }

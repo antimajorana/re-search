@@ -89,21 +89,28 @@ fn handle_connection(mut stream: TcpStream, state: Arc<DesktopState>, shutdown: 
     let method = method.as_str();
 
     if method == "GET" && (path == "/" || path == "/index.html") {
-        let valid_query = state.auth.validate_query_token(req.raw_query.as_deref());
         // `re-search-app` navigates its window here with the token in a request header, so
         // the token never appears in a URL or on a command line.
         let valid_header =
             state.auth.has_valid_header_token(req.header("x-research-token"), req.header("authorization"));
+        // `re-search ui` opens the default browser with a single-use, short-lived `?launch=<nonce>`
+        // URL. Only attempt to consume it when no valid header token was provided.
+        let valid_nonce = !valid_header && state.auth.consume_launch_nonce(req.raw_query.as_deref());
         let valid_cookie = state.auth.has_valid_cookie(req.header("cookie"));
-        if !valid_query && !valid_header && !valid_cookie {
-            write_json(&mut stream, 403, json!({ "error": "invalid or missing launch token" }), &[]);
+        if !valid_header && !valid_nonce && !valid_cookie {
+            write_json(
+                &mut stream,
+                403,
+                json!({ "error": "invalid, expired, or missing launch credential" }),
+                &[],
+            );
             return;
         }
-        // The token is written into the page only for a request that already carries it (a
-        // valid `?token=` launch URL or header). A reload carries just the stream cookie and
+        // The token is written into the page only for a request authenticated by header token
+        // or redeeming the single-use launch nonce. A reload carries just the stream cookie and
         // gets the page without the token (the UI keeps it in per-origin sessionStorage), so
         // the cookie can never be traded for it.
-        let html = if valid_query || valid_header {
+        let html = if valid_header || valid_nonce {
             state.auth.inject_csrf_meta(INDEX_HTML)
         } else {
             INDEX_HTML.to_string()

@@ -134,8 +134,11 @@ pub fn start_desktop_server(cfg: DesktopConfig) -> Result<RunningDesktopServer, 
 
     let auth = AuthGuard::new(actual_port)?;
     let token = auth.token().to_string();
+    let nonce = auth
+        .launch_nonce()
+        .ok_or_else(|| "launch nonce unavailable at startup".to_string())?;
     let base_url = format!("http://127.0.0.1:{actual_port}");
-    let url = format!("{base_url}/?token={token}");
+    let url = format!("{base_url}/?launch={nonce}");
     let info = ServerLaunchInfo {
         url: url.clone(),
         base_url,

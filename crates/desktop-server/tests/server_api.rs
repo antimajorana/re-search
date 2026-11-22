@@ -1,6 +1,6 @@
 //! Tests-first integration tests for `desktop-server`:
-//! - Auth & CSRF (`GET /?token=`, `Set-Cookie`, `<meta name="re-search-csrf">`,
-//!   `Host`/`Origin` enforcement, `401`/`403` rejections)
+//! - Auth & CSRF (single-use `GET /?launch=`, rejection of `GET /?token=`, `Set-Cookie`,
+//!   `<meta name="re-search-csrf">`, `Host`/`Origin` enforcement, `401`/`403` rejections)
 //! - Session CRUD, prompt execution + SSE event streaming
 //! - Live `UiApprover` diff preview (`fs_write`/`latex_patch`) + fail-closed ledger recording
 //! - File upload (`base64` JSON + `multipart/form-data`), workspace read/patch/audit,
@@ -29,6 +29,14 @@ fn auth_bootstrap_assets_host_origin_and_csrf_enforced() {
     let tok = srv.info.token.clone();
     assert_eq!(tok.len(), 64);
 
+    // Launch URL carries only the single-use launch nonce, never the live API token.
+    assert!(srv.info.url.starts_with(&format!("{}/?launch=", srv.info.base_url)), "{}", srv.info.url);
+    assert!(!srv.info.url.contains(&tok), "launch URL must never contain the API token");
+    let launch_path = srv.info.url.strip_prefix(&srv.info.base_url).unwrap().to_string();
+    let nonce = launch_path.strip_prefix("/?launch=").unwrap();
+    assert_eq!(nonce.len(), 64);
+    assert_ne!(nonce, tok);
+
     // Health check works on loopback Host.
     let (st, _, body) = raw_http(port, "GET", "/api/health", &[], b"");
     assert_eq!(st, 200);
@@ -39,11 +47,23 @@ fn auth_bootstrap_assets_host_origin_and_csrf_enforced() {
     let (st_host, _, _) = raw_http(port, "GET", "/api/health", &[("Host", "evil.example:8080")], b"");
     assert_eq!(st_host, 403);
 
-    // Wrong token on / rejected; valid token sets HttpOnly SameSite=Strict cookie + injects <meta>.
+    // Real API token is NEVER accepted as a URL query parameter on GET /.
+    let (st_real_tok_q, tok_q_hdrs, tok_q_body) = raw_http(port, "GET", &format!("/?token={tok}"), &[], b"");
+    assert_eq!(st_real_tok_q, 403);
+    assert!(!String::from_utf8_lossy(&tok_q_body).contains(&tok));
+    assert!(!tok_q_hdrs.iter().any(|(k, _)| k == "set-cookie"));
+
     let (st_bad_q, _, _) = raw_http(port, "GET", "/?token=wrong", &[], b"");
     assert_eq!(st_bad_q, 403);
 
-    let (st_root, hdrs, html_bytes) = raw_http(port, "GET", &format!("/?token={tok}"), &[], b"");
+    // Wrong launch nonce is 403 and must NOT burn the legitimate launch nonce.
+    let (st_bad_launch, bad_launch_hdrs, bad_launch_body) = raw_http(port, "GET", "/?launch=wrong", &[], b"");
+    assert_eq!(st_bad_launch, 403);
+    assert!(!String::from_utf8_lossy(&bad_launch_body).contains(&tok));
+    assert!(!bad_launch_hdrs.iter().any(|(k, _)| k == "set-cookie"));
+
+    // First use of the valid launch nonce returns 200, injects <meta>, and sets the stream cookie.
+    let (st_root, hdrs, html_bytes) = raw_http(port, "GET", &launch_path, &[], b"");
     assert_eq!(st_root, 200);
     let html = String::from_utf8(html_bytes).unwrap();
     assert!(html.contains(&format!("<meta name=\"re-search-csrf\" content=\"{tok}\">")));
@@ -52,17 +72,26 @@ fn auth_bootstrap_assets_host_origin_and_csrf_enforced() {
         .find(|(k, _)| k == "set-cookie")
         .map(|(_, v)| v.as_str())
         .unwrap();
-    // The stream cookie is per-port and is a different secret from the token.
+    // The stream cookie is per-port and is independent of both the token and the launch nonce.
     assert!(set_cookie.starts_with(&format!("__research_stream_{port}=")));
     assert!(!set_cookie.contains(&tok));
+    assert!(!set_cookie.contains(nonce));
     assert!(set_cookie.contains("HttpOnly"));
     assert!(set_cookie.contains("SameSite=Strict"));
-    let cookie_hdr = launch_cookie(port, &tok);
+    let cookie_hdr = set_cookie.split(';').next().unwrap().trim().to_string();
 
-    // A reload (cookie, no ?token=) gets the page WITHOUT the token: the cookie cannot be traded for it.
+    // Replay of the same launch nonce (without cookie) is 403, leaks no token, and sets no cookie.
+    let (st_replay, replay_hdrs, replay_body) = raw_http(port, "GET", &launch_path, &[], b"");
+    assert_eq!(st_replay, 403);
+    assert!(!String::from_utf8_lossy(&replay_body).contains(&tok));
+    assert!(!replay_hdrs.iter().any(|(k, _)| k == "set-cookie"));
+
+    // A reload (cookie alone) gets the page WITHOUT the token: the cookie cannot be traded for it.
     let (st_reload, _, reload_html) = raw_http(port, "GET", "/", &[("Cookie", &cookie_hdr)], b"");
     assert_eq!(st_reload, 200);
-    assert!(!String::from_utf8_lossy(&reload_html).contains(&tok));
+    let reload_str = String::from_utf8_lossy(&reload_html);
+    assert!(!reload_str.contains(&tok));
+    assert!(reload_str.contains(r#"<meta name="re-search-csrf" content="">"#));
 
     // The page refuses to be framed, and `/` with no credential at all is refused.
     for (name, want) in [("x-frame-options", "DENY"), ("content-security-policy", "frame-ancestors 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'")] {

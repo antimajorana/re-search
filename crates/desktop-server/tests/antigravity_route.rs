@@ -418,6 +418,27 @@ fn env_auth_refusal_blocks_route_unless_explicitly_allowed() {
 }
 
 #[test]
+fn connection_env_cannot_supply_env_auth_opt_in_bypass_for_turns() {
+    clear_agy_env_auth();
+    let h = CliHarness::start_agy_with(|cfg| {
+        cfg.connection_env = Some(BTreeMap::from([
+            ("GEMINI_API_KEY".to_string(), "dummy-agy-secret".to_string()),
+            ("RE_SEARCH_ALLOW_AGY_ENV_AUTH".to_string(), "1".to_string()),
+        ]));
+    });
+    acknowledge(&h);
+    let sid = create_agy_session(&h);
+    let mut sse = h.sse(&sid);
+    send_agy(&h, &sid, "bypass attempt");
+    let err = sse.wait_turn_end(TURN).expect_err("turn_error");
+    let text = err["error"].as_str().unwrap();
+    assert!(text.contains("GEMINI_API_KEY") && !text.contains("dummy-agy-secret"), "{text}");
+    assert!(h.fake.argv().is_none(), "agy must not start when opt-in is only in connection_env");
+    assert!(kinds(&h.data, &sid).is_empty(), "nothing recorded");
+    h.srv.shutdown();
+}
+
+#[test]
 fn reopening_antigravity_session_after_withdraw_keeps_confinement_label() {
     let h = CliHarness::start_agy();
     acknowledge(&h);

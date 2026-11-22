@@ -353,3 +353,41 @@ fn shared_test_config_never_opens_a_browser_or_reaches_openai() {
     }
     f.srv.shutdown();
 }
+
+#[test]
+fn launch_nonce_is_never_accepted_on_api_routes() {
+    let f = fixture(None);
+    let port = f.port;
+    let launch_path = f.srv.info.url.strip_prefix(&f.srv.info.base_url).unwrap().to_string();
+    let nonce = launch_path.strip_prefix("/?launch=").unwrap();
+    let sid = f.sid.as_str();
+
+    // `?launch=<nonce>` is never valid on any `/api/` route (GET or POST, including cookie routes).
+    let api_gets = [
+        format!("/api/sessions?launch={nonce}"),
+        format!("/api/sessions/{sid}?launch={nonce}"),
+        format!("/api/sessions/{sid}/events?launch={nonce}"),
+        format!("/api/sessions/{sid}/export?format=tex&launch={nonce}"),
+        format!("/api/settings/providers?launch={nonce}"),
+        format!("/api/sessions?token={}", f.tok),
+    ];
+    for path in &api_gets {
+        assert_eq!(raw_http(port, "GET", path, &[], b"").0, 401, "GET {path} must be 401");
+    }
+    assert_eq!(
+        raw_http(port, "POST", &format!("/api/sessions?launch={nonce}"), &[], b"{}").0,
+        401
+    );
+    // Nor is the launch nonce accepted as a header token.
+    assert_eq!(
+        raw_http(port, "GET", "/api/sessions", &[("X-ReSearch-Token", nonce)], b"").0,
+        401
+    );
+
+    // None of those refused `/api/` requests consumed the launch nonce on `GET /`.
+    let (st, _, body) = raw_http(port, "GET", &launch_path, &[], b"");
+    assert_eq!(st, 200);
+    assert!(String::from_utf8_lossy(&body).contains(&format!(r#"<meta name="re-search-csrf" content="{}">"#, f.tok)));
+    assert_eq!(raw_http(port, "GET", &launch_path, &[], b"").0, 403);
+    f.srv.shutdown();
+}

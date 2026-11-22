@@ -1,11 +1,12 @@
 //! Default-browser launcher for `re-search ui` and the readiness JSON stdout emitter.
 //!
-//! There is deliberately no Edge/Chrome `--app=<url>` mode: it put the launch URL, and with
-//! it the token, on the browser's process command line. The desktop window is the separate
-//! `re-search-app` binary (`crates/desktop-app`), which delivers the token in a request header.
+//! `re-search ui` passes only a single-use, short-lived `?launch=<nonce>` URL to the default
+//! browser — never the live API token. The desktop window is the separate `re-search-app`
+//! binary (`crates/desktop-app`), which delivers the token in a request header.
 
 use crate::ServerLaunchInfo;
 use std::io::{self, Write};
+#[cfg(not(test))]
 use std::process::{Command, Stdio};
 
 pub fn emit_launch_json(info: &ServerLaunchInfo) -> Result<(), String> {
@@ -15,6 +16,13 @@ pub fn emit_launch_json(info: &ServerLaunchInfo) -> Result<(), String> {
 }
 
 /// Opens `url` in the user's default browser (`re-search ui`).
+///
+/// Compiled out under `#[cfg(test)]` so unit tests can never invoke an OS browser launcher.
+#[cfg(test)]
+pub fn launch_browser_window(_url: &str) {}
+
+/// Opens `url` in the user's default browser (`re-search ui`).
+#[cfg(not(test))]
 pub fn launch_browser_window(url: &str) {
     #[cfg(windows)]
     {

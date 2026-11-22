@@ -81,3 +81,37 @@ fn cookie_alone_still_gets_the_page_without_the_token() {
     assert_eq!(st, 200);
     assert!(!String::from_utf8_lossy(&body).contains(&tok));
 }
+
+#[test]
+fn launch_url_uses_nonce_and_header_loads_do_not_consume_or_depend_on_it() {
+    let (_tmp, srv) = start();
+    let (port, tok) = (srv.addr.port(), srv.info.token.clone());
+
+    assert!(srv.info.url.contains("?launch="), "{}", srv.info.url);
+    assert!(!srv.info.url.contains(&tok), "launch URL must not expose the API token");
+    let launch_path = srv.info.url.strip_prefix(&srv.info.base_url).unwrap().to_string();
+
+    // Repeated header-token loads (including one carrying ?launch=<nonce>) work without
+    // consuming the single-use launch nonce.
+    let bearer = format!("Bearer {tok}");
+    for (path, hdr) in [
+        ("/", ("X-ReSearch-Token", tok.as_str())),
+        ("/index.html", ("X-ReSearch-Token", tok.as_str())),
+        (launch_path.as_str(), ("Authorization", bearer.as_str())),
+    ] {
+        let (st, _, body) = raw_http(port, "GET", path, &[hdr], b"");
+        assert_eq!(st, 200, "{path}");
+        assert!(String::from_utf8_lossy(&body).contains(&meta_with(&tok)));
+    }
+
+    // The launch nonce is still unconsumed and redeems once; replay is 403.
+    let (st, _, body) = raw_http(port, "GET", &launch_path, &[], b"");
+    assert_eq!(st, 200);
+    assert!(String::from_utf8_lossy(&body).contains(&meta_with(&tok)));
+    assert_eq!(raw_http(port, "GET", &launch_path, &[], b"").0, 403);
+
+    // Header-token loads (`re-search-app`) continue working after the launch nonce is spent.
+    let (st, _, body) = raw_http(port, "GET", "/", &[("X-ReSearch-Token", &tok)], b"");
+    assert_eq!(st, 200);
+    assert!(String::from_utf8_lossy(&body).contains(&meta_with(&tok)));
+}

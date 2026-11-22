@@ -322,22 +322,30 @@ pub(crate) fn run_cli_turn(
 ) -> Result<String, String> {
     // Locating the CLI follows the configured environment (tests point it at a fake).
     let env_lookup = |n: &str| state.env_var(n);
-    // Billing safety looks at the environment the CLI will really inherit: the process
-    // environment, plus `connection_env` when one is configured. A configured map can add
-    // a variable but never hide one that the child process would see.
-    let inherited = |n: &str| std::env::var_os(n).or_else(|| state.env_var(n));
+    // Billing safety checks credential vars against both the real process environment and
+    // `connection_env` (a test map can add a blocked credential var, never hide a real one),
+    // while opt-in bypass flags come strictly from the real process environment.
+    let auth_env = |n: &str| {
+        if n == cli_route::env_auth::ALLOW_ENV_AUTH_VAR
+            || n == cli_route::antigravity::ALLOW_ENV_AUTH_VAR
+        {
+            std::env::var_os(n)
+        } else {
+            std::env::var_os(n).or_else(|| state.env_var(n))
+        }
+    };
     // The person's acknowledgement (Antigravity), then billing safety: nothing is started
     // while either is missing.
     let (vendor, allowed_env, allow_env_auth, explicit_exe): (Box<dyn VendorCli>, Vec<&str>, bool, Option<&Path>) =
         match kind {
             CliRouteKind::Claude => {
-                let allowed = cli_route::env_auth::check(ClaudeCode.env_auth_vars(), &inherited)?;
-                (Box::new(ClaudeCode), allowed, cli_route::env_auth::opted_in(&inherited), state.cfg.claude_exe.as_deref())
+                let allowed = cli_route::env_auth::check(ClaudeCode.env_auth_vars(), &auth_env)?;
+                (Box::new(ClaudeCode), allowed, cli_route::env_auth::opted_in(&auth_env), state.cfg.claude_exe.as_deref())
             }
             CliRouteKind::Antigravity => {
                 crate::antigravity::require_acknowledged(state)?;
-                let allowed = cli_route::antigravity::check_env_auth(&inherited)?;
-                let opted = cli_route::env_auth::flag_set(cli_route::antigravity::ALLOW_ENV_AUTH_VAR, &inherited);
+                let allowed = cli_route::antigravity::check_env_auth(&auth_env)?;
+                let opted = cli_route::env_auth::flag_set(cli_route::antigravity::ALLOW_ENV_AUTH_VAR, &auth_env);
                 (Box::new(Antigravity::new()), allowed, opted, state.cfg.agy_exe.as_deref())
             }
         };
@@ -540,6 +548,43 @@ mod tests {
         let updated = state.load_meta("s-switch01").unwrap();
         assert_eq!(updated.route.as_deref(), Some(ANTIGRAVITY_ROUTE));
         assert_eq!(updated.default_model, None, "stale claude-cli model must be cleared");
+    }
+
+    #[test]
+    fn connection_env_cannot_supply_claude_env_auth_opt_in_for_turns() {
+        if std::env::var_os(cli_route::env_auth::ALLOW_ENV_AUTH_VAR).is_some() {
+            return;
+        }
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cfg = DesktopConfig {
+            port: 0,
+            data_dir: tmp.path().to_path_buf(),
+            workspace_root: None,
+            python: None,
+            worker_script: None,
+            api_base_override: None,
+            literature_endpoints: LiteratureEndpoints::default(),
+            open_window: false,
+            print_url_json: false,
+            eval_timeout_s: 30,
+            core_exe: None,
+            claude_exe: None,
+            agy_exe: None,
+            connection_env: Some(BTreeMap::from([
+                ("ANTHROPIC_API_KEY".to_string(), "sk-ant-dummy".to_string()),
+                (cli_route::env_auth::ALLOW_ENV_AUTH_VAR.to_string(), "1".to_string()),
+            ])),
+            chatgpt_test: Some(crate::chatgpt::offline_test_hooks()),
+        };
+        let chatgpt = crate::chatgpt::ChatGptHub::new(&cfg).unwrap();
+        let state = Arc::new(DesktopState::new(
+            cfg,
+            crate::auth::AuthGuard::new(1).unwrap(),
+            Arc::new(crate::sse::SseHub::new()),
+            chatgpt,
+        ));
+        let err = run_cli_turn(&state, "s-env01", &json!({}), "hi", &StopHandle::new(), CliRouteKind::Claude).unwrap_err();
+        assert!(err.contains("ANTHROPIC_API_KEY") && !err.contains("sk-ant-dummy"), "{err}");
     }
 }
 

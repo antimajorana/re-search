@@ -311,7 +311,7 @@ fn f5_latex_compile_missing_compiler_mock_script_flags_env_scrub_and_timeout() {
         let script_path = tmp.path().join("pdflatex");
         let script = r#"#!/bin/sh
 set -eu
-# Verify mandatory safe flags are present and API keys are scrubbed
+# Verify mandatory safe flags are present, TeX env is hardened, and API keys are scrubbed
 case " $* " in
   *" -interaction=nonstopmode "*) ;;
   *) echo "missing nonstopmode" >&2; exit 91 ;;
@@ -327,6 +327,22 @@ esac
 if [ -n "${ANTHROPIC_API_KEY:-}" ] || [ -n "${OPENAI_API_KEY:-}" ]; then
   echo "leaked api key!" >&2
   exit 94
+fi
+if [ "${openin_any:-}" != "p" ]; then
+  echo "expected openin_any=p, got '${openin_any:-}'" >&2
+  exit 95
+fi
+if [ "${openout_any:-}" != "p" ]; then
+  echo "expected openout_any=p, got '${openout_any:-}'" >&2
+  exit 96
+fi
+if [ -n "${shell_escape:-}" ]; then
+  echo "leaked shell_escape='${shell_escape}'" >&2
+  exit 97
+fi
+if [ -n "${shell_escape_commands:-}" ]; then
+  echo "leaked shell_escape_commands='${shell_escape_commands}'" >&2
+  exit 98
 fi
 for last; do true; done
 stem="${last%.tex}"
@@ -344,7 +360,38 @@ exit 0
         fs::write(&script_path, script).unwrap();
         fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755)).unwrap();
 
-        std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-should-not-leak");
+        struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl EnvGuard {
+            fn set(pairs: &[(&'static str, &str)]) -> Self {
+                let prev = pairs
+                    .iter()
+                    .map(|(k, v)| {
+                        let old = std::env::var_os(k);
+                        std::env::set_var(k, v);
+                        (*k, old)
+                    })
+                    .collect();
+                Self(prev)
+            }
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                for (k, old) in &self.0 {
+                    match old {
+                        Some(v) => std::env::set_var(k, v),
+                        None => std::env::remove_var(k),
+                    }
+                }
+            }
+        }
+
+        let _env_guard = EnvGuard::set(&[
+            ("ANTHROPIC_API_KEY", "sk-ant-should-not-leak"),
+            ("openin_any", "a"),
+            ("openout_any", "a"),
+            ("shell_escape", "1"),
+            ("shell_escape_commands", "sh"),
+        ]);
         let mock_env = Arc::new(
             ResearchEnv::with_workspace(tmp.path().join("data2"), &ws)
                 .unwrap()
@@ -362,17 +409,19 @@ exit 0
             mock_approver,
         );
 
-        let ok_res = router2
-            .try_call("agent:test", LATEX_COMPILE, &json!({"path": "main.tex", "engine": "latexmk"}))
-            .unwrap();
-        match ok_res {
-            CallOutcome::Ok(v) => {
-                assert_eq!(v["ok"], true);
-                assert_eq!(v["status"], "compiled");
-                assert_eq!(v["pdf_path"], "main.pdf");
-                assert_eq!(v["warnings"][0]["line"], 12);
+        for engine in ["latexmk", "pdflatex"] {
+            let ok_res = router2
+                .try_call("agent:test", LATEX_COMPILE, &json!({"path": "main.tex", "engine": engine}))
+                .unwrap();
+            match ok_res {
+                CallOutcome::Ok(v) => {
+                    assert_eq!(v["ok"], true, "engine={engine}, result={v}");
+                    assert_eq!(v["status"], "compiled", "engine={engine}, result={v}");
+                    assert_eq!(v["pdf_path"], "main.pdf");
+                    assert_eq!(v["warnings"][0]["line"], 12);
+                }
+                other => panic!("unexpected {other:?} for engine={engine}"),
             }
-            other => panic!("unexpected {other:?}"),
         }
 
         let err_res = router2
@@ -401,7 +450,7 @@ exit 0
             }
             other => panic!("unexpected {other:?}"),
         }
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        drop(_env_guard);
 
         assert_eq!(
             Ledger::open(&tmp.path().join("data2")).unwrap().verify_all().unwrap().unreferenced_blobs,

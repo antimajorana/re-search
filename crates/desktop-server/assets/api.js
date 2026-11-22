@@ -10,21 +10,22 @@ export async function initAuth() {
   const meta = document.querySelector('meta[name="re-search-csrf"]');
   const metaToken = meta && typeof meta.content === 'string' ? meta.content.trim() : '';
   const params = new URLSearchParams(window.location.search);
-  const queryToken = (params.get('token') || '').trim();
 
-  // Only the server-validated value from the <meta> tag is trusted; the raw query value is
-  // never used as a credential (it is only stripped from the address bar below).
+  // Only the server-validated value from the <meta> tag is trusted; query parameters are
+  // never used as credentials (launch/token are only stripped from the address bar below).
   csrfToken = metaToken;
 
-  if (queryToken) {
+  if (params.has('launch') || params.has('token')) {
+    params.delete('launch');
     params.delete('token');
     const clean = params.toString();
     const nextUrl = window.location.pathname + (clean ? `?${clean}` : '') + window.location.hash;
     window.history.replaceState(null, '', nextUrl);
   }
 
-  // The server writes the token into the page only for the launch URL. Keep it in
-  // sessionStorage (scoped to this origin, port included, and to this tab) so a reload works.
+  // The server writes the token into the page only for header-authenticated loads or the
+  // single-use launch nonce. Keep it in sessionStorage (scoped to this origin, port
+  // included, and to this tab) so a reload works.
   try {
     if (csrfToken) {
       window.sessionStorage.setItem(TOKEN_STORAGE_KEY, csrfToken);

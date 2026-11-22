@@ -157,9 +157,10 @@ pub fn offline_chatgpt_hooks() -> ChatGptTestHooks {
     }
 }
 
-/// Loads the launch URL like the browser does and returns the `name=value` stream cookie.
+/// Loads `GET /` with the `X-ReSearch-Token` header and returns the `name=value` stream cookie.
+/// Uses header auth so tests neither depend on `?token=` nor consume the single-use launch nonce.
 pub fn launch_cookie(port: u16, token: &str) -> String {
-    let (st, hdrs, _) = raw_http(port, "GET", &format!("/?token={token}"), &[], b"");
+    let (st, hdrs, _) = raw_http(port, "GET", "/", &[("X-ReSearch-Token", token)], b"");
     assert_eq!(st, 200);
     let set_cookie = hdrs.iter().find(|(k, _)| k == "set-cookie").map(|(_, v)| v.clone()).expect("Set-Cookie");
     set_cookie.split(';').next().unwrap().trim().to_string()

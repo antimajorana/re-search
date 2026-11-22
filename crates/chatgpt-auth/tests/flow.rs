@@ -343,7 +343,11 @@ mod windows_flow {
         assert_eq!(ans2.unwrap().0, 400);
         assert!(matches!(env.auth.login_attempt().unwrap().state(), LoginState::Failed(m) if m.contains("different ChatGPT account")));
         assert_eq!(env.auth.access_token().unwrap().as_str(), "acc-1-SECRETVALUE");
-        // The discarded exchange's refresh token was revoked (best effort), once.
+        // The discarded exchange's refresh token is revoked asynchronously (best effort), once.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while env.mock.count("/api/accounts/oauth/revoke") == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(15));
+        }
         let rv: Vec<Recorded> = env.mock.requests().into_iter().filter(|r| r.path == "/api/accounts/oauth/revoke").collect();
         assert_eq!(rv.len(), 1);
         assert_eq!(rv[0].form("token_type_hint").as_deref(), Some("refresh_token"));

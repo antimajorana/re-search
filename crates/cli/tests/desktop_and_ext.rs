@@ -261,14 +261,39 @@ fn cli_ui_print_url_json_serves_health_and_exits_cleanly() {
     let launch: Value = serde_json::from_str(&first_line).expect("expected launch JSON on stdout");
     let port = launch["port"].as_u64().unwrap() as u16;
     let tok = launch["token"].as_str().unwrap();
-    assert!(launch["url"].as_str().unwrap().contains(&format!("token={tok}")));
+    let base_url = launch["base_url"].as_str().unwrap();
+    let url = launch["url"].as_str().unwrap();
+    assert!(url.contains("?launch="), "expected ?launch= nonce in url: {url}");
+    assert!(!url.contains(tok), "launch url must not expose the API token");
+    let launch_path = url.strip_prefix(base_url).expect("url starts with base_url");
 
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    let req = format!("GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
-    stream.write_all(req.as_bytes()).unwrap();
-    let mut resp = String::new();
-    stream.read_to_string(&mut resp).unwrap();
-    assert!(resp.contains("200 OK") && resp.contains("\"ok\":true"));
+    let send_get = |path: &str| {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let req = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+        stream.write_all(req.as_bytes()).unwrap();
+        let mut resp = String::new();
+        stream.read_to_string(&mut resp).unwrap();
+        resp
+    };
+
+    let health = send_get("/api/health");
+    assert!(health.contains("200 OK") && health.contains("\"ok\":true"), "{health}");
+
+    // Real API token in query string is rejected.
+    let tok_q = send_get(&format!("/?token={tok}"));
+    assert!(tok_q.starts_with("HTTP/1.1 403"), "{tok_q}");
+    assert!(!tok_q.contains(tok));
+
+    // Single-use launch URL redeems once with 200 and injects <meta name="re-search-csrf">.
+    let first = send_get(launch_path);
+    assert!(first.starts_with("HTTP/1.1 200"), "{first}");
+    assert!(first.contains(&format!(r#"<meta name="re-search-csrf" content="{tok}">"#)));
+
+    // Replaying the same launch URL without a cookie is rejected with 403.
+    let replay = send_get(launch_path);
+    assert!(replay.starts_with("HTTP/1.1 403"), "{replay}");
+    assert!(!replay.contains(tok));
+    assert!(!replay.to_ascii_lowercase().contains("set-cookie:"));
 
     let _ = child.kill();
     let _ = child.wait();
