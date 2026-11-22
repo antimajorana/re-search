@@ -464,9 +464,15 @@ test('Stage 11 Workbench UI: pipeline stepper, rigor presets, conventions popove
   assert.match(indexHtml, /id="canvas-resizer"/, 'Right Canvas resizer handle must exist');
   assert.match(indexHtml, /data-latex-mode="preview"/, 'LaTeX Canvas must expose Split/Edit/Preview modes');
   assert.match(indexHtml, /id="session-search"/, 'Session filter input must exist');
+  assert.match(indexHtml, /id="rail-tab-archived"/, 'Archived chats tab must exist');
+  assert.match(indexHtml, /id="topbar-stop-btn"/, 'Topbar Stop button must exist');
+  assert.match(indexHtml, /id="topbar-archive-btn"/, 'Topbar Archive button must exist');
+  assert.match(indexHtml, /id="topbar-delete-btn"/, 'Topbar Delete button must exist');
+  assert.match(indexHtml, /id="session-grants-pill"/, 'Session tool grants pill must exist');
   assert.match(assetsRs, /"\/assets\/workbench\.css"/);
   assert.match(assetsRs, /"\/assets\/trace_cards\.js"/);
   assert.match(assetsRs, /"\/assets\/workbench\.js"/);
+  assert.match(assetsRs, /"\/assets\/session_rail\.js"/);
 
   // Import trace_cards.js by mapping /assets/math.js cleanly via minimal DOM stub.
   const traceSrc = fs

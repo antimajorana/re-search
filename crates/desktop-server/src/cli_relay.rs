@@ -80,7 +80,8 @@ impl RelayDecider for UiRelay {
             ask.session.to_string(),
             request.digest.clone(),
         );
-        let approver = UiApprover::new(Arc::clone(&self.state), ask.containment.to_string(), ask.contained);
+        let approver = UiApprover::new(Arc::clone(&self.state), ask.containment.to_string(), ask.contained)
+            .with_session_network_grant(true);
         let reply = approver.decide(&request);
         watch.finish();
         // `UiApprover` already recorded `approval.answered` (and answered "no" if it could not).

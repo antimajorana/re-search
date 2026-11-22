@@ -9,6 +9,7 @@ let formEl = null;
 let inputEl = null;
 let sendEl = null;
 let stopEl = null;
+let topbarStopEl = null;
 let uploadEl = null;
 let filesBoxEl = null;
 let workspaceBtn = null;
@@ -27,6 +28,7 @@ export function initComposer(opts = {}) {
   inputEl = document.getElementById('composer-input');
   sendEl = document.getElementById('composer-send');
   stopEl = document.getElementById('composer-stop');
+  topbarStopEl = document.getElementById('topbar-stop-btn');
   uploadEl = document.getElementById('composer-upload-input');
   filesBoxEl = document.getElementById('composer-files');
   workspaceBtn = document.getElementById('workspace-attach-btn');
@@ -56,18 +58,32 @@ export function initComposer(opts = {}) {
     uploadEl.addEventListener('change', handleFileSelection);
   }
 
-  if (stopEl) {
-    stopEl.addEventListener('click', async () => {
-      if (typeof callbacks.onStopTurn === 'function') {
-        stopEl.disabled = true;
-        try {
-          await callbacks.onStopTurn();
-        } finally {
-          stopEl.disabled = false;
-        }
-      }
-    });
-  }
+  const triggerStop = async () => {
+    if (typeof callbacks.onStopTurn !== 'function') return;
+    if (stopEl) stopEl.disabled = true;
+    if (topbarStopEl) topbarStopEl.disabled = true;
+    try {
+      await callbacks.onStopTurn();
+    } finally {
+      if (stopEl) stopEl.disabled = false;
+      if (topbarStopEl) topbarStopEl.disabled = false;
+    }
+  };
+
+  if (stopEl) stopEl.addEventListener('click', triggerStop);
+  if (topbarStopEl) topbarStopEl.addEventListener('click', triggerStop);
+
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape' || !turnRunning) return;
+    const settingsOpen = document.getElementById('settings-dialog');
+    const wsOpen = document.getElementById('workspace-dialog');
+    const convOpen = document.getElementById('conventions-popover');
+    if ((settingsOpen && !settingsOpen.hidden) || (wsOpen && !wsOpen.hidden) || (convOpen && !convOpen.hidden)) {
+      return;
+    }
+    ev.preventDefault();
+    triggerStop();
+  });
 
   for (const chip of [verifierChip, strategistChip]) {
     if (chip) {
@@ -102,6 +118,10 @@ function syncButtons() {
   if (stopEl) {
     stopEl.hidden = !turnRunning;
     stopEl.disabled = false;
+  }
+  if (topbarStopEl) {
+    topbarStopEl.hidden = !turnRunning;
+    topbarStopEl.disabled = false;
   }
 }
 

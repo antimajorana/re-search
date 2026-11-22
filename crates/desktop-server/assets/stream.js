@@ -453,13 +453,24 @@ export function renderApprovalCard(req) {
   const toolId = String(req.tool_id || req.tool || 'tool');
   const digest = String(req.digest || '');
   const scope = String(req.scope || 'once');
+  const effect = String(req.effect || '');
   const allowSessionApprove = Boolean(req.allow_session_approve);
   const containmentBadge =
     req.contained || scope === 'worker-session'
       ? '<span class="badge ok">CONTAINED AppContainer</span>'
-      : allowSessionApprove
+      : effect === 'network-read'
         ? '<span class="badge accent">Literature Read</span>'
-        : '<span class="badge warn">ONCE Approval</span>';
+        : effect === 'write-workspace'
+          ? '<span class="badge accent">Workspace Edit</span>'
+          : '<span class="badge warn">ONCE Approval</span>';
+
+  const sessionHint = allowSessionApprove
+    ? (effect === 'execute-code'
+        ? 'Tip: Click "Approve for Session" once to run all sandboxed SymPy steps in this chat without asking every time.'
+        : effect === 'write-workspace'
+          ? 'Tip: Click "Approve for Session" once to allow workspace edits in this chat without asking on every patch.'
+          : 'Tip: Click "Approve for Session" once to allow literature lookups in this chat without asking every time.')
+    : '';
 
   const editPreview = req.edit_preview || null;
   let previewHtml = '';
@@ -491,12 +502,13 @@ export function renderApprovalCard(req) {
       <span class="digest-pill" title="${escapeHtml(digest)}">SHA-256 ${escapeHtml(digest.slice(0, 14))}…</span>
     </div>
     <div class="approval-preview">${previewHtml}</div>
+    ${sessionHint ? `<div class="approval-session-hint">${escapeHtml(sessionHint)}</div>` : ''}
     <div class="approval-actions">
       <button type="button" class="pill-btn sm approval-decline-btn">Decline</button>
       ${
         allowSessionApprove
-          ? '<button type="button" class="pill-btn sm approval-once-btn">Approve Once</button>' +
-            '<button type="button" class="pill-btn sm primary approval-session-btn">Approve for Session</button>'
+          ? '<button type="button" class="pill-btn sm approval-once-btn" title="Approve this single tool call only">Approve Once</button>' +
+            '<button type="button" class="pill-btn sm primary approval-session-btn" title="Approve all calls of this capability in this chat session">Approve for Session</button>'
           : '<button type="button" class="pill-btn sm primary approval-approve-btn">Approve &amp; Run</button>'
       }
     </div>

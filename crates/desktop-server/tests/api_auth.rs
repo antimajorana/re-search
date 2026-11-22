@@ -109,6 +109,8 @@ fn every_api_route_except_health_requires_the_token() {
         ("POST", "/api/connections/antigravity/withdraw".to_string()),
         ("PUT", "/api/settings/providers".to_string()),
         ("DELETE", s.clone()),
+        ("POST", format!("{s}/archive")),
+        ("DELETE", format!("{s}/grants")),
         ("PATCH", s.clone()),
         ("OPTIONS", "/api/sessions".to_string()),
         // A mutation aimed at a cookie route is still a mutation.

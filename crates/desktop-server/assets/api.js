@@ -96,6 +96,18 @@ export function stopTurn(id) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/stop`, {});
 }
 
+export function archiveSession(id, archived = true) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/archive`, { archived });
+}
+
+export function deleteSession(id) {
+  return rawJson('DELETE', `/api/sessions/${encodeURIComponent(id)}`);
+}
+
+export function revokeSessionGrants(id) {
+  return rawJson('DELETE', `/api/sessions/${encodeURIComponent(id)}/grants`);
+}
+
 export function pickWorkspaceFolder() {
   return rawJson('POST', '/api/workspace/pick', {});
 }

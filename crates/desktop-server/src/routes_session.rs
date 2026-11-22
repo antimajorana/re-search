@@ -1,5 +1,6 @@
 //! Session, SSE, approval, fork, diff, and provider-settings REST handlers.
 
+use crate::session_lifecycle::{is_turn_running, list_session_grants};
 use crate::session_view::summarize_session_events;
 use crate::sse::stream_session_sse;
 use crate::state::{now_ms, update_provider_roles_from_ui, DesktopState, ForkInfo, SessionMeta};
@@ -67,6 +68,10 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
     let mut sessions = Vec::new();
     for id in ids {
         let meta = state.load_meta(&id);
+        if meta.as_ref().is_some_and(|m| m.deleted) {
+            continue;
+        }
+        let archived = meta.as_ref().is_some_and(|m| m.archived);
         let events = ledger.read_session(&id).unwrap_or_default();
         let prompt_title = events
             .iter()
@@ -114,6 +119,8 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
             "workspace_root": workspace_root,
             "parent_session": parent_session,
             "event_count": events.len(),
+            "archived": archived,
+            "running": is_turn_running(state, &id),
             "stats": stats,
             "created_ms": created_ms,
             "updated_ms": updated_ms,
@@ -206,6 +213,8 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
             .or(ui.default_model),
         created_ms: now_ms(),
         fork_info: None,
+        archived: false,
+        deleted: false,
     };
     state.save_meta(&meta).map_err(internal)?;
 
@@ -302,6 +311,9 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
             "traces": traces,
             "sources": sources,
             "stats": stats,
+            "archived": meta.as_ref().is_some_and(|m| m.archived),
+            "running": is_turn_running(state, session_id),
+            "session_grants": list_session_grants(state, session_id),
             "pending_approvals": pending,
         }),
     ))
@@ -424,6 +436,8 @@ pub fn handle_fork(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRe
             forked_at_seq: at_seq,
             modified_assumption,
         }),
+        archived: false,
+        deleted: false,
     };
     let _ = state.save_meta(&child_meta);
     Ok((200, serde_json::to_value(receipt).map_err(|e| internal(e.to_string()))?))

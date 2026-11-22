@@ -1,63 +1,36 @@
-// Main entry controller: wires left rail, Connect panel, model picker, live pipeline bar,
-// center stream, SSE live updates, resizable Canvas tabs, and postMessage bridge.
+// Main entry controller: wires left rail (Active/Archived + Delete), Connect panel, model picker,
+// live pipeline bar, center stream, SSE live updates, resizable Canvas tabs, and postMessage bridge.
 import * as api from '/assets/api.js';
-import { escapeHtml } from '/assets/math.js';
 import {
-  appendAssistantMessage,
-  appendUserMessage,
-  appendWarningLine,
-  finalizeLiveAssistant,
-  finalizeLiveOnError,
-  finalizeLiveThinking,
-  handleRoundReset,
-  handleTextDelta,
-  handleThinkingDelta,
-  handleToolTrace,
-  initStream,
-  refreshEmptyHeroIfVisible,
-  renderApprovalCard,
-  renderSessionStream,
-  resolveApprovalCard,
-  setStreamStatus,
+  appendAssistantMessage, appendUserMessage, appendWarningLine, finalizeLiveAssistant,
+  finalizeLiveOnError, finalizeLiveThinking, handleRoundReset, handleTextDelta,
+  handleThinkingDelta, handleToolTrace, initStream, refreshEmptyHeroIfVisible,
+  renderApprovalCard, renderSessionStream, resolveApprovalCard, setStreamStatus,
 } from '/assets/stream.js';
+import { initComposer, setComposerBusy, setComposerPrompt } from '/assets/composer.js';
 import {
-  initComposer,
-  setComposerBusy,
-  setComposerPrompt,
-} from '/assets/composer.js';
-import {
-  applySession,
-  getModelChoice,
-  initModelPicker,
-  loadModels,
-  noModelReason,
-  rememberForSession,
+  applySession, getModelChoice, initModelPicker, loadModels, noModelReason, rememberForSession,
 } from '/assets/model_picker.js';
 import { initConnect, openConnect } from '/assets/connect.js';
 import { initLatexCanvas, refreshWorkspaceFiles } from '/assets/canvas_latex.js';
 import { initDagCanvas, refreshDag, selectNodeById } from '/assets/canvas_dag.js';
+import { initSourcesAndSidetalk, loadSessionSources, refreshSourcesAndSidetalk } from '/assets/canvas_sources.js';
 import {
-  initSourcesAndSidetalk,
-  loadSessionSources,
-  refreshSourcesAndSidetalk,
-} from '/assets/canvas_sources.js';
-import {
-  applySessionTelemetry,
-  finishLivePipeline,
-  getWorkbenchSnapshot,
-  initWorkbench,
-  refreshConnectionBadge,
-  refreshConventionsState,
-  startLivePipeline,
-  updateCanvasTabCounts,
-  updatePipelineFromEvent,
+  applySessionTelemetry, finishLivePipeline, getWorkbenchSnapshot, initWorkbench,
+  refreshConnectionBadge, refreshConventionsState, startLivePipeline,
+  updateCanvasTabCounts, updatePipelineFromEvent,
 } from '/assets/workbench.js';
+import {
+  formatBuiltinToolWarning, initSessionRail, renderSessionGrantsPill,
+  renderSessionRailList, updateWorkspaceBadges,
+} from '/assets/session_rail.js';
 
 const state = {
   sessions: [],
   activeSessionId: null,
   activeWorkspaceRoot: '',
   sessionQuery: '',
+  railFilterMode: 'active',
   tabCounts: { dag: 0, sources: 0, sidetalk: 0 },
   eventSource: null,
   theme: 'light',
@@ -67,18 +40,19 @@ const el = {};
 
 document.addEventListener('DOMContentLoaded', boot);
 
-function basenameOf(p) {
-  if (!p) return '';
-  const parts = String(p).replace(/[\\/]+$/, '').split(/[\\/]/);
-  return parts[parts.length - 1] || String(p);
-}
-
 async function boot() {
   cacheElements();
   restoreTheme();
   wireShellControls();
   wireCanvasTabs();
   wirePostMessageBridge();
+
+  initSessionRail({
+    onFilterMode: (mode) => {
+      state.railFilterMode = mode;
+      renderSessionList();
+    },
+  });
 
   const inspectStepInCanvas = (stepId) => {
     activateCanvasTab('tab-dag');
@@ -99,18 +73,12 @@ async function boot() {
     onNotify: showToast,
     onInspectStep: inspectStepInCanvas,
     onOpenConnect: openConnect,
-    onPickWorkspace: () => {
-      const btn = document.getElementById('workspace-attach-btn');
-      if (btn) btn.click();
-    },
+    onPickWorkspace: () => { if (el.wsBtn) el.wsBtn.click(); },
     onOpenConventions: () => {
       const btn = document.getElementById('conventions-btn');
       if (btn) btn.click();
     },
-    getSetupInfo: () => ({
-      ...getWorkbenchSnapshot(),
-      workspaceRoot: state.activeWorkspaceRoot,
-    }),
+    getSetupInfo: () => ({ ...getWorkbenchSnapshot(), workspaceRoot: state.activeWorkspaceRoot }),
   });
 
   initComposer({
@@ -132,6 +100,7 @@ async function boot() {
       updateCanvasTabCounts(state.tabCounts);
     },
     onForkCreated: async (newId) => {
+      state.railFilterMode = 'active';
       await refreshSessionList();
       await selectSession(newId);
       showToast(`Forked session ${newId}`);
@@ -162,19 +131,12 @@ async function boot() {
     return;
   }
 
-  initWorkbench({
-    onNotify: showToast,
-    onConnectionsUpdated: () => refreshEmptyHeroIfVisible(),
-  });
-
+  initWorkbench({ onNotify: showToast, onConnectionsUpdated: () => refreshEmptyHeroIfVisible() });
   await Promise.all([checkHealth(), loadModels(false), refreshSessionList()]);
 
-  if (state.sessions.length > 0) {
-    await selectSession(state.sessions[0].id);
-  } else {
-    syncWorkspaceIndicators('');
-    renderSessionStream(null, { messages: [] });
-  }
+  const firstActive = state.sessions.find((s) => !s.archived);
+  if (firstActive) await selectSession(firstActive.id);
+  else resetToBlankState();
 }
 
 function cacheElements() {
@@ -187,6 +149,9 @@ function cacheElements() {
   el.sessionTitle = document.getElementById('active-session-title');
   el.wsPill = document.getElementById('active-workspace-pill');
   el.wsBtn = document.getElementById('workspace-attach-btn');
+  el.grantsPill = document.getElementById('session-grants-pill');
+  el.topbarArchiveBtn = document.getElementById('topbar-archive-btn');
+  el.topbarDeleteBtn = document.getElementById('topbar-delete-btn');
   el.healthBadge = document.getElementById('health-badge');
   el.themeToggle = document.getElementById('theme-toggle');
 }
@@ -199,9 +164,7 @@ function restoreTheme() {
 function applyTheme(theme) {
   state.theme = theme;
   document.documentElement.setAttribute('data-theme', theme);
-  if (el.themeToggle) {
-    el.themeToggle.textContent = theme === 'dark' ? 'Light' : 'Dark';
-  }
+  if (el.themeToggle) el.themeToggle.textContent = theme === 'dark' ? 'Light' : 'Dark';
   window.localStorage.setItem('re-search-theme', theme);
 }
 
@@ -220,12 +183,13 @@ function wireShellControls() {
     });
   }
   if (el.themeToggle) {
-    el.themeToggle.addEventListener('click', () => {
-      applyTheme(state.theme === 'dark' ? 'light' : 'dark');
-    });
+    el.themeToggle.addEventListener('click', () => applyTheme(state.theme === 'dark' ? 'light' : 'dark'));
   }
   if (el.newBtn) {
-    el.newBtn.addEventListener('click', () => createAndSelectSession({}));
+    el.newBtn.addEventListener('click', () => {
+      state.railFilterMode = 'active';
+      createAndSelectSession({});
+    });
   }
   if (el.sessionSearch) {
     el.sessionSearch.addEventListener('input', () => {
@@ -235,15 +199,37 @@ function wireShellControls() {
   }
   if (el.wsPill) {
     el.wsPill.style.cursor = 'pointer';
-    el.wsPill.addEventListener('click', () => {
-      if (el.wsBtn) el.wsBtn.click();
+    el.wsPill.addEventListener('click', () => { if (el.wsBtn) el.wsBtn.click(); });
+  }
+  if (el.topbarArchiveBtn) {
+    el.topbarArchiveBtn.addEventListener('click', () => {
+      const cur = state.sessions.find((s) => s.id === state.activeSessionId);
+      if (cur) handleArchiveSession(cur, !cur.archived);
+    });
+  }
+  if (el.topbarDeleteBtn) {
+    el.topbarDeleteBtn.addEventListener('click', () => {
+      const cur = state.sessions.find((s) => s.id === state.activeSessionId) ||
+        (state.activeSessionId ? { id: state.activeSessionId, title: el.sessionTitle && el.sessionTitle.textContent } : null);
+      if (cur) handleDeleteSession(cur);
+    });
+  }
+  if (el.grantsPill) {
+    el.grantsPill.addEventListener('click', async () => {
+      if (!state.activeSessionId) return;
+      try {
+        await api.revokeSessionGrants(state.activeSessionId);
+        renderSessionGrantsPill(el.grantsPill, []);
+        showToast('Session tool approvals reset — next tool call will ask again.');
+      } catch (err) {
+        showToast(`Could not reset approvals: ${err.message}`);
+      }
     });
   }
 }
 
 function wireCanvasTabs() {
-  const tabs = ['tab-latex', 'tab-dag', 'tab-sources', 'tab-sidetalk'];
-  for (const tabId of tabs) {
+  for (const tabId of ['tab-latex', 'tab-dag', 'tab-sources', 'tab-sidetalk']) {
     const btn = document.getElementById(tabId);
     if (btn) btn.addEventListener('click', () => activateCanvasTab(tabId));
   }
@@ -295,80 +281,74 @@ async function refreshSessionList() {
 }
 
 function renderSessionList() {
-  if (!el.sessionList) return;
-  el.sessionList.innerHTML = '';
-  const q = state.sessionQuery;
-  const filtered = q
-    ? state.sessions.filter((s) => {
-        const hay = `${s.title || ''} ${s.id || ''} ${s.workspace_root || ''} ${(s.stats && s.stats.model) || ''}`.toLowerCase();
-        return hay.includes(q);
-      })
-    : state.sessions;
-
-  if (filtered.length === 0) {
-    const empty = document.createElement('div');
-    empty.style.cssText = 'padding:10px 12px;font-size:12px;color:var(--ink-muted);';
-    empty.textContent = q ? 'No sessions match filter.' : 'No research sessions yet.';
-    el.sessionList.appendChild(empty);
-    return;
-  }
-
-  for (const s of filtered) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = `session-item${s.id === state.activeSessionId ? ' is-active' : ''}`;
-    const stats = s.stats || {};
-    const badges = [];
-    if (stats.verified_status === 'verified') {
-      badges.push('<span class="mini-pill ok" title="Independently verified">✓</span>');
-    } else if (stats.verified_status === 'unverified') {
-      badges.push('<span class="mini-pill warn" title="Unverified draft">!</span>');
-    }
-    if ((Number(stats.proof_entries) || 0) > 0) {
-      badges.push(`<span class="mini-pill" title="Proof-DAG steps">${Number(stats.proof_entries)}</span>`);
-    }
-    if (s.parent_session) {
-      badges.push('<span class="mini-pill">Fork</span>');
-    }
-    const metaParts = [];
-    if (stats.model) metaParts.push(stats.model);
-    if (s.workspace_root) metaParts.push(basenameOf(s.workspace_root));
-    if (metaParts.length === 0) metaParts.push(s.id);
-
-    btn.innerHTML = `
-      <div class="session-title-row">
-        <span class="session-item-title">${escapeHtml(s.title || s.id)}</span>
-        <span class="session-badges">${badges.join('')}</span>
-      </div>
-      <div class="session-item-meta"><span>${escapeHtml(metaParts.join(' · '))}</span></div>
-    `;
-    btn.addEventListener('click', () => selectSession(s.id));
-    el.sessionList.appendChild(btn);
-  }
+  renderSessionRailList(el.sessionList, {
+    sessions: state.sessions,
+    activeSessionId: state.activeSessionId,
+    query: state.sessionQuery,
+    filterMode: state.railFilterMode,
+    onSelect: (id) => selectSession(id),
+    onArchive: handleArchiveSession,
+    onDelete: handleDeleteSession,
+  });
 }
 
 function syncWorkspaceIndicators(wsRoot) {
   state.activeWorkspaceRoot = wsRoot || '';
-  if (el.wsPill) {
-    if (wsRoot) {
-      el.wsPill.hidden = false;
-      el.wsPill.textContent = wsRoot;
-      el.wsPill.title = `${wsRoot} (click to switch workspace folder)`;
-    } else {
-      el.wsPill.hidden = true;
-      el.wsPill.title = '';
-    }
+  updateWorkspaceBadges(el.wsPill, el.wsBtn, state.activeWorkspaceRoot);
+}
+
+function resetToBlankState() {
+  if (state.eventSource) {
+    state.eventSource.close();
+    state.eventSource = null;
   }
-  if (el.wsBtn) {
-    if (wsRoot) {
-      el.wsBtn.textContent = `Workspace: ${basenameOf(wsRoot)}`;
-      el.wsBtn.setAttribute('aria-pressed', 'true');
-      el.wsBtn.title = `Attached workspace: ${wsRoot} (click to switch)`;
-    } else {
-      el.wsBtn.textContent = 'Workspace';
-      el.wsBtn.setAttribute('aria-pressed', 'false');
-      el.wsBtn.title = 'Attach local workspace directory';
+  state.activeSessionId = null;
+  if (el.sessionTitle) el.sessionTitle.textContent = 'New research';
+  if (el.topbarArchiveBtn) el.topbarArchiveBtn.hidden = true;
+  if (el.topbarDeleteBtn) el.topbarDeleteBtn.hidden = true;
+  renderSessionGrantsPill(el.grantsPill, []);
+  syncWorkspaceIndicators('');
+  applySessionTelemetry(null, false);
+  setComposerBusy(false);
+  setStreamStatus('Ready', 'ok');
+  updateCanvasTabCounts({ dag: 0, sources: 0, sidetalk: 0 });
+  renderSessionList();
+  renderSessionStream(null, { messages: [] });
+}
+
+async function handleArchiveSession(sess, nextArchived) {
+  try {
+    await api.archiveSession(sess.id, nextArchived);
+    await refreshSessionList();
+    showToast(nextArchived ? `Archived "${sess.title || sess.id}"` : `Restored "${sess.title || sess.id}"`);
+    if (nextArchived && state.activeSessionId === sess.id && state.railFilterMode === 'active') {
+      const next = state.sessions.find((s) => !s.archived);
+      if (next) await selectSession(next.id);
+      else resetToBlankState();
+    } else if (state.activeSessionId === sess.id) {
+      await selectSession(sess.id);
     }
+  } catch (err) {
+    showToast(`Archive failed: ${err.message}`);
+  }
+}
+
+async function handleDeleteSession(sess) {
+  const label = sess.title || sess.id;
+  if (!window.confirm(`Delete chat "${label}"?\n\nYour attached local workspace files are never touched.`)) return;
+  try {
+    await api.deleteSession(sess.id);
+    const wasActive = state.activeSessionId === sess.id;
+    await refreshSessionList();
+    showToast(`Deleted "${label}"`);
+    if (wasActive) {
+      const next = state.sessions.find((s) => Boolean(s.archived) === (state.railFilterMode === 'archived')) ||
+        state.sessions.find((s) => !s.archived);
+      if (next) await selectSession(next.id);
+      else resetToBlankState();
+    }
+  } catch (err) {
+    showToast(`Delete failed: ${err.message}`);
   }
 }
 
@@ -398,18 +378,24 @@ async function selectSession(id) {
   try {
     const sess = await api.getSession(id);
     if (el.sessionTitle) el.sessionTitle.textContent = sess.title || id;
+    if (el.topbarArchiveBtn) {
+      el.topbarArchiveBtn.hidden = false;
+      el.topbarArchiveBtn.title = sess.archived ? 'Restore chat to Active' : 'Archive this chat';
+    }
+    if (el.topbarDeleteBtn) el.topbarDeleteBtn.hidden = false;
     syncWorkspaceIndicators(sess.workspace_root || '');
+    renderSessionGrantsPill(el.grantsPill, sess.session_grants || []);
     renderSessionStream(id, sess);
     applySession(id, sess);
     applySessionTelemetry(sess.stats, Array.isArray(sess.messages) && sess.messages.length > 0);
-    setComposerBusy(false);
+    const isRunning = Boolean(sess.running);
     const hasPending = sess.pending_approvals && sess.pending_approvals.length > 0;
-    setStreamStatus(hasPending ? 'Awaiting Approval' : 'Ready', hasPending ? 'warn' : 'ok');
-    await Promise.all([
-      refreshWorkspaceFiles(id),
-      refreshDag(id),
-      refreshSourcesAndSidetalk(id),
-    ]);
+    setComposerBusy(isRunning || hasPending);
+    setStreamStatus(
+      hasPending ? 'Awaiting Approval' : isRunning ? 'Running...' : 'Ready',
+      hasPending ? 'warn' : isRunning ? 'accent' : 'ok'
+    );
+    await Promise.all([refreshWorkspaceFiles(id), refreshDag(id), refreshSourcesAndSidetalk(id)]);
   } catch (err) {
     showToast(`Failed to load session ${id}: ${err.message}`);
   }
@@ -422,11 +408,13 @@ function connectSessionSse(id) {
   }
   state.eventSource = api.openSessionEvents(id, {
     text_delta: (d) => {
+      setComposerBusy(true);
       setStreamStatus('Streaming...', 'accent');
       updatePipelineFromEvent('solver_stream', d);
       handleTextDelta(d);
     },
     thinking_delta: (d) => {
+      setComposerBusy(true);
       updatePipelineFromEvent('thinking_delta', d);
       handleThinkingDelta(d);
     },
@@ -440,12 +428,21 @@ function connectSessionSse(id) {
       handleToolTrace(d);
     },
     approval_requested: (d) => {
+      setComposerBusy(true);
       setStreamStatus('Awaiting Approval', 'warn');
       renderApprovalCard(d);
     },
-    approval_resolved: (d) => {
-      setStreamStatus('Running', 'accent');
-      if (d) resolveApprovalCard(d.call_id, d.approved, Boolean(d.approve_for_session));
+    approval_resolved: async (d) => {
+      setStreamStatus('Running...', 'accent');
+      if (d) {
+        resolveApprovalCard(d.call_id, d.approved, Boolean(d.approve_for_session));
+        if (d.approve_for_session && state.activeSessionId === id) {
+          try {
+            const s = await api.getSession(id);
+            if (state.activeSessionId === id) renderSessionGrantsPill(el.grantsPill, s.session_grants || []);
+          } catch { /* ignore */ }
+        }
+      }
     },
     dag_updated: (d) => {
       updatePipelineFromEvent('dag_updated', d);
@@ -453,9 +450,7 @@ function connectSessionSse(id) {
     },
     session_event: (d) => {
       updatePipelineFromEvent('session_event', d);
-      if (d && d.kind === 'vendor.builtin_tool') {
-        appendWarningLine(builtinToolWarning(d.data || {}));
-      }
+      if (d && d.kind === 'vendor.builtin_tool') appendWarningLine(formatBuiltinToolWarning(d.data || {}));
     },
     turn_complete: async (d) => {
       finalizeLiveThinking();
@@ -465,6 +460,7 @@ function connectSessionSse(id) {
         const sess = await api.getSession(id);
         const msgs = Array.isArray(sess && sess.messages) ? sess.messages : [];
         const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+        if (state.activeSessionId === id) renderSessionGrantsPill(el.grantsPill, sess.session_grants || []);
         if (d && d.text) {
           finalizeLiveAssistant(d.text, lastMsg && lastMsg.role === 'assistant' ? lastMsg : null);
           if (state.activeSessionId === id) applySession(id, sess);
@@ -477,12 +473,7 @@ function connectSessionSse(id) {
         finalizeLiveAssistant((d && d.text) || '');
         finishLivePipeline('ok', null);
       }
-      await Promise.all([
-        refreshSessionList(),
-        refreshWorkspaceFiles(id),
-        refreshDag(id),
-        loadSessionSources(id),
-      ]);
+      await Promise.all([refreshSessionList(), refreshWorkspaceFiles(id), refreshDag(id), loadSessionSources(id)]);
     },
     turn_error: (d) => {
       finalizeLiveThinking();
@@ -498,17 +489,10 @@ function connectSessionSse(id) {
         finishLivePipeline('error', null);
         showToast(`Turn error: ${rawErr}`);
       }
+      refreshSessionList();
       refreshSessionRoute(id);
     },
   });
-}
-
-function builtinToolWarning(data) {
-  const name = String(data.tool_name || '?').slice(0, 80);
-  const outcome = data.denied_or_failed
-    ? 'reported denied or failed'
-    : data.state === 'DONE' ? 'reported finished' : 'reported running';
-  return `Warning: the Antigravity CLI's built-in tool \`${name}\` ${outcome}. It is outside re:Search's tools, policy and approvals; re:Search only records what the CLI reported (vendor-sandboxed, not confined to re:Search tools).`;
 }
 
 async function refreshSessionRoute(id) {
@@ -516,9 +500,7 @@ async function refreshSessionRoute(id) {
   try {
     const sess = await api.getSession(id);
     if (state.activeSessionId === id) applySession(id, sess);
-  } catch {
-    // Keep dropdown state
-  }
+  } catch { /* ignore */ }
 }
 
 async function handleSendPrompt(sessionId, prompt, opts) {
@@ -528,6 +510,7 @@ async function handleSendPrompt(sessionId, prompt, opts) {
   startLivePipeline(opts);
   await api.sendMessage(sessionId, { prompt, ...opts });
   rememberForSession(sessionId, { provider: opts.provider, model: opts.model });
+  refreshSessionList();
 }
 
 async function handleStopTurn() {
@@ -550,10 +533,7 @@ async function handleAttachWorkspace(workspaceRoot) {
     const sess = await api.setSessionWorkspace(state.activeSessionId, workspaceRoot);
     syncWorkspaceIndicators((sess && sess.workspace_root) || workspaceRoot);
     refreshEmptyHeroIfVisible();
-    await Promise.all([
-      refreshSessionList(),
-      refreshWorkspaceFiles(state.activeSessionId),
-    ]);
+    await Promise.all([refreshSessionList(), refreshWorkspaceFiles(state.activeSessionId)]);
     showToast(`Attached workspace: ${(sess && sess.workspace_root) || workspaceRoot}`);
   } catch (err) {
     showToast(`Could not attach workspace: ${err.message}`);
@@ -562,18 +542,12 @@ async function handleAttachWorkspace(workspaceRoot) {
 
 function wirePostMessageBridge() {
   window.addEventListener('message', (ev) => {
-    if (ev.origin && ev.origin !== window.location.origin && ev.origin !== 'null') {
-      return;
-    }
+    if (ev.origin && ev.origin !== window.location.origin && ev.origin !== 'null') return;
     const msg = ev.data;
     if (!msg || typeof msg !== 'object') return;
-    if (msg.type === 're-search:select-tab' && msg.tab) {
-      activateCanvasTab(msg.tab);
-    } else if (msg.type === 're-search:set-prompt' && typeof msg.prompt === 'string') {
-      setComposerPrompt(msg.prompt, false);
-    } else if (msg.type === 're-search:set-theme' && (msg.theme === 'light' || msg.theme === 'dark')) {
-      applyTheme(msg.theme);
-    }
+    if (msg.type === 're-search:select-tab' && msg.tab) activateCanvasTab(msg.tab);
+    else if (msg.type === 're-search:set-prompt' && typeof msg.prompt === 'string') setComposerPrompt(msg.prompt, false);
+    else if (msg.type === 're-search:set-theme' && (msg.theme === 'light' || msg.theme === 'dark')) applyTheme(msg.theme);
   });
 }
 

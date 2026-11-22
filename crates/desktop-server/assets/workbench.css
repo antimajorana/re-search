@@ -12,9 +12,107 @@
   user-select: none;
 }
 
-/* Left Rail Search & Enhanced Session Cards */
+/* Left Rail Search, Filter Tabs & Archive/Delete Session Row Actions */
 .rail-search-wrap {
-  padding: 0 12px 8px;
+  padding: 0 12px 6px;
+}
+
+.rail-filter-bar {
+  padding: 0 12px 6px;
+}
+
+.wide-seg {
+  display: flex;
+  width: 100%;
+}
+.wide-seg > .seg-btn {
+  flex: 1 1 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.session-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-md);
+}
+.session-row > .session-item {
+  padding-right: 58px;
+}
+.session-row-actions {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  background: var(--bg-rail);
+  border-radius: var(--radius-pill);
+  padding: 2px;
+  transition: opacity var(--transition-fast);
+}
+.session-row.is-active > .session-row-actions {
+  background: var(--bg-active);
+  opacity: 1;
+  pointer-events: auto;
+}
+.session-row:hover > .session-row-actions,
+.session-row:focus-within > .session-row-actions {
+  opacity: 1;
+  pointer-events: auto;
+  background: var(--bg-hover);
+}
+.session-row.is-active:hover > .session-row-actions {
+  background: var(--bg-active);
+}
+
+.row-action-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.row-action-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--ink-primary);
+}
+.row-action-btn.danger:hover,
+.icon-btn.danger-hover:hover {
+  background: var(--status-err-bg);
+  color: var(--status-err);
+}
+
+.mini-pill.accent {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.approval-session-hint {
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--ink-secondary);
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-subtle);
+}
+
+#session-grants-pill {
+  cursor: pointer;
+}
+#session-grants-pill:hover {
+  opacity: 0.85;
 }
 
 #session-search {

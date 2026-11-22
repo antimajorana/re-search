@@ -203,6 +203,21 @@ fn dispatch_api(
             write_api_res(&mut stream, handle_create_session(state, &req.body));
         }
         ("GET", ["api", "sessions", id]) => write_api_res(&mut stream, handle_get_session(state, id)),
+        ("DELETE", ["api", "sessions", id]) => {
+            write_api_res(&mut stream, crate::session_lifecycle::handle_delete_session(state, id));
+        }
+        ("POST", ["api", "sessions", id, "archive"]) => {
+            write_api_res(
+                &mut stream,
+                crate::session_lifecycle::handle_archive_session(state, id, &req.body),
+            );
+        }
+        ("DELETE", ["api", "sessions", id, "grants"]) => {
+            write_api_res(
+                &mut stream,
+                crate::session_lifecycle::handle_revoke_session_grants(state, id),
+            );
+        }
         ("GET", ["api", "sessions", id, "events"]) => {
             if let Err((st, msg)) = handle_sse_stream(stream, state, id, shutdown) {
                 let _ = st;

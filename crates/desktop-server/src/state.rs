@@ -41,6 +41,10 @@ pub struct SessionMeta {
     /// subscription-CLI route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<String>,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub deleted: bool,
 }
 
 /// Route value stored in [`SessionMeta::route`] (and accepted as `provider`) for the
@@ -122,8 +126,8 @@ pub struct DesktopState {
     pub cli_turns: Mutex<HashMap<String, (crate::cli_turn::CliRouteKind, cli_route::StopHandle)>>,
     /// Running in-core API / ChatGPT turns, by session: cooperative cancellation token.
     pub api_turns: Mutex<HashMap<String, agent::CancelToken>>,
-    /// Session-scoped human-approved `network-read` grants keyed by `(session_id, caller)`.
-    pub network_session_grants: Mutex<HashMap<(String, String), tools::NetworkReadGrant>>,
+    /// Session-scoped human-approved capability grants keyed by `(session_id, effect)`.
+    pub session_capability_grants: Mutex<HashMap<(String, policy::EffectClass), crate::session_lifecycle::SessionCapabilityGrant>>,
     /// Model lists fetched from providers, kept for [`crate::model_catalog::CACHE_TTL`].
     pub catalog: crate::model_catalog::Catalog,
     /// `claude --version` output once a probe succeeded (a failed probe is not kept).
@@ -148,7 +152,7 @@ impl DesktopState {
             ui_settings_lock: Mutex::new(()),
             cli_turns: Mutex::new(HashMap::new()),
             api_turns: Mutex::new(HashMap::new()),
-            network_session_grants: Mutex::new(HashMap::new()),
+            session_capability_grants: Mutex::new(HashMap::new()),
             catalog: crate::model_catalog::Catalog::default(),
             claude_version: std::sync::OnceLock::new(),
             chatgpt,
@@ -279,8 +283,8 @@ impl DesktopState {
 
     pub fn session_exists(&self, session_id: &str) -> Result<bool, String> {
         validate_session_id(session_id).map_err(|e| e.to_string())?;
-        if self.load_meta(session_id).is_some() {
-            return Ok(true);
+        if let Some(meta) = self.load_meta(session_id) {
+            return Ok(!meta.deleted);
         }
         let ledger = self.open_ledger()?;
         Ok(!ledger.read_session(session_id).map_err(|e| e.to_string())?.is_empty())

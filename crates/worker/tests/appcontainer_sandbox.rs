@@ -358,7 +358,7 @@ fn control_vs_contained_probes() {
     // Pad low handle slots in the parent so `high_pipe`'s inheritable handle value sits well above
     // fresh CPython's ~60 startup handles, and keep `extra_pipe` open across both spawns for the
     // kernel pipe-EOF refcount proof.
-    let pad_pipes: Vec<PipePair> = (0..256).map(|_| PipePair::new(Direction::FromChild).unwrap()).collect();
+    let pad_pipes: Vec<PipePair> = (0..1024).map(|_| PipePair::new(Direction::FromChild).unwrap()).collect();
     let extra_pipe = PipePair::new(Direction::FromChild).unwrap();
     let high_pipe = PipePair::new(Direction::FromChild).unwrap();
     let high_handle = high_pipe.their_handle_value();

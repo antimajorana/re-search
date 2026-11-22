@@ -1,6 +1,7 @@
 //! UI-backed `tools::Approver` implementation with unified diff previews
 //! and fail-closed SHA-256 chained ledger recording.
 
+use crate::session_lifecycle::{bind_session_grant, can_grant_for_session, matching_session_grant};
 use crate::state::{now_ms, DesktopState, PendingApprovalView, PendingSlot};
 use research_tools::{preview_workspace_edit, EditPreview};
 use serde_json::json;
@@ -125,10 +126,21 @@ impl Approver for UiApprover {
             }
         };
 
+        let allow_session_approve =
+            self.allow_session_network_grant && can_grant_for_session(request.effect, self.contained);
+
+        if allow_session_approve {
+            if let Some(grant) = matching_session_grant(&self.state, &request.session, request.effect, self.contained) {
+                let reason = format!(
+                    "reused human session grant ({}) in desktop UI",
+                    &grant.grant_digest[..grant.grant_digest.len().min(12)]
+                );
+                return self.record_answer_and_reply(request, scope, true, true, &reason);
+            }
+        }
+
         let call_id = format!("ap-{}", random_hex(8));
         let edit_preview = self.compute_preview(request);
-        let allow_session_approve =
-            self.allow_session_network_grant && request.effect == policy::EffectClass::NetworkRead;
         let view = PendingApprovalView {
             call_id: call_id.clone(),
             session: request.session.clone(),
@@ -215,6 +227,15 @@ impl Approver for UiApprover {
         };
 
         let outcome = self.record_answer_and_reply(request, scope, approved, approve_for_session, &reason);
+        if outcome.reply.approved && outcome.approve_for_session {
+            bind_session_grant(
+                &self.state,
+                &request.session,
+                request.effect,
+                self.contained,
+                &request.digest,
+            );
+        }
         self.state.sse.emit(
             &request.session,
             "approval_resolved",

@@ -185,12 +185,6 @@ fn run_session_turn(
 
     let (router, containment, contained) =
         build_desktop_router(Arc::clone(state), Arc::clone(&env), session_id)?;
-    let caller = format!("agent:{}:{session_id}", transport.info().provider);
-    if let Ok(grants) = state.network_session_grants.lock() {
-        if let Some(g) = grants.get(&(session_id.to_string(), caller.clone())) {
-            router.seed_network_read_grant(&caller, g.clone());
-        }
-    }
 
     let guardrails = GuardrailConfig {
         verification_mode: req
@@ -275,12 +269,6 @@ fn run_session_turn(
             &mut sink,
         )?
     };
-
-    if let Some(grant) = router.active_network_read_grant(&caller) {
-        if let Ok(mut grants) = state.network_session_grants.lock() {
-            grants.insert((session_id.to_string(), caller), grant);
-        }
-    }
 
     match outcome {
         SessionOutcome::Aborted { reason, .. } => Err(reason),

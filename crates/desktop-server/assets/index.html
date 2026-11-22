@@ -32,7 +32,14 @@
       <div class="rail-search-wrap">
         <input id="session-search" class="text-input" type="search" placeholder="Filter sessions (Ctrl+K)..." aria-label="Filter sessions">
       </div>
-      <div class="rail-section-label">Sessions &amp; Forks</div>
+      <div class="rail-filter-bar">
+        <div class="segmented-group wide-seg" role="group" aria-label="Chat filter">
+          <button id="rail-tab-active" type="button" class="seg-btn is-active" aria-pressed="true">Active</button>
+          <button id="rail-tab-archived" type="button" class="seg-btn" aria-pressed="false">
+            <span>Archived</span><span id="rail-archived-count" class="tab-count" hidden>0</span>
+          </button>
+        </div>
+      </div>
       <nav id="session-list" aria-label="Session threads"></nav>
       <div class="rail-footer">
         <button id="settings-btn" type="button" class="pill-btn sm" aria-haspopup="dialog" aria-controls="settings-dialog">Connect</button>
@@ -53,7 +60,18 @@
           <span id="active-workspace-pill" class="badge" hidden></span>
         </div>
         <div class="topbar-right">
+          <button id="session-grants-pill" type="button" class="badge ok" title="Click to revoke session-wide tool approvals for this chat" hidden></button>
+          <button id="topbar-stop-btn" type="button" class="stop-pill-btn sm" title="Stop active turn (Esc)" aria-label="Stop active turn" hidden>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2.5"/></svg>
+            <span>Stop</span>
+          </button>
           <span id="stream-status-pill" class="badge">Ready</span>
+          <button id="topbar-archive-btn" type="button" class="icon-btn" title="Archive this chat" aria-label="Archive this chat" hidden>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="4" width="20" height="5" rx="1"/><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9"/><line x1="10" y1="13" x2="14" y2="13"/></svg>
+          </button>
+          <button id="topbar-delete-btn" type="button" class="icon-btn danger-hover" title="Delete this chat" aria-label="Delete this chat" hidden>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+          </button>
           <button id="canvas-toggle" type="button" class="pill-btn sm" title="Toggle Research Canvas (Ctrl+\)" aria-expanded="true" aria-controls="canvas-drawer">Canvas</button>
         </div>
       </header>
@@ -137,10 +155,11 @@
                 <option value="">Loading models...</option>
               </select>
               <button id="composer-connect" type="button" class="pill-btn sm" title="Connect a model provider" hidden>Connect</button>
-              <button id="composer-stop" type="button" title="Stop active turn immediately" aria-label="Stop active turn" hidden>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                  <rect x="5" y="5" width="14" height="14" rx="2.5"/>
+              <button id="composer-stop" type="button" class="stop-pill-btn" title="Stop active turn immediately (Esc)" aria-label="Stop active turn" hidden>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <rect x="4" y="4" width="16" height="16" rx="2.5"/>
                 </svg>
+                <span>Stop</span>
               </button>
               <button id="composer-send" type="submit" title="Send prompt (Enter)" aria-label="Send prompt">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
