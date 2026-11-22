@@ -36,6 +36,38 @@ pub const USAGE_URL: &str = "https://chatgpt.com/settings/usage";
 /// Opens a URL with the system's default handler.
 pub type UrlOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
+/// What a test opener answers.
+pub const TEST_OPENER_REFUSAL: &str = "test: browser opening disabled";
+
+/// An opener that never opens anything; every test configuration uses it.
+pub fn refusing_opener() -> UrlOpener {
+    Arc::new(|_url: &str| Err(TEST_OPENER_REFUSAL.to_string()))
+}
+
+/// The real opener: `chatgpt_auth::open_authorize_url` (ShellExecuteW; `xdg-open`
+/// elsewhere), limited to `ep`'s sign-in page.
+#[cfg(not(test))]
+fn system_opener(ep: Endpoints) -> UrlOpener {
+    Arc::new(move |url: &str| chatgpt_auth::open_authorize_url(&ep, url))
+}
+
+/// This crate's unit tests never get the real opener, whatever their configuration says.
+#[cfg(test)]
+fn system_opener(_ep: Endpoints) -> UrlOpener {
+    refusing_opener()
+}
+
+/// Test hooks for unit tests: a refusing opener and every endpoint on a closed loopback
+/// port, so nothing can reach a browser or OpenAI.
+#[cfg(test)]
+pub(crate) fn offline_test_hooks() -> ChatGptTestHooks {
+    ChatGptTestHooks {
+        mock_base: chatgpt_auth::testkit::closed_loopback_base(),
+        opener: refusing_opener(),
+        login_timeout: Duration::from_secs(5),
+    }
+}
+
 /// Test-only: a loopback mock for every OpenAI endpoint, a replacement for the browser
 /// opener, and a short sign-in timeout. Production leaves [`DesktopConfig::chatgpt_test`]
 /// at `None`.
@@ -68,8 +100,7 @@ impl ChatGptHub {
             ),
             None => {
                 let ep = Endpoints::production();
-                let ep2 = ep.clone();
-                (Options { endpoints: ep, ..Options::default() }, Arc::new(move |url: &str| chatgpt_auth::open_authorize_url(&ep2, url)))
+                (Options { endpoints: ep.clone(), ..Options::default() }, system_opener(ep))
             }
         };
         let auth = Arc::new(ChatGptAuth::new(cfg.data_dir.clone(), opts));
@@ -236,5 +267,23 @@ pub fn handle_open(state: &DesktopState) -> ApiResult {
 pub fn handle_logout(state: &DesktopState) -> ApiResult {
     let out = state.chatgpt.auth.logout();
     state.catalog.clear();
-    Ok((200, json!({ "revoked": out.revoked, "message": out.message, "connected": false })))
+    // Report what is actually on disk now: sign-out can fail to take the folder lock, and
+    // then the saved sign-in is still there.
+    let st = state.chatgpt.auth.status();
+    Ok((200, json!({ "revoked": out.revoked, "message": out.message, "connected": st.signed_in && st.plan_enabled, "signed_in": st.signed_in })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unit_test_builds_have_no_real_opener() {
+        let ep = Endpoints::production();
+        let url = format!("{}?client_id=x", ep.authorize);
+        assert_eq!(system_opener(ep)(&url).unwrap_err(), TEST_OPENER_REFUSAL);
+        let hooks = offline_test_hooks();
+        assert_eq!((hooks.opener)(&url).unwrap_err(), TEST_OPENER_REFUSAL);
+        assert!(hooks.mock_base.starts_with("http://127.0.0.1:"));
+    }
 }

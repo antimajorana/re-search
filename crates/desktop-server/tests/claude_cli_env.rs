@@ -16,6 +16,18 @@ use std::time::Duration;
 fn env_credentials_refuse_the_turn_unless_explicitly_allowed() {
     clear_env_auth();
     std::env::set_var("ANTHROPIC_API_KEY", "dummy-not-a-key-0000");
+
+    // A configured connection_env map (here the tests' empty one) never hides a variable
+    // the CLI would inherit from the real process environment.
+    let h0 = CliHarness::start();
+    let sid0 = h0.create_cli_session();
+    let mut sse0 = h0.sse(&sid0);
+    h0.send(&sid0, "hello");
+    let err0 = sse0.wait_turn_end(Duration::from_secs(30)).expect_err("refused despite the empty map");
+    assert!(err0["error"].as_str().unwrap().contains("ANTHROPIC_API_KEY"), "{err0}");
+    assert!(h0.fake.argv().is_none(), "the CLI must not have been started");
+    h0.srv.shutdown();
+
     let h = CliHarness::start_with(|cfg| cfg.connection_env = None);
     let sid = h.create_cli_session();
     h.fake.script(&[

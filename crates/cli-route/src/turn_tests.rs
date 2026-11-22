@@ -128,13 +128,91 @@ fn tool_config_is_not_written_when_version_fails_or_turn_is_stopped() {
     assert_eq!(ok_vendor.writes.load(Ordering::Acquire), 0);
     assert!(!cfg.exists());
 
-    // Even when spawn fails (e.g. non-Windows stub sandbox or missing exe), version() ran
-    // before write_tool_config and ToolConfigGuard cleans up the config file on exit.
+    // Even when spawn fails, version() ran before write_tool_config and ToolConfigGuard
+    // cleans up the config file on exit. The exe is an absolute path that does not exist
+    // (never a bare name looked up on PATH), so the spawn fails on every machine; the
+    // failure after the start event is recorded as `session.abort`.
+    let missing_exe = dir.join("definitely-missing-cli.exe");
+    let spawn_spec = make_spec("s-1", &missing_exe, &dir, &cfg, &core);
     let spawn_fail_vendor = StubVendor::ok();
-    let _ = run_turn(&spawn_fail_vendor, &rec, &mut NoopSink, &spec, &StopHandle::new());
+    let report = run_turn(&spawn_fail_vendor, &rec, &mut NoopSink, &spawn_spec, &StopHandle::new()).unwrap();
+    assert!(matches!(&report.end, TurnEnd::Aborted(r) if r.contains("could not start the CLI")), "{:?}", report.end);
     assert!(!spawn_fail_vendor.tool_config_seen_in_version.load(Ordering::Acquire));
     assert_eq!(spawn_fail_vendor.writes.load(Ordering::Acquire), 1);
     assert!(!cfg.exists());
+    assert_eq!(last_kinds(&rec, 2), ["session.start", "session.abort"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn last_kinds(rec: &Recorder, n: usize) -> Vec<String> {
+    let events = rec.ledger.read_session(&rec.session).unwrap();
+    events.iter().rev().take(n).rev().map(|e| e.kind.clone()).collect()
+}
+
+struct FailingConfigVendor(StubVendor);
+
+impl VendorCli for FailingConfigVendor {
+    fn route(&self) -> &'static str {
+        self.0.route()
+    }
+    fn caller(&self, session: &str) -> String {
+        self.0.caller(session)
+    }
+    fn locate(&self, explicit: Option<&Path>, env: &dyn Fn(&str) -> Option<OsString>) -> Result<PathBuf, String> {
+        self.0.locate(explicit, env)
+    }
+    fn version(&self, exe: &Path) -> Result<VersionInfo, String> {
+        self.0.version(exe)
+    }
+    fn env_auth_vars(&self) -> &'static [&'static str] {
+        &[]
+    }
+    fn tool_name(&self, tool_id: &str) -> String {
+        tool_id.to_string()
+    }
+    fn write_tool_config(&self, _path: &Path, _core: &CoreLaunch) -> Result<(), String> {
+        Err("disk full".into())
+    }
+    fn args(&self, model: &str, tool_config: &Path) -> Vec<String> {
+        self.0.args(model, tool_config)
+    }
+    fn prepare(&self, _cmd: &mut Command) {}
+    fn is_handshake(&self, line: &Value) -> bool {
+        self.0.is_handshake(line)
+    }
+    fn check_handshake(&self, line: &Value, expected_tools: &[String]) -> Result<(), String> {
+        self.0.check_handshake(line, expected_tools)
+    }
+    fn check_auth(&self, line: &Value, allow_env_auth: bool) -> Result<(), String> {
+        self.0.check_auth(line, allow_env_auth)
+    }
+    fn handshake_version(&self, line: &Value) -> Option<String> {
+        self.0.handshake_version(line)
+    }
+    fn is_model_activity(&self, line: &Value) -> bool {
+        self.0.is_model_activity(line)
+    }
+    fn map_line(&self, line: &Value) -> Vec<(String, Value)> {
+        self.0.map_line(line)
+    }
+}
+
+#[test]
+fn a_tool_config_write_failure_after_the_start_event_records_session_abort() {
+    let dir = std::env::temp_dir().join(format!("cli-route-turn-cfgfail-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let cfg = dir.join("mcp.json");
+    let core = CoreLaunch { exe: PathBuf::from("core"), env: BTreeMap::new() };
+    let rec = Recorder { ledger: Ledger::open(&dir).unwrap(), session: "s-cfgfail".into() };
+    let missing_exe = dir.join("definitely-missing-cli.exe");
+    let spec = make_spec("s-cfgfail", &missing_exe, &dir, &cfg, &core);
+    let report = run_turn(&FailingConfigVendor(StubVendor::ok()), &rec, &mut NoopSink, &spec, &StopHandle::new()).unwrap();
+    assert!(matches!(&report.end, TurnEnd::Aborted(r) if r.contains("tool configuration") && r.contains("disk full")), "{:?}", report.end);
+    assert_eq!(last_kinds(&rec, 2), ["session.start", "session.abort"]);
+    assert!(!cfg.exists());
+    let prior = crate::history::prior_turns(&rec.ledger.read_session("s-cfgfail").unwrap());
+    assert!(prior.last().is_some_and(|t| t.aborted));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

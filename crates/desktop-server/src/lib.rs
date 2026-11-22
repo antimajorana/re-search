@@ -57,7 +57,9 @@ pub struct DesktopConfig {
     /// Environment used by `GET /api/connections` and `GET /api/models` (provider key
     /// variables, the Claude CLI's location and the billing-safety variables). `None`: the
     /// process environment, which is what turns use. Tests pass a fixed map so the answer
-    /// does not depend on the machine.
+    /// does not depend on the machine. A turn's billing-safety refusal always reads the
+    /// process environment (what the CLI inherits) as well: this map can add variables to
+    /// that check but never hide one.
     pub connection_env: Option<BTreeMap<String, String>>,
     /// Test-only: points Sign in with ChatGPT at a loopback mock and replaces the browser
     /// opener. `None` (always, outside tests): OpenAI's production endpoints.

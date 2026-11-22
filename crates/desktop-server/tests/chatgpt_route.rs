@@ -307,7 +307,7 @@ fn chatgpt_turn_refused_without_signin_or_plan_scope_and_ignores_generic_key() {
         write!(s, "GET /api/sessions/{sid}/events HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {cookie}\r\n\r\n").unwrap();
         let (tx, rx) = mpsc::channel::<String>();
         std::thread::spawn(move || {
-            for line in BufReader::new(s).lines().flatten() {
+            for line in BufReader::new(s).lines().map_while(Result::ok) {
                 if tx.send(line).is_err() {
                     break;
                 }

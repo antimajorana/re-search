@@ -349,15 +349,34 @@ pub fn discover_revocation_endpoint(ep: &Endpoints, cfg: HttpCfg) -> Option<Stri
     pin_revocation_endpoint(&ep.issuer, raw)
 }
 
-/// Revoke the renewable session. HTTP 200 (even empty) is success.
-pub fn revoke(ep: &Endpoints, client_id: &str, refresh_token: &str, cfg: HttpCfg) -> Result<(), OAuthError> {
-    let discovered = discover_revocation_endpoint(ep, cfg);
-    let url = discovered.as_deref().unwrap_or(&ep.revoke);
+/// The revocation endpoint to use: the discovered one when it passes the origin pin,
+/// else the fixed `ep.revoke`.
+pub fn revocation_url(ep: &Endpoints, cfg: HttpCfg) -> String {
+    discover_revocation_endpoint(ep, cfg).unwrap_or_else(|| ep.revoke.clone())
+}
+
+/// Revoke the renewable session at `url` (from [`revocation_url`]). HTTP 200 (even
+/// empty) is success.
+pub fn revoke_at(url: &str, client_id: &str, refresh_token: &str, cfg: HttpCfg) -> Result<(), OAuthError> {
     let (status, mut body) =
         post_form(url, &[("token", refresh_token), ("token_type_hint", "refresh_token"), ("client_id", client_id)], cfg)?;
     let res = if status == 200 { Ok(()) } else { Err(rejected(status, &body)) };
     zeroize::Zeroize::zeroize(&mut body);
     res
+}
+
+/// Discovery, then one revocation attempt.
+pub fn revoke(ep: &Endpoints, client_id: &str, refresh_token: &str, cfg: HttpCfg) -> Result<(), OAuthError> {
+    revoke_at(&revocation_url(ep, cfg), client_id, refresh_token, cfg)
+}
+
+impl HttpCfg {
+    /// These settings with both timeouts capped at `left` (at least 1 ms), so a series of
+    /// calls stays inside one overall time budget.
+    pub fn capped(self, left: Duration) -> Self {
+        let left = left.max(Duration::from_millis(1));
+        Self { connect_timeout: self.connect_timeout.min(left), timeout: self.timeout.min(left) }
+    }
 }
 
 /// The issuer's JSON Web Key Set.

@@ -10,12 +10,20 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use zeroize::Zeroize;
 
-/// Refresh when the access token has less than this many seconds left.
+/// Refresh when the access token has less than this many seconds left (at most half of
+/// the token's issued lifetime, so a short-lived token is not refreshed on every request).
 pub const REFRESH_MARGIN_S: i64 = 300;
+/// An access token with this many seconds or fewer left counts as expired.
+pub const EXPIRY_SKEW_S: i64 = 10;
 pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
+/// Default overall time for the network part of a sign-out (discovery, revocation
+/// attempts and their backoff); it runs with no lock held.
+pub const REVOKE_BUDGET: Duration = Duration::from_secs(45);
+/// Overall time for revoking tokens of a completed code exchange that is then discarded.
+const DISCARD_REVOKE_BUDGET: Duration = Duration::from_secs(10);
 const MAX_EXPIRES_IN_S: i64 = 86_400 * 365;
 
 #[derive(Debug, Clone)]
@@ -25,12 +33,36 @@ pub struct Options {
     pub login_timeout: Duration,
     /// Backoff between revocation retries on sign-out.
     pub revoke_backoff: Duration,
+    /// Overall cap on sign-out network time (see [`REVOKE_BUDGET`]).
+    pub revoke_budget: Duration,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { endpoints: Endpoints::production(), http: HttpCfg::default(), login_timeout: LOGIN_TIMEOUT, revoke_backoff: Duration::from_millis(500) }
+        Self {
+            endpoints: Endpoints::production(),
+            http: HttpCfg::default(),
+            login_timeout: LOGIN_TIMEOUT,
+            revoke_backoff: Duration::from_millis(500),
+            revoke_budget: REVOKE_BUDGET,
+        }
     }
+}
+
+/// Whether the saved access token should be refreshed now. A token that is expired (or
+/// within [`EXPIRY_SKEW_S`] of it) always is. Otherwise a refresh happens only inside the
+/// refresh margin (`min(REFRESH_MARGIN_S, lifetime / 2)`) and never before the server's
+/// `earliest_refresh_at`.
+pub(crate) fn refresh_due(c: &Credentials, now: i64) -> bool {
+    let left = c.expires_at_s.saturating_sub(now);
+    if left <= EXPIRY_SKEW_S {
+        return true;
+    }
+    let lifetime = c.expires_at_s.saturating_sub(c.saved_at_s).max(0);
+    if left > REFRESH_MARGIN_S.min(lifetime / 2) {
+        return false;
+    }
+    !c.earliest_refresh_at.is_some_and(|t| now < t)
 }
 
 /// Status for the Connect panel. `account` is the verified email when the ID token had
@@ -87,7 +119,9 @@ pub struct LogoutOutcome {
 pub struct ChatGptAuth {
     data_dir: PathBuf,
     opts: Options,
-    /// Serializes refresh, sign-in start/completion, status reads and sign-out.
+    /// Serializes refresh, sign-in start/completion and the storage part of sign-out.
+    /// Status reads do not take it (a refresh holds it across a network call), and no
+    /// sign-out network call runs under it.
     lock: Mutex<()>,
     note: Mutex<Option<String>>,
     attempt: Mutex<Option<Arc<Attempt>>>,
@@ -134,10 +168,9 @@ impl ChatGptAuth {
         if !vault::supported() {
             return off(vault::NOT_SUPPORTED.to_string());
         }
-        let Ok(_g) = self.lock.lock() else {
-            return off("The saved sign-in cannot be used: sign-in lock poisoned.".to_string());
-        };
-        match vault::load_credentials(&self.data_dir) {
+        // No lock: the vault files are replaced atomically, and a refresh or sign-out may
+        // be waiting on the network. A read that races a replace is retried briefly.
+        match self.load_for_status() {
             Ok(Some(c)) => {
                 let who = c.email.clone();
                 let plan = c.plan_enabled();
@@ -153,9 +186,22 @@ impl ChatGptAuth {
         }
     }
 
-    /// A current access token, refreshed first when it expires within
-    /// [`REFRESH_MARGIN_S`]. Concurrent callers wait for one refresh and then share its
-    /// result (the credentials are re-read under the lock).
+    fn load_for_status(&self) -> Result<Option<Credentials>, String> {
+        let mut tries = 0;
+        loop {
+            match vault::load_credentials(&self.data_dir) {
+                Err(_) if tries < 2 => {
+                    tries += 1;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                r => return r,
+            }
+        }
+    }
+
+    /// A current access token, refreshed first when [`refresh_due`] says so. Concurrent
+    /// callers wait for one refresh and then share its result (the credentials are re-read
+    /// under the lock).
     pub fn access_token(&self) -> Result<Secret, TokenError> {
         if !vault::supported() {
             return Err(TokenError::NotSupported);
@@ -167,7 +213,7 @@ impl ChatGptAuth {
             return Err(TokenError::PlanNotEnabled);
         }
         let now = try_now_s().map_err(|e| TokenError::Temporary(format!("Cannot verify token expiry: {e}.")))?;
-        if c.expires_at_s.saturating_sub(now) > REFRESH_MARGIN_S {
+        if !refresh_due(&c, now) {
             return Ok(c.access());
         }
         self.refresh_locked(c, now, true)
@@ -230,7 +276,7 @@ impl ChatGptAuth {
                 Err(self.disconnect("ChatGPT no longer accepts this app registration (invalid_client). Sign in again to register.".into()))
             }
             Err(e) if e.is_transient() => {
-                if allow_fallback && c.expires_at_s.saturating_sub(now) > 10 {
+                if allow_fallback && c.expires_at_s.saturating_sub(now) > EXPIRY_SKEW_S {
                     return Ok(c.access());
                 }
                 Err(TokenError::Temporary(format!("Could not renew the ChatGPT sign-in right now ({e}); it is kept.")))
@@ -272,9 +318,33 @@ impl ChatGptAuth {
         TokenError::Disconnected(why)
     }
 
-    /// Sign out: stop a pending attempt, try to revoke the refresh token (retrying network
-    /// and 5xx failures twice), then delete the tokens. The registration (issued client ID
-    /// and host ID) is kept for the next sign-in.
+    /// Best-effort revocation of `rt`: discovery once, then up to `attempts` tries
+    /// (retrying network and 5xx failures), all inside `budget`. Callers hold no lock.
+    fn revoke_bounded(&self, client_id: &str, rt: &Secret, attempts: u32, budget: Duration) -> bool {
+        let deadline = Instant::now() + budget;
+        let left = || deadline.saturating_duration_since(Instant::now());
+        let url = oauth::revocation_url(&self.opts.endpoints, self.opts.http.capped(budget / 3));
+        for attempt in 0..attempts {
+            if left().is_zero() {
+                return false;
+            }
+            match oauth::revoke_at(&url, client_id, rt.as_str(), self.opts.http.capped(left())) {
+                Ok(()) => return true,
+                Err(e) if e.is_transient() && attempt + 1 < attempts => {
+                    std::thread::sleep((self.opts.revoke_backoff * (attempt + 1)).min(left()));
+                }
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+
+    /// Sign out: stop a pending attempt, delete the stored tokens (under both locks, so no
+    /// refresh in this or another process can save rotated tokens afterwards), then, with
+    /// no lock held, try to revoke the refresh token from an in-memory copy (discovery once,
+    /// network and 5xx failures retried twice, all within [`Options::revoke_budget`]). The
+    /// copy is zeroized when dropped. The registration (issued client ID and host ID) is
+    /// kept for the next sign-in.
     pub fn logout(&self) -> LogoutOutcome {
         self.cancel_login();
         if !vault::supported() {
@@ -282,33 +352,21 @@ impl ChatGptAuth {
             self.set_note(None);
             return LogoutOutcome { revoked: None, message: "Signed out.".into() };
         }
-        let Ok(_g) = self.lock.lock() else {
-            return LogoutOutcome { revoked: Some(false), message: "sign-in lock poisoned".into() };
+        let (to_revoke, deleted) = {
+            let Ok(_g) = self.lock.lock() else {
+                return LogoutOutcome { revoked: Some(false), message: "sign-in lock poisoned".into() };
+            };
+            let Ok(_vl) = VaultLock::acquire(&self.data_dir) else {
+                return LogoutOutcome { revoked: Some(false), message: "Not signed out: another ChatGPT sign-in operation is in progress, so the saved sign-in is still on this computer. Try Sign out again.".into() };
+            };
+            let creds = vault::load_credentials(&self.data_dir).ok().flatten();
+            let deleted = vault::delete_credentials(&self.data_dir);
+            self.login_gen.fetch_add(1, Ordering::Release);
+            self.set_note(None);
+            let copy = creds.and_then(|c| c.refresh_token.clone().map(|rt| (c.client_id.clone(), Secret::new(rt))));
+            (copy, deleted)
         };
-        let Ok(_vl) = VaultLock::acquire(&self.data_dir) else {
-            return LogoutOutcome { revoked: Some(false), message: "could not lock the ChatGPT folder".into() };
-        };
-        let creds = vault::load_credentials(&self.data_dir).ok().flatten();
-        let mut revoked = None;
-        if let Some(c) = &creds {
-            if let Some(rt) = c.refresh_token.clone().map(Secret::new) {
-                let mut ok = false;
-                for attempt in 0..3 {
-                    match oauth::revoke(&self.opts.endpoints, &c.client_id, rt.as_str(), self.opts.http) {
-                        Ok(()) => {
-                            ok = true;
-                            break;
-                        }
-                        Err(e) if e.is_transient() && attempt < 2 => std::thread::sleep(self.opts.revoke_backoff * (attempt + 1)),
-                        Err(_) => break,
-                    }
-                }
-                revoked = Some(ok);
-            }
-        }
-        let deleted = vault::delete_credentials(&self.data_dir);
-        self.login_gen.fetch_add(1, Ordering::Release);
-        self.set_note(None);
+        let revoked = to_revoke.map(|(client_id, rt)| self.revoke_bounded(&client_id, &rt, 3, self.opts.revoke_budget));
         let message = match (revoked, deleted) {
             (_, Err(e)) => e,
             (Some(false), Ok(())) => "Signed out on this computer, but ChatGPT did not confirm the revocation. You can disconnect re:Search in ChatGPT Settings.".into(),
@@ -407,6 +465,20 @@ impl ChatGptAuth {
             }
             Err(e) => return Err(format!("the code exchange failed ({e})")),
         };
+        let res = self.accept_tokens(&tr, client_id, p, attempt);
+        if res.is_err() {
+            // The exchange succeeded but its tokens are discarded (cancelled attempt, other
+            // account, failed ID token, storage error): revoke the fresh grant, best effort
+            // and bounded, with every lock released. `tr` is zeroized when dropped.
+            if let Some(rt) = &tr.refresh_token {
+                self.revoke_bounded(client_id, rt, 1, DISCARD_REVOKE_BUDGET.min(self.opts.revoke_budget));
+            }
+        }
+        res
+    }
+
+    fn accept_tokens(&self, tr: &oauth::TokenResponse, client_id: &str, p: &Pending, attempt: &Attempt) -> Result<bool, String> {
+        let ep = &self.opts.endpoints;
         let id_token = tr.id_token.as_ref().ok_or("the token answer had no ID token")?;
         let jwks = oauth::fetch_jwks(ep, self.opts.http).map_err(|e| format!("could not fetch OpenAI's signing keys ({e})"))?;
         let now = try_now_s().map_err(|e| format!("cannot verify ID token time ({e})"))?;
@@ -468,5 +540,38 @@ impl ChatGptAuth {
                 (s.as_str(), msg)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn creds(saved_at_s: i64, expires_at_s: i64, earliest_refresh_at: Option<i64>) -> Credentials {
+        Credentials {
+            issuer: "i".into(), client_id: "c".into(), subject: "s".into(), email: None, id_token: "x".into(),
+            access_token: "a".into(), refresh_token: Some("r".into()), token_type: "Bearer".into(),
+            expires_at_s, scopes: vec![], saved_at_s, earliest_refresh_at,
+        }
+    }
+
+    #[test]
+    fn refresh_is_due_only_inside_a_margin_capped_by_half_the_lifetime_and_after_earliest_refresh_at() {
+        let now = 1_800_000_000;
+        // One-hour token: the margin is 300 s.
+        assert!(!refresh_due(&creds(now - 3000, now + 600, None), now));
+        assert!(refresh_due(&creds(now - 3400, now + 200, None), now));
+        // Short-lived tokens (lifetime <= 600 s) are not refreshed while more than half is
+        // left, so a fresh short token is not refreshed on every request.
+        for ttl in [20, 60, 120, 300, 600] {
+            assert!(!refresh_due(&creds(now, now + ttl, None), now), "fresh {ttl} s token");
+        }
+        assert!(refresh_due(&creds(now - 40, now + 20, None), now), "60 s token two-thirds used");
+        // earliest_refresh_at in the future holds off a margin refresh...
+        assert!(!refresh_due(&creds(now - 3400, now + 200, Some(now + 100)), now));
+        assert!(refresh_due(&creds(now - 3400, now + 200, Some(now)), now));
+        // ...but never an expired (or nearly expired) token.
+        assert!(refresh_due(&creds(now - 3600, now + EXPIRY_SKEW_S, Some(now + 100)), now));
+        assert!(refresh_due(&creds(now - 3600, now - 5, Some(now + 100)), now));
     }
 }

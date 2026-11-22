@@ -54,6 +54,38 @@ mod windows_flow {
         code_error: Mutex<Option<&'static str>>,
         omit_refresh_token: AtomicBool,
         revoke_status: AtomicU16,
+        revoke_delay_ms: AtomicUsize,
+        /// The vault's data directory, so the revoke handler can look at it.
+        data_dir: Mutex<Option<std::path::PathBuf>>,
+        /// Set when a revocation arrived while tokens or the cross-process lock still existed.
+        revoke_saw_tokens: AtomicBool,
+        revoke_saw_lock: AtomicBool,
+    }
+
+    fn revoke_reply(s: &Script) -> Reply {
+        if let Some(d) = s.data_dir.lock().unwrap().clone() {
+            let v = d.join(vault::DIR);
+            s.revoke_saw_tokens.fetch_or(v.join("credentials.dpapi").exists(), Ordering::SeqCst);
+            // The lock is an OS file lock on `.lock` (the file itself always stays): it is
+            // held exactly when another handle cannot lock it.
+            let held = std::fs::OpenOptions::new()
+                .write(true)
+                .open(v.join(".lock"))
+                .is_ok_and(|f| matches!(f.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
+            s.revoke_saw_lock.fetch_or(held, Ordering::SeqCst);
+        }
+        std::thread::sleep(Duration::from_millis(s.revoke_delay_ms.load(Ordering::SeqCst) as u64));
+        Reply { status: s.revoke_status.load(Ordering::SeqCst), content_type: "application/json", body: Vec::new() }
+    }
+
+    /// Make the saved access token due for a refresh: an hour-long token with 60 s left.
+    /// (A freshly issued short token is no longer refreshed at once; see `refresh_due`.)
+    fn make_due(env: &Env) {
+        let mut c = vault::load_credentials(env._dir.path()).unwrap().unwrap();
+        let now = chatgpt_auth::codec::now_s();
+        c.saved_at_s = now - 3540;
+        c.expires_at_s = now + 60;
+        vault::save_credentials(env._dir.path(), &c).unwrap();
     }
 
     fn token_reply(s: &Script, r: &Recorded) -> Reply {
@@ -116,13 +148,12 @@ mod windows_flow {
         let mock = MockAuth::start(Arc::new(move |r: &Recorded| match (r.method.as_str(), r.path.as_str()) {
             ("POST", "/api/accounts/oauth/token") => token_reply(&s2, r),
             ("GET", "/.well-known/jwks.json") => Reply::json(200, &jwks()),
-            ("POST", "/api/accounts/oauth/revoke") => {
-                Reply { status: s2.revoke_status.load(Ordering::SeqCst), content_type: "application/json", body: Vec::new() }
-            }
+            ("POST", "/api/accounts/oauth/revoke") => revoke_reply(&s2),
             _ => Reply::json(404, &json!({})),
         }));
         *script.issuer.lock().unwrap() = mock.base.clone();
         let dir = tempfile::tempdir().unwrap();
+        *script.data_dir.lock().unwrap() = Some(dir.path().to_path_buf());
         let opts = Options {
             endpoints: Endpoints::loopback_mock(&mock.base).unwrap(),
             login_timeout,
@@ -307,10 +338,17 @@ mod windows_flow {
 
         // Returning sign-in with a different `sub` is rejected and keeps existing credentials.
         *env.script.claims_patch.lock().unwrap() = Some(("sub".into(), json!("sub-different")));
+        assert_eq!(env.mock.count("/api/accounts/oauth/revoke"), 0);
         let (_, _, ans2) = sign_in(&env, None);
         assert_eq!(ans2.unwrap().0, 400);
         assert!(matches!(env.auth.login_attempt().unwrap().state(), LoginState::Failed(m) if m.contains("different ChatGPT account")));
         assert_eq!(env.auth.access_token().unwrap().as_str(), "acc-1-SECRETVALUE");
+        // The discarded exchange's refresh token was revoked (best effort), once.
+        let rv: Vec<Recorded> = env.mock.requests().into_iter().filter(|r| r.path == "/api/accounts/oauth/revoke").collect();
+        assert_eq!(rv.len(), 1);
+        assert_eq!(rv[0].form("token_type_hint").as_deref(), Some("refresh_token"));
+        assert_eq!(rv[0].form("client_id").as_deref(), Some(CLIENT));
+        assert!(env.auth.status().signed_in, "the saved sign-in is kept");
     }
 
     #[test]
@@ -319,6 +357,7 @@ mod windows_flow {
         let env = setup(Duration::from_secs(60));
         env.script.expires_in.store(60, Ordering::SeqCst);
         assert_eq!(sign_in(&env, Some(CLIENT)).2.unwrap().0, 200);
+        make_due(&env);
         let host_id = vault::load_registration(env._dir.path()).unwrap().unwrap().ext_agent_host_id;
         *env.script.refresh_error.lock().unwrap() = Some("invalid_client");
         assert!(matches!(env.auth.access_token().unwrap_err(), TokenError::Disconnected(m) if m.contains("invalid_client")));
@@ -346,6 +385,7 @@ mod windows_flow {
         env.script.expires_in.store(60, Ordering::SeqCst);
         env.script.omit_refresh_token.store(true, Ordering::SeqCst);
         assert_eq!(sign_in(&env, Some(CLIENT)).2.unwrap().0, 200);
+        make_due(&env);
         assert!(matches!(env.auth.access_token().unwrap_err(), TokenError::Disconnected(m) if m.contains("no refresh token")));
         assert!(!env.auth.status().signed_in);
 
@@ -353,6 +393,7 @@ mod windows_flow {
         let env2 = setup(Duration::from_secs(60));
         env2.script.expires_in.store(60, Ordering::SeqCst);
         assert_eq!(sign_in(&env2, Some(CLIENT)).2.unwrap().0, 200);
+        make_due(&env2);
         *env2.script.scope.lock().unwrap() = "email offline_access openid profile resource.invoke".into();
         assert_eq!(env2.auth.access_token().unwrap_err(), TokenError::PlanNotEnabled);
         let st = env2.auth.status();
@@ -376,8 +417,9 @@ mod windows_flow {
     #[test]
     fn refresh_rotates_tokens_once_for_concurrent_callers() {
         let env = setup(Duration::from_secs(60));
-        env.script.expires_in.store(60, Ordering::SeqCst); // inside the refresh margin
+        env.script.expires_in.store(60, Ordering::SeqCst);
         assert_eq!(sign_in(&env, Some(CLIENT)).2.unwrap().0, 200);
+        make_due(&env); // inside the refresh margin
         env.script.refresh_delay_ms.store(300, Ordering::SeqCst);
         let tokens: Vec<String> = std::thread::scope(|s| {
             let hs: Vec<_> = (0..4).map(|_| s.spawn(|| env.auth.access_token().map(|t| t.as_str().to_string()))).collect();
@@ -385,7 +427,9 @@ mod windows_flow {
         });
         let refresh_reqs: Vec<Recorded> =
             env.mock.requests().into_iter().filter(|r| r.form("grant_type").as_deref() == Some("refresh_token")).collect();
-        assert!(!refresh_reqs.is_empty());
+        // One refresh: the rotated 60 s token is not itself due (it has more than half its
+        // lifetime left), so the other three callers share it instead of refreshing again.
+        assert_eq!(refresh_reqs.len(), 1);
         for (i, r) in refresh_reqs.iter().enumerate() {
             assert_eq!(r.form("refresh_token"), Some(format!("rt-{}-SECRETVALUE", i + 1)), "refresh {i}");
             assert_eq!(r.form("client_id").as_deref(), Some(CLIENT));
@@ -395,6 +439,7 @@ mod windows_flow {
         assert_eq!(tokens.len(), 4);
 
         env.script.expires_in.store(3600, Ordering::SeqCst);
+        make_due(&env);
         let before = env.script.refreshes.load(Ordering::SeqCst);
         let tokens: Vec<String> = std::thread::scope(|s| {
             let hs: Vec<_> = (0..4).map(|_| s.spawn(|| env.auth.access_token().unwrap().as_str().to_string())).collect();
@@ -410,6 +455,7 @@ mod windows_flow {
         let env = setup(Duration::from_secs(60));
         env.script.expires_in.store(60, Ordering::SeqCst);
         assert_eq!(sign_in(&env, Some(CLIENT)).2.unwrap().0, 200);
+        make_due(&env);
         *env.script.refresh_error.lock().unwrap() = Some("invalid_grant");
         match env.auth.access_token().unwrap_err() {
             TokenError::Disconnected(m) => {
@@ -427,6 +473,7 @@ mod windows_flow {
         let env = setup(Duration::from_secs(60));
         env.script.expires_in.store(60, Ordering::SeqCst);
         assert_eq!(sign_in(&env, Some(CLIENT)).2.unwrap().0, 200);
+        make_due(&env);
         *env.script.refresh_error.lock().unwrap() = Some("temporarily_unavailable");
         assert!(matches!(env.auth.access_token().unwrap_err(), TokenError::Temporary(_)));
         assert!(env.auth.status().signed_in);
@@ -442,6 +489,9 @@ mod windows_flow {
         assert_eq!(rv.form("token").as_deref(), Some("rt-1-SECRETVALUE"));
         assert_eq!(rv.form("token_type_hint").as_deref(), Some("refresh_token"));
         assert_eq!(rv.form("client_id").as_deref(), Some(CLIENT));
+        // Tokens were deleted first, and the revocation ran outside the cross-process lock.
+        assert!(!env.script.revoke_saw_tokens.load(Ordering::SeqCst), "tokens must be deleted before revoking");
+        assert!(!env.script.revoke_saw_lock.load(Ordering::SeqCst), "revocation must not hold the vault lock");
         assert!(!env.auth.status().signed_in);
         assert_eq!(env.auth.access_token().unwrap_err(), TokenError::NotSignedIn);
         let next = env.auth.start_login().unwrap();
@@ -455,7 +505,39 @@ mod windows_flow {
         let out2 = env2.auth.logout();
         assert_eq!(out2.revoked, Some(false), "{}", out2.message);
         assert_eq!(env2.mock.count("/api/accounts/oauth/revoke"), 3);
+        assert_eq!(env2.mock.count("/.well-known/openid-configuration"), 1, "discovery runs once per sign-out");
         assert!(!env2.auth.status().signed_in);
         assert_no_secret(&[&out2.message]);
+    }
+
+    #[test]
+    fn a_slow_sign_out_blocks_neither_status_nor_other_callers_and_stays_within_its_budget() {
+        let mut env = setup(Duration::from_secs(60));
+        assert_eq!(sign_in(&env, Some(CLIENT)).2.unwrap().0, 200);
+        env.script.revoke_delay_ms.store(5_000, Ordering::SeqCst);
+        // Rebuild the manager on the same vault with a 1.5 s sign-out budget.
+        let opts = Options {
+            endpoints: Endpoints::loopback_mock(&env.mock.base).unwrap(),
+            revoke_backoff: Duration::from_millis(10),
+            revoke_budget: Duration::from_millis(1500),
+            ..Options::default()
+        };
+        env.auth = Arc::new(ChatGptAuth::new(env._dir.path(), opts));
+        let auth = Arc::clone(&env.auth);
+        let t0 = std::time::Instant::now();
+        let h = std::thread::spawn(move || auth.logout());
+        while env.mock.count("/api/accounts/oauth/revoke") == 0 && t0.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(env.mock.count("/api/accounts/oauth/revoke"), 1, "revocation is in flight");
+        let t1 = std::time::Instant::now();
+        let st = env.auth.status();
+        assert!(t1.elapsed() < Duration::from_millis(500), "status waited {:?}", t1.elapsed());
+        assert!(!st.signed_in, "tokens are already deleted while revocation runs");
+        assert_eq!(env.auth.access_token().unwrap_err(), TokenError::NotSignedIn);
+        assert!(t1.elapsed() < Duration::from_millis(1000), "access_token waited {:?}", t1.elapsed());
+        let out = h.join().unwrap();
+        assert_eq!(out.revoked, Some(false), "{}", out.message);
+        assert!(t0.elapsed() < Duration::from_millis(3500), "sign-out took {:?}", t0.elapsed());
     }
 }

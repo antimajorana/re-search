@@ -36,7 +36,13 @@ pub fn open_authorize_url(endpoints: &Endpoints, url: &str) -> Result<(), String
     open_with_os(url)
 }
 
-#[cfg(windows)]
+/// This crate's own unit tests can never start a browser.
+#[cfg(test)]
+fn open_with_os(_url: &str) -> Result<(), String> {
+    Err("test: browser opening disabled".into())
+}
+
+#[cfg(all(windows, not(test)))]
 fn open_with_os(url: &str) -> Result<(), String> {
     use windows_sys::Win32::System::Com::{
         CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
@@ -67,7 +73,7 @@ fn open_with_os(url: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(test)))]
 fn open_with_os(url: &str) -> Result<(), String> {
     std::process::Command::new("xdg-open")
         .arg(url)
@@ -98,5 +104,12 @@ mod tests {
             let err = open_authorize_url(&ep, bad).unwrap_err();
             assert!(err.contains("refusing to open"), "{bad}: {err}");
         }
+    }
+
+    #[test]
+    fn a_valid_sign_in_url_still_opens_nothing_in_unit_tests() {
+        let ep = Endpoints::production();
+        let err = open_authorize_url(&ep, "https://auth.openai.com/api/accounts/authorize?client_id=x").unwrap_err();
+        assert_eq!(err, "test: browser opening disabled");
     }
 }

@@ -355,35 +355,22 @@ fn the_fake_rejects_unknown_flags_and_a_prompt_argument() {
 
 #[test]
 fn pre_ack_never_spawns_agy_version_probe() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let src = tmp.path().join("probe.rs");
-    let marker = tmp.path().join("invoked.txt");
-    let exe = tmp.path().join(format!("probe_agy{}", std::env::consts::EXE_SUFFIX));
-    std::fs::write(
-        &src,
-        format!(
-            "fn main() {{ let _ = std::fs::write({:?}, b\"ran\"); println!(\"1.5.14\"); }}\n",
-            marker.to_string_lossy()
-        ),
-    )
-    .unwrap();
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let out = std::process::Command::new(rustc).args(["--edition", "2021"]).arg(&src).arg("-o").arg(&exe).output().unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-
-    let h = CliHarness::start_agy_with(|cfg| cfg.agy_exe = Some(exe.clone()));
+    // The shared fake agy (compiled once by cli_route::testkit) logs every start of any
+    // kind to invocations.txt, so no extra probe has to be compiled here.
+    let h = CliHarness::start_agy();
     let (_, conns) = h.get("/api/connections");
     let c = find(&conns, "connections", "antigravity").unwrap();
     assert_eq!((c["found"].as_bool(), c["connected"].as_bool()), (Some(true), Some(false)));
     assert!(c["version"].is_null(), "version must stay null before ack: {c}");
     let (_, models) = h.get("/api/models");
     assert!(find(&models, "providers", "antigravity").is_none());
-    assert!(!marker.exists(), "agy must NOT be spawned before acknowledgement");
+    assert!(h.fake.read("invocations.txt").is_none(), "agy must NOT be spawned before acknowledgement");
 
     acknowledge(&h);
     let (_, conns) = h.get("/api/connections");
     let c = find(&conns, "connections", "antigravity").unwrap();
-    assert!(marker.exists(), "agy --version should run once acknowledged");
+    let log = h.fake.read("invocations.txt").unwrap_or_default();
+    assert!(log.lines().any(|l| l == "--version"), "agy --version should run once acknowledged: {log:?}");
     assert_eq!(c["version"], "1.5.14");
     h.srv.shutdown();
 }
@@ -455,8 +442,14 @@ fn reopening_antigravity_session_after_withdraw_keeps_confinement_label() {
     assert!(row["route_label"].as_str().unwrap().contains(SUFFIX), "{row}");
 
     // Withdrawn session refuses both explicit and implicit antigravity sends synchronously.
-    let (st, _) = h.post(&format!("/api/sessions/{sid}/messages"), &json!({ "prompt": "again" }));
-    assert_eq!(st, 403);
+    let before = kinds(&h.data, &sid);
+    let (st, body) = h.post(&format!("/api/sessions/{sid}/messages"), &json!({ "prompt": "again" }));
+    assert_eq!(st, 403, "implicit send: {body}");
+    let (st, body) =
+        h.post(&format!("/api/sessions/{sid}/messages"), &json!({ "prompt": "again", "provider": "antigravity" }));
+    assert_eq!(st, 403, "explicit send: {body}");
+    assert_eq!(kinds(&h.data, &sid), before, "nothing recorded");
+    assert!(h.fake.argv().is_none(), "agy must not start");
     h.srv.shutdown();
 }
 

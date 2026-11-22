@@ -149,20 +149,24 @@ fn percent_decode(s: &str) -> String {
     while i < b.len() {
         match b[i] {
             b'+' => out.push(b' '),
-            b'%' if i + 2 < b.len() => {
-                match std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                    Some(v) => {
-                        out.push(v);
-                        i += 2;
-                    }
-                    None => out.push(b'%'),
-                }
+            // Exactly two ASCII hex digits (`from_str_radix` alone would accept `%+f`).
+            b'%' if i + 2 < b.len() && b[i + 1].is_ascii_hexdigit() && b[i + 2].is_ascii_hexdigit() => {
+                out.push((hex_val(b[i + 1]) << 4) | hex_val(b[i + 2]));
+                i += 2;
             }
             c => out.push(c),
         }
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_val(c: u8) -> u8 {
+    match c {
+        b'0'..=b'9' => c - b'0',
+        b'a'..=b'f' => c - b'a' + 10,
+        _ => c - b'A' + 10,
+    }
 }
 
 pub fn try_now_s() -> Result<i64, &'static str> {
@@ -238,6 +242,12 @@ mod tests {
         assert_eq!(q[1], ("state".into(), "a b".into()));
         assert_eq!(q[2], ("bad".into(), "%zz".into()));
         assert_eq!(q[3], ("e".into(), "".into()));
+        // A `%` must be followed by exactly two hex digits; a sign is not a digit. (`%+f`
+        // keeps the `%` literal and the `+` still decodes to a space, as everywhere else;
+        // before the fix it decoded to the byte 0x0F.)
+        for (raw, want) in [("x=%+f", "% f"), ("x=%-1", "%-1"), ("x=%4", "%4"), ("x=%", "%"), ("x=%4a", "J"), ("x=%4A%41", "JA")] {
+            assert_eq!(parse_query(raw)[0].1, want, "{raw}");
+        }
         assert!(ct_eq(b"abc", b"abc") && !ct_eq(b"abc", b"abd") && !ct_eq(b"ab", b"abc"));
     }
 }

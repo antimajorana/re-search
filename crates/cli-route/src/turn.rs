@@ -123,9 +123,10 @@ fn spawn_err(e: std::io::Error) -> String {
     format!("could not start the CLI: {e}")
 }
 
-/// Run one turn. Errors are returned for failures before the CLI starts and for ledger
-/// failures; everything after the start event ends in `session.end` or `session.abort`
-/// unless the ledger itself fails. A stop that arrives before the start event ends the
+/// Run one turn. Errors are returned for failures before the start event and for ledger
+/// failures; everything after the start event (including a failure to write the tool
+/// configuration or to start the CLI) ends in `session.end` or `session.abort` unless the
+/// ledger itself fails. A stop that arrives before the start event ends the
 /// turn as [`TurnEnd::Stopped`] with nothing recorded and nothing started.
 pub fn run_turn(
     vendor: &dyn VendorCli,
@@ -183,8 +184,16 @@ pub fn run_turn(
     // Write the per-turn tool config (carrying `CORE_SESSION_TOKEN`) only right before
     // spawning the CLI, after `version()` and stop checks have passed. Declared before
     // `ProcGuard` so the process tree is killed before the config file is deleted on drop.
+    // A failure from here on happens after the start event: record `session.abort` so the
+    // ledger never keeps a start without an end (fail closed), then report the abort.
+    let abort = |sink: &mut dyn EventSink, reason: String| -> Result<TurnReport, String> {
+        rec.emit_into(sink, "session.abort", json!({ "reason": reason }), None)?;
+        Ok(TurnReport { end: TurnEnd::Aborted(reason), final_text: String::new() })
+    };
     let _config_guard = ToolConfigGuard::new(spec.tool_config);
-    vendor.write_tool_config(spec.tool_config, spec.core)?;
+    if let Err(e) = vendor.write_tool_config(spec.tool_config, spec.core) {
+        return abort(sink, format!("could not write the CLI's tool configuration: {e}"));
+    }
 
     let mut command = Command::new(spec.exe);
     command
@@ -196,7 +205,10 @@ pub fn run_turn(
     vendor.prepare(&mut command);
     // Job object: if the supervisor dies, aborts or is stopped, the CLI and everything it
     // started (core.exe, the worker) die with it.
-    let mut proc = JobObjectSandbox.spawn_command(command).map_err(spawn_err)?;
+    let mut proc = match JobObjectSandbox.spawn_command(command) {
+        Ok(p) => p,
+        Err(e) => return abort(sink, spawn_err(e)),
+    };
     let stdin = proc.child().stdin.take();
     let stdout = proc.child().stdout.take();
     let proc = Arc::new(Mutex::new(proc));
@@ -205,7 +217,10 @@ pub fn run_turn(
     if stop.is_stopped() {
         guard.proc.lock().unwrap_or_else(|e| e.into_inner()).kill_tree();
     }
-    let stdout = stdout.ok_or("the CLI has no stdout pipe")?;
+    let Some(stdout) = stdout else {
+        drop(guard);
+        return abort(sink, "the CLI has no stdout pipe".to_string());
+    };
 
     // The prompt goes on stdin (not visible in the process list, no argv length limit).
     // A separate thread, so a CLI that does not read stdin cannot block the line loop.

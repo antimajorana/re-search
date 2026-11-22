@@ -320,19 +320,24 @@ pub(crate) fn run_cli_turn(
     stop: &StopHandle,
     kind: CliRouteKind,
 ) -> Result<String, String> {
+    // Locating the CLI follows the configured environment (tests point it at a fake).
     let env_lookup = |n: &str| state.env_var(n);
+    // Billing safety looks at the environment the CLI will really inherit: the process
+    // environment, plus `connection_env` when one is configured. A configured map can add
+    // a variable but never hide one that the child process would see.
+    let inherited = |n: &str| std::env::var_os(n).or_else(|| state.env_var(n));
     // The person's acknowledgement (Antigravity), then billing safety: nothing is started
     // while either is missing.
     let (vendor, allowed_env, allow_env_auth, explicit_exe): (Box<dyn VendorCli>, Vec<&str>, bool, Option<&Path>) =
         match kind {
             CliRouteKind::Claude => {
-                let allowed = cli_route::env_auth::check(ClaudeCode.env_auth_vars(), &env_lookup)?;
-                (Box::new(ClaudeCode), allowed, cli_route::env_auth::opted_in(&env_lookup), state.cfg.claude_exe.as_deref())
+                let allowed = cli_route::env_auth::check(ClaudeCode.env_auth_vars(), &inherited)?;
+                (Box::new(ClaudeCode), allowed, cli_route::env_auth::opted_in(&inherited), state.cfg.claude_exe.as_deref())
             }
             CliRouteKind::Antigravity => {
                 crate::antigravity::require_acknowledged(state)?;
-                let allowed = cli_route::antigravity::check_env_auth(&env_lookup)?;
-                let opted = cli_route::env_auth::flag_set(cli_route::antigravity::ALLOW_ENV_AUTH_VAR, &env_lookup);
+                let allowed = cli_route::antigravity::check_env_auth(&inherited)?;
+                let opted = cli_route::env_auth::flag_set(cli_route::antigravity::ALLOW_ENV_AUTH_VAR, &inherited);
                 (Box::new(Antigravity::new()), allowed, opted, state.cfg.agy_exe.as_deref())
             }
         };
@@ -510,7 +515,7 @@ mod tests {
             claude_exe: None,
             agy_exe: None,
             connection_env: Some(std::collections::BTreeMap::new()),
-            chatgpt_test: None,
+            chatgpt_test: Some(crate::chatgpt::offline_test_hooks()),
         };
         let chatgpt = crate::chatgpt::ChatGptHub::new(&cfg).unwrap();
         let state = DesktopState::new(

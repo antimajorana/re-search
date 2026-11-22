@@ -17,6 +17,8 @@
 // `--output-format stream-json`, or stdin that is not exactly one `user` event line, exits 1
 // (as the Headless page documents for invalid stream input).
 // It records what it was given:
+//   invocations.txt        one line per start of any kind (`--version`, `models`, a turn):
+//                          its arguments joined by spaces
 //   argv.txt               every argument, one per line
 //   stdin.txt              everything read from stdin (until EOF)
 //   cwd.txt                its working directory
@@ -106,6 +108,9 @@ fn check_flags(args: &[String]) {
 fn main() {
     let dir = here();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Ok(mut log) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("invocations.txt")) {
+        let _ = writeln!(log, "{}", args.join(" "));
+    }
     if args.iter().any(|a| a == "--version") {
         println!("{}", read(&dir, "version.txt").unwrap_or_else(|| "1.5.14".to_string()).trim());
         return;

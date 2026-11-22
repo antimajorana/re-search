@@ -17,6 +17,21 @@ use std::time::Duration;
 const TEST_KEY: &[u8] = include_bytes!("test_rsa_key.der");
 pub const TEST_KID: &str = "re-search-test-key";
 
+/// `http://127.0.0.1:<port>` for a port that was just free and is no longer listened on:
+/// endpoints for tests that must not reach any server (a call fails fast, locally).
+pub fn closed_loopback_base() -> String {
+    let l = TcpListener::bind(("127.0.0.1", 0)).expect("bind a loopback port");
+    let port = l.local_addr().expect("local address").port();
+    drop(l);
+    format!("http://127.0.0.1:{port}")
+}
+
+/// [`crate::Options`] whose every endpoint is [`closed_loopback_base`].
+pub fn offline_options() -> crate::Options {
+    let endpoints = crate::Endpoints::loopback_mock(&closed_loopback_base()).expect("loopback endpoints");
+    crate::Options { endpoints, revoke_budget: Duration::from_secs(2), ..crate::Options::default() }
+}
+
 fn key() -> RsaKeyPair {
     RsaKeyPair::from_der(TEST_KEY).expect("test key")
 }

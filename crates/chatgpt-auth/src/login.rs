@@ -364,7 +364,6 @@ fn page(stream: &mut TcpStream, status: u16, title: &str, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manager::Options;
 
     fn send_raw(port: u16, raw: &[u8]) -> Option<String> {
         let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
@@ -377,7 +376,7 @@ mod tests {
 
     fn spawn_test_listener() -> (tempfile::TempDir, Arc<Attempt>, u16) {
         let tmp = tempfile::tempdir().unwrap();
-        let auth = Arc::new(ChatGptAuth::new(tmp.path(), Options::default()));
+        let auth = Arc::new(ChatGptAuth::new(tmp.path(), crate::testkit::offline_options()));
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let attempt = Arc::new(Attempt::new("https://auth.openai.com/api/accounts/authorize?x=1".into(), port, Duration::from_secs(30)));
@@ -490,7 +489,7 @@ mod tests {
     #[test]
     fn complete_rejects_dynamic_client_id_and_mismatched_known_client() {
         let tmp = tempfile::tempdir().unwrap();
-        let auth = ChatGptAuth::new(tmp.path(), Options::default());
+        let auth = ChatGptAuth::new(tmp.path(), crate::testkit::offline_options());
         let attempt = Attempt::new("u".into(), 1234, Duration::from_secs(30));
         let fresh = Pending { state: "s".into(), nonce: "n".into(), verifier: "v".into(), redirect_uri: "r".into(), known_client: None };
         assert!(complete(&auth, &attempt, &fresh, Some("c"), Some(crate::oauth::DYNAMIC_CLIENT_ID)).unwrap_err().contains("issued client ID"));

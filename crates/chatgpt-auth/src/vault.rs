@@ -16,7 +16,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 use zeroize::Zeroize;
 
 pub const DIR: &str = "chatgpt";
@@ -26,7 +26,6 @@ const LOCK_FILE: &str = ".lock";
 const MAX_VAULT_FILE: u64 = 1024 * 1024;
 const LOCK_WAIT: Duration = Duration::from_secs(10);
 const LOCK_POLL: Duration = Duration::from_millis(25);
-const LOCK_STALE: Duration = Duration::from_secs(60);
 /// Optional DPAPI entropy: binds the blobs to this use.
 #[cfg(windows)]
 const ENTROPY: &[u8] = b"re:Search chatgpt-auth v1";
@@ -98,96 +97,46 @@ impl Drop for Credentials {
     }
 }
 
-/// Cross-process lock on `<data_dir>/chatgpt/.lock` created atomically with `create_new`.
+/// Cross-process lock on `<data_dir>/chatgpt/.lock`: an operating-system file lock
+/// (`File::try_lock`: `LockFileEx` on Windows, `flock` elsewhere) held on an open handle
+/// for as long as this value lives.
+///
+/// The system releases the lock when the handle closes, including when the holding
+/// process dies, so there is no PID or age to judge, nothing to reclaim and no lock to
+/// steal: a live holder keeps it however long it takes, and a waiter fails closed with
+/// "another ChatGPT sign-in operation is in progress" after [`LOCK_WAIT`]. The file itself
+/// is never deleted (deleting it would let two processes lock two different files); a
+/// leftover `.lock` file with any content is harmless.
 pub struct VaultLock {
-    path: PathBuf,
+    _file: fs::File,
 }
 
 impl VaultLock {
     pub fn acquire(data_dir: &Path) -> Result<Self, String> {
-        Self::acquire_with(data_dir, LOCK_WAIT, LOCK_STALE)
+        Self::acquire_with(data_dir, LOCK_WAIT)
     }
 
-    pub(crate) fn acquire_with(data_dir: &Path, wait: Duration, stale: Duration) -> Result<Self, String> {
+    pub(crate) fn acquire_with(data_dir: &Path, wait: Duration) -> Result<Self, String> {
         let d = dir(data_dir);
         fs::create_dir_all(&d).map_err(|_| "could not create the ChatGPT folder in the data directory".to_string())?;
-        let path = d.join(LOCK_FILE);
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(d.join(LOCK_FILE))
+            .map_err(|_| "could not open the ChatGPT lock file in the data directory".to_string())?;
         let deadline = Instant::now() + wait;
         loop {
-            match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(mut f) => {
-                    let _ = writeln!(f, "{}", std::process::id());
-                    return Ok(Self { path });
+            match file.try_lock() {
+                Ok(()) => return Ok(Self { _file: file }),
+                Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(LOCK_POLL),
+                Err(fs::TryLockError::WouldBlock) => {
+                    return Err("another ChatGPT sign-in operation is in progress; please try again".into())
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if is_stale_lock(&path, stale) && fs::remove_file(&path).is_ok() && Instant::now() < deadline {
-                        continue;
-                    }
-                    if Instant::now() >= deadline {
-                        return Err("another ChatGPT sign-in operation is in progress; please try again".into());
-                    }
-                    std::thread::sleep(LOCK_POLL);
-                }
-                Err(_) => return Err("could not lock the ChatGPT folder in the data directory".into()),
+                Err(fs::TryLockError::Error(_)) => return Err("could not lock the ChatGPT folder in the data directory".into()),
             }
         }
     }
-}
-
-impl Drop for VaultLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-fn is_stale_lock(path: &Path, stale: Duration) -> bool {
-    if let Ok(meta) = fs::metadata(path) {
-        if let Ok(modified) = meta.modified() {
-            if SystemTime::now().duration_since(modified).is_ok_and(|age| age >= stale) {
-                return true;
-            }
-        }
-    }
-    let Ok(f) = fs::File::open(path) else {
-        return false;
-    };
-    let mut text = String::new();
-    if f.take(32).read_to_string(&mut text).is_err() {
-        return false;
-    }
-    let Ok(pid) = text.trim().parse::<u32>() else {
-        return false;
-    };
-    pid != std::process::id() && !process_alive(pid)
-}
-
-#[cfg(target_os = "linux")]
-fn process_alive(pid: u32) -> bool {
-    if !Path::new("/proc").is_dir() {
-        return true;
-    }
-    Path::new(&format!("/proc/{pid}")).exists()
-}
-
-#[cfg(windows)]
-fn process_alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ACCESS_DENIED};
-    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
-    const STILL_ACTIVE_CODE: u32 = 259;
-    // SAFETY: OpenProcess returns null on failure or a handle closed before returning.
-    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if h.is_null() {
-        return unsafe { GetLastError() } == ERROR_ACCESS_DENIED;
-    }
-    let mut code: u32 = 0;
-    let ok = unsafe { GetExitCodeProcess(h, &mut code) };
-    unsafe { CloseHandle(h) };
-    ok != 0 && code == STILL_ACTIVE_CODE
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
-fn process_alive(_pid: u32) -> bool {
-    true
 }
 
 pub fn supported() -> bool {
@@ -384,28 +333,58 @@ mod tests {
     }
 
     #[test]
-    fn vault_lock_serializes_and_reclaims_stale_locks() {
+    fn vault_lock_serializes_and_is_free_again_after_drop() {
         let tmp = tempfile::tempdir().unwrap();
         let lock = VaultLock::acquire(tmp.path()).unwrap();
-        assert!(dir(tmp.path()).join(LOCK_FILE).exists());
-        // While held by current PID, a short wait must fail rather than steal.
-        assert!(VaultLock::acquire_with(tmp.path(), Duration::from_millis(80), LOCK_STALE).is_err());
+        // A second holder (another handle, as another process would have) waits and fails.
+        let err = VaultLock::acquire_with(tmp.path(), Duration::from_millis(120)).err().unwrap();
+        assert!(err.contains("in progress"), "{err}");
+        // The holder is never robbed, however long the waiter is willing to wait.
+        assert!(VaultLock::acquire_with(tmp.path(), Duration::from_millis(300)).is_err());
         drop(lock);
-        assert!(!dir(tmp.path()).join(LOCK_FILE).exists());
+        let again = VaultLock::acquire_with(tmp.path(), Duration::from_millis(200)).unwrap();
+        // The lock file stays on disk (it is never deleted) and still excludes others.
+        assert!(dir(tmp.path()).join(LOCK_FILE).exists());
+        assert!(VaultLock::acquire_with(tmp.path(), Duration::from_millis(80)).is_err());
+        drop(again);
+    }
 
-        // Stale lock by age is reclaimed.
-        fs::create_dir_all(dir(tmp.path())).unwrap();
-        fs::write(dir(tmp.path()).join(LOCK_FILE), format!("{}\n", std::process::id())).unwrap();
-        let reclaimed = VaultLock::acquire_with(tmp.path(), Duration::from_millis(200), Duration::ZERO).unwrap();
-        drop(reclaimed);
-
-        // On Linux, a lock owned by a non-existent PID is reclaimed immediately.
-        #[cfg(target_os = "linux")]
-        {
-            fs::write(dir(tmp.path()).join(LOCK_FILE), "999999999\n").unwrap();
-            let reclaimed = VaultLock::acquire_with(tmp.path(), Duration::from_millis(200), LOCK_STALE).unwrap();
-            drop(reclaimed);
+    #[test]
+    fn a_leftover_lock_file_of_any_content_does_not_block() {
+        // What an earlier version, or a process that died, may have left behind: a PID and
+        // nonce, a PID that is alive (our own), garbage, or nothing.
+        let own = format!("{} somenonce", std::process::id());
+        let garbage: &[u8] = &[0xff, 0xfe, b'x'];
+        for content in [b"999999 deadnonce".as_slice(), own.as_bytes(), garbage, b"".as_slice()] {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::create_dir_all(dir(tmp.path())).unwrap();
+            fs::write(dir(tmp.path()).join(LOCK_FILE), content).unwrap();
+            let lock = VaultLock::acquire_with(tmp.path(), Duration::from_millis(200));
+            assert!(lock.is_ok(), "leftover content {content:?} must not block");
         }
+    }
+
+    #[test]
+    fn the_lock_is_released_when_its_holder_goes_away_without_cleanup() {
+        // The property the design rests on: closing the handle is the release, with no file
+        // removal. (A crashed process closes its handles the same way; that case is not
+        // tested with a real second process.)
+        let tmp = tempfile::tempdir().unwrap();
+        let path = dir(tmp.path()).join(LOCK_FILE);
+        let t = {
+            let p = tmp.path().to_path_buf();
+            std::thread::spawn(move || {
+                let _held = VaultLock::acquire(&p).unwrap();
+                std::thread::sleep(Duration::from_millis(150));
+            })
+        };
+        std::thread::sleep(Duration::from_millis(40));
+        assert!(VaultLock::acquire_with(tmp.path(), Duration::from_millis(20)).is_err(), "held by the other thread");
+        // Waiting longer than the holder lives succeeds without anything being reclaimed.
+        let got = VaultLock::acquire_with(tmp.path(), Duration::from_secs(5)).unwrap();
+        t.join().unwrap();
+        assert!(path.exists());
+        drop(got);
     }
 
     #[test]

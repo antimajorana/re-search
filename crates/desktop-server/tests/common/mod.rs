@@ -1,6 +1,7 @@
 //! Shared helpers for the desktop-server integration tests.
 #![allow(dead_code)]
 
+use desktop_server::chatgpt::ChatGptTestHooks;
 use desktop_server::DesktopConfig;
 use research_tools::LiteratureEndpoints;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -140,7 +141,19 @@ pub fn test_cfg(data_dir: &Path, workspace: Option<PathBuf>, api_base: Option<St
         agy_exe: None,
         // Hermetic: connection status and model lists never see this machine's keys or CLI.
         connection_env: Some(std::collections::BTreeMap::new()),
-        chatgpt_test: None,
+        // Never the real browser opener or OpenAI's endpoints, even if a test drives
+        // sign-in and "Open in browser" with a valid token.
+        chatgpt_test: Some(offline_chatgpt_hooks()),
+    }
+}
+
+/// Sign in with ChatGPT for tests that do not use a mock: an opener that refuses and
+/// every endpoint on a loopback port nothing listens on.
+pub fn offline_chatgpt_hooks() -> ChatGptTestHooks {
+    ChatGptTestHooks {
+        mock_base: chatgpt_auth::testkit::closed_loopback_base(),
+        opener: desktop_server::chatgpt::refusing_opener(),
+        login_timeout: Duration::from_secs(5),
     }
 }
 

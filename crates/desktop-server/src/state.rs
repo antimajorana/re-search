@@ -540,7 +540,7 @@ mod tests {
             claude_exe: None,
             agy_exe: None,
             connection_env: Some(std::collections::BTreeMap::new()),
-            chatgpt_test: None,
+            chatgpt_test: Some(crate::chatgpt::offline_test_hooks()),
         };
         let chatgpt = crate::chatgpt::ChatGptHub::new(&cfg).unwrap();
         Arc::new(DesktopState::new(cfg, AuthGuard::new(1).unwrap(), Arc::new(SseHub::new()), chatgpt))

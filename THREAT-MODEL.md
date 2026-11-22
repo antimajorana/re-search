@@ -438,7 +438,11 @@ result.
   the subscription login in non-interactive mode. re:Search does not remove
   them (that would restrict how the CLI authenticates); when any is set (non-
   empty) it refuses to start the turn, naming the variables but never their
-  values, on the desktop and on `re-search run --route cli`.
+  values, on the desktop and on `re-search run --route cli`. On the desktop the
+  check reads the environment the CLI really inherits (re:Search's process
+  environment); a configured `DesktopConfig::connection_env` map can only add
+  variables to the check, never hide one the child would see (tested on
+  Windows in `claude_cli_env.rs`).
   `RE_SEARCH_ALLOW_CLAUDE_ENV_AUTH=1` proceeds anyway and records the names in
   the start event (`env_auth_vars_allowed`). Second check, on the CLI's own
   report: after a verified `system/init`, a turn whose `apiKeySource` is
@@ -472,10 +476,13 @@ result.
   unambiguous, it does not make the model ignore what the text says; the
   approval cards gate every effect either way.
 - **`mcp.json` lifetime.** `sessions/<id>/mcp.json` holds the turn's
-  `CORE_SESSION_TOKEN`. It is written at the start of a turn and deleted when
-  the turn ends on every path (completion, abort, stop, error, server
-  shutdown: closing the window waits up to 5 s for running turns to finish
-  their cleanup). While the turn runs it is readable by any process running
+  `CORE_SESSION_TOKEN`. It is written right before the CLI is started (after
+  the start event) and deleted when the turn ends on every path (completion,
+  abort, stop, error, server shutdown: closing the window waits up to 5 s for
+  running turns to finish their cleanup). If writing it or starting the CLI
+  fails after the start event, the turn records `session.abort` with the
+  reason, so the ledger never keeps a start without an end (tested in
+  `cli-route` `turn_tests.rs`). While the turn runs it is readable by any process running
   as you; a crash or kill of re:Search itself leaves it behind (the token is
   useless once its relay listener is gone) until the next server start or
   until the session is opened: both delete `sessions/*/mcp.json` unless a
@@ -614,7 +621,15 @@ exactly as on the API-key route; the session records `route: "api"`,
   system's default handler (`ShellExecuteW` with STA COM initialization, no
   shell, so `&` in the URL cannot start a command); nothing opens a browser
   unless the person clicks. Server shutdown cancels any pending login listener.
-  Tests replace the opener and never start a browser.
+  In-process tests never hold the real opener: the shared desktop-server test
+  configuration and the unit-test configurations use an opener that refuses
+  (`test: browser opening disabled`) and endpoints on a closed `127.0.0.1`
+  port, and in `cfg(test)` builds of `chatgpt-auth` and `desktop-server` the
+  real opener is compiled out (it returns the same refusal). A test drives
+  sign-in and *Open in browser* with a valid token and asserts the refusal
+  (`api_auth.rs`; the sign-in part runs on Windows only). The CLI's
+  end-to-end test starts the real `re-search ui --no-open` binary, whose
+  configuration is the production one; it never calls the open route.
 - **The callback is unauthenticated by nature.** The listener enforces a 5 s
   total wall-clock read deadline (defeating slowloris stalls), parses only
   headers before `\r\n\r\n`, and answers only `GET /auth/callback` (`HTTP/1.0`
@@ -658,7 +673,13 @@ exactly as on the API-key route; the session records `route: "api"`,
   expired and not-yet-valid tokens, missing `iat`, `crit`, non-canonical
   base64url, missing scope, declined consent, missing/dynamic/mismatched
   client ID, wrong state, slowloris deadline, body/duplicate Host, duplicate
-  query params, wrong path/method/host, and `MAX_BAD_REQUESTS`.
+  query params, wrong path/method/host, and `MAX_BAD_REQUESTS`. Missing scope
+  and *Allow ChatGPT plan* re-consent, declined consent, the returning-sign-in
+  `sub` mismatch, `invalid_client` handling, a missing refresh token and the
+  refresh and sign-out behaviour are tested only in the Windows-only suites
+  (`chatgpt-auth` `tests/flow.rs`, `desktop-server` `tests/chatgpt_route.rs`);
+  the ID-token, callback and client-ID checks are unit tests that run on
+  Linux and Windows.
 - **Storage.** `<data_dir>/chatgpt/registration.dpapi` (host ID, issued
   client ID, account subject) and `<data_dir>/chatgpt/credentials.dpapi` (ID,
   access and refresh tokens, scopes, expiry), each encrypted with Windows
@@ -671,13 +692,27 @@ exactly as on the API-key route; the session records `route: "api"`,
   "not supported yet" instead of storing tokens in plain text (tested on Linux).
   DPAPI protects against other Windows users and copies of the files to another
   account or machine, **not** against code running as the same user.
-- **Refresh.** A token expiring within 5 minutes is refreshed
-  (`grant_type=refresh_token`, issued `client_id`, `refresh_token`,
-  `resource`, no `scope`) under both an in-process mutex and a cross-process
-  lockfile (`<data_dir>/chatgpt/.lock`, with stale-lock reclamation) that also
-  cover sign-in completion and sign-out; credentials are re-read under the
-  lock, so concurrent callers share one refresh and a rotated refresh token is
-  stored before anyone uses it. On HTTP 401 from Responses, the transport calls
+- **Refresh.** An access token is refreshed (`grant_type=refresh_token`,
+  issued `client_id`, `refresh_token`, `resource`, no `scope`) when it is
+  expired or within 10 s of expiry, or when it is inside the refresh margin of
+  `min(5 minutes, half its issued lifetime)` and the server's
+  `earliest_refresh_at` (when given) has passed; so a short-lived token is not
+  refreshed on every request (unit-tested in `manager.rs`). The refresh runs
+  under both an in-process mutex and a cross-process lockfile
+  (`<data_dir>/chatgpt/.lock`) that also cover sign-in completion and the
+  storage part of sign-out; credentials are re-read under the lock, so
+  concurrent callers share one refresh and a rotated refresh token is stored
+  before anyone uses it. The lock is an operating-system
+  file lock (`File::try_lock`: `LockFileEx` on Windows) held on an open handle
+  to that file; the system releases it when the handle closes, including when
+  the holding process dies, so nothing is judged by PID or age and no lock is
+  ever taken over from a live holder. A waiter fails closed with "another
+  ChatGPT sign-in operation is in progress" after a 10 s wait. The file is
+  never deleted and its content is ignored. Unit-tested on Windows (exclusion,
+  release on drop, leftover files of any content); not run on Linux, and not
+  tested with two real processes. If sign-out cannot take the lock, nothing
+  is deleted and the answer says the sign-in is still on this computer. Status reads (Connect panel, sign-in polling)
+  take neither lock. On HTTP 401 from Responses, the transport calls
   `force_refresh` and retries once (if the token changed). On a transient
   refresh failure while the current access token still has more than 10 s left,
   the still-valid token is returned instead of failing immediately.
@@ -687,14 +722,24 @@ exactly as on the API-key route; the session records `route: "api"`,
   with that code; `invalid_client` (on refresh, exchange, or returning
   callback) also forgets the saved `client_id`/`subject` while keeping
   `ext_agent_host_id`; network or 5xx failures keep the sign-in.
-- **Sign-out.** `POST /api/connections/chatgpt/logout` discovers
-  `revocation_endpoint` from `{issuer}/.well-known/openid-configuration`
-  (pinned to the exact issuer origin `https://auth.openai.com`, falling back to
-  `https://auth.openai.com/api/accounts/oauth/revoke`), revokes the refresh
+- **Sign-out.** `POST /api/connections/chatgpt/logout` first deletes
+  `credentials.dpapi` under both locks (keeping the registration for the next
+  sign-in), so no refresh in this or another process can save rotated tokens
+  afterwards. Then, with no lock held and from an in-memory copy of the refresh
+  token (zeroized on drop), it discovers `revocation_endpoint` once from
+  `{issuer}/.well-known/openid-configuration` (pinned to the exact issuer
+  origin `https://auth.openai.com`, falling back to
+  `https://auth.openai.com/api/accounts/oauth/revoke`) and revokes the refresh
   token (`token`, `token_type_hint=refresh_token`, `client_id`; retried twice
-  on network or 5xx failures), then deletes `credentials.dpapi`, keeping the
-  registration for the next sign-in. If revocation is not confirmed the UI says
-  so and points to ChatGPT Settings.
+  on network or 5xx failures), all within a 45 s overall budget. Status reads,
+  sign-in and turn starts are not blocked meanwhile. If revocation is not
+  confirmed the UI says so and points to ChatGPT Settings. When a completed
+  code exchange is discarded (the attempt was cancelled, the account differs
+  from the saved one, the ID token fails its checks, or storage fails), its
+  refresh token is revoked once, best effort, within 10 s and outside the
+  locks. The ordering, the single discovery, the non-blocking status read, the
+  budget and the discarded-exchange revocation are tested only in the
+  Windows-only `tests/flow.rs` suite (DPAPI).
 - **Where the token goes.** Only to `auth.openai.com` (refresh, revocation)
   and as `Authorization: Bearer` to `https://api.openai.com/v1/responses` and
   `/v1/models`. `agent::ChatGptTransport` and `agent::model_list` refuse any
@@ -733,11 +778,12 @@ exactly as on the API-key route; the session records `route: "api"`,
   later requests.
 - **Not verified.** No live sign-in, token exchange, refresh, revocation,
   model list or inference against OpenAI has been performed; all of it is
-  tested against loopback mocks written from the documentation. Because the
-  review fixes were gated on Linux, all `#[cfg(windows)]` ChatGPT code and
-  tests (DPAPI encryption/retry, `ShellExecuteW` + COM initialization,
+  tested against loopback mocks written from the documentation. The
+  `#[cfg(windows)]` ChatGPT code and tests (DPAPI encryption/retry, the
   `chatgpt-auth` `tests/flow.rs` DPAPI suite, `desktop-server`
-  `tests/chatgpt_route.rs`) must be re-compiled and re-tested on Windows. Not
+  `tests/chatgpt_route.rs`) have been compiled and run on Windows 11 with the
+  sign-out/lock fixes; `ShellExecuteW` + COM initialization is compiled but
+  never executed by any test (tests never open a browser). Not
   checked live: that the issued client accepts a callback port different from
   the one used at registration (the documentation says only the port may
   vary), the exact `revocation_endpoint` returned by live discovery, the exact
@@ -861,7 +907,7 @@ event, session API `confinement`/`route_label`, this file, README).
   and records the names. The `init` event reports no credential source, so
   there is no second check.
 - **Not verified (no live turn has been run; every test uses a scripted fake
-  `agy`, and the review fixes were gated on Linux only):** that the CLI honours
+  `agy`; the fake-CLI suites have been run on Windows 11):** that the CLI honours
   the deny rules and `agentMode` given through `--settings` (merge semantics
   with the user's `settings.json` are undocumented); that the workspace
   `mcp_config.json` is loaded in an untrusted, non-git folder under the data

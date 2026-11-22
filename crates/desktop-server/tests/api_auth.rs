@@ -322,3 +322,34 @@ fn request_body_api_base_is_ignored() {
     assert!(decoy.accept().is_err(), "the body's api_base must not be contacted");
     f.srv.shutdown();
 }
+
+/// The shared test configuration can never open a browser or reach OpenAI: its opener
+/// refuses and its endpoints are a closed loopback port, even when a test drives
+/// sign-in and "Open in browser" with a valid token.
+#[test]
+fn shared_test_config_never_opens_a_browser_or_reaches_openai() {
+    let tmp = TempDir::new().unwrap();
+    let cfg = test_cfg(tmp.path(), None, None, None);
+    let hooks = cfg.chatgpt_test.clone().expect("test_cfg must carry ChatGPT test hooks");
+    assert!(hooks.mock_base.starts_with("http://127.0.0.1:"), "{}", hooks.mock_base);
+    let err = (hooks.opener)("https://auth.openai.com/api/accounts/authorize?client_id=x").unwrap_err();
+    assert_eq!(err, desktop_server::chatgpt::TEST_OPENER_REFUSAL);
+    let hub = desktop_server::chatgpt::ChatGptHub::new(&cfg).unwrap();
+    assert!(hub.api_base().starts_with("http://127.0.0.1:"), "{}", hub.api_base());
+    assert!(!hub.auth.endpoints().is_production());
+
+    let f = fixture(None);
+    let token = [("X-ReSearch-Token", f.tok.as_str())];
+    let (st, _, body) = raw_http(f.port, "POST", "/api/connections/chatgpt/login", &token, b"");
+    if cfg!(windows) {
+        assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+        let url = serde_json::from_slice::<Value>(&body).unwrap()["authorize_url"].as_str().unwrap().to_string();
+        assert!(url.starts_with("http://127.0.0.1:"), "{url}");
+        let (st, _, body) = raw_http(f.port, "POST", "/api/connections/chatgpt/open", &token, b"");
+        assert_eq!(st, 500, "{}", String::from_utf8_lossy(&body));
+        assert!(String::from_utf8_lossy(&body).contains("browser opening disabled"));
+    } else {
+        assert_eq!(st, 400, "sign-in is not supported off Windows");
+    }
+    f.srv.shutdown();
+}
