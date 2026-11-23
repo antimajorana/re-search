@@ -162,6 +162,8 @@ pub struct DesktopState {
     pub agy_version: std::sync::OnceLock<String>,
     /// Generation-tagged `agy models` cache, kept for [`crate::model_catalog::CACHE_TTL`].
     pub agy_models: Mutex<(u64, Option<crate::antigravity::AgyModelCache>)>,
+    /// Stage 15 Human-in-the-Loop steer queue and pending checkpoint slots.
+    pub hitl: crate::hitl::HitlHub,
 }
 
 impl DesktopState {
@@ -182,6 +184,7 @@ impl DesktopState {
             chatgpt,
             agy_version: std::sync::OnceLock::new(),
             agy_models: Mutex::new((0, None)),
+            hitl: crate::hitl::HitlHub::default(),
         }
     }
 

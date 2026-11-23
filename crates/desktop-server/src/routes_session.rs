@@ -316,6 +316,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
             "running": is_turn_running(state, session_id),
             "session_grants": list_session_grants(state, session_id),
             "pending_approvals": pending,
+            "pending_checkpoints": state.hitl.list_pending(session_id),
         }),
     ))
 }

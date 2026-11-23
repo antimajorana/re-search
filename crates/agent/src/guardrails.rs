@@ -429,6 +429,8 @@ pub fn run_research_loop(
             cancel: None,
             emit_end_event: true,
             delegation: None,
+            human: None,
+            pause_after_explore: false,
         },
     )?;
 

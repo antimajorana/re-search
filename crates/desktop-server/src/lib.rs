@@ -11,6 +11,7 @@ mod cli_relay;
 pub mod cli_turn;
 pub mod connections;
 mod explain_export;
+pub mod hitl;
 pub mod http_srv;
 pub mod launcher;
 pub mod model_catalog;

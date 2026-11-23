@@ -26,10 +26,12 @@ let currentSessionId = null;
 let notifyFn = () => {};
 let onSelectStepRef = () => {};
 let onCountsChange = () => {};
+let callbacks = {};
 let lastSourcesCount = 0;
 let lastSidetalkCount = 0;
 
 export function initSourcesAndSidetalk(opts = {}) {
+  callbacks = opts;
   notifyFn = opts.onNotify || (() => {});
   onSelectStepRef = opts.onSelectStepRef || (() => {});
   onCountsChange = opts.onCountsChange || (() => {});
@@ -259,6 +261,52 @@ function appendSidetalkPair(question, answer) {
     badge.textContent = `Inspect ${stepId}`;
     badge.addEventListener('click', () => onSelectStepRef(stepId));
     refsBox.appendChild(badge);
+  }
+  const ansText = String(answer ?? '').trim();
+  if (ansText && ansText !== 'Thinking...' && !ansText.startsWith('Error:')) {
+    const pinBtn = document.createElement('button');
+    pinBtn.type = 'button';
+    pinBtn.className = 'pill-btn sm';
+    pinBtn.textContent = 'Pin to Conventions';
+    pinBtn.addEventListener('click', async () => {
+      if (!currentSessionId) return;
+      pinBtn.disabled = true;
+      try {
+        const resp = await api.promoteExplain(currentSessionId, { target: 'conventions', text: answer });
+        if (typeof callbacks.onConventionsPromoted === 'function') callbacks.onConventionsPromoted(resp);
+        notifyFn('Pinned Explain note to conventions.');
+      } catch (err) {
+        notifyFn(`Could not pin to conventions: ${err.message}`);
+      } finally {
+        pinBtn.disabled = false;
+      }
+    });
+    refsBox.appendChild(pinBtn);
+
+    const sendBtn = document.createElement('button');
+    sendBtn.type = 'button';
+    sendBtn.className = 'pill-btn sm';
+    sendBtn.textContent = 'Send to Orchestrator';
+    sendBtn.addEventListener('click', async () => {
+      if (!currentSessionId) return;
+      sendBtn.disabled = true;
+      try {
+        const resp = await api.promoteExplain(currentSessionId, { target: 'steer', text: answer });
+        if (resp && resp.mode === 'steer') {
+          notifyFn('Sent to active Orchestrator as live steer.');
+        } else {
+          if (typeof callbacks.onPromoteToComposer === 'function') {
+            callbacks.onPromoteToComposer((resp && resp.text) || answer);
+          }
+          notifyFn('Loaded Explain note into composer.');
+        }
+      } catch (err) {
+        notifyFn(`Could not send to Orchestrator: ${err.message}`);
+      } finally {
+        sendBtn.disabled = false;
+      }
+    });
+    refsBox.appendChild(sendBtn);
   }
   sidetalkStreamEl.appendChild(card);
   sidetalkStreamEl.scrollTop = sidetalkStreamEl.scrollHeight;

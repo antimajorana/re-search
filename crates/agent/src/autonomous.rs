@@ -31,6 +31,7 @@ pub struct AutonomousRoles<'a> {
     pub verifier: Option<(&'a dyn Transport, &'a str)>,
     pub strategist: Option<(&'a dyn Transport, &'a str)>,
     pub delegation: Option<crate::delegate::DelegationConfig<'a>>,
+    pub human: Option<&'a dyn crate::interaction::HumanChannel>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +39,8 @@ pub struct AutonomousConfig {
     pub guardrails: GuardrailConfig,
     pub use_strategist: bool,
     pub max_verification_rounds: u32,
+    pub interactive_plan_mode: bool,
+    pub pause_after_explore: bool,
 }
 
 impl Default for AutonomousConfig {
@@ -46,6 +49,8 @@ impl Default for AutonomousConfig {
             guardrails: GuardrailConfig::default(),
             use_strategist: false,
             max_verification_rounds: DEFAULT_MAX_VERIFICATION_ROUNDS,
+            interactive_plan_mode: false,
+            pause_after_explore: false,
         }
     }
 }
@@ -86,6 +91,13 @@ pub fn run_autonomous_research_loop(
             system_prompt.push_str(&sec);
         }
     }
+    if roles.human.is_some() {
+        crate::interaction::upsert_interactive_prompt_section(
+            &mut system_prompt,
+            auto_cfg.interactive_plan_mode,
+            auto_cfg.pause_after_explore,
+        );
+    }
     let session = router.session();
     let info = solver_transport.info();
     let defs = router.registry().defs();
@@ -111,6 +123,8 @@ pub fn run_autonomous_research_loop(
             "verification_mode": auto_cfg.guardrails.verification_mode,
             "calculation_mode": auto_cfg.guardrails.calculation_mode,
             "use_strategist": auto_cfg.use_strategist,
+            "interactive_plan_mode": auto_cfg.interactive_plan_mode,
+            "pause_after_explore": auto_cfg.pause_after_explore,
             "pinned_conventions": auto_cfg.guardrails.pinned_conventions,
             "tool_defs": tool_defs_json(&defs),
         }),
@@ -194,6 +208,13 @@ pub fn resume_autonomous_research_loop(
             }
         }
     }
+    if roles.human.is_some() {
+        crate::interaction::upsert_interactive_prompt_section(
+            &mut system_prompt,
+            auto_cfg.interactive_plan_mode,
+            auto_cfg.pause_after_explore,
+        );
+    }
 
     let mut audit = Audit { ledger, session, sink, last_seq: inspection.resumed_from_seq };
     audit.emit(
@@ -220,6 +241,8 @@ pub fn resume_autonomous_research_loop(
             "verification_mode": auto_cfg.guardrails.verification_mode,
             "calculation_mode": auto_cfg.guardrails.calculation_mode,
             "use_strategist": auto_cfg.use_strategist,
+            "interactive_plan_mode": auto_cfg.interactive_plan_mode,
+            "pause_after_explore": auto_cfg.pause_after_explore,
             "history_messages": messages.len(),
             "tool_defs": tool_defs_json(&defs),
         }),
@@ -296,6 +319,8 @@ fn drive_autonomous_rounds(
                 cancel,
                 emit_end_event: false,
                 delegation: roles.delegation.as_ref(),
+                human: roles.human,
+                pause_after_explore: auto_cfg.pause_after_explore,
             },
         )?;
 

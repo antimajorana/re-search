@@ -165,6 +165,7 @@ impl EventSink for SseEventSink {
                     json!({ "seq": receipt.seq, "kind": kind, "payload": data }),
                 );
             }
+            // Includes `human.steer`, `human.checkpoint_requested`, `human.decision`, `explain.promoted`.
             _ => {
                 self.sse.emit(
                     &self.session_id,
@@ -503,6 +504,29 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                     last["honesty"] = ev.payload.clone();
                 }
             }
+            "human.steer" => {
+                let text = ev.payload.get("text").and_then(Value::as_str).unwrap_or("").trim();
+                if !text.is_empty() {
+                    pending_thinking.push_str(&format!("[Human steer: {text}]\n"));
+                }
+            }
+            "human.decision" => {
+                let kind = ev.payload.get("kind").and_then(Value::as_str).unwrap_or("checkpoint");
+                let cancelled = ev.payload.get("cancelled").and_then(Value::as_bool).unwrap_or(false);
+                let opt = ev.payload.get("selected_option").and_then(Value::as_str).unwrap_or("").trim();
+                let text = ev.payload.get("text").and_then(Value::as_str).unwrap_or("").trim();
+                let detail = if cancelled {
+                    if text.is_empty() { "cancelled".to_string() } else { format!("cancelled: {text}") }
+                } else {
+                    match (opt.is_empty(), text.is_empty()) {
+                        (false, false) => format!("{opt} — {text}"),
+                        (false, true) => opt.to_string(),
+                        (true, false) => text.to_string(),
+                        (true, true) => "confirmed".to_string(),
+                    }
+                };
+                pending_thinking.push_str(&format!("[Checkpoint decision ({kind}): {detail}]\n"));
+            }
             "campaign.phase" => {}
             _ => {}
         }
@@ -534,8 +558,10 @@ mod tests {
             ev(2, "campaign.phase", json!({ "phase": "EXPLORE" })),
             ev(3, "explore.end", json!({ "model": "claude-haiku-4-5", "branch_count": 2, "turns": 4, "input_tokens": 30, "output_tokens": 12 })),
             ev(4, "delegate.end", json!({ "worker": "compute_worker", "worker_name": "Compute Worker", "model": "claude-haiku-4-5", "turns": 2, "input_tokens": 40, "output_tokens": 15 })),
-            ev(5, "model.text", json!({ "text": "Done." })),
-            ev(6, "honesty.lint", json!({ "passed": false, "findings": [{ "severity": "warning", "claim": "q.e.d." }] })),
+            ev(5, "human.steer", json!({ "steer_id": "st-1", "text": "Use k=0 gauge", "ts_ms": 50 })),
+            ev(6, "human.decision", json!({ "checkpoint_id": "chk-1", "kind": "plan", "selected_option": "Approve", "text": "", "cancelled": false })),
+            ev(7, "model.text", json!({ "text": "Done." })),
+            ev(8, "honesty.lint", json!({ "passed": false, "findings": [{ "severity": "warning", "claim": "q.e.d." }] })),
         ];
         let stats = summarize_session_events(&events);
         assert_eq!(stats["worker_input_tokens"], 70);
@@ -549,6 +575,8 @@ mod tests {
         let think = msgs[1]["thinking"].as_str().unwrap();
         assert!(think.contains("[Ultramath Explorer (claude-haiku-4-5): 2 branches, 4 turns, 30+12 tok]"));
         assert!(think.contains("[Worker Compute Worker (claude-haiku-4-5): 2 turn(s), 40+15 tok]"));
+        assert!(think.contains("[Human steer: Use k=0 gauge]"));
+        assert!(think.contains("[Checkpoint decision (plan): Approve]"));
         assert_eq!(msgs[1]["honesty"]["passed"], false);
         assert_eq!(msgs[1]["honesty"]["findings"][0]["claim"], "q.e.d.");
     }

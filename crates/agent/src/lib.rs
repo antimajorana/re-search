@@ -15,6 +15,7 @@ pub mod gemini;
 pub mod guardrails;
 pub mod honesty;
 pub(crate) mod http;
+pub mod interaction;
 pub mod model_list;
 pub mod narrator;
 pub mod openai;
@@ -53,6 +54,7 @@ pub use guardrails::{
     validate_pinned_conventions, GuardrailConfig,
 };
 pub use honesty::{infer_campaign_phase, lint_honesty, CampaignPhase, HonestyFinding, HonestyReport};
+pub use interaction::{is_human_tool, CheckpointPrompt, HumanChannel, HumanReply, SteerMessage, ASK_USER};
 pub use narrator::{build_derivation_sheet, narrate_session, NarrationReport};
 pub use openai::{OpenAiConfig, OpenAiTransport};
 pub use presets::{ModelEndpointSpec, PresetKind, RoleAssignment};

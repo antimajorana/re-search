@@ -67,6 +67,7 @@ pub fn handle_stop_turn(state: &DesktopState, session_id: &str) -> ApiResult {
         c.cancel();
     }
     let denied = state.deny_pending(session_id, None, "supervisor: turn stopped by the user");
+    state.hitl.cancel_session(session_id);
     Ok((
         200,
         json!({
@@ -88,6 +89,7 @@ pub fn stop_all_turns(state: &DesktopState) {
     for (sid, tok) in &api_tokens {
         tok.cancel();
         state.deny_pending(sid, None, "desktop server shutting down; denied");
+        state.hitl.cancel_session(sid);
     }
     state.stop_all_cli_turns();
     if !api_tokens.is_empty() {

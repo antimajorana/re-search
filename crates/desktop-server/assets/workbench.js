@@ -192,14 +192,17 @@ export function applySessionTelemetry(stats, hasMessages = false) {
 // --- 2. Rigor Mode Presets synced with Verifier & Strategist chips ---
 
 function wireModePresets() {
+  const group = document.getElementById('mode-preset-group');
   const presetBtns = document.querySelectorAll('[data-rigor-preset]');
   const vChip = document.getElementById('verifier-chip');
   const sChip = document.getElementById('strategist-chip');
+  const pauseChip = document.getElementById('pause-explore-chip');
 
   const syncFromChips = () => {
+    const isInteractive = Boolean(group && group.getAttribute('data-interactive') === 'true');
     const vOn = Boolean(vChip && vChip.getAttribute('aria-pressed') === 'true');
     const sOn = Boolean(sChip && sChip.getAttribute('aria-pressed') === 'true');
-    const active = !vOn && !sOn ? 'direct' : (vOn && sOn ? 'deep' : 'verified');
+    const active = isInteractive ? 'interactive' : (!vOn && !sOn ? 'direct' : (vOn && sOn ? 'deep' : 'verified'));
     for (const b of presetBtns) {
       const match = b.getAttribute('data-rigor-preset') === active;
       b.classList.toggle('is-active', match);
@@ -210,9 +213,23 @@ function wireModePresets() {
   for (const b of presetBtns) {
     b.addEventListener('click', () => {
       const mode = b.getAttribute('data-rigor-preset');
-      if (vChip) vChip.setAttribute('aria-pressed', mode === 'direct' ? 'false' : 'true');
-      if (sChip) sChip.setAttribute('aria-pressed', mode === 'deep' ? 'true' : 'false');
+      if (mode === 'interactive') {
+        if (group) group.setAttribute('data-interactive', 'true');
+        if (vChip) vChip.setAttribute('aria-pressed', 'true');
+        if (sChip) sChip.setAttribute('aria-pressed', 'false');
+        if (pauseChip) pauseChip.setAttribute('aria-pressed', 'true');
+      } else {
+        if (group) group.removeAttribute('data-interactive');
+        if (vChip) vChip.setAttribute('aria-pressed', mode === 'direct' ? 'false' : 'true');
+        if (sChip) sChip.setAttribute('aria-pressed', mode === 'deep' ? 'true' : 'false');
+      }
       syncFromChips();
+    });
+  }
+  if (pauseChip) {
+    pauseChip.addEventListener('click', () => {
+      const next = pauseChip.getAttribute('aria-pressed') !== 'true';
+      pauseChip.setAttribute('aria-pressed', next ? 'true' : 'false');
     });
   }
   for (const chip of [vChip, sChip]) {
@@ -291,7 +308,12 @@ function wireConventionsPopover() {
   }
 }
 
-export async function refreshConventionsState() {
+export async function refreshConventionsState(overrideText) {
+  if (typeof overrideText === 'string') {
+    currentConventions = overrideText;
+    syncConventionsIndicators();
+    return;
+  }
   try {
     const s = await api.getProviderSettings();
     currentConventions = String((s && s.pinned_conventions) || '');

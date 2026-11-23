@@ -23,11 +23,13 @@ let callbacks = {};
 let stagedFiles = [];
 let submitting = false;
 let turnRunning = false;
+let defaultPlaceholder = 'Ask a derivation, run SymPy, or audit arXiv TeX...';
 
 export function initComposer(opts = {}) {
   callbacks = opts;
   formEl = document.getElementById('composer-pill');
   inputEl = document.getElementById('composer-input');
+  if (inputEl && inputEl.placeholder) defaultPlaceholder = inputEl.placeholder;
   sendEl = document.getElementById('composer-send');
   stopEl = document.getElementById('composer-stop');
   topbarStopEl = document.getElementById('topbar-stop-btn');
@@ -127,8 +129,15 @@ export function setComposerPrompt(text, focusInput = true) {
 
 function syncButtons() {
   if (sendEl) {
-    sendEl.disabled = submitting || turnRunning;
-    sendEl.hidden = turnRunning;
+    sendEl.disabled = submitting;
+    sendEl.hidden = false;
+    sendEl.textContent = turnRunning ? 'Steer' : 'Send';
+    sendEl.classList.toggle('is-steer', turnRunning);
+    sendEl.title = turnRunning ? 'Send live steer to active turn (Enter)' : 'Send prompt (Enter)';
+    sendEl.setAttribute('aria-label', turnRunning ? 'Steer active turn' : 'Send prompt');
+  }
+  if (inputEl) {
+    inputEl.placeholder = turnRunning ? 'Steer the active turn (injected at next step)...' : defaultPlaceholder;
   }
   if (stopEl) {
     stopEl.hidden = !turnRunning;
@@ -149,6 +158,8 @@ export function setComposerBusy(busy) {
 export function getComposerOptions(choice) {
   const verifyOn = Boolean(verifierChip && verifierChip.getAttribute('aria-pressed') === 'true');
   const stratOn = Boolean(strategistChip && strategistChip.getAttribute('aria-pressed') === 'true');
+  const interactiveOn = document.querySelector('[data-rigor-preset="interactive"]')?.getAttribute('aria-pressed') === 'true';
+  const pauseExploreOn = document.getElementById('pause-explore-chip')?.getAttribute('aria-pressed') === 'true';
   const effort = getReasoningEffort();
   const subagent = getActiveSubagent();
   return {
@@ -157,6 +168,8 @@ export function getComposerOptions(choice) {
     verification_mode: verifyOn,
     calculation_mode: verifyOn,
     use_strategist: stratOn,
+    interactive_plan_mode: interactiveOn,
+    pause_after_explore: pauseExploreOn,
     reasoning_effort: effort || 'default',
     subagent_id: subagent ? subagent.id : undefined,
   };
@@ -238,7 +251,28 @@ async function flushStagedUploads(sessionId) {
 }
 
 async function handleSubmit() {
-  if (submitting || turnRunning) return;
+  if (submitting) return;
+  if (turnRunning) {
+    const text = inputEl ? inputEl.value.trim() : '';
+    if (!text || typeof callbacks.onSteerTurn !== 'function') return;
+    try {
+      submitting = true;
+      syncButtons();
+      inputEl.value = '';
+      resizeTextarea();
+      await callbacks.onSteerTurn(text);
+    } catch (err) {
+      if (inputEl && !inputEl.value) {
+        inputEl.value = text;
+        resizeTextarea();
+      }
+      if (!err || !err._notified) notify(`Steer failed: ${err.message}`);
+    } finally {
+      submitting = false;
+      syncButtons();
+    }
+    return;
+  }
   const prompt = inputEl ? inputEl.value.trim() : '';
   if (!prompt && stagedFiles.length === 0) return;
   const currentChoice = () => (typeof callbacks.getModelChoice === 'function' ? callbacks.getModelChoice() : null);

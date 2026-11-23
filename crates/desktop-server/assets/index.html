@@ -125,6 +125,7 @@
               <span style="font-size:12px;color:var(--ink-muted);">Active agents:</span>
               <button id="verifier-chip" type="button" class="chip-toggle" aria-pressed="true" title="Run stateless Verifier + Calculation guardrail before accepting final answer">Verifier</button>
               <button id="strategist-chip" type="button" class="chip-toggle" aria-pressed="false" title="Consult Research Strategist to plan repairs if Verifier rejects a round">Strategist</button>
+              <button id="pause-explore-chip" type="button" class="chip-toggle" aria-pressed="false" title="Pause after Ultramath parallel exploration to choose a branch">Pause on Explore</button>
             </div>
             <div style="display:flex;gap:6px;">
               <button id="conventions-clear-btn" type="button" class="pill-btn sm">Clear</button>
@@ -160,6 +161,7 @@
                 <button type="button" class="seg-btn" data-rigor-preset="direct" aria-pressed="false" title="Direct mode: single-pass Orchestrator + tools without post-turn Verifier gate">Direct</button>
                 <button type="button" class="seg-btn is-active" data-rigor-preset="verified" aria-pressed="true" title="Verified mode: Orchestrator + Calculation Guard + Independent Stateless Verifier (up to 3 rounds)">✓ Verified</button>
                 <button type="button" class="seg-btn" data-rigor-preset="deep" aria-pressed="false" title="Deep Research mode: Orchestrator + Independent Verifier + Research Strategist repair">✦ Deep</button>
+                <button type="button" class="seg-btn" data-rigor-preset="interactive" aria-pressed="false" title="Interactive Plan-First mode: Orchestrator proposes a plan and pauses for your approval before heavy work">Interactive</button>
               </div>
             </div>
             <div class="composer-right">

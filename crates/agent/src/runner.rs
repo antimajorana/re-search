@@ -111,6 +111,8 @@ pub(crate) struct LoopParams<'a> {
     pub(crate) cancel: Option<&'a CancelToken>,
     pub(crate) emit_end_event: bool,
     pub(crate) delegation: Option<&'a crate::delegate::DelegationConfig<'a>>,
+    pub(crate) human: Option<&'a dyn crate::interaction::HumanChannel>,
+    pub(crate) pause_after_explore: bool,
 }
 
 pub(crate) struct LegResult {
@@ -213,6 +215,8 @@ pub fn run_agent_loop(
             cancel: None,
             emit_end_event: true,
             delegation: None,
+            human: None,
+            pause_after_explore: false,
         },
     )
 }
@@ -230,7 +234,7 @@ pub(crate) fn run_turn_leg(
     transport: &dyn Transport,
     router: &Router,
     audit: &mut Audit<'_>,
-    params: LoopParams<'_>,
+    mut params: LoopParams<'_>,
 ) -> Result<LegResult, String> {
     let info = transport.info();
     let caller = format!("agent:{}:{}", info.provider, audit.session);
@@ -238,17 +242,16 @@ pub(crate) fn run_turn_leg(
         .registry()
         .defs()
         .iter()
-        .map(|d| ToolSpec {
-            name: d.id.clone(),
-            description: d.description.clone(),
-            input_schema: d.input_schema.clone(),
-        })
+        .map(|d| ToolSpec { name: d.id.clone(), description: d.description.clone(), input_schema: d.input_schema.clone() })
         .collect();
     if let Some(dcfg) = params.delegation {
         tool_specs.extend(crate::delegate::delegation_tool_specs(dcfg));
     }
+    if params.human.is_some() {
+        tool_specs.push(crate::interaction::ask_user_tool_spec());
+    }
     let started = Instant::now();
-    let mut messages = params.initial_messages;
+    let mut messages = std::mem::take(&mut params.initial_messages);
 
     for offset in 0..params.max_turns {
         let leg_turns = offset + 1;
@@ -256,6 +259,9 @@ pub(crate) fn run_turn_leg(
         if params.cancel.is_some_and(CancelToken::is_cancelled) {
             let outcome = abort_stopped(audit, leg_turns)?;
             return Ok(LegResult { outcome, messages, last_turn: turn, last_text: String::new() });
+        }
+        if let Some(h) = params.human {
+            crate::interaction::inject_pending_steers(audit, h, &mut messages)?;
         }
         let outgoing_messages = match params.mask_keep_recent {
             Some((keep, stride)) => crate::guardrails::mask_old_tool_outputs_stepped(&messages, keep, stride),
@@ -386,7 +392,7 @@ pub(crate) fn run_turn_leg(
                     return Ok(LegResult { outcome, messages, last_turn: turn, last_text: String::new() });
                 }
                 messages.push(Message { role: Role::Assistant, content: resp.content.clone() });
-                let results = dispatch_tool_calls(audit, router, &caller, turn, &resp.content, params.cancel, params.delegation)?;
+                let results = dispatch_tool_calls(audit, router, &caller, turn, &resp.content, &params)?;
                 if params.cancel.is_some_and(CancelToken::is_cancelled) {
                     messages.push(Message { role: Role::User, content: results });
                     let outcome = abort_stopped(audit, leg_turns)?;
@@ -445,26 +451,19 @@ fn abort_session(audit: &mut Audit<'_>, turn: u32, reason: String) -> Result<Ses
 
 fn record_content_blocks(audit: &mut Audit<'_>, content: &[ContentBlock]) -> Result<(), String> {
     for block in content {
-        match block {
-            ContentBlock::Text { text } => {
-                audit.emit("model.text", json!({ "text": text }))?;
-            }
-            ContentBlock::Thinking { thinking, .. } => {
-                audit.emit("model.thinking", json!({ "chars": thinking.chars().count() }))?;
-            }
+        let (kind, data) = match block {
+            ContentBlock::Text { text } => ("model.text", json!({ "text": text })),
+            ContentBlock::Thinking { thinking, .. } => ("model.thinking", json!({ "chars": thinking.chars().count() })),
             ContentBlock::RedactedThinking { data } => {
-                audit.emit("model.thinking", json!({ "chars": data.chars().count(), "redacted": true }))?;
+                ("model.thinking", json!({ "chars": data.chars().count(), "redacted": true }))
             }
             ContentBlock::ToolUse { id, name, input } => {
-                audit.emit("model.tool_use", json!({ "id": id, "name": name, "input": input }))?;
+                ("model.tool_use", json!({ "id": id, "name": name, "input": input }))
             }
-            ContentBlock::ToolResult { .. } => {
-                audit.emit("model.other", json!({ "block_type": "tool_result" }))?;
-            }
-            ContentBlock::Other { block_type, .. } => {
-                audit.emit("model.other", json!({ "block_type": block_type }))?;
-            }
-        }
+            ContentBlock::ToolResult { .. } => ("model.other", json!({ "block_type": "tool_result" })),
+            ContentBlock::Other { block_type, .. } => ("model.other", json!({ "block_type": block_type })),
+        };
+        audit.emit(kind, data)?;
     }
     Ok(())
 }
@@ -519,20 +518,26 @@ fn dispatch_tool_calls(
     caller: &str,
     turn: u32,
     content: &[ContentBlock],
-    cancel: Option<&CancelToken>,
-    delegation: Option<&crate::delegate::DelegationConfig<'_>>,
+    params: &LoopParams<'_>,
 ) -> Result<Vec<ContentBlock>, String> {
     let mut results = Vec::new();
     for block in content {
         let ContentBlock::ToolUse { id, name, input } = block else {
             continue;
         };
-        let (is_error, content_text) = if cancel.is_some_and(CancelToken::is_cancelled) {
+        let (is_error, content_text) = if params.cancel.is_some_and(CancelToken::is_cancelled) {
             (true, "DENIED: stopped by user".to_string())
+        } else if crate::interaction::is_human_tool(name) {
+            crate::interaction::run_ask_user_tool(audit, params.human, id, input, params.cancel)?
         } else if crate::delegate::is_delegation_tool(name) {
-            match delegation {
-                Some(dcfg) => crate::delegate::run_delegation_call(audit, router, dcfg, id, name, input, cancel)?,
+            let res = match params.delegation {
+                Some(dcfg) => crate::delegate::run_delegation_call(audit, router, dcfg, id, name, input, params.cancel)?,
                 None => (true, "DENIED: delegation is not enabled for this session".to_string()),
+            };
+            if name == crate::explore::DELEGATE_EXPLORE {
+                crate::interaction::maybe_pause_explore_branch_picker(audit, params.human, params.pause_after_explore, id, res, params.cancel)?
+            } else {
+                res
             }
         } else {
             let outcome = router.try_call(caller, name, input)?;
@@ -554,11 +559,7 @@ fn dispatch_tool_calls(
                 "truncated": truncated,
             }),
         )?;
-        results.push(ContentBlock::ToolResult {
-            tool_use_id: id.clone(),
-            is_error,
-            content: content_text,
-        });
+        results.push(ContentBlock::ToolResult { tool_use_id: id.clone(), is_error, content: content_text });
     }
     Ok(results)
 }

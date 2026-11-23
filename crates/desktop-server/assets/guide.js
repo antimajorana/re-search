@@ -7,7 +7,7 @@ const GUIDE_SECTIONS = [
       '<strong>Connect a Provider:</strong> Open <em>Settings -> Providers</em> to paste an API key (Anthropic, OpenAI, Gemini), sign in with ChatGPT, use Claude Code / Antigravity CLI, or start Ollama locally.',
       '<strong>Pick Model &amp; Reasoning Effort:</strong> Select your model in the composer dropdown; the secondary <em>Reasoning Effort</em> window opens automatically (or click <code>Effort: ...</code> anytime) to choose <code>Default</code>, <code>Low</code>, <code>Medium</code>, <code>High</code>, <code>X-High</code>, or <code>Max</code>.',
       '<strong>Attach a Paper Workspace:</strong> Click <code>Workspace</code> to grant read/write access to your LaTeX project folder (nothing outside it can be touched).',
-      '<strong>Choose Rigor Mode:</strong> <code>Direct</code> (single-pass Orchestrator), <code>Verified</code> (Orchestrator + SymPy guard + Independent Verifier up to 3 rounds), or <code>Deep</code> (adds Research Strategist diagnosis on rejections).',
+      '<strong>Choose Rigor Mode:</strong> <code>Direct</code> (single-pass Orchestrator), <code>Verified</code> (Orchestrator + SymPy guard + Independent Verifier up to 3 rounds), <code>Deep</code> (adds Research Strategist diagnosis on rejections), or <code>Interactive</code> (Plan-First approval + <em>Pause on Explore</em> branch selection).',
     ],
   },
   {
@@ -20,7 +20,16 @@ const GUIDE_SECTIONS = [
     ],
   },
   {
-    title: '3. Computation Sandbox & Tool Approvals',
+    title: '3. Interactive Steering, Checkpoints & Branch Picker',
+    items: [
+      '<strong>Mid-Turn Live Steering:</strong> While a turn is running, the composer submit button switches to <code>Steer</code>. Type guidance and submit anytime to queue a live steer (shown as <code>Steer queued -&gt; ...</code>) injected at the Orchestrator\'s next step without aborting the turn.',
+      '<strong>Interactive Plan-First Mode &amp; <code>ask_user</code> Checkpoints:</strong> Choosing the <code>Interactive</code> rigor preset instructs the Orchestrator to present a numbered <em>Research Plan Checkpoint</em> before heavy worker delegation. During any turn, <code>ask_user</code> can also surface an inline <em>Orchestrator Question</em> card for convention or mathematical decisions.',
+      '<strong>Ultramath Branch Picker (<code>Pause on Explore</code>):</strong> Toggle <code>Pause on Explore</code> in the <em>Conventions</em> popover (enabled automatically by <code>Interactive</code> mode) to pause after parallel <code>delegate_explore</code> runs, compare candidate branches side by side, and adopt, combine, or steer the chosen approach.',
+      '<strong>Promote from Explain:</strong> Answers in Canvas -&gt; <code>Explain</code> include <code>Pin to Conventions</code> (adds the insight to pinned conventions) and <code>Send to Orchestrator</code> (queues a live steer if a turn is running, or populates the composer when idle).',
+    ],
+  },
+  {
+    title: '4. Computation Sandbox & Tool Approvals',
     items: [
       '<strong>Default-On Desktop Auto-Approval:</strong> In desktop mode, <code>auto_approve_tools</code> in <em>Settings -&gt; Advanced</em> is enabled by default so sandboxed SymPy runs, workspace writes, and literature lookups run uninterrupted while still fail-closed recording <code>approval.answered</code> in <code>ledger.db</code>.',
       '<strong>Manual Approvals &amp; Policy Clamps:</strong> Uncheck <em>Auto-approve computations, workspace writes &amp; literature lookups</em> in <em>Settings -&gt; Advanced</em> anytime to require manual approval cards on every call or once per chat (<code>Approve for Session</code>, revocable via the topbar pill). The CLI route and <code>crates/policy</code> always clamp <code>execute-code</code>, <code>write-workspace</code>, and <code>network-read</code> to <em>Ask</em> at the policy layer.',
@@ -28,7 +37,7 @@ const GUIDE_SECTIONS = [
     ],
   },
   {
-    title: '4. Sources, Proof DAG, Explain & LaTeX Canvas',
+    title: '5. Sources, Proof DAG, Explain & LaTeX Canvas',
     items: [
       '<strong>Direct Source Links &amp; Reader:</strong> Literature hits and ingested arXiv sources include direct clickable links (<code>Open Paper ↗</code>, <code>PDF ↗</code>, <code>DOI ↗</code>) plus a <code>Read Source</code> modal to inspect downloaded TeX/Markdown/BibTeX files in-app.',
       '<strong>Campaign Phases &amp; Shared SHA-256 Ledger:</strong> Research turns progress through structured campaign phases (<code>INGEST -&gt; EXPLORE -&gt; COMPUTE -&gt; SYNTHESIZE -&gt; VERIFY -&gt; REVISE -&gt; COMPLETE</code>). The append-only SHA-256 <strong>Ledger</strong> acts as shared Proof-DAG memory across isolated workers, an anti-overclaiming gate, and a tamper-evident token/routing provenance log.',
@@ -38,7 +47,7 @@ const GUIDE_SECTIONS = [
     ],
   },
   {
-    title: '5. Managing Chats, Live Model Updates & Shortcuts',
+    title: '6. Managing Chats, Live Model Updates & Shortcuts',
     items: [
       '<strong>Stop, Archive &amp; Delete:</strong> Press the red <code>Stop</code> button (or <kbd class="guide-kbd">Esc</kbd>) to halt an active turn cleanly. Hover any thread or use topbar buttons to <em>Archive</em> or <em>Delete</em> (local workspace files are never modified; the append-only audit chain stays intact).',
       '<strong>Automatic New Models:</strong> reSearch checks connected providers automatically when stale and highlights newly released models with <code>✦ New</code>.',

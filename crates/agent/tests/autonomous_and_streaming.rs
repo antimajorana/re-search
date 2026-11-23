@@ -4,11 +4,13 @@
 //! and cooperative `CancelToken` mid-stream Stop cancellation.
 
 use agent::{
-    resume_autonomous_research_loop, run_autonomous_research_loop, AgentConfig, AutonomousConfig,
-    AutonomousRoles, BearerSource, CancelToken, ChatGptConfig, ChatGptTransport, ContentBlock,
-    EventSink, GuardrailConfig, ModelRequest, ModelResponse, PreparedRequest, ResumeConfig,
-    SecretKey, SessionOutcome, StopReason, Transport, TransportError, TransportInfo,
-    DEFAULT_MAX_TOKENS, RESEARCH_SYSTEM_PROMPT,
+    explore_worker_tools, resume_autonomous_research_loop, run_autonomous_research_loop,
+    AgentConfig, AutonomousConfig, AutonomousRoles, BearerSource, CancelToken, ChatGptConfig,
+    ChatGptTransport, CheckpointPrompt, ContentBlock, DelegatedWorkerSpec, DelegationConfig,
+    EventSink, GuardrailConfig, HumanChannel, HumanReply, ModelRequest, ModelResponse,
+    PreparedRequest, ResumeConfig, SecretKey, SessionOutcome, SteerMessage, StopReason, Transport,
+    TransportError, TransportInfo, ASK_USER, DEFAULT_MAX_TOKENS, DELEGATE_EXPLORE,
+    EXPLORE_BRANCH_MAX_TURNS, RESEARCH_SYSTEM_PROMPT,
 };
 use ledger::{AppendedEvent, Ledger};
 use research_tools::{register_research_tools, research_policy, ResearchEnv};
@@ -141,6 +143,7 @@ fn autonomous_loop_rejects_consults_strategist_revises_accepts_and_resumes_lossl
         verifier: Some((&verifier, "claude-haiku-4-5")),
         strategist: Some((&strategist, "claude-haiku-4-5")),
         delegation: None,
+        human: None,
     };
     let cfg = AgentConfig {
         prompt: "Compute the Kitaev chain excitation gap at mu = 0.".into(),
@@ -157,6 +160,7 @@ fn autonomous_loop_rejects_consults_strategist_revises_accepts_and_resumes_lossl
         guardrails: GuardrailConfig { verification_mode: true, calculation_mode: true, ..Default::default() },
         use_strategist: true,
         max_verification_rounds: 3,
+        ..Default::default()
     };
     let mut sink = RecordingSink::default();
     let out = run_autonomous_research_loop(
@@ -187,7 +191,7 @@ fn autonomous_loop_rejects_consults_strategist_revises_accepts_and_resumes_lossl
         "anthropic-messages",
         vec![anthropic_text_reply("v-3", r#"{"verdict":"accepted","summary":"Follow-up sound","issues":[]}"#)],
     );
-    let roles_leg2 = AutonomousRoles { verifier: Some((&verifier_leg2, "claude-haiku-4-5")), strategist: None, delegation: None };
+    let roles_leg2 = AutonomousRoles { verifier: Some((&verifier_leg2, "claude-haiku-4-5")), strategist: None, delegation: None, human: None };
     let resume_cfg = ResumeConfig {
         prompt: "What happens for |mu| > 2t?".into(),
         model_requested: "claude-haiku-4-5".into(),
@@ -242,7 +246,7 @@ fn autonomous_loop_emits_warning_instead_of_discarding_when_verifier_rounds_exha
             anthropic_text_reply("v2", r#"{"verdict":"rejected","summary":"Still missing bound","issues":[{"severity":"error","message":"Unbounded operator"}]}"#),
         ],
     );
-    let roles = AutonomousRoles { verifier: Some((&verifier, "claude-haiku-4-5")), strategist: None, delegation: None };
+    let roles = AutonomousRoles { verifier: Some((&verifier, "claude-haiku-4-5")), strategist: None, delegation: None, human: None };
     let cfg = AgentConfig {
         prompt: "Prove operator bound.".into(),
         model_requested: "claude-haiku-4-5".into(),
@@ -258,6 +262,7 @@ fn autonomous_loop_emits_warning_instead_of_discarding_when_verifier_rounds_exha
         guardrails: GuardrailConfig { verification_mode: true, ..Default::default() },
         use_strategist: false,
         max_verification_rounds: 2,
+        ..Default::default()
     };
     let mut sink = RecordingSink::default();
     let out = run_autonomous_research_loop(&solver, &roles, &router, &ledger, &env, &cfg, &auto_cfg, None, &mut sink).unwrap();
@@ -403,4 +408,114 @@ fn chatgpt_streaming_delivers_live_deltas_and_cancel_token_aborts_promptly() {
     let evs = ledger.read_session("s-cancel01").unwrap();
     assert_eq!(evs.last().unwrap().kind, "session.abort");
     assert_eq!(evs.last().unwrap().payload["stopped"], true);
+}
+
+fn anthropic_tool_reply(id: &str, call_id: &str, name: &str, input: Value) -> ModelResponse {
+    let raw = serde_json::to_vec(&json!({
+        "id": id, "type": "message", "role": "assistant", "model": "claude-haiku-4-5",
+        "stop_reason": "tool_use",
+        "content": [{ "type": "tool_use", "id": call_id, "name": name, "input": input }],
+        "usage": { "input_tokens": 10, "output_tokens": 12 }
+    })).unwrap();
+    ModelResponse {
+        raw_body: raw, id: Some(id.into()), model: "claude-haiku-4-5".into(),
+        stop_reason: StopReason::ToolUse,
+        content: vec![ContentBlock::ToolUse { id: call_id.into(), name: name.into(), input }],
+        usage: json!({"input_tokens": 10, "output_tokens": 12}),
+    }
+}
+
+struct InteractiveStub {
+    steers: Mutex<Vec<SteerMessage>>,
+    prompts: Mutex<Vec<CheckpointPrompt>>,
+}
+impl HumanChannel for InteractiveStub {
+    fn drain_steers(&self) -> Vec<SteerMessage> {
+        std::mem::take(&mut *self.steers.lock().unwrap())
+    }
+    fn ask_checkpoint(&self, prompt: &CheckpointPrompt, _cancel: Option<&CancelToken>) -> HumanReply {
+        self.prompts.lock().unwrap().push(prompt.clone());
+        if prompt.kind == "plan" {
+            self.steers.lock().unwrap().push(SteerMessage {
+                steer_id: "st-1".into(), text: "Use dimensionless units t = 1".into(), ts_ms: 99,
+            });
+            HumanReply { checkpoint_id: prompt.checkpoint_id.clone(), selected_option: Some("Approve plan".into()), text: "Proceed".into(), cancelled: false }
+        } else {
+            HumanReply { checkpoint_id: prompt.checkpoint_id.clone(), selected_option: prompt.options.first().cloned(), text: "Use branch 1".into(), cancelled: false }
+        }
+    }
+}
+
+#[test]
+fn interactive_hitl_plan_steer_explore_pause_and_resume_work_losslessly() {
+    let tmp = TempDir::new().unwrap();
+    let data = tmp.path().join("data");
+    let env = Arc::new(ResearchEnv::new(&data));
+    let mut reg = Registry::new();
+    register_research_tools(&mut reg, env.clone());
+    let session = "s-hitl01";
+    let router = Router::new(reg, research_policy(), Ledger::open(&data).unwrap(), session, Arc::new(DenyAsk));
+    let ledger = Ledger::open(&data).unwrap();
+
+    let solver = MockTransport::new("anthropic-messages", vec![
+        anthropic_tool_reply("m1", "tu-plan", ASK_USER, json!({ "question": "Approve or edit this research plan before execution?", "kind": "plan", "options": ["Approve plan", "Adjust approach"] })),
+        anthropic_tool_reply("m2", "tu-exp", DELEGATE_EXPLORE, json!({ "problem": "Find gap", "approaches": ["Majorana", "Jordan-Wigner"] })),
+        anthropic_text_reply("m3", "Gap is 2|Delta|."),
+    ]);
+    let explorer = MockTransport::new("anthropic-messages", vec![
+        anthropic_text_reply("e1", "Branch A viable."),
+        anthropic_text_reply("e2", "Branch B viable."),
+    ]);
+    let human = InteractiveStub { steers: Mutex::new(Vec::new()), prompts: Mutex::new(Vec::new()) };
+    let delegation = DelegationConfig {
+        explorer_worker: Some(DelegatedWorkerSpec {
+            role: "explorer_worker".into(), display_name: "Explorer".into(),
+            transport: &explorer, model: "claude-haiku-4-5".into(), routing_reason: "test".into(),
+            system_prompt: "Explore.".into(), allowed_tools: explore_worker_tools(),
+            max_turns: EXPLORE_BRANCH_MAX_TURNS, max_tokens: 2048, reasoning_effort: None,
+        }),
+        ..Default::default()
+    };
+    let roles = AutonomousRoles { verifier: None, strategist: None, delegation: Some(delegation), human: Some(&human) };
+    let cfg = AgentConfig {
+        prompt: "Find Kitaev gap.".into(), model_requested: "claude-haiku-4-5".into(), model: "claude-haiku-4-5".into(),
+        system_prompt: RESEARCH_SYSTEM_PROMPT.into(), max_turns: 8, max_tokens: DEFAULT_MAX_TOKENS,
+        containment: "test".into(), contained: false, reasoning_effort: None,
+    };
+    let auto_cfg = AutonomousConfig { interactive_plan_mode: true, pause_after_explore: true, ..Default::default() };
+    let mut sink = RecordingSink::default();
+    let out = run_autonomous_research_loop(&solver, &roles, &router, &ledger, &env, &cfg, &auto_cfg, None, &mut sink).unwrap();
+    assert_eq!(out, SessionOutcome::Completed { turns: 3, stop_reason: "end_turn".into() });
+
+    let reqs = solver.seen_requests();
+    assert!(reqs[0].tools.iter().any(|t| t.name == ASK_USER));
+    assert!(reqs[0].system.as_deref().unwrap().contains("Interactive Plan Mode"));
+    assert!(reqs[0].system.as_deref().unwrap().contains("Pause After Explore"));
+    assert!(explorer.seen_requests().iter().all(|r| r.tools.iter().all(|t| t.name != ASK_USER)));
+    assert!(serde_json::to_string(&reqs[1].messages.last().unwrap()).unwrap().contains("<human_steer>\\nUse dimensionless units t = 1\\n</human_steer>"));
+    assert!(serde_json::to_string(&reqs[2].messages.last().unwrap()).unwrap().contains("human_selection"));
+    {
+        let prompts = human.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 2);
+        assert_eq!(prompts[0].kind, "plan");
+        assert_eq!(prompts[1].kind, "branch");
+    }
+
+    let solver2 = MockTransport::new("anthropic-messages", vec![anthropic_text_reply("m4", "Follow-up complete.")]);
+    let roles2 = AutonomousRoles { verifier: None, strategist: None, delegation: None, human: Some(&human) };
+    let rcfg = ResumeConfig {
+        prompt: "Check mu != 0.".into(), model_requested: "claude-haiku-4-5".into(), model: "claude-haiku-4-5".into(),
+        system_prompt: None, max_turns: 4, max_tokens: DEFAULT_MAX_TOKENS,
+        containment: "test".into(), contained: false, reasoning_effort: None,
+    };
+    let auto_cfg2 = AutonomousConfig { interactive_plan_mode: false, pause_after_explore: false, ..Default::default() };
+    let out2 = resume_autonomous_research_loop(&solver2, &roles2, &router, &ledger, &env, &rcfg, &auto_cfg2, None, &mut sink).unwrap();
+    assert_eq!(out2, SessionOutcome::Completed { turns: 1, stop_reason: "end_turn".into() });
+    let r2 = &solver2.seen_requests()[0];
+    let sys2 = r2.system.as_deref().unwrap();
+    assert_eq!(sys2.matches("Interactive Human-in-the-Loop").count(), 1);
+    assert!(!sys2.contains("Interactive Plan Mode"));
+    assert!(serde_json::to_string(&r2.messages).unwrap().contains("<human_steer>\\nUse dimensionless units t = 1\\n</human_steer>"));
+    ledger.verify_session(session).unwrap();
+    assert_eq!(ledger.verify_all().unwrap().unreferenced_blobs, 0);
 }

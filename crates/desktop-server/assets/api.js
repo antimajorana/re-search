@@ -126,6 +126,19 @@ export function respondApproval(id, callId, payload) {
   );
 }
 
+export function postSteer(sessionId, text) {
+  const payload = typeof text === 'string' ? { text } : text;
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(sessionId)}/steer`, payload);
+}
+
+export function answerCheckpoint(sessionId, checkpointId, payload) {
+  return rawJson(
+    'POST',
+    `/api/sessions/${encodeURIComponent(sessionId)}/checkpoints/${encodeURIComponent(checkpointId)}`,
+    payload
+  );
+}
+
 export function uploadFilesBase64(id, files) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/upload`, { files });
 }
@@ -185,6 +198,10 @@ export function postSidetalk(id, payload) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/sidetalk`, payload);
 }
 
+export function promoteExplain(sessionId, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(sessionId)}/explain/promote`, payload);
+}
+
 export function getProviderSettings() {
   return rawJson('GET', '/api/settings/providers');
 }
@@ -242,6 +259,9 @@ export function openSessionEvents(id, handlers) {
     'tool_trace',
     'approval_requested',
     'approval_resolved',
+    'checkpoint_requested',
+    'checkpoint_resolved',
+    'steer_queued',
     'dag_updated',
     'turn_complete',
     'turn_error',

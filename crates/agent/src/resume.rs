@@ -368,6 +368,11 @@ pub(crate) fn rehydrate_history(
                     append_user_prompt(&mut history, text.to_string());
                 }
             }
+            "human.steer" => {
+                if let Some(text) = ev.payload.get("text").and_then(Value::as_str) {
+                    append_user_prompt(&mut history, format!("<human_steer>\n{text}\n</human_steer>"));
+                }
+            }
             "model.response" => {
                 let leg_provider = active_provider.ok_or_else(|| corrupt(format!("seq {} model.response before start", ev.seq)))?;
                 let blob_hash = req_str(ev, "raw_blob")?;
@@ -509,6 +514,8 @@ pub fn resume_agent_loop(
             cancel: None,
             emit_end_event: true,
             delegation: None,
+            human: None,
+            pause_after_explore: false,
         },
     )
 }

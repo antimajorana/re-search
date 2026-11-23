@@ -320,14 +320,20 @@ fn run_session_turn(
             .collect(),
         pinned_conventions: guardrails.pinned_conventions.clone(),
     };
+    let interactive_plan_mode = req.get("interactive_plan_mode").and_then(Value::as_bool).unwrap_or(false);
+    let pause_after_explore = req.get("pause_after_explore").and_then(Value::as_bool).unwrap_or(false);
+    let human_channel = crate::hitl::DesktopHumanChannel::new(Arc::clone(state), session_id);
     let roles = AutonomousRoles {
         verifier: v_built.as_ref().map(|(t, m)| (&**t as &dyn agent::Transport, m.as_str())),
         strategist: s_built.as_ref().map(|(t, m)| (&**t as &dyn agent::Transport, m.as_str())),
         delegation: Some(delegation_cfg),
+        human: Some(&human_channel),
     };
     let auto_cfg = AutonomousConfig {
         guardrails,
         use_strategist: req.get("use_strategist").and_then(Value::as_bool).unwrap_or(false),
+        interactive_plan_mode,
+        pause_after_explore,
         ..AutonomousConfig::default()
     };
 

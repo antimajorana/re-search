@@ -230,6 +230,15 @@ fn dispatch_api(
         ("POST", ["api", "sessions", id, "approvals", call_id]) => {
             write_api_res(&mut stream, handle_post_approval(state, id, call_id, &req.body));
         }
+        ("POST", ["api", "sessions", id, "steer"]) => {
+            write_api_res(&mut stream, crate::hitl::handle_post_steer(state, id, &req.body));
+        }
+        ("POST", ["api", "sessions", id, "checkpoints", cid]) => {
+            write_api_res(&mut stream, crate::hitl::handle_answer_checkpoint(state, id, cid, &req.body));
+        }
+        ("POST", ["api", "sessions", id, "explain", "promote"]) => {
+            write_api_res(&mut stream, crate::hitl::handle_explain_promote(state, id, &req.body));
+        }
         ("POST", ["api", "sessions", id, "stop"]) => {
             write_api_res(&mut stream, crate::turn_control::handle_stop_turn(state, id));
         }
