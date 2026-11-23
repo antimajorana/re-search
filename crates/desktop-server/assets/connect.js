@@ -7,7 +7,7 @@
 // Rows with a `warning` (the Antigravity route) show it in full, and until the person
 // clicks the acknowledgement button (after a confirm dialog) the route stays off; the
 // server stores the acknowledgement and refuses the route without it.
-// Base URLs, role presets and pinned conventions sit behind "Advanced".
+// Base URLs, auto-approval toggle and pinned conventions sit behind "Advanced".
 // Every server string is set as textContent, never as HTML.
 import * as api from '/assets/api.js';
 
@@ -61,6 +61,26 @@ export function initConnect(opts = {}) {
     });
   }
   if (form) form.addEventListener('submit', saveAdvanced);
+  const autoEl = document.getElementById('set-auto-approve-tools');
+  if (autoEl) {
+    autoEl.addEventListener('change', async () => {
+      const checked = autoEl.checked;
+      autoEl.disabled = true;
+      try {
+        await api.updateProviderSettings({ auto_approve_tools: checked });
+        notify(
+          checked
+            ? 'Auto-approve enabled for SymPy, workspace writes & literature lookups.'
+            : 'Manual approval required for SymPy, workspace writes & literature lookups.'
+        );
+      } catch (err) {
+        autoEl.checked = !checked;
+        notify(`Could not update tool approval setting: ${err.message}`);
+      } finally {
+        autoEl.disabled = false;
+      }
+    });
+  }
 }
 
 export function switchSettingsTab(tab = 'providers') {
@@ -391,9 +411,8 @@ async function loadAdvanced() {
       if (node) node.value = val === undefined || val === null ? '' : String(val);
     };
     set('set-conventions', s && s.pinned_conventions);
-    const presets = (s && s.role_presets) || {};
-    set('set-role-verifier', presets.step_verification);
-    set('set-role-strategist', presets.research_strategist);
+    const autoEl = document.getElementById('set-auto-approve-tools');
+    if (autoEl) autoEl.checked = s ? s.auto_approve_tools !== false : true;
   } catch {
     // Keep the fields as they are.
   }
@@ -401,12 +420,10 @@ async function loadAdvanced() {
 
 async function saveAdvanced(ev) {
   ev.preventDefault();
+  const autoEl = document.getElementById('set-auto-approve-tools');
   const payload = {
     pinned_conventions: document.getElementById('set-conventions').value,
-    role_presets: {
-      step_verification: document.getElementById('set-role-verifier').value.trim() || undefined,
-      research_strategist: document.getElementById('set-role-strategist').value.trim() || undefined,
-    },
+    auto_approve_tools: autoEl ? autoEl.checked : true,
   };
   const bases = {};
   for (const input of baseUrlsEl ? baseUrlsEl.querySelectorAll('input[data-provider]') : []) {

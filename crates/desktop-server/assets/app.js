@@ -2,10 +2,11 @@
 // live pipeline bar, center stream, SSE live updates, resizable Canvas tabs, and postMessage bridge.
 import * as api from '/assets/api.js';
 import {
-  appendAssistantMessage, appendUserMessage, appendWarningLine, finalizeLiveAssistant,
-  finalizeLiveOnError, finalizeLiveThinking, handleRoundReset, handleTextDelta,
-  handleThinkingDelta, handleToolTrace, initStream, refreshEmptyHeroIfVisible,
-  renderApprovalCard, renderSessionStream, resolveApprovalCard, setStreamStatus,
+  appendAssistantMessage, appendUserMessage, appendWarningLine, confirmOptimisticUserMessage,
+  finalizeLiveAssistant, finalizeLiveOnError, finalizeLiveThinking, handleRoundReset,
+  handleTextDelta, handleThinkingDelta, handleToolTrace, initStream, refreshEmptyHeroIfVisible,
+  removeOptimisticUserMessage, renderApprovalCard, renderSessionStream, resetLiveTurnState,
+  resolveApprovalCard, setStreamStatus,
 } from '/assets/stream.js';
 import { initComposer, setComposerBusy, setComposerPrompt } from '/assets/composer.js';
 import {
@@ -52,12 +53,7 @@ async function boot() {
   wireCanvasTabs();
   wirePostMessageBridge();
 
-  initSessionRail({
-    onFilterMode: (mode) => {
-      state.railFilterMode = mode;
-      renderSessionList();
-    },
-  });
+  initSessionRail({ onFilterMode: (mode) => { state.railFilterMode = mode; renderSessionList(); } });
 
   const inspectStepInCanvas = (stepId) => {
     activateCanvasTab('tab-dag');
@@ -81,6 +77,7 @@ async function boot() {
     onNotify: showToast,
     getModelChoice,
     onOpenSubagentsTab: () => openConnect('subagents'),
+    onOrchestratorModelChanged: () => loadModels(false),
     onActivated: (sa) => {
       if (sa.rigor) setRigorPreset(sa.rigor);
       if (sa.reasoning_effort) setReasoningEffort(sa.reasoning_effort);
@@ -99,11 +96,8 @@ async function boot() {
     onNotify: showToast,
     onInspectStep: inspectStepInCanvas,
     onOpenConnect: openConnect,
-    onPickWorkspace: () => { if (el.wsBtn) el.wsBtn.click(); },
-    onOpenConventions: () => {
-      const btn = document.getElementById('conventions-btn');
-      if (btn) btn.click();
-    },
+    onPickWorkspace: () => el.wsBtn?.click(),
+    onOpenConventions: () => document.getElementById('conventions-btn')?.click(),
     getSetupInfo: () => ({ ...getWorkbenchSnapshot(), workspaceRoot: state.activeWorkspaceRoot }),
   });
 
@@ -121,28 +115,21 @@ async function boot() {
 
   initLatexCanvas({ onNotify: showToast });
   initDagCanvas({
-    onDagCount: (n) => {
-      state.tabCounts.dag = n;
-      updateCanvasTabCounts(state.tabCounts);
-    },
+    onDagCount: (n) => { state.tabCounts.dag = n; updateCanvasTabCounts(state.tabCounts); },
     onForkCreated: async (newId) => {
       state.railFilterMode = 'active';
       await refreshSessionList();
       await selectSession(newId);
       showToast(`Forked session ${newId}`);
     },
-    onNarrativeReady: (md) => {
-      appendAssistantMessage(md);
-      showToast('Proof narrative added to stream.');
-    },
+    onNarrativeReady: (md) => { appendAssistantMessage(md); showToast('Proof narrative added to stream.'); },
     onNotify: showToast,
   });
   initSourcesAndSidetalk({
     onNotify: showToast,
     onSelectStepRef: inspectStepInCanvas,
     onCountsChange: ({ sources, sidetalk }) => {
-      state.tabCounts.sources = sources;
-      state.tabCounts.sidetalk = sidetalk;
+      Object.assign(state.tabCounts, { sources, sidetalk });
       updateCanvasTabCounts(state.tabCounts);
     },
   });
@@ -166,20 +153,22 @@ async function boot() {
 }
 
 function cacheElements() {
-  el.shell = document.getElementById('app-shell');
-  el.railToggle = document.getElementById('rail-toggle');
-  el.canvasToggle = document.getElementById('canvas-toggle');
-  el.newBtn = document.getElementById('new-research-btn');
-  el.sessionSearch = document.getElementById('session-search');
-  el.sessionList = document.getElementById('session-list');
-  el.sessionTitle = document.getElementById('active-session-title');
-  el.wsPill = document.getElementById('active-workspace-pill');
-  el.wsBtn = document.getElementById('workspace-attach-btn');
-  el.grantsPill = document.getElementById('session-grants-pill');
-  el.topbarArchiveBtn = document.getElementById('topbar-archive-btn');
-  el.topbarDeleteBtn = document.getElementById('topbar-delete-btn');
-  el.healthBadge = document.getElementById('health-badge');
-  el.themeToggle = document.getElementById('theme-toggle');
+  const ids = {
+    shell: 'app-shell', railToggle: 'rail-toggle', canvasToggle: 'canvas-toggle',
+    newBtn: 'new-research-btn', sessionSearch: 'session-search', sessionList: 'session-list',
+    sessionTitle: 'active-session-title', wsPill: 'active-workspace-pill',
+    wsBtn: 'workspace-attach-btn', grantsPill: 'session-grants-pill',
+    topbarArchiveBtn: 'topbar-archive-btn', topbarDeleteBtn: 'topbar-delete-btn',
+    healthBadge: 'health-badge', themeToggle: 'theme-toggle',
+  };
+  for (const [k, id] of Object.entries(ids)) el[k] = document.getElementById(id);
+}
+
+function closeSse() {
+  if (state.eventSource) {
+    state.eventSource.close();
+    state.eventSource = null;
+  }
 }
 
 function restoreTheme() {
@@ -195,81 +184,58 @@ function applyTheme(theme) {
 }
 
 function wireShellControls() {
-  if (el.railToggle) {
-    el.railToggle.addEventListener('click', () => {
-      const open = el.shell.getAttribute('data-rail-open') !== 'false';
-      el.shell.setAttribute('data-rail-open', open ? 'false' : 'true');
-    });
-  }
-  if (el.canvasToggle) {
-    el.canvasToggle.addEventListener('click', () => {
-      const open = el.shell.getAttribute('data-canvas-open') !== 'false';
-      el.shell.setAttribute('data-canvas-open', open ? 'false' : 'true');
-      el.canvasToggle.setAttribute('aria-expanded', open ? 'false' : 'true');
-    });
-  }
-  if (el.themeToggle) {
-    el.themeToggle.addEventListener('click', () => applyTheme(state.theme === 'dark' ? 'light' : 'dark'));
-  }
-  if (el.newBtn) {
-    el.newBtn.addEventListener('click', () => {
-      state.railFilterMode = 'active';
-      createAndSelectSession({});
-    });
-  }
-  if (el.sessionSearch) {
-    el.sessionSearch.addEventListener('input', () => {
-      state.sessionQuery = el.sessionSearch.value.trim().toLowerCase();
-      renderSessionList();
-    });
-  }
+  el.railToggle?.addEventListener('click', () => {
+    const open = el.shell.getAttribute('data-rail-open') !== 'false';
+    el.shell.setAttribute('data-rail-open', open ? 'false' : 'true');
+  });
+  el.canvasToggle?.addEventListener('click', () => {
+    const open = el.shell.getAttribute('data-canvas-open') !== 'false';
+    el.shell.setAttribute('data-canvas-open', open ? 'false' : 'true');
+    el.canvasToggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+  });
+  el.themeToggle?.addEventListener('click', () => applyTheme(state.theme === 'dark' ? 'light' : 'dark'));
+  el.newBtn?.addEventListener('click', () => {
+    state.railFilterMode = 'active';
+    createAndSelectSession({});
+  });
+  el.sessionSearch?.addEventListener('input', () => {
+    state.sessionQuery = el.sessionSearch.value.trim().toLowerCase();
+    renderSessionList();
+  });
   if (el.wsPill) {
     el.wsPill.style.cursor = 'pointer';
-    el.wsPill.addEventListener('click', () => { if (el.wsBtn) el.wsBtn.click(); });
+    el.wsPill.addEventListener('click', () => el.wsBtn?.click());
   }
-  if (el.topbarArchiveBtn) {
-    el.topbarArchiveBtn.addEventListener('click', () => {
-      const cur = state.sessions.find((s) => s.id === state.activeSessionId);
-      if (cur) handleArchiveSession(cur, !cur.archived);
-    });
-  }
-  if (el.topbarDeleteBtn) {
-    el.topbarDeleteBtn.addEventListener('click', () => {
-      const cur = state.sessions.find((s) => s.id === state.activeSessionId) ||
-        (state.activeSessionId ? { id: state.activeSessionId, title: el.sessionTitle && el.sessionTitle.textContent } : null);
-      if (cur) handleDeleteSession(cur);
-    });
-  }
-  if (el.grantsPill) {
-    el.grantsPill.addEventListener('click', async () => {
-      if (!state.activeSessionId) return;
-      try {
-        await api.revokeSessionGrants(state.activeSessionId);
-        renderSessionGrantsPill(el.grantsPill, []);
-        showToast('Session tool approvals reset — next tool call will ask again.');
-      } catch (err) {
-        showToast(`Could not reset approvals: ${err.message}`);
-      }
-    });
-  }
+  el.topbarArchiveBtn?.addEventListener('click', () => {
+    const cur = state.sessions.find((s) => s.id === state.activeSessionId);
+    if (cur) handleArchiveSession(cur, !cur.archived);
+  });
+  el.topbarDeleteBtn?.addEventListener('click', () => {
+    const cur = state.sessions.find((s) => s.id === state.activeSessionId) ||
+      (state.activeSessionId ? { id: state.activeSessionId, title: el.sessionTitle?.textContent } : null);
+    if (cur) handleDeleteSession(cur);
+  });
+  el.grantsPill?.addEventListener('click', async () => {
+    if (!state.activeSessionId) return;
+    try {
+      await api.revokeSessionGrants(state.activeSessionId);
+      renderSessionGrantsPill(el.grantsPill, []);
+      showToast('Session tool approvals reset — next tool call will ask again.');
+    } catch (err) {
+      showToast(`Could not reset approvals: ${err.message}`);
+    }
+  });
 }
 
 function wireCanvasTabs() {
   for (const tabId of ['tab-latex', 'tab-dag', 'tab-sources', 'tab-sidetalk']) {
-    const btn = document.getElementById(tabId);
-    if (btn) btn.addEventListener('click', () => activateCanvasTab(tabId));
+    document.getElementById(tabId)?.addEventListener('click', () => activateCanvasTab(tabId));
   }
 }
 
 function activateCanvasTab(activeTabId) {
-  if (el.shell) el.shell.setAttribute('data-canvas-open', 'true');
-  const map = {
-    'tab-latex': 'panel-latex',
-    'tab-dag': 'panel-dag',
-    'tab-sources': 'panel-sources',
-    'tab-sidetalk': 'panel-sidetalk',
-  };
-  for (const [tId, pId] of Object.entries(map)) {
+  el.shell?.setAttribute('data-canvas-open', 'true');
+  for (const [tId, pId] of [['tab-latex', 'panel-latex'], ['tab-dag', 'panel-dag'], ['tab-sources', 'panel-sources'], ['tab-sidetalk', 'panel-sidetalk']]) {
     const tEl = document.getElementById(tId);
     const pEl = document.getElementById(pId);
     const active = tId === activeTabId;
@@ -277,7 +243,7 @@ function activateCanvasTab(activeTabId) {
       tEl.classList.toggle('is-active', active);
       tEl.setAttribute('aria-selected', active ? 'true' : 'false');
     }
-    if (pEl) pEl.classList.toggle('is-active', active);
+    pEl?.classList.toggle('is-active', active);
   }
 }
 
@@ -324,11 +290,10 @@ function syncWorkspaceIndicators(wsRoot) {
 }
 
 function resetToBlankState() {
-  if (state.eventSource) {
-    state.eventSource.close();
-    state.eventSource = null;
-  }
+  closeSse();
   state.activeSessionId = null;
+  resetLiveTurnState();
+  refreshSourcesAndSidetalk(null);
   if (el.sessionTitle) el.sessionTitle.textContent = 'New research';
   if (el.topbarArchiveBtn) el.topbarArchiveBtn.hidden = true;
   if (el.topbarDeleteBtn) el.topbarDeleteBtn.hidden = true;
@@ -429,37 +394,40 @@ async function selectSession(id) {
 }
 
 function connectSessionSse(id) {
-  if (state.eventSource) {
-    state.eventSource.close();
-    state.eventSource = null;
-  }
+  closeSse();
   state.eventSource = api.openSessionEvents(id, {
     text_delta: (d) => {
+      if (state.activeSessionId !== id) return;
       setComposerBusy(true);
       setStreamStatus('Streaming...', 'accent');
       updatePipelineFromEvent('solver_stream', d);
       handleTextDelta(d);
     },
     thinking_delta: (d) => {
+      if (state.activeSessionId !== id) return;
       setComposerBusy(true);
       updatePipelineFromEvent('thinking_delta', d);
       handleThinkingDelta(d);
     },
     round_reset: (d) => {
+      if (state.activeSessionId !== id) return;
       setStreamStatus('Revising...', 'accent');
       updatePipelineFromEvent('round_reset', d);
       handleRoundReset();
     },
     tool_trace: (d) => {
+      if (state.activeSessionId !== id) return;
       updatePipelineFromEvent('tool_trace', d);
       handleToolTrace(d);
     },
     approval_requested: (d) => {
+      if (state.activeSessionId !== id) return;
       setComposerBusy(true);
       setStreamStatus('Awaiting Approval', 'warn');
       renderApprovalCard(d);
     },
     approval_resolved: async (d) => {
+      if (state.activeSessionId !== id) return;
       setStreamStatus('Running...', 'accent');
       if (d) {
         resolveApprovalCard(d.call_id, d.approved, Boolean(d.approve_for_session));
@@ -472,39 +440,53 @@ function connectSessionSse(id) {
       }
     },
     dag_updated: (d) => {
+      if (state.activeSessionId !== id) return;
       updatePipelineFromEvent('dag_updated', d);
       refreshDag(id);
     },
     session_event: (d) => {
+      if (state.activeSessionId !== id) return;
       updatePipelineFromEvent('session_event', d);
       if (d && d.kind === 'vendor.builtin_tool') appendWarningLine(formatBuiltinToolWarning(d.data || {}));
     },
     turn_complete: async (d) => {
+      if (state.activeSessionId !== id) return;
       finalizeLiveThinking();
       setComposerBusy(false);
       setStreamStatus('Ready', 'ok');
       try {
         const sess = await api.getSession(id);
-        const msgs = Array.isArray(sess && sess.messages) ? sess.messages : [];
+        if (state.activeSessionId !== id) return;
+        const msgs = Array.isArray(sess?.messages) ? sess.messages : [];
         const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
-        if (state.activeSessionId === id) renderSessionGrantsPill(el.grantsPill, sess.session_grants || []);
+        renderSessionGrantsPill(el.grantsPill, sess.session_grants || []);
         if (d && d.text) {
-          finalizeLiveAssistant(d.text, lastMsg && lastMsg.role === 'assistant' ? lastMsg : null);
-          if (state.activeSessionId === id) applySession(id, sess);
-        } else if (state.activeSessionId === id) {
+          finalizeLiveAssistant(d.text, lastMsg?.role === 'assistant' ? lastMsg : null);
+          resetLiveTurnState();
+        } else if (lastMsg?.role === 'assistant') {
+          resetLiveTurnState();
           renderSessionStream(id, sess);
-          applySession(id, sess);
+        } else {
+          finalizeLiveAssistant('');
+          resetLiveTurnState();
         }
+        applySession(id, sess);
         finishLivePipeline('ok', sess && sess.stats);
       } catch {
+        if (state.activeSessionId !== id) return;
         finalizeLiveAssistant((d && d.text) || '');
+        resetLiveTurnState();
         finishLivePipeline('ok', null);
       }
-      await Promise.all([refreshSessionList(), refreshWorkspaceFiles(id), refreshDag(id), loadSessionSources(id)]);
+      if (state.activeSessionId === id) {
+        await Promise.all([refreshSessionList(), refreshWorkspaceFiles(id), refreshDag(id), loadSessionSources(id)]);
+      } else await refreshSessionList();
     },
     turn_error: (d) => {
+      if (state.activeSessionId !== id) return;
       finalizeLiveThinking();
       finalizeLiveOnError();
+      resetLiveTurnState();
       setComposerBusy(false);
       const rawErr = String((d && (d.error || d.message)) || 'unknown failure');
       if (/stopped/i.test(rawErr)) {
@@ -531,14 +513,24 @@ async function refreshSessionRoute(id) {
 }
 
 async function handleSendPrompt(sessionId, prompt, opts) {
-  appendUserMessage(prompt);
+  resetLiveTurnState();
+  appendUserMessage(prompt, { optimistic: true });
   setComposerBusy(true);
   setStreamStatus('Thinking...', 'accent');
   startLivePipeline(opts);
-  await api.sendMessage(sessionId, { prompt, ...opts });
-  rememberForSession(sessionId, { provider: opts.provider, model: opts.model });
-  rememberEffortForSession(sessionId, opts.reasoning_effort);
-  refreshSessionList();
+  try {
+    await api.sendMessage(sessionId, { prompt, ...opts });
+    confirmOptimisticUserMessage();
+    rememberForSession(sessionId, { provider: opts.provider, model: opts.model });
+    rememberEffortForSession(sessionId, opts.reasoning_effort);
+    refreshSessionList();
+  } catch (err) {
+    removeOptimisticUserMessage();
+    setComposerBusy(false);
+    setStreamStatus('Ready', 'ok');
+    finishLivePipeline('error', null);
+    throw err;
+  }
 }
 
 async function handleStopTurn() {

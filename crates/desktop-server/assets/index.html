@@ -80,9 +80,9 @@
       <!-- Live Multi-Agent Pipeline & Session Telemetry Bar -->
       <div id="pipeline-bar" role="status" aria-label="Multi-agent verification pipeline" hidden>
         <div class="pipeline-steps">
-          <span class="pipeline-step" data-stage="solver" data-state="idle" title="Solver drafts derivations and executes sandboxed SymPy / arXiv tools">
+          <span class="pipeline-step" data-stage="solver" data-state="idle" title="Orchestrator drafts derivations and executes sandboxed SymPy / arXiv tools">
             <span class="pipeline-dot" aria-hidden="true"></span>
-            <span>Solver</span>
+            <span>Orchestrator</span>
           </span>
           <span class="pipeline-arrow" aria-hidden="true">→</span>
           <span class="pipeline-step" data-stage="ledger" data-state="idle" title="Typed assumptions, derivations, computations, and results recorded in SHA-256 Proof DAG">
@@ -116,7 +116,7 @@
             <button id="conventions-close-btn" type="button" class="icon-btn" aria-label="Close conventions">✕</button>
           </div>
           <div style="font-size:12px;color:var(--ink-secondary);margin-bottom:6px;">
-            Injected into both the Solver and the Independent Verifier on every round so signs, units, and Fourier factors stay consistent.
+            Injected into both the Orchestrator and the Independent Verifier on every round so signs, units, and Fourier factors stay consistent.
           </div>
           <textarea id="quick-conventions-input" class="text-input" rows="3" maxlength="2000" placeholder="e.g. Metric signature (-,+,+,+), natural units \hbar = c = 1, periodic boundary conditions..."></textarea>
           <div id="conventions-presets" class="conventions-presets"></div>
@@ -157,14 +157,14 @@
               <button id="workspace-attach-btn" type="button" class="chip-toggle" title="Attach or switch local paper directory">Workspace</button>
               <button id="conventions-btn" type="button" class="chip-toggle" aria-pressed="false" title="Pin metric signature, units, or notation conventions">Conventions</button>
               <div id="mode-preset-group" class="segmented-group" role="group" aria-label="Verification rigor mode">
-                <button type="button" class="seg-btn" data-rigor-preset="direct" aria-pressed="false" title="Direct mode: single-pass Solver + tools without post-turn Verifier gate">Direct</button>
-                <button type="button" class="seg-btn is-active" data-rigor-preset="verified" aria-pressed="true" title="Verified mode: Solver + Calculation Guard + Independent Stateless Verifier (up to 3 rounds)">✓ Verified</button>
-                <button type="button" class="seg-btn" data-rigor-preset="deep" aria-pressed="false" title="Deep Research mode: Solver + Independent Verifier + Research Strategist repair">✦ Deep</button>
+                <button type="button" class="seg-btn" data-rigor-preset="direct" aria-pressed="false" title="Direct mode: single-pass Orchestrator + tools without post-turn Verifier gate">Direct</button>
+                <button type="button" class="seg-btn is-active" data-rigor-preset="verified" aria-pressed="true" title="Verified mode: Orchestrator + Calculation Guard + Independent Stateless Verifier (up to 3 rounds)">✓ Verified</button>
+                <button type="button" class="seg-btn" data-rigor-preset="deep" aria-pressed="false" title="Deep Research mode: Orchestrator + Independent Verifier + Research Strategist repair">✦ Deep</button>
               </div>
             </div>
             <div class="composer-right">
               <span id="composer-route-note" class="route-note" hidden></span>
-              <button id="composer-subagent-btn" type="button" class="chip-toggle" aria-pressed="false" title="Active agent (Solver or custom specialist subagent)">Agent: Solver</button>
+              <button id="composer-subagent-btn" type="button" class="chip-toggle" aria-pressed="false" title="Active agent (Orchestrator or custom specialist subagent)">Agent: Orchestrator</button>
               <select id="composer-model" class="compact-select model-picker" aria-label="Model for the next message" title="Model for the next message">
                 <option value="">Loading models...</option>
               </select>
@@ -200,7 +200,7 @@
             <span>Sources</span><span id="tab-sources-count" class="tab-count" hidden>0</span>
           </button>
           <button id="tab-sidetalk" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-sidetalk">
-            <span>Side-Talk</span><span id="tab-sidetalk-count" class="tab-count" hidden>0</span>
+            <span>Explain</span><span id="tab-sidetalk-count" class="tab-count" hidden>0</span>
           </button>
         </div>
         <button id="canvas-wide-btn" type="button" class="icon-btn" title="Toggle wide Canvas view" aria-label="Toggle wide Canvas view" aria-pressed="false">⇔</button>
@@ -304,15 +304,19 @@
           </div>
         </section>
 
-        <!-- Tab 4: Isolated Side-Talk Canvas -->
+        <!-- Tab 4: Isolated Explain Canvas -->
         <section id="panel-sidetalk" class="canvas-panel" role="tabpanel" aria-labelledby="tab-sidetalk">
           <div class="sidetalk-layout">
-            <div style="padding:8px 12px;border-bottom:1px solid var(--border-subtle);font-size:12px;color:var(--ink-muted);">
-              Isolated side channel — clarify notation, check intuition, or ask about `e-1` steps without mutating the main Proof Ledger.
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border-subtle);font-size:12px;color:var(--ink-muted);">
+              <span>Explain — clarify notation, check intuition, export notes (.md / .html), or ask about e-1 steps without mutating the Proof DAG.</span>
+              <div style="display:flex;gap:6px;flex-shrink:0;">
+                <button id="explain-export-md-btn" type="button" class="pill-btn sm" title="Export Explain conversation as Markdown (.md)">.md</button>
+                <button id="explain-export-html-btn" type="button" class="pill-btn sm" title="Export Explain conversation as standalone HTML (.html)">.html</button>
+              </div>
             </div>
             <div id="sidetalk-stream"></div>
             <form id="sidetalk-form" class="sidetalk-composer" autocomplete="off">
-              <input id="sidetalk-input" class="text-input" type="text" placeholder="Ask about a step, convention, or equation...">
+              <input id="sidetalk-input" class="text-input" type="text" placeholder="Ask Explain about a step, convention, or equation...">
               <button id="sidetalk-send" type="submit" class="pill-btn sm primary">Ask</button>
             </form>
           </div>
@@ -330,7 +334,7 @@
       </div>
       <div class="settings-tabs" role="tablist" aria-label="Settings sections">
         <button id="settings-tab-providers" type="button" class="settings-tab-btn is-active" data-settings-tab="providers" role="tab" aria-selected="true">Providers</button>
-        <button id="settings-tab-subagents" type="button" class="settings-tab-btn" data-settings-tab="subagents" role="tab" aria-selected="false">Subagents</button>
+        <button id="settings-tab-subagents" type="button" class="settings-tab-btn" data-settings-tab="subagents" role="tab" aria-selected="false">Agents &amp; Models</button>
         <button id="settings-tab-guide" type="button" class="settings-tab-btn" data-settings-tab="guide" role="tab" aria-selected="false">User Guide</button>
         <button id="settings-tab-advanced" type="button" class="settings-tab-btn" data-settings-tab="advanced" role="tab" aria-selected="false">Advanced</button>
       </div>
@@ -364,13 +368,19 @@
                 <input id="subagent-desc-input" class="text-input" type="text" placeholder="What this specialist checks or focuses on..." maxlength="300">
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
               <div class="form-row">
                 <label for="subagent-tools-select">Tool Focus</label>
                 <select id="subagent-tools-select" class="compact-select">
                   <option value="full_research">Full Research</option>
                   <option value="compute">SymPy &amp; Proof DAG</option>
                   <option value="read_only">Read &amp; Audit Only</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label for="subagent-model-select">Assigned Model (optional)</label>
+                <select id="subagent-model-select" class="compact-select">
+                  <option value="">Default (Follow Orchestrator)</option>
                 </select>
               </div>
               <div class="form-row">
@@ -415,20 +425,14 @@
       </div>
 
       <div id="settings-panel-advanced" class="settings-tab-panel" data-settings-panel="advanced" role="tabpanel">
+        <div class="subagent-card" style="padding:12px 14px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Tool &amp; Computation Approvals</div>
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;"><input id="set-auto-approve-tools" type="checkbox" checked> <span><strong>Auto-approve computations, workspace writes &amp; literature lookups (default on)</strong><br><span style="font-size:11.5px;color:var(--ink-muted);">When enabled, SymPy evaluations (still sandboxed inside Windows AppContainer), workspace edits, and literature lookups run without pausing for approval cards. Uncheck to require manual approval on every tool call or per session.</span></span></label>
+        </div>
         <details id="connect-advanced" class="connect-advanced" open>
-          <summary>Role Models, Custom Endpoints &amp; Conventions</summary>
+          <summary>Custom Endpoints &amp; Conventions</summary>
           <form id="settings-form" class="form-grid" autocomplete="off">
             <div id="advanced-base-urls" class="form-grid"></div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-              <div class="form-row">
-                <label for="set-role-verifier">Independent Verifier Model (optional)</label>
-                <input id="set-role-verifier" class="text-input" type="text" placeholder="Defaults to Solver model">
-              </div>
-              <div class="form-row">
-                <label for="set-role-strategist">Research Strategist Model (optional)</label>
-                <input id="set-role-strategist" class="text-input" type="text" placeholder="Defaults to Solver model">
-              </div>
-            </div>
             <div class="form-row">
               <label for="set-conventions">Pinned Conventions (max 2000 chars)</label>
               <textarea id="set-conventions" class="text-input" rows="3" maxlength="2000" placeholder="Metric signature (-,+,+,+), natural units hbar = c = 1..."></textarea>

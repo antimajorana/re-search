@@ -67,9 +67,7 @@ function getInnerContainer() {
 }
 
 function scrollToBottom() {
-  if (streamEl) {
-    streamEl.scrollTop = streamEl.scrollHeight;
-  }
+  if (streamEl) streamEl.scrollTop = streamEl.scrollHeight;
 }
 
 export function renderSessionStream(sessionId, sessionPayload) {
@@ -80,15 +78,9 @@ export function renderSessionStream(sessionId, sessionPayload) {
   if (!inner) return;
   inner.innerHTML = '';
 
-  const messages = Array.isArray(sessionPayload && sessionPayload.messages)
-    ? sessionPayload.messages
-    : [];
-  const traces = Array.isArray(sessionPayload && sessionPayload.traces)
-    ? sessionPayload.traces
-    : [];
-  const pending = Array.isArray(sessionPayload && sessionPayload.pending_approvals)
-    ? sessionPayload.pending_approvals
-    : [];
+  const messages = Array.isArray(sessionPayload?.messages) ? sessionPayload.messages : [];
+  const traces = Array.isArray(sessionPayload?.traces) ? sessionPayload.traces : [];
+  const pending = Array.isArray(sessionPayload?.pending_approvals) ? sessionPayload.pending_approvals : [];
 
   if (messages.length === 0 && traces.length === 0 && pending.length === 0) {
     renderEmptyHero(inner);
@@ -101,18 +93,11 @@ export function renderSessionStream(sessionId, sessionPayload) {
     } else if (msg.role === 'warning') {
       appendWarningLine(msg.text || '');
     } else {
-      appendAssistantMessage(
-        msg.text || msg.content || '',
-        msg.thinking || '',
-        msg.tool_traces || [],
-        msg
-      );
+      appendAssistantMessage(msg.text || msg.content || '', msg.thinking || '', msg.tool_traces || [], msg);
     }
   }
 
-  for (const req of pending) {
-    renderApprovalCard(req);
-  }
+  for (const req of pending) renderApprovalCard(req);
   scrollToBottom();
 }
 
@@ -146,7 +131,7 @@ function renderEmptyHero(inner) {
           <span>1. Model Provider</span>
           <span class="badge ${connCount > 0 ? 'ok' : 'warn'}">${connCount > 0 ? `${connCount} ready` : 'Setup'}</span>
         </div>
-        <div class="quickstart-desc">${connCount > 0 ? 'Provider connected. Choose your model next to Send or configure separate Verifier models.' : 'Connect ChatGPT, Claude Code, Anthropic/OpenAI/Gemini API, or local Ollama.'}</div>
+        <div class="quickstart-desc">${connCount > 0 ? 'Provider connected. Choose your model next to Send or configure per-agent models in Settings.' : 'Connect ChatGPT, Claude Code, Anthropic/OpenAI/Gemini API, or local Ollama.'}</div>
         <div><button type="button" class="pill-btn sm hero-connect-btn ${connCount > 0 ? '' : 'primary'}">${connCount > 0 ? 'Manage Providers' : 'Connect a Model'}</button></div>
       </div>
       <div class="quickstart-card">
@@ -162,7 +147,7 @@ function renderEmptyHero(inner) {
           <span>3. Conventions &amp; Rigor</span>
           <span class="badge ${hasConv ? 'ok' : 'accent'}">${hasConv ? 'Pinned' : 'Verified Loop'}</span>
         </div>
-        <div class="quickstart-desc">${hasConv ? 'Custom metric/unit conventions active across Solver & Stateless Verifier.' : 'Pin metric signature, natural units, or Fourier conventions so signs stay exact.'}</div>
+        <div class="quickstart-desc">${hasConv ? 'Custom metric/unit conventions active across Orchestrator & Stateless Verifier.' : 'Pin metric signature, natural units, or Fourier conventions so signs stay exact.'}</div>
         <div><button type="button" class="pill-btn sm hero-conv-btn">${hasConv ? 'Edit Conventions' : 'Pin Conventions'}</button></div>
       </div>
     </div>
@@ -201,17 +186,34 @@ function clearHeroIfPresent() {
   return inner;
 }
 
-export function appendUserMessage(text) {
+export function appendUserMessage(text, { optimistic = false } = {}) {
   const inner = clearHeroIfPresent();
   if (!inner) return;
   const row = document.createElement('div');
   row.className = 'msg-row user';
+  if (optimistic) row.dataset.optimistic = 'true';
   const bubble = document.createElement('div');
   bubble.className = 'msg-bubble-user rich-prose';
   renderRichInto(bubble, text);
   row.appendChild(bubble);
   inner.appendChild(row);
   scrollToBottom();
+}
+
+export function confirmOptimisticUserMessage() {
+  if (!streamEl) return;
+  for (const row of streamEl.querySelectorAll('.msg-row.user[data-optimistic="true"]')) {
+    delete row.dataset.optimistic;
+  }
+}
+
+export function removeOptimisticUserMessage() {
+  if (!streamEl) return;
+  for (const row of streamEl.querySelectorAll('.msg-row.user[data-optimistic="true"]')) {
+    row.remove();
+  }
+  const inner = streamEl.querySelector('.stream-inner');
+  if (inner && inner.children.length === 0) renderEmptyHero(inner);
 }
 
 // A plain-text warning line in the transcript (for example a vendor CLI's built-in tool
@@ -357,6 +359,15 @@ export function handleTextDelta(data) {
   }
 }
 
+export function resetLiveTurnState() {
+  liveStreamText = '';
+  liveRenderPending = false;
+  if (!streamEl) return;
+  for (const node of streamEl.querySelectorAll('.msg-row.assistant[data-live="true"], .thinking-accordion[data-live="true"]')) {
+    delete node.dataset.live;
+  }
+}
+
 export function handleRoundReset() {
   liveStreamText = '';
   liveRenderPending = false;
@@ -408,6 +419,20 @@ export function finalizeLiveOnError() {
 }
 
 export function handleToolTrace(data) {
+  if (streamEl) {
+    const liveRow = streamEl.querySelector('.msg-row.assistant[data-live="true"]');
+    if (liveRow) {
+      if (liveStreamText && liveStreamText.trim()) {
+        const body = liveRow.querySelector('.msg-assistant-body');
+        if (body) renderRichInto(body, liveStreamText);
+      } else {
+        liveRow.remove();
+      }
+      delete liveRow.dataset.live;
+      liveStreamText = '';
+      liveRenderPending = false;
+    }
+  }
   const acc = ensureLiveThinkingAccordion();
   if (!acc || !data) return;
   const list = acc.querySelector('.trace-list');

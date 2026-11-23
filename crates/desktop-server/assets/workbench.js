@@ -1,5 +1,5 @@
 // Research Workbench enhancements:
-// - Live multi-agent pipeline stepper (Solver & Compute -> Proof Ledger -> Verifier -> Strategist)
+// - Live multi-agent pipeline stepper (Orchestrator & Compute -> Proof Ledger -> Verifier -> Strategist)
 // - Rigor mode presets (Direct / Verified / Deep) synced with Verifier & Strategist chips
 // - Quick Pinned Conventions popover with physics/math presets
 // - Drag-resizable Right Canvas + LaTeX Split/Editor/Preview switcher + tab count badges

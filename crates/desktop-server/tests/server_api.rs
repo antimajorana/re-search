@@ -199,6 +199,7 @@ fn sessions_sse_approval_card_tools_fork_export_and_settings() {
     .unwrap();
     let port = srv.addr.port();
     let tok = srv.info.token.clone();
+    common::disable_auto_approve(port, &tok);
     let auth_hdr = [("X-ReSearch-Token", tok.as_str()), ("Content-Type", "application/json")];
 
     // Create idle session -> visible immediately in GET /api/sessions.

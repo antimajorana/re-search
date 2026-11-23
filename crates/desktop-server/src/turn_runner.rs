@@ -6,8 +6,8 @@ use crate::state::DesktopState;
 use crate::turn_control::ApiTurnGuard;
 use agent::{
     inspect_session_for_resume, resume_autonomous_research_loop, run_autonomous_research_loop, AgentConfig,
-    AutonomousConfig, AutonomousRoles, CancelToken, GuardrailConfig, ProviderKind,
-    ResumeConfig, SessionOutcome, DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS, RESEARCH_SYSTEM_PROMPT,
+    AutonomousConfig, AutonomousRoles, CancelToken, GuardrailConfig, ResumeConfig, SessionOutcome,
+    DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS, RESEARCH_SYSTEM_PROMPT,
 };
 use research_tools::{register_research_tools, research_policy, ResearchEnv};
 use serde_json::{json, Value};
@@ -133,24 +133,12 @@ fn run_session_turn(
     let ui = state.load_ui_settings();
     let (reasoning_effort, subagent) =
         crate::subagents::resolve_turn_options(state, session_id, req, meta.clone());
-    let provider_str = req
-        .get("provider")
-        .and_then(Value::as_str)
-        .or_else(|| meta.as_ref().and_then(|m| m.default_provider.as_deref()))
-        .or(ui.default_provider.as_deref())
-        .unwrap_or("anthropic");
-    let provider = ProviderKind::parse(provider_str)?;
-
-    let model_requested = req
-        .get("model")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .or_else(|| meta.as_ref().and_then(|m| m.default_model.as_deref()))
-        .or(ui.default_model.as_deref())
-        .unwrap_or_else(|| provider.default_model())
-        .to_string();
-    let model = provider.resolve_model(&model_requested);
+    let (provider, model_requested, model) = crate::agent_models::resolve_orchestrator_model(
+        subagent.as_ref(),
+        req,
+        meta.as_ref(),
+        &ui,
+    )?;
 
     let max_turns = req
         .get("max_turns")
@@ -167,19 +155,22 @@ fn run_session_turn(
 
     let env = Arc::new(state.research_env_for_session(session_id)?);
     let transport = state.build_transport(provider, &model)?;
-    let resolve_role = |role_key: &str| -> Option<(Box<dyn agent::Transport>, String)> {
-        let obj = req
-            .get(role_key)
-            .or_else(|| ui.role_presets.as_ref().and_then(|p| p.get(role_key)))?;
-        let p = ProviderKind::parse(obj.get("provider")?.as_str()?).ok()?;
-        let m = p.resolve_model(obj.get("model").and_then(Value::as_str).unwrap_or(""));
-        if p == provider && m == model {
-            return None;
-        }
-        state.build_transport(p, &m).ok().map(|t| (t, m))
-    };
-    let v_built = resolve_role("full_verifier").or_else(|| resolve_role("verifier"));
-    let s_built = resolve_role("strategist");
+    let v_built = crate::agent_models::resolve_optional_role_transport(
+        state,
+        &ui,
+        req,
+        "full_verifier",
+        provider,
+        &model,
+    );
+    let s_built = crate::agent_models::resolve_optional_role_transport(
+        state,
+        &ui,
+        req,
+        "strategist",
+        provider,
+        &model,
+    );
     let roles = AutonomousRoles {
         verifier: v_built.as_ref().map(|(t, m)| (&**t as &dyn agent::Transport, m.as_str())),
         strategist: s_built.as_ref().map(|(t, m)| (&**t as &dyn agent::Transport, m.as_str())),
@@ -217,7 +208,8 @@ fn run_session_turn(
     let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
     let mut sink = SseEventSink::new(Arc::clone(&state.sse), session_id);
 
-    let outcome = if existing.is_empty() {
+    let has_started = existing.iter().any(|e| e.kind == "session.start");
+    let outcome = if !has_started {
         let system_prompt = match &subagent {
             Some(sa) => crate::subagents::apply_subagent_to_system_prompt(RESEARCH_SYSTEM_PROMPT, sa),
             None => RESEARCH_SYSTEM_PROMPT.to_string(),

@@ -65,7 +65,11 @@ pub struct ForkInfo {
     pub modified_assumption: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub fn default_auto_approve_tools() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiSettings {
     pub default_provider: Option<String>,
     pub default_model: Option<String>,
@@ -76,6 +80,24 @@ pub struct UiSettings {
     /// it (or for an older notice version) the route refuses to start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub antigravity_ack: Option<AntigravityAck>,
+    #[serde(default = "default_auto_approve_tools")]
+    pub auto_approve_tools: bool,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub agent_models: std::collections::BTreeMap<String, crate::agent_models::AgentModelSpec>,
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            default_provider: None,
+            default_model: None,
+            pinned_conventions: None,
+            role_presets: None,
+            antigravity_ack: None,
+            auto_approve_tools: default_auto_approve_tools(),
+            agent_models: std::collections::BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -414,6 +436,8 @@ impl DesktopState {
             "default_model": ui.default_model.unwrap_or_else(|| redacted.roles.solver.model.clone()),
             "pinned_conventions": ui.pinned_conventions.unwrap_or_default(),
             "role_presets": ui.role_presets.unwrap_or_else(|| json!({})),
+            "auto_approve_tools": ui.auto_approve_tools,
+            "agent_models": ui.agent_models,
         }))
     }
 

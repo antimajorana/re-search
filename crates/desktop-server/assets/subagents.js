@@ -1,14 +1,17 @@
-// Settings -> Subagents tab: Built-in Agents overview, In-App AI Subagent Builder Agent,
+// Settings -> Agents & Models tab: Built-in Agents + per-agent models, AI Subagent Builder,
 // and user Custom Subagents manager + composer active-subagent selector.
 import * as api from '/assets/api.js';
 import { escapeHtml } from '/assets/math.js';
 
+const CLI_PROVIDERS = new Set(['claude-cli', 'antigravity']);
+const STORE_KEY = 're-search-active-subagent';
+
 let builtinList = [];
 let customList = [];
+let providerGroups = [];
+let agentModels = {};
 let activeSubagentId = null;
 let callbacks = {};
-
-const STORE_KEY = 're-search-active-subagent';
 
 export function initSubagents(opts = {}) {
   callbacks = opts;
@@ -35,19 +38,30 @@ export function initSubagents(opts = {}) {
 }
 
 export async function loadSubagents() {
-  try {
-    const data = await api.listSubagents();
-    builtinList = Array.isArray(data && data.builtin) ? data.builtin : [];
-    customList = Array.isArray(data && data.custom) ? data.custom : [];
+  const [subRes, setRes, modRes] = await Promise.allSettled([
+    api.listSubagents(),
+    api.getProviderSettings(),
+    api.getModels(false),
+  ]);
+  if (subRes.status === 'fulfilled' && subRes.value) {
+    const data = subRes.value;
+    builtinList = Array.isArray(data.builtin) ? data.builtin : [];
+    customList = Array.isArray(data.custom) ? data.custom : [];
     if (activeSubagentId && !customList.some((s) => s.id === activeSubagentId)) {
       activeSubagentId = null;
       persistActive(null);
     }
-    renderSubagentsPanel();
-    syncComposerBadge();
-  } catch {
-    // Panel renders empty state cleanly
   }
+  if (setRes.status === 'fulfilled' && setRes.value) {
+    agentModels = (setRes.value.agent_models && typeof setRes.value.agent_models === 'object')
+      ? setRes.value.agent_models
+      : {};
+  }
+  if (modRes.status === 'fulfilled' && modRes.value) {
+    providerGroups = Array.isArray(modRes.value.providers) ? modRes.value.providers : [];
+  }
+  renderSubagentsPanel();
+  syncComposerBadge();
 }
 
 export function getActiveSubagent() {
@@ -79,11 +93,11 @@ function syncComposerBadge() {
   const btn = document.getElementById('composer-subagent-btn');
   if (!btn) return;
   const active = getActiveSubagent();
-  btn.textContent = active ? `Agent: ${active.name}` : 'Agent: Solver';
+  btn.textContent = active ? `Agent: ${active.name}` : 'Agent: Orchestrator';
   btn.setAttribute('aria-pressed', active ? 'true' : 'false');
   btn.title = active
-    ? `Active custom subagent "${active.name}" — click to switch or clear in Settings -> Subagents`
-    : 'Using built-in Solver — click to choose or create a custom specialist subagent';
+    ? `Active custom subagent "${active.name}" — click to switch or clear in Settings -> Agents & Models`
+    : 'Using built-in Orchestrator — click to choose or create a custom specialist subagent';
 }
 
 async function handleDraftWithAgent(ev) {
@@ -120,6 +134,57 @@ async function handleDraftWithAgent(ev) {
   }
 }
 
+function encodeModelValue(provider, model) {
+  return provider && model ? `${provider}::${model}` : '';
+}
+
+function decodeModelValue(val) {
+  if (!val) return null;
+  const idx = String(val).indexOf('::');
+  if (idx <= 0) return null;
+  const provider = String(val).slice(0, idx);
+  const model = String(val).slice(idx + 2);
+  return provider && model ? { provider, model } : null;
+}
+
+function isCliGroup(g) {
+  return !g || CLI_PROVIDERS.has(g.id) || g.route === 'claude-cli' || g.route === 'antigravity';
+}
+
+function populateModelSelect(selectEl, { allowCli = false, defaultLabel = 'Default (Follow Orchestrator)', selected = null } = {}) {
+  if (!selectEl) return;
+  selectEl.replaceChildren();
+  selectEl.append(new Option(defaultLabel, ''));
+  const targetVal = selected && selected.provider && selected.model
+    ? encodeModelValue(selected.provider, selected.model)
+    : '';
+  let matched = false;
+  for (const g of providerGroups) {
+    if (!allowCli && isCliGroup(g)) continue;
+    const models = Array.isArray(g.models) ? g.models : [];
+    if (models.length === 0) continue;
+    const og = document.createElement('optgroup');
+    og.label = String(g.label || g.id);
+    for (const m of models) {
+      const val = encodeModelValue(g.id, m.id);
+      const opt = new Option(String(m.label || m.id), val);
+      opt.title = String(m.id);
+      if (targetVal && val === targetVal) {
+        opt.selected = true;
+        matched = true;
+      }
+      og.append(opt);
+    }
+    selectEl.append(og);
+  }
+  if (targetVal && !matched) {
+    const fallback = new Option(`${selected.provider}: ${selected.model} (saved)`, targetVal);
+    fallback.selected = true;
+    selectEl.append(fallback);
+  }
+  if (!targetVal) selectEl.value = '';
+}
+
 function fillForm(d) {
   const set = (id, v) => {
     const el = document.getElementById(id);
@@ -131,6 +196,15 @@ function fillForm(d) {
   set('subagent-effort-select', d.reasoning_effort || '');
   set('subagent-rigor-select', d.rigor || '');
   set('subagent-prompt-input', d.system_prompt || '');
+  const subModelSel = document.getElementById('subagent-model-select');
+  if (subModelSel) {
+    const sel = d && d.provider && d.model ? { provider: String(d.provider), model: String(d.model) } : null;
+    populateModelSelect(subModelSel, {
+      allowCli: false,
+      defaultLabel: 'Default (Follow Orchestrator)',
+      selected: sel,
+    });
+  }
 }
 
 function resetBuilderForm() {
@@ -141,6 +215,8 @@ function resetBuilderForm() {
     reasoning_effort: '',
     rigor: '',
     system_prompt: '',
+    provider: '',
+    model: '',
   });
 }
 
@@ -152,6 +228,7 @@ async function handleSaveSubagent(ev) {
   const reasoning_effort = document.getElementById('subagent-effort-select')?.value || '';
   const rigor = document.getElementById('subagent-rigor-select')?.value || '';
   const system_prompt = (document.getElementById('subagent-prompt-input')?.value || '').trim();
+  const chosenModel = decodeModelValue(document.getElementById('subagent-model-select')?.value || '');
 
   if (!name || !system_prompt) {
     notify('Subagent name and specialist instructions are required.');
@@ -166,6 +243,8 @@ async function handleSaveSubagent(ev) {
       tools_profile,
       reasoning_effort: reasoning_effort || undefined,
       rigor: rigor || undefined,
+      provider: chosenModel ? chosenModel.provider : undefined,
+      model: chosenModel ? chosenModel.model : undefined,
       system_prompt,
     });
     customList = Array.isArray(resp && resp.custom) ? resp.custom : customList;
@@ -198,6 +277,14 @@ async function handleDeleteSubagent(sa) {
 function renderSubagentsPanel() {
   const customBox = document.getElementById('custom-subagents-list');
   const builtinBox = document.getElementById('builtin-agents-list');
+  const subModelSel = document.getElementById('subagent-model-select');
+  if (subModelSel) {
+    populateModelSelect(subModelSel, {
+      allowCli: false,
+      defaultLabel: 'Default (Follow Orchestrator)',
+      selected: decodeModelValue(subModelSel.value),
+    });
+  }
 
   if (customBox) {
     customBox.innerHTML = '';
@@ -219,6 +306,7 @@ function renderSubagentsPanel() {
           ${sa.description ? `<div style="font-size:12px;color:var(--ink-secondary);">${escapeHtml(sa.description)}</div>` : ''}
           <div class="subagent-meta-row">
             <span class="badge">${escapeHtml(sa.tools_profile || 'full_research')}</span>
+            ${sa.provider && sa.model ? `<span class="badge">${escapeHtml(sa.provider)}: ${escapeHtml(sa.model)}</span>` : ''}
             ${sa.reasoning_effort ? `<span class="badge">effort: ${escapeHtml(sa.reasoning_effort)}</span>` : ''}
             ${sa.rigor ? `<span class="badge">rigor: ${escapeHtml(sa.rigor)}</span>` : ''}
           </div>
@@ -233,10 +321,11 @@ function renderSubagentsPanel() {
   }
 
   if (builtinBox) {
-    builtinBox.innerHTML = builtinList
-      .map(
-        (b) => `
-      <div class="builtin-card">
+    builtinBox.replaceChildren();
+    for (const b of builtinList) {
+      const card = document.createElement('div');
+      card.className = 'builtin-card';
+      card.innerHTML = `
         <div style="display:flex;justify-content:space-between;gap:6px;align-items:center;">
           <strong style="font-size:12.5px;">${escapeHtml(b.name)}</strong>
           <span class="badge">${escapeHtml(b.category === 'builder' ? 'Builder' : 'Built-in')}</span>
@@ -244,9 +333,50 @@ function renderSubagentsPanel() {
         <div class="builtin-card-role">${escapeHtml(b.role)}</div>
         <div class="builtin-card-desc">${escapeHtml(b.summary)}</div>
         <div style="font-size:11px;color:var(--ink-muted);margin-top:2px;">${escapeHtml(b.when)}</div>
-      </div>`
-      )
-      .join('');
+      `;
+      if (b.role_key) {
+        const allowCli = b.role_key === 'orchestrator';
+        const defaultLabel = allowCli ? 'Default (Composer Choice)' : 'Default (Follow Orchestrator)';
+        let lastSaved = agentModels[b.role_key] && agentModels[b.role_key].provider && agentModels[b.role_key].model
+          ? agentModels[b.role_key]
+          : null;
+        const row = document.createElement('div');
+        row.className = 'form-row';
+        row.style.marginTop = '6px';
+        const selId = `agent-model-${String(b.role_key).replace(/[^a-z0-9_-]/gi, '')}`;
+        const label = document.createElement('label');
+        label.htmlFor = selId;
+        label.style.cssText = 'font-size:11px;color:var(--ink-muted);';
+        label.textContent = 'Assigned Model';
+        const select = document.createElement('select');
+        select.id = selId;
+        select.className = 'compact-select agent-model-select';
+        select.dataset.roleKey = b.role_key;
+        populateModelSelect(select, { allowCli, defaultLabel, selected: lastSaved });
+        select.addEventListener('change', async () => {
+          const chosen = decodeModelValue(select.value);
+          select.disabled = true;
+          try {
+            const val = chosen ? { provider: chosen.provider, model: chosen.model } : null;
+            await api.updateProviderSettings({ agent_models: { [b.role_key]: val } });
+            agentModels[b.role_key] = val;
+            lastSaved = val;
+            notify(val ? `${b.name} assigned to ${val.provider}: ${val.model}.` : `${b.name} reset to default model.`);
+            if (b.role_key === 'orchestrator' && typeof callbacks.onOrchestratorModelChanged === 'function') {
+              callbacks.onOrchestratorModelChanged(val);
+            }
+          } catch (err) {
+            populateModelSelect(select, { allowCli, defaultLabel, selected: lastSaved });
+            notify(`Could not update ${b.name} model: ${err.message}`);
+          } finally {
+            select.disabled = false;
+          }
+        });
+        row.append(label, select);
+        card.append(row);
+      }
+      builtinBox.append(card);
+    }
   }
 }
 

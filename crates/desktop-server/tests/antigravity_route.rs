@@ -152,6 +152,7 @@ fn model_list_comes_from_agy_models_and_carries_the_label() {
 fn turn_runs_core_tool_with_a_persons_approval_and_cleans_up() {
     clear_agy_env_auth();
     let h = CliHarness::start_agy();
+    common::disable_auto_approve(h.port, &h.tok);
     acknowledge(&h);
     let sid = create_agy_session(&h);
     let digest = "cd".repeat(32);

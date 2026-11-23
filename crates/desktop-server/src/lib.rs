@@ -1,6 +1,7 @@
 //! Loopback `127.0.0.1` HTTP + SSE desktop server, UI approval broker, and
 //! embedded Gemini-inspired research UI.
 
+pub mod agent_models;
 pub mod antigravity;
 pub mod approver;
 pub mod assets;
@@ -9,6 +10,7 @@ pub mod chatgpt;
 mod cli_relay;
 pub mod cli_turn;
 pub mod connections;
+mod explain_export;
 pub mod http_srv;
 pub mod launcher;
 pub mod model_catalog;

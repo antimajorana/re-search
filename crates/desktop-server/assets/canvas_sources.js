@@ -1,4 +1,4 @@
-// Tabs 3 & 4: Literature & Sources Canvas (arXiv/INSPIRE/Crossref/S2) and isolated Side-Talk Canvas.
+// Tabs 3 & 4: Literature & Sources Canvas (arXiv/INSPIRE/Crossref/S2) and isolated Explain Canvas.
 import * as api from '/assets/api.js';
 import { escapeHtml, renderLatexDocumentPreview, renderRichInto } from '/assets/math.js';
 import { getModelChoice } from '/assets/model_picker.js';
@@ -57,6 +57,17 @@ export function initSourcesAndSidetalk(opts = {}) {
       await handleSidetalkSubmit();
     });
   }
+  const exportMdBtn = document.getElementById('explain-export-md-btn');
+  const exportHtmlBtn = document.getElementById('explain-export-html-btn');
+  const triggerExplainExport = (format) => {
+    if (!currentSessionId) {
+      notifyFn('Select or create a session before exporting Explain.');
+      return;
+    }
+    window.location.assign(api.exportUrl(currentSessionId, format));
+  };
+  if (exportMdBtn) exportMdBtn.addEventListener('click', () => triggerExplainExport('explain_md'));
+  if (exportHtmlBtn) exportHtmlBtn.addEventListener('click', () => triggerExplainExport('explain_html'));
   wireSourceReaderModal();
 }
 
@@ -193,14 +204,14 @@ async function loadSidetalk(sessionId) {
     onCountsChange({ sources: lastSourcesCount, sidetalk: lastSidetalkCount });
     sidetalkStreamEl.innerHTML = '';
     if (turns.length === 0) {
-      sidetalkStreamEl.innerHTML = '<div style="color:var(--ink-muted);font-size:13px;">Ask clarifying questions here without altering the verified proof chain.</div>';
+      sidetalkStreamEl.innerHTML = '<div style="color:var(--ink-muted);font-size:13px;">Ask Explain clarifying questions here without altering the verified proof chain.</div>';
       return;
     }
     for (const t of turns) {
       appendSidetalkPair(t.question || t.q || '', t.answer || t.a || '');
     }
   } catch {
-    // Empty sidetalk stream
+    // Empty Explain stream
   }
 }
 

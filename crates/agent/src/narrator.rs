@@ -10,6 +10,43 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const NARRATOR_MAX_TOKENS: u32 = 4096;
+const NARRATOR_FALLBACK_MAX_CHARS: usize = 24_000;
+
+fn format_problem_prompts(events: &[ledger::Event]) -> String {
+    let prompts: Vec<&str> = events
+        .iter()
+        .filter(|e| matches!(e.kind.as_str(), "session.start" | "session.resume"))
+        .filter_map(|e| e.payload.get("prompt").and_then(Value::as_str))
+        .filter(|p| !p.trim().is_empty())
+        .collect();
+    match prompts.as_slice() {
+        [] => "(no session prompt recorded)".to_string(),
+        [single] => (*single).to_string(),
+        [first, followups @ ..] => {
+            let numbered = followups
+                .iter()
+                .enumerate()
+                .map(|(i, p)| format!("{}. {p}", i + 1))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("Initial prompt:\n{first}\n\nFollow-up requests:\n{numbered}")
+        }
+    }
+}
+
+fn collect_fallback_derivations(events: &[ledger::Event]) -> String {
+    let joined = events
+        .iter()
+        .filter(|ev| ev.kind == "model.text")
+        .filter_map(|ev| ev.payload.get("text").and_then(Value::as_str))
+        .filter(|t| !t.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n---\n\n");
+    match joined.char_indices().nth(NARRATOR_FALLBACK_MAX_CHARS) {
+        Some((idx, _)) => joined[..idx].to_string(),
+        None => joined,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NarrationReport {
@@ -70,12 +107,8 @@ pub fn narrate_session(
     let events = ledger
         .read_session(session)
         .map_err(|e| format!("failed to read session `{session}`: {e}"))?;
-    let problem_prompt = events
-        .iter()
-        .find(|e| e.kind == "session.start")
-        .and_then(|e| e.payload.get("prompt"))
-        .and_then(Value::as_str)
-        .unwrap_or("(no session prompt recorded)");
+    let has_session_start = events.iter().any(|e| e.kind == "session.start");
+    let problem_prompt = format_problem_prompts(&events);
     let dag = read_proof_dag(ledger, session)?;
     let entries = if !dag.entries.is_empty() {
         dag.entries
@@ -86,26 +119,41 @@ pub fn narrate_session(
         .into_iter()
         .filter(|e| matches!(e.status, ProofStatus::Accepted | ProofStatus::Pending))
         .collect();
-    let derivation_sheet = build_derivation_sheet(&included);
+    let fallback_text = collect_fallback_derivations(&events);
 
-    let mut proof_text = String::new();
-    for e in &included {
-        proof_text.push_str(&format!(
-            "- {} ({}, {:?}): {}\n  Details: {}\n  LaTeX: {}\n",
-            e.entry_id,
-            e.entry_type,
-            e.status,
-            e.summary,
-            e.details,
-            e.latex.as_deref().unwrap_or("")
-        ));
+    if !has_session_start && included.is_empty() && fallback_text.is_empty() {
+        return Err("Run at least one derivation turn before narrating the proof.".into());
     }
 
-    let system_prompt = "You are a Proof Narrator producing a clear, rigorous read-only \
-        walkthrough and Derivation Sheet from the session's accepted and pending proof steps.";
-    let user_prompt = format!(
-        "Problem:\n{problem_prompt}\n\n{derivation_sheet}\n\nProof steps:\n{proof_text}"
-    );
+    let derivation_sheet = build_derivation_sheet(&included);
+
+    let (system_prompt, user_prompt) = if included.is_empty() {
+        (
+            "You are a Proof Narrator producing a clear, rigorous read-only walkthrough and \
+             Derivation Sheet from the session's recorded derivation messages.",
+            format!(
+                "Problem:\n{problem_prompt}\n\n{derivation_sheet}\n\n<session_derivations>\n{fallback_text}\n</session_derivations>"
+            ),
+        )
+    } else {
+        let mut proof_text = String::new();
+        for e in &included {
+            proof_text.push_str(&format!(
+                "- {} ({}, {:?}): {}\n  Details: {}\n  LaTeX: {}\n",
+                e.entry_id,
+                e.entry_type,
+                e.status,
+                e.summary,
+                e.details,
+                e.latex.as_deref().unwrap_or("")
+            ));
+        }
+        (
+            "You are a Proof Narrator producing a clear, rigorous read-only \
+             walkthrough and Derivation Sheet from the session's accepted and pending proof steps.",
+            format!("Problem:\n{problem_prompt}\n\n{derivation_sheet}\n\nProof steps:\n{proof_text}"),
+        )
+    };
     let req = ModelRequest {
         model: model.to_string(),
         system: Some(system_prompt.to_string()),

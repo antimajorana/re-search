@@ -20,11 +20,13 @@ pub const MAX_GOAL_CHARS: usize = 2000;
 
 const RESERVED_IDS: &[&str] = &[
     "solver",
+    "orchestrator",
     "step-verifier",
     "full-verifier",
     "strategist",
     "narrator",
     "sidetalk",
+    "explain",
     "subagent-builder",
 ];
 
@@ -58,7 +60,8 @@ pub fn builtin_agents_json() -> Vec<Value> {
     vec![
         json!({
             "id": "solver",
-            "name": "Solver",
+            "role_key": "orchestrator",
+            "name": "Orchestrator",
             "role": "Primary Derivation & Research Agent",
             "when": "Runs on every turn in Direct, Verified, and Deep modes.",
             "category": "research",
@@ -66,6 +69,7 @@ pub fn builtin_agents_json() -> Vec<Value> {
         }),
         json!({
             "id": "step-verifier",
+            "role_key": "step_verifier",
             "name": "Step Verifier",
             "role": "Single-Step Audit Agent",
             "when": "Audits individual Proof-DAG entries against their `depends_on` ancestors.",
@@ -74,22 +78,25 @@ pub fn builtin_agents_json() -> Vec<Value> {
         }),
         json!({
             "id": "full-verifier",
+            "role_key": "full_verifier",
             "name": "Full Solution Verifier",
             "role": "Independent End-of-Round Auditor",
-            "when": "Runs automatically after Solver finishes a round in Verified and Deep modes (up to 3 rounds).",
+            "when": "Runs automatically after Orchestrator finishes a round in Verified and Deep modes (up to 3 rounds).",
             "category": "research",
             "summary": "Starts with clean context (only problem statement, active Proof DAG, and `tex_audit` XML) to approve (`verified`) or reject with counterexamples."
         }),
         json!({
             "id": "strategist",
+            "role_key": "strategist",
             "name": "Research Strategist",
             "role": "Recovery & Strategy Advisor",
             "when": "Triggered automatically in Deep mode when the Verifier rejects a draft.",
             "category": "research",
-            "summary": "Diagnoses structural proof failures and proposes an advisory repair plan before the Solver's next revision round."
+            "summary": "Diagnoses structural proof failures and proposes an advisory repair plan before the Orchestrator's next revision round."
         }),
         json!({
             "id": "narrator",
+            "role_key": "narrator",
             "name": "Proof Narrator",
             "role": "Derivation Sheet Synthesizer",
             "when": "Invoked on demand from Proof DAG -> Narrate Proof.",
@@ -98,14 +105,16 @@ pub fn builtin_agents_json() -> Vec<Value> {
         }),
         json!({
             "id": "sidetalk",
-            "name": "Side-Talk Assistant",
+            "role_key": "explain",
+            "name": "Explain",
             "role": "Isolated Q&A Channel",
-            "when": "Invoked on demand in Canvas -> Side-Talk.",
+            "when": "Invoked on demand in Canvas -> Explain.",
             "category": "research",
-            "summary": "Answers notation, intuition, or `e-N` step questions in a separate ledger stream without mutating the main Proof DAG."
+            "summary": "Answers notation, intuition, or `e-N` step questions in a separate ledger stream without mutating the main Proof DAG, with Markdown and HTML conversation export."
         }),
         json!({
             "id": "subagent-builder",
+            "role_key": "subagent_builder",
             "name": "Subagent Builder",
             "role": "In-App Subagent Creator Agent",
             "when": "Invoked inside Settings -> Subagents -> Create with AI Agent.",

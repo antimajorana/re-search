@@ -100,6 +100,11 @@ fn narrate_and_sidetalk_use_an_api_provider_or_say_they_need_one() {
         json!({ "keys": { "openai": "sk-test-not-a-key-0001" }, "base_urls": { "openai": base } }),
     );
     assert_eq!(st, 200, "{text}");
+    // Narrate and side questions need a started session (empty pre-start sessions reject before hitting providers).
+    ledger::Ledger::open(&tmp.path().join("data"))
+        .unwrap()
+        .append(&sid, "session.start", 1, &json!({ "prompt": "P" }))
+        .unwrap();
     let (st, _, text) = call("POST", &narrate, json!({ "provider": "claude-cli", "model": "sonnet" }));
     assert_eq!(st, 400, "the mock refuses: {text}");
     assert!(!text.contains("need an API-key provider"), "{text}");
@@ -111,11 +116,6 @@ fn narrate_and_sidetalk_use_an_api_provider_or_say_they_need_one() {
         assert!(reqs[0].1.contains(&format!("\"model\":\"{default_model}\"")), "{reqs:?}");
         assert!(!reqs[0].1.contains("\"sonnet\""), "{reqs:?}");
     }
-    // Side questions need a session with a start event.
-    ledger::Ledger::open(&tmp.path().join("data"))
-        .unwrap()
-        .append(&sid, "session.start", 1, &json!({ "prompt": "P" }))
-        .unwrap();
     let (st, _, text) = call("POST", &sidetalk, json!({ "question": "why?", "provider": "openai", "model": "gpt-4.1-mini" }));
     assert_eq!(st, 400, "{text}");
     let want = agent::ProviderKind::OpenAi.resolve_model("gpt-4.1-mini");

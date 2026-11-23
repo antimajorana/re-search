@@ -97,10 +97,13 @@ pub(crate) fn verify_and_read(
     let events = ledger
         .read_session(session)
         .map_err(|e| reject(ResumeRejectKind::TamperOrMissing, format!("cannot read session `{session}`: {e}")))?;
-    let start_ev = events.first().ok_or_else(|| corrupt(format!("session `{session}` has no events")))?;
-    if start_ev.kind != "session.start" {
-        return Err(corrupt(format!("session `{session}` seq 1 must be `session.start`, found `{}`", start_ev.kind)));
+    if events.is_empty() {
+        return Err(corrupt(format!("session `{session}` has no events")));
     }
+    let start_ev = events
+        .iter()
+        .find(|e| e.kind == "session.start")
+        .ok_or_else(|| corrupt(format!("session `{session}` has no `session.start` event")))?;
     let route = start_ev.payload.get("route").and_then(Value::as_str);
     if route != Some("api") {
         let label = route.unwrap_or("unknown");

@@ -144,6 +144,7 @@ fn handshake_mismatch_aborts_before_any_assistant_event() {
 fn relay_approval_is_a_card_answered_with_the_digest() {
     clear_env_auth();
     let h = CliHarness::start();
+    common::disable_auto_approve(h.port, &h.tok);
     let sid = h.create_cli_session();
     let digest = "ab".repeat(32);
     let request = json!({

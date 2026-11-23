@@ -68,13 +68,27 @@ fn load_problem_and_entries(
     let events = ledger
         .read_session(session)
         .map_err(|e| format!("cannot read session `{session}`: {e}"))?;
-    let problem_prompt = events
+    let prompts: Vec<&str> = events
         .iter()
-        .find(|e| e.kind == "session.start")
-        .and_then(|e| e.payload.get("prompt"))
-        .and_then(Value::as_str)
-        .unwrap_or("(no session prompt recorded)")
-        .to_string();
+        .filter(|e| e.kind == "session.start" || e.kind == "session.resume")
+        .filter_map(|e| e.payload.get("prompt").and_then(Value::as_str))
+        .filter(|p| !p.trim().is_empty())
+        .collect();
+    let problem_prompt = match prompts.as_slice() {
+        [] => "(no session prompt recorded)".to_string(),
+        [single] => (*single).to_string(),
+        [earlier @ .., latest] => {
+            let context = earlier
+                .iter()
+                .enumerate()
+                .map(|(i, p)| format!("{}. {p}", i + 1))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "Latest user request to verify:\n{latest}\n\nEarlier session prompts (context):\n{context}"
+            )
+        }
+    };
     let dag = read_proof_dag(ledger, session)?;
     let entries = if !dag.entries.is_empty() {
         dag.entries

@@ -259,6 +259,11 @@ pub(crate) fn summarize_session_events(events: &[ledger::Event]) -> Value {
     })
 }
 
+fn is_primary_assistant(msg: &Value) -> bool {
+    msg.get("role").and_then(Value::as_str) == Some("assistant")
+        && !msg.get("narrator").and_then(Value::as_bool).unwrap_or(false)
+}
+
 pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
     let mut messages: Vec<Value> = Vec::new();
     let mut traces = Vec::new();
@@ -339,7 +344,7 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                     "summary": summary,
                     "issues": ev.payload.get("issues").cloned().unwrap_or_else(|| json!([])),
                 });
-                if let Some(last) = messages.last_mut().filter(|m| m.get("role").and_then(Value::as_str) == Some("assistant")) {
+                if let Some(last) = messages.last_mut().filter(|m| is_primary_assistant(m)) {
                     let cur = last.get("thinking").and_then(Value::as_str).unwrap_or("");
                     last["thinking"] = json!(format!("{cur}{line}"));
                     if let Some(arr) = last.get_mut("verifications").and_then(Value::as_array_mut) {
@@ -355,7 +360,7 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
             }
             "strategist.consult" => {
                 let note = "[Research Strategist consulted]\n";
-                if let Some(last) = messages.last_mut().filter(|m| m.get("role").and_then(Value::as_str) == Some("assistant")) {
+                if let Some(last) = messages.last_mut().filter(|m| is_primary_assistant(m)) {
                     let cur = last.get("thinking").and_then(Value::as_str).unwrap_or("");
                     last["thinking"] = json!(format!("{cur}{note}"));
                 } else {
@@ -363,7 +368,7 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                 }
             }
             "autonomous.feedback" => {
-                if messages.last().and_then(|m| m.get("role")).and_then(Value::as_str) == Some("assistant") {
+                if messages.last().is_some_and(is_primary_assistant) {
                     if let Some(prev) = messages.pop() {
                         if let Some(old_think) = prev.get("thinking").and_then(Value::as_str) {
                             pending_thinking = format!("{old_think}{pending_thinking}");
@@ -384,7 +389,7 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
             }
             "guardrail.warning" => {
                 if let Some(banner) = ev.payload.get("banner").and_then(Value::as_str) {
-                    if let Some(last) = messages.last_mut().filter(|m| m.get("role").and_then(Value::as_str) == Some("assistant")) {
+                    if let Some(last) = messages.last_mut().filter(|m| is_primary_assistant(m)) {
                         let cur = last.get("text").and_then(Value::as_str).unwrap_or("");
                         last["text"] = json!(format!("{banner}\n{cur}"));
                         last["verified_status"] = json!("unverified");
@@ -392,7 +397,7 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                 }
             }
             "session.end" => {
-                if let Some(last) = messages.last_mut().filter(|m| m.get("role").and_then(Value::as_str) == Some("assistant")) {
+                if let Some(last) = messages.last_mut().filter(|m| is_primary_assistant(m)) {
                     if let Some(rounds) = ev.payload.get("verification_rounds").and_then(Value::as_u64) {
                         last["verification_rounds"] = json!(rounds);
                     }
@@ -402,6 +407,37 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                     } else if ev.payload.get("outcome").and_then(Value::as_str) == Some("completed_unverified") {
                         last["verified_status"] = json!("unverified");
                     }
+                }
+            }
+            "narrator.report" => {
+                let walkthrough = ev
+                    .payload
+                    .get("walkthrough")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                let sheet = ev
+                    .payload
+                    .get("derivation_sheet")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim();
+                let combined = match (walkthrough.is_empty(), sheet.is_empty()) {
+                    (false, false) => format!("{walkthrough}\n\n{sheet}"),
+                    (false, true) => walkthrough.to_string(),
+                    (true, false) => sheet.to_string(),
+                    (true, true) => String::new(),
+                };
+                if !combined.is_empty() {
+                    messages.push(json!({
+                        "role": "assistant",
+                        "narrator": true,
+                        "seq": ev.seq,
+                        "text": combined,
+                        "thinking": "",
+                        "tool_traces": [],
+                        "verifications": [],
+                    }));
                 }
             }
             "source.ingested" => {

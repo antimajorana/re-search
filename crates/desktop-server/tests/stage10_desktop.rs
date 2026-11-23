@@ -224,6 +224,7 @@ fn approve_for_session_persists_across_turns_of_same_session_only() {
     let srv = start_desktop_server(cfg).unwrap();
     let port = srv.addr.port();
     let tok = srv.info.token.clone();
+    common::disable_auto_approve(port, &tok);
     let cookie = launch_cookie(port, &tok);
     let hdr = [("X-ReSearch-Token", tok.as_str())];
 

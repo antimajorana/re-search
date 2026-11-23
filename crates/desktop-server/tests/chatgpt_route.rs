@@ -187,6 +187,7 @@ fn sign_in_pick_a_model_run_a_turn_with_approval_and_sign_out() {
     }
 
     // A session on the ChatGPT plan: in-core loop, approval card answered over the API.
+    common::disable_auto_approve(port, &tok);
     let (_, created) = call_api("POST", "/api/sessions", json!({ "title": "ChatGPT", "workspace_root": ws, "provider": "chatgpt" }));
     let sid = created["id"].as_str().unwrap().to_string();
     let cookie = launch_cookie(port, &tok);

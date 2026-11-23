@@ -106,6 +106,19 @@ impl Catalog {
         self.entries.lock().ok()?.map.get(id)?.last_error.clone()
     }
 
+    /// True if a live list fetch for `id` has succeeded and has not subsequently failed.
+    pub fn has_ok_entry(&self, id: &str) -> bool {
+        self.entries
+            .lock()
+            .ok()
+            .and_then(|e| {
+                e.map
+                    .get(id)
+                    .map(|ent| ent.ok_ms.is_some() && ent.last_error.is_none())
+            })
+            .unwrap_or(false)
+    }
+
     /// The current generation. Read it BEFORE loading keys and base URLs, and pass it to
     /// [`Catalog::fetch`], so a result fetched with settings older than a `clear` is dropped.
     pub fn generation(&self) -> u64 {

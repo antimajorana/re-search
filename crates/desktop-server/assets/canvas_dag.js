@@ -316,6 +316,11 @@ function renderBranchDiff(diff) {
 
 async function handleNarrateProof() {
   if (!currentSessionId) return;
+  const narrateBtn = document.getElementById('dag-narrate-btn');
+  if (narrateBtn) {
+    narrateBtn.disabled = true;
+    narrateBtn.textContent = 'Narrating...';
+  }
   try {
     const res = await api.narrateSession(currentSessionId, sideModelPayload());
     const text = (res && (res.narrative || res.markdown || res.text)) || JSON.stringify(res);
@@ -324,5 +329,10 @@ async function handleNarrateProof() {
     }
   } catch (err) {
     if (typeof callbacks.onNotify === 'function') callbacks.onNotify(`Narration failed: ${err.message}`);
+  } finally {
+    if (narrateBtn) {
+      narrateBtn.disabled = false;
+      narrateBtn.textContent = 'Narrate Proof';
+    }
   }
 }

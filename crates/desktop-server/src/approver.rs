@@ -126,6 +126,32 @@ impl Approver for UiApprover {
             }
         };
 
+        if self.state.load_ui_settings().auto_approve_tools {
+            let call_id = format!("ap-auto-{}", random_hex(6));
+            let outcome = self.record_answer_and_reply(
+                request,
+                scope,
+                true,
+                false,
+                "auto-approved by desktop setting (auto_approve_tools)",
+            );
+            self.state.sse.emit(
+                &request.session,
+                "approval_resolved",
+                json!({
+                    "call_id": call_id,
+                    "session": &request.session,
+                    "tool_id": &request.tool_id,
+                    "digest": &request.digest,
+                    "approved": outcome.reply.approved,
+                    "approve_for_session": false,
+                    "auto_approved": true,
+                    "reason": &outcome.reply.by,
+                }),
+            );
+            return outcome;
+        }
+
         let allow_session_approve =
             self.allow_session_network_grant && can_grant_for_session(request.effect, self.contained);
 

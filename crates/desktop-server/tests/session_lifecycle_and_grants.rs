@@ -167,6 +167,7 @@ fn workspace_write_session_grant_reuses_across_turns_and_can_be_revoked() {
     let srv = start_desktop_server(test_cfg(&data_dir, Some(ws_dir.clone()), Some(format!("http://{model_addr}")), None)).unwrap();
     let port = srv.addr.port();
     let tok = srv.info.token.clone();
+    common::disable_auto_approve(port, &tok);
     let cookie = launch_cookie(port, &tok);
     let hdr = [("X-ReSearch-Token", tok.as_str())];
 

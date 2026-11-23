@@ -254,7 +254,6 @@ async function handleSubmit() {
     return;
   }
 
-  let startedTurn = false;
   try {
     submitting = true;
     syncButtons();
@@ -280,15 +279,21 @@ async function handleSubmit() {
       inputEl.value = '';
       resizeTextarea();
       if (typeof callbacks.onSendPrompt === 'function') {
-        await callbacks.onSendPrompt(sessionId, prompt, getComposerOptions(choice));
-        startedTurn = true;
+        try {
+          await callbacks.onSendPrompt(sessionId, prompt, getComposerOptions(choice));
+        } catch (err) {
+          if (inputEl && !inputEl.value) {
+            inputEl.value = prompt;
+            resizeTextarea();
+          }
+          throw err;
+        }
       }
     }
   } catch (err) {
     notify(`Send failed: ${err.message}`);
   } finally {
     submitting = false;
-    turnRunning = startedTurn;
     syncButtons();
   }
 }

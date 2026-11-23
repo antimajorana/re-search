@@ -559,9 +559,12 @@ test('Stage 11 Workbench UI: pipeline stepper, rigor presets, conventions popove
     globalThis.document = prevDoc;
   }
 
-  for (const id of ['effort-popover', 'composer-effort-btn', 'composer-subagent-btn', 'settings-tab-subagents', 'settings-tab-guide', 'source-reader-dialog']) {
+  for (const id of ['effort-popover', 'composer-effort-btn', 'composer-subagent-btn', 'settings-tab-subagents', 'settings-tab-guide', 'source-reader-dialog', 'explain-export-md-btn', 'explain-export-html-btn', 'set-auto-approve-tools', 'subagent-model-select']) {
     assert.match(indexHtml, new RegExp(`id="${id}"`), `Missing #${id} in index.html`);
   }
+  assert.match(indexHtml, /Orchestrator/, 'UI must label Orchestrator');
+  assert.match(indexHtml, /Explain/, 'UI must label Explain');
+  assert.match(fs.readFileSync(path.join(assetsDir, 'subagents.js'), 'utf8'), /agent-model-select/, 'subagents.js must render per-agent model selectors');
   for (const a of ['/assets/modals.css', '/assets/effort_picker.js', '/assets/subagents.js', '/assets/guide.js', '/assets/source_links.js']) {
     assert.ok(assetsRs.includes(a), `Missing static asset registration ${a}`);
   }

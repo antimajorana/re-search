@@ -117,14 +117,15 @@ fn subagents_crud_and_builder_draft_and_turn_wiring() {
     let (st, _, _) = raw_http(port, "PUT", "/api/settings/providers", &[("X-ReSearch-Token", &tok)], &key_payload);
     assert_eq!(st, 200);
 
-    // 1. GET /api/subagents lists built-in roles (including solver & subagent-builder).
+    // 1. GET /api/subagents lists built-in roles (including Orchestrator, Explain & Subagent Builder).
     let (st, _, body) = raw_http(port, "GET", "/api/subagents", &[("X-ReSearch-Token", &tok)], b"");
     assert_eq!(st, 200);
     let list: Value = serde_json::from_slice(&body).unwrap();
     let builtins = list["builtin"].as_array().unwrap();
-    assert!(builtins.iter().any(|b| b["id"] == "solver"));
-    assert!(builtins.iter().any(|b| b["id"] == "full-verifier"));
-    assert!(builtins.iter().any(|b| b["id"] == "subagent-builder"));
+    assert!(builtins.iter().any(|b| b["id"] == "solver" && b["name"] == "Orchestrator" && b["role_key"] == "orchestrator"));
+    assert!(builtins.iter().any(|b| b["id"] == "sidetalk" && b["name"] == "Explain" && b["role_key"] == "explain"));
+    assert!(builtins.iter().any(|b| b["id"] == "full-verifier" && b["role_key"] == "full_verifier"));
+    assert!(builtins.iter().any(|b| b["id"] == "subagent-builder" && b["role_key"] == "subagent_builder"));
     assert_eq!(list["custom"].as_array().unwrap().len(), 0);
 
     // 2. Reject deleting or overwriting reserved built-in IDs.

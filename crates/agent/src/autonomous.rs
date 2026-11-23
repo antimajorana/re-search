@@ -80,7 +80,8 @@ pub fn run_autonomous_research_loop(
     let session = router.session();
     let info = solver_transport.info();
     let defs = router.registry().defs();
-    let mut audit = Audit { ledger, session, sink, last_seq: 0 };
+    let last_seq = ledger.read_session(session).ok().and_then(|ev| ev.last().map(|e| e.seq)).unwrap_or(0);
+    let mut audit = Audit { ledger, session, sink, last_seq };
     audit.emit(
         "session.start",
         json!({
@@ -296,7 +297,7 @@ fn drive_autonomous_rounds(
                 if !calc_repair_attempted && turns_used < max_turns_budget {
                     calc_repair_attempted = true;
                     audit.sink.on_thinking_delta(
-                        "\n[Calculation guardrail: symbolic computation needs an interpreting `result` entry — prompting Solver...]\n",
+                        "\n[Calculation guardrail: symbolic computation needs an interpreting `result` entry — prompting Orchestrator...]\n",
                     );
                     let fb = format!(
                         "<guardrail_feedback>\n{calc_err}\n\

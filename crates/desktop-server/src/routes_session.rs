@@ -477,6 +477,18 @@ pub fn handle_put_settings(state: &DesktopState, body: &[u8]) -> ApiResult {
         None => None,
     };
     let next_role_presets = val.get("role_presets").cloned();
+    let next_auto_approve = match val.get("auto_approve_tools") {
+        Some(v) => Some(v.as_bool().ok_or_else(|| bad("`auto_approve_tools` must be a boolean"))?),
+        None => None,
+    };
+    let next_agent_models = match val.get("agent_models") {
+        Some(am_val) => {
+            let mut map = state.load_ui_settings().agent_models;
+            crate::agent_models::parse_agent_models_patch(am_val, &mut map)?;
+            Some(map)
+        }
+        None => None,
+    };
 
     if let Some(roles_val) = val.get("roles") {
         let parsed: RoleAssignment =
@@ -535,6 +547,12 @@ pub fn handle_put_settings(state: &DesktopState, body: &[u8]) -> ApiResult {
             }
             if let Some(rp) = next_role_presets {
                 ui.role_presets = Some(rp);
+            }
+            if let Some(auto) = next_auto_approve {
+                ui.auto_approve_tools = auto;
+            }
+            if let Some(am) = next_agent_models {
+                ui.agent_models = am;
             }
         })
         .map_err(internal)?;

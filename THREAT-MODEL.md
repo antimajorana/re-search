@@ -88,9 +88,10 @@ result.
   `--route api`, `AgentLoop` advertises only `router.registry().defs()`.
 - **Code execution always asks.** `execute-code` tools can never be configured
   to `allow`: the policy engine clamps `allow` to `ask`.
-- **No approval without a person.** If stdin or stderr is not a terminal, or
+- **No approval without a person on the console route.** If stdin or stderr is not a terminal, or
   the token, channel version, session, scope, or containment check fails, the
-  answer is "no". There is no auto-approve switch. Stray console input outside
+  answer is "no". There is no auto-approve switch on the console route (see
+  `auto_approve_tools` in the desktop section below). Stray console input outside
   an active prompt is drained and discarded.
 - **Approval channel timeout & ACK.** On `--route cli`, disconnecting before a
   decision closes the prompt and records `approval.expired`; valid answers
@@ -226,28 +227,36 @@ result.
   allows `read-workspace` and `observe-local` without asking, asks for
   `write-workspace`, `execute-code` (`sympy_eval`, `latex_compile`) and
   `network-read`, and denies everything else (including `network-egress`).
-- **Unconfigurable human approvals for writes, code and literature queries.**
-  `policy::evaluate` hard-clamps `allow` to `ask` for `execute-code`,
-  `write-workspace` and `network-read`, so no rule or preset can switch these
-  prompts off; a `deny` rule stays `deny`. For `write-workspace`,
-  `ConsoleApprover` and `UiApprover` display a unified diff preview
-  (`preview_workspace_edit`) and SHA-256 request digest, store pre-write file
-  backups in `blobs/` (`"workspace.backup"`), and record `"approval.answered"`
-  before modifying any workspace file.
-- **Literature queries always ask first, with optional human session opt-in.**
+- **Policy-layer clamps vs desktop `auto_approve_tools` (`UiApprover`).**
+  `policy::evaluate` in `crates/policy` still hard-clamps `allow` to `ask` for
+  `execute-code`, `write-workspace` and `network-read` at the `policy` layer; a
+  `deny` rule stays `deny`, and the CLI route always requires an interactive
+  terminal decision (`ConsoleApprover`). On the desktop server, `UiApprover`
+  checks `auto_approve_tools` (`Settings -> Advanced`, stored in provider
+  settings and **default `true`**) before showing UI approval cards: when on,
+  `UiApprover` approves immediately while still fail-closed recording
+  `"approval.answered"` in `ledger.db` (denying if the ledger write fails) and
+  keeping `sympy_eval` inside the Windows AppContainer and `write-workspace`
+  pre-write backups in `blobs/` (`"workspace.backup"`). Unchecking
+  `auto_approve_tools` switches desktop sessions back to digest-bound UI cards
+  (`preview_workspace_edit` unified diff for writes, SHA-256 request digest)
+  before execution.
+- **Literature queries & optional human session opt-in.**
   The query text of `arxiv_search` / `literature_search` is chosen by the model,
   so it is a channel by which a manipulated model could carry workspace content
   to a search host. `policy::evaluate` hard-clamps `network-read` to `ask`, so
-  the first model-initiated literature lookup in a session always prompts the
+  on the CLI route (and on the desktop when `auto_approve_tools` is unchecked),
+  the first model-initiated literature lookup in a session prompts the
   human with the full arguments (including the query) before any network request
-  is made. On the desktop in-core route, the human may choose *Approve Once*
-  (single-use digest) or *Approve for Session* (`approve_for_session: true`),
-  which binds a `NetworkReadGrant` strictly for `EffectClass::NetworkRead` tools
-  under the same `(session_id, caller, policy_version)` (recorded as
-  `approval.session_bound` / `approval.session_reused`); `write-workspace` and
-  `execute-code` can never use a `NetworkReadGrant`, and grants never carry
-  across sessions or server restarts. A refused call makes no network request
-  (tested). Searches the person types into the desktop UI's literature drawer
+  is made. When manually prompted on the desktop in-core route, the human may
+  choose *Approve Once* (single-use digest) or *Approve for Session*
+  (`approve_for_session: true`), which binds a `NetworkReadGrant` strictly for
+  `EffectClass::NetworkRead` tools under the same `(session_id, caller,
+  policy_version)` (recorded as `approval.session_bound` /
+  `approval.session_reused`); `write-workspace` and `execute-code` can never
+  use a `NetworkReadGrant`, and grants never carry across sessions or server
+  restarts. A refused call makes no network request (tested). Searches the
+  person types into the desktop UI's literature drawer
   (`POST /api/sessions/{id}/literature`, token-protected) are human-authored and
   run without a second prompt.
 - **Allowlisted literature egress & deterministic `tex_audit`.** `arxiv_search`
@@ -257,13 +266,13 @@ result.
   tests), reject XXE/DTD feeds, and record `"literature.fetched"` `"raw_blob"`s.
   `tex_audit` deterministically checks `\label`/`\ref`/`\cite`, verbatim TeX
   quotes, and blocks reliance on withdrawn arXiv papers or retracted DOIs.
-- **Stateless verifiers, isolated Side-Talk & verified fork/export
+- **Stateless verifiers, isolated Explain & verified fork/export
   (`crates/agent`, `crates/export`).** Step and Full-Solution Verifiers see only
   the problem prompt, `depends_on` DAG ancestors, and `<deterministic_tex_audit>`
-  (forcing `"rejected"` if `tex_audit` has blockers). Side-Talk writes only to
-  `sidetalk:<id>` without mutating the solver chain; `fork` and `export` verify
-  session hash chains before cloning prefixes or writing `.tex`/`.html`/`.zip`
-  bundles.
+  (forcing `"rejected"` if `tex_audit` has blockers). Explain writes only to
+  `sidetalk:<id>` without mutating the Orchestrator chain; `fork` and `export`
+  verify session hash chains before cloning prefixes or writing `.tex`/`.html`/`.zip`
+  and Explain `.md`/`.html` (`explain_md`/`explain_html`) bundles.
 - **Loopback `127.0.0.1` desktop server (`crates/desktop-server`).** `re-search
   ui` / `desktop` binds exclusively to `127.0.0.1` (`std::net` + `httparse`,
   zero `tokio`) and serves the UI, an HTTP/JSON API and an SSE event stream.
@@ -292,7 +301,7 @@ result.
     and the version) requires the token in the `X-ReSearch-Token` or
     `Authorization: Bearer` header, compared in constant time; otherwise 401.
     This covers listing sessions, session contents, workspace listings and file
-    contents, the proof DAG, diffs, Side-Talk, provider settings and all
+    contents, the proof DAG, diffs, Explain, provider/agent settings and all
     mutations. Credentials are checked from the request headers before any
     body is read.
   - *What the cookie opens.* Only `GET /api/sessions/{id}/events` (SSE) and
@@ -321,9 +330,13 @@ result.
     `.tex`/`.html`/`.zip` in memory and writes nothing to disk (the CLI
     `re-search export --out` is what writes files). Opening the ledger can
     create an empty `ledger.db` in the data directory if none exists.
-  - *Approvals.* Model tool calls that need approval appear as cards in the UI
-    (`UiApprover`), bound to the request digest and recorded in the ledger
-    (fail-closed) before the tool runs; answering needs the header token.
+  - *Approvals.* Model tool calls routed through `crates/policy` (`execute-code`,
+    `write-workspace`, `network-read`) hit `UiApprover`. When `auto_approve_tools`
+    is enabled (desktop default in `Settings -> Advanced`), `UiApprover`
+    auto-approves after fail-closed recording `approval.answered` in `ledger.db`
+    before the tool runs (keeping AppContainer isolation and workspace backups
+    active). When `auto_approve_tools` is off, calls pause for digest-bound UI
+    approval cards and answering requires the header token.
   - *Provider keys.* Keys are stored in `<data_dir>/providers.json` outside git
     (`0600` on Unix; on Windows no ACL is set, so the file inherits the data
     directory's permissions: private under the default

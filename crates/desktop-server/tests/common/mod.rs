@@ -165,3 +165,16 @@ pub fn launch_cookie(port: u16, token: &str) -> String {
     let set_cookie = hdrs.iter().find(|(k, _)| k == "set-cookie").map(|(_, v)| v.clone()).expect("Set-Cookie");
     set_cookie.split(';').next().unwrap().trim().to_string()
 }
+
+/// Switches `auto_approve_tools` off for tests that specifically exercise interactive
+/// `approval_requested` cards and session-grant prompts.
+pub fn disable_auto_approve(port: u16, token: &str) {
+    let (st, _, b) = raw_http(
+        port,
+        "PUT",
+        "/api/settings/providers",
+        &[("X-ReSearch-Token", token), ("Content-Type", "application/json")],
+        br#"{"auto_approve_tools":false}"#,
+    );
+    assert_eq!(st, 200, "disable_auto_approve failed: {}", String::from_utf8_lossy(&b));
+}

@@ -178,7 +178,14 @@ pub(crate) fn wants_cli_route(
         (Some(other), None, Some(kind)) => Err(runs_on(kind, other)),
         (Some(_), None, None) => Ok(None),
         (None, recorded_kind, bound) => {
-            let resolved = recorded_kind.or(bound);
+            let mut resolved = recorded_kind.or(bound);
+            let meta_provider_unset = meta
+                .as_ref()
+                .and_then(|m| m.default_provider.as_deref())
+                .is_none_or(|s| s.trim().is_empty());
+            if resolved.is_none() && recorded.is_none() && meta_provider_unset {
+                resolved = crate::agent_models::orchestrator_cli_override(state).map(|(k, _)| k);
+            }
             if resolved == Some(CliRouteKind::Antigravity) {
                 crate::antigravity::require_acknowledged(state).map_err(|e| (403, e))?;
             }
@@ -187,7 +194,12 @@ pub(crate) fn wants_cli_route(
     }
 }
 /// A model alias, full model name or slug: never something the CLI could read as a flag.
-fn pick_model(req: &Value, meta: Option<&SessionMeta>, kind: CliRouteKind) -> Result<String, String> {
+fn pick_model(
+    req: &Value,
+    meta: Option<&SessionMeta>,
+    ui: &crate::state::UiSettings,
+    kind: CliRouteKind,
+) -> Result<String, String> {
     let default = match kind {
         CliRouteKind::Claude => DEFAULT_CLI_MODEL,
         CliRouteKind::Antigravity => crate::antigravity::DEFAULT_AGY_MODEL,
@@ -199,6 +211,12 @@ fn pick_model(req: &Value, meta: Option<&SessionMeta>, kind: CliRouteKind) -> Re
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .or_else(|| meta.filter(|m| meta_kind(Some(m)) == Some(kind)).and_then(|m| m.default_model.clone()))
+        .or_else(|| {
+            ui.agent_models
+                .get("orchestrator")
+                .filter(|s| CliRouteKind::from_provider(&s.provider) == Some(kind))
+                .map(|s| s.model.clone())
+        })
         .unwrap_or_else(|| default.to_string());
     let ok = match kind {
         CliRouteKind::Claude => {
@@ -355,7 +373,8 @@ pub(crate) fn run_cli_turn(
     let cli_exe = vendor.locate(explicit_exe, &env_lookup)?;
     let core_exe = resolve_core_exe(&state.cfg)?;
     let meta = state.load_meta(session_id);
-    let model = pick_model(req, meta.as_ref(), kind)?;
+    let ui = state.load_ui_settings();
+    let model = pick_model(req, meta.as_ref(), &ui, kind)?;
     let (reasoning_effort, subagent) =
         crate::subagents::resolve_turn_options(state, session_id, req, meta);
     let research = Arc::new(state.research_env_for_session(session_id)?);
