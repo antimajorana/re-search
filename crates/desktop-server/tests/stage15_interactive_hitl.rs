@@ -504,3 +504,44 @@ fn explain_promote_updates_conventions_and_steers_or_returns_prompt() {
     assert!(evs.iter().any(|e| e.kind == "human.steer" && e.payload["text"] == "Drop O(a^2) surface terms"));
     srv.shutdown();
 }
+
+#[test]
+fn session_conventions_put_updates_and_clears_resumed_orchestrator() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = EnvGuard::clear_providers();
+    let mock = ScriptedMock::start(Box::new(|_path, body| {
+        let idx = last_user_text(body);
+        anthropic_text("claude-haiku-4-5", &format!("Ack: {idx}"))
+    }));
+
+    let (_tmp, data_dir, srv, client) = setup_server(&mock.base_url, json!({ "keys": { "anthropic": "sk-ant-s15-t5" } }));
+    assert_eq!(desktop_server::subagents::normalize_rigor(Some("interactive")).unwrap().as_deref(), Some("interactive"));
+
+    let sid = client.create_session("Session Conventions Sync");
+    let mut sse = client.sse(&sid);
+    client.post_message(&sid, json!({ "prompt": "Turn one", "provider": "anthropic", "model": "claude-haiku-4-5", "verification_mode": false }));
+    sse.wait_event_since(0, "turn_complete", Duration::from_secs(10));
+    client.wait_idle(&sid);
+
+    let (st_put, put_v, put_raw) = client.req("PUT", &format!("/api/sessions/{sid}/conventions"), Some(&json!({ "pinned_conventions": "Signature (-,+,+,+)" })));
+    assert_eq!((st_put, put_v["pinned_conventions"].as_str()), (200, Some("Signature (-,+,+,+)")), "{put_raw}");
+    let m2 = sse.len();
+    client.post_message(&sid, json!({ "prompt": "Turn two", "provider": "anthropic", "model": "claude-haiku-4-5", "verification_mode": false }));
+    sse.wait_event_since(m2, "turn_complete", Duration::from_secs(10));
+    client.wait_idle(&sid);
+
+    let (st_clr, clr_v, _) = client.req("PUT", &format!("/api/sessions/{sid}/conventions"), Some(&json!({ "pinned_conventions": "" })));
+    assert_eq!((st_clr, clr_v["pinned_conventions"].as_str()), (200, Some("")));
+    let m3 = sse.len();
+    client.post_message(&sid, json!({ "prompt": "Turn three", "provider": "anthropic", "model": "claude-haiku-4-5", "verification_mode": false }));
+    sse.wait_event_since(m3, "turn_complete", Duration::from_secs(10));
+    client.wait_idle(&sid);
+
+    let cap = mock.captured();
+    assert_eq!(cap.len(), 3);
+    assert!(!system_text(&cap[0].1).contains("<pinned_conventions>"));
+    assert!(system_text(&cap[1].1).contains("<pinned_conventions>\nSignature (-,+,+,+)\n</pinned_conventions>"));
+    assert!(!system_text(&cap[2].1).contains("<pinned_conventions>"));
+    verify_ledger_clean(&data_dir, &sid);
+    srv.shutdown();
+}

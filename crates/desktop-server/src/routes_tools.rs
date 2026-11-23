@@ -96,16 +96,20 @@ pub fn handle_workspace(
     }
 
     let ws_root = env.workspace_root.as_ref().map(|p| p.display().to_string());
-    let res = match handle_fs_list(
-        &env,
-        session_id,
-        &json!({ "root": root, "recursive": true, "max_entries": 1000 }),
-    ) {
-        Ok(v) => v,
-        Err(msg) if msg.contains("no workspace attached") && root == "workspace" => {
-            json!({ "entries": [] })
+    let res = if root == "workspace" && env.workspace_root.is_none() {
+        json!({ "entries": [] })
+    } else {
+        match handle_fs_list(
+            &env,
+            session_id,
+            &json!({ "root": root, "recursive": true, "max_entries": 1000 }),
+        ) {
+            Ok(v) => v,
+            Err(msg) if msg.contains("no workspace") && root == "workspace" => {
+                json!({ "entries": [] })
+            }
+            Err(e) => return Err(bad(e)),
         }
-        Err(e) => return Err(bad(e)),
     };
     let entries = res.get("entries").cloned().unwrap_or_else(|| json!([]));
     Ok((

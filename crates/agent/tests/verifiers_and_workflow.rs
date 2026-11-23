@@ -175,6 +175,15 @@ fn guardrails_masking_conventions_computation_and_final_answer_gates() {
     assert!(sys.contains("mostly-plus metric"));
     assert!(sys.contains("<pinned_conventions>"));
 
+    let mut dyn_sys = "Base prompt.".to_string();
+    agent::upsert_pinned_conventions_in_prompt(&mut dyn_sys, Some("Metric (-,+,+,+)")).unwrap();
+    assert!(dyn_sys.contains("<pinned_conventions>\nMetric (-,+,+,+)\n</pinned_conventions>"), "{dyn_sys}");
+    agent::upsert_pinned_conventions_in_prompt(&mut dyn_sys, Some("Natural units")).unwrap();
+    assert!(!dyn_sys.contains("Metric (-,+,+,+)") && dyn_sys.contains("<pinned_conventions>\nNatural units\n</pinned_conventions>"), "{dyn_sys}");
+    assert!(agent::upsert_pinned_conventions_in_prompt(&mut dyn_sys, Some(&"x".repeat(2001))).is_err());
+    agent::upsert_pinned_conventions_in_prompt(&mut dyn_sys, Some("   ")).unwrap();
+    assert_eq!(dyn_sys, "Base prompt.");
+
     // Stepped tool-output masking keeps the newest `keep_recent` intact and masks older ones.
     let mut msgs = Vec::new();
     for i in 0..5 {

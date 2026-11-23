@@ -272,11 +272,18 @@ function appendSidetalkPair(question, answer) {
       if (!currentSessionId) return;
       pinBtn.disabled = true;
       try {
-        const resp = await api.promoteExplain(currentSessionId, { target: 'conventions', text: answer });
+        const clean = ansText.length > 1500 ? `${ansText.slice(0, 1500).trimEnd()}…` : ansText;
+        const resp = await api.promoteExplain(currentSessionId, { target: 'conventions', text: clean });
         if (typeof callbacks.onConventionsPromoted === 'function') callbacks.onConventionsPromoted(resp);
-        notifyFn('Pinned Explain note to conventions.');
+        notifyFn(ansText.length > 1500 ? 'Pinned trimmed Explain excerpt to session conventions.' : 'Pinned Explain note to conventions.');
       } catch (err) {
-        notifyFn(`Could not pin to conventions: ${err.message}`);
+        if (err && err.status === 400 && /2000|exceeds/i.test(err.message || '')) {
+          notifyFn('Conventions limit (2000 chars) reached — trim existing conventions in the Conventions popover.');
+          const pop = document.getElementById('conventions-popover');
+          if (pop && pop.hidden) document.getElementById('conventions-btn')?.click();
+        } else {
+          notifyFn(`Could not pin to conventions: ${err.message}`);
+        }
       } finally {
         pinBtn.disabled = false;
       }
@@ -291,7 +298,8 @@ function appendSidetalkPair(question, answer) {
       if (!currentSessionId) return;
       sendBtn.disabled = true;
       try {
-        const resp = await api.promoteExplain(currentSessionId, { target: 'steer', text: answer });
+        const sendText = ansText.length > 3900 ? `${ansText.slice(0, 3900).trimEnd()}…` : ansText;
+        const resp = await api.promoteExplain(currentSessionId, { target: 'steer', text: sendText });
         if (resp && resp.mode === 'steer') {
           notifyFn('Sent to active Orchestrator as live steer.');
         } else {

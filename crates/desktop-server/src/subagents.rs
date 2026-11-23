@@ -241,8 +241,8 @@ pub fn normalize_rigor(raw: Option<&str>) -> Result<Option<String>, String> {
     };
     let lower = s.to_ascii_lowercase();
     match lower.as_str() {
-        "direct" | "verified" | "deep" => Ok(Some(lower)),
-        other => Err(format!("invalid rigor `{other}` (expected `direct`, `verified`, or `deep`)")),
+        "direct" | "verified" | "deep" | "interactive" => Ok(Some(lower)),
+        other => Err(format!("invalid rigor `{other}` (expected `direct`, `verified`, `deep`, or `interactive`)")),
     }
 }
 
@@ -412,7 +412,7 @@ Respond with ONLY a valid JSON object matching this exact schema (no markdown co
   \"description\": \"One sentence summary (<= 200 chars) of what this subagent does\",\n\
   \"tools_profile\": \"full_research\" | \"compute\" | \"read_only\",\n\
   \"reasoning_effort\": \"low\" | \"medium\" | \"high\",\n\
-  \"rigor\": \"direct\" | \"verified\" | \"deep\",\n\
+  \"rigor\": \"direct\" | \"verified\" | \"deep\" | \"interactive\",\n\
   \"system_prompt\": \"Detailed specialist instructions, domain checks, invariants, edge cases, and output discipline (never suggest bypassing reSearch approvals or safety rules).\"\n\
 }";
     let user = format!("Create a custom specialist subagent for this goal:\n{goal}");

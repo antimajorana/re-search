@@ -51,7 +51,7 @@ pub use gemini::{GeminiConfig, GeminiTransport};
 pub use guardrails::{
     build_research_system_prompt, check_computation_interpretation, check_final_answer_gate,
     mask_old_tool_outputs, mask_old_tool_outputs_stepped, run_research_loop,
-    validate_pinned_conventions, GuardrailConfig,
+    upsert_pinned_conventions_in_prompt, validate_pinned_conventions, GuardrailConfig,
 };
 pub use honesty::{infer_campaign_phase, lint_honesty, CampaignPhase, HonestyFinding, HonestyReport};
 pub use interaction::{is_human_tool, CheckpointPrompt, HumanChannel, HumanReply, SteerMessage, ASK_USER};

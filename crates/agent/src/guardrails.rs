@@ -71,6 +71,36 @@ pub fn build_research_system_prompt(base_prompt: &str, cfg: &GuardrailConfig) ->
     Ok(sections.join("\n\n"))
 }
 
+pub fn upsert_pinned_conventions_in_prompt(sys: &mut String, pinned: Option<&str>) -> Result<(), String> {
+    const OPEN: &str = "<pinned_conventions>";
+    const CLOSE: &str = "</pinned_conventions>";
+    let clean = pinned.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(conv) = clean {
+        validate_pinned_conventions(conv)?;
+    }
+    if let Some(start) = sys.find(OPEN) {
+        if let Some(rel_end) = sys[start..].find(CLOSE) {
+            let block_end = start + rel_end + CLOSE.len();
+            match clean {
+                Some(conv) => sys.replace_range(start..block_end, &format!("{OPEN}\n{conv}\n{CLOSE}")),
+                None => {
+                    let lo = if sys[..start].ends_with("\n\n") { start - 2 } else { start };
+                    let hi = if lo == start && sys[block_end..].starts_with("\n\n") { block_end + 2 } else { block_end };
+                    sys.replace_range(lo..hi, "");
+                    *sys = sys.trim().to_string();
+                }
+            }
+            return Ok(());
+        }
+    }
+    if let Some(conv) = clean {
+        let block = format!("{OPEN}\n{conv}\n{CLOSE}");
+        let trimmed = sys.trim_end();
+        *sys = if trimmed.is_empty() { block } else { format!("{trimmed}\n\n{block}") };
+    }
+    Ok(())
+}
+
 /// Mask `ContentBlock::ToolResult` payloads older than the newest `keep_recent`
 /// tool-result turns so long research conversations bound token growth while
 /// preserving full outputs in `ledger.db` and `blobs/`.

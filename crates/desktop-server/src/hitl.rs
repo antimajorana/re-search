@@ -196,8 +196,12 @@ fn opt_str_field(val: &Value, key: &str) -> Result<Option<String>, (u16, String)
     }
 }
 
-fn is_turn_active(state: &DesktopState, session_id: &str) -> Result<bool, (u16, String)> {
-    state.active_turns.lock().map(|s| s.contains(session_id)).map_err(|_| internal("active turn lock poisoned"))
+fn is_api_turn_active(state: &DesktopState, session_id: &str) -> Result<bool, (u16, String)> {
+    state.api_turns.lock().map(|m| m.contains_key(session_id)).map_err(|_| internal("api_turns lock poisoned"))
+}
+
+fn is_cli_turn_active(state: &DesktopState, session_id: &str) -> Result<bool, (u16, String)> {
+    state.cli_turns.lock().map(|m| m.contains_key(session_id)).map_err(|_| internal("cli_turns lock poisoned"))
 }
 
 fn enqueue_and_emit_steer(state: &DesktopState, session_id: &str, text: String) -> SteerMessage {
@@ -223,11 +227,36 @@ pub fn handle_post_steer(state: &DesktopState, session_id: &str, body: &[u8]) ->
     validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
     let val = parse_json_body(body)?;
     let text = validate_nonempty_text(&val)?;
-    if !is_turn_active(state, session_id)? {
-        return Err((409, "no active turn to steer; send a normal message instead".into()));
+    if is_cli_turn_active(state, session_id)? {
+        return Err(conflict("live steering is only supported on in-core API/ChatGPT sessions, not subscription-CLI routes"));
+    }
+    if !is_api_turn_active(state, session_id)? {
+        return Err(conflict("no active turn to steer; send a normal message instead"));
     }
     let msg = enqueue_and_emit_steer(state, session_id, text);
     Ok((202, json!({ "ok": true, "steer": msg })))
+}
+
+pub fn handle_put_session_conventions(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiResult {
+    validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
+    if !state.session_exists(session_id).map_err(internal)? {
+        return Err(not_found(format!("session `{session_id}` not found")));
+    }
+    let val = parse_json_body(body)?;
+    let trimmed = match val.get("pinned_conventions") {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) => s.trim().to_string(),
+        Some(_) => return Err(bad("`pinned_conventions` must be a string or null")),
+    };
+    if !trimmed.is_empty() {
+        agent::validate_pinned_conventions(&trimmed).map_err(bad)?;
+    }
+    let mut meta = state.load_meta(session_id).unwrap_or_else(|| SessionMeta {
+        id: session_id.to_string(), title: session_id.to_string(), created_ms: now_ms(), ..SessionMeta::default()
+    });
+    meta.pinned_conventions = Some(trimmed.clone());
+    state.save_meta(&meta).map_err(internal)?;
+    Ok((200, json!({ "ok": true, "session": session_id, "pinned_conventions": trimmed })))
 }
 
 pub fn handle_answer_checkpoint(state: &DesktopState, session_id: &str, checkpoint_id: &str, body: &[u8]) -> ApiResult {
@@ -283,7 +312,7 @@ pub fn handle_explain_promote(state: &DesktopState, session_id: &str, body: &[u8
         return Ok((200, json!({ "ok": true, "target": "conventions", "pinned_conventions": combined })));
     }
     record_explain_promoted(state, session_id, target, &text)?;
-    if target == "steer" && is_turn_active(state, session_id)? {
+    if target == "steer" && is_api_turn_active(state, session_id)? {
         let msg = enqueue_and_emit_steer(state, session_id, text);
         return Ok((202, json!({ "ok": true, "mode": "steer", "steer": msg })));
     }
@@ -326,5 +355,28 @@ mod tests {
         let cancelled = waiter.join().unwrap();
         assert!(cancelled.cancelled && cancelled.text == "stopped by user");
         assert!(hub.drain_steers("sess-1").is_empty() && hub.list_pending("sess-1").is_empty());
+    }
+
+    #[test]
+    fn steer_rejects_cli_routes_and_accepts_api_turns() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cfg = crate::DesktopConfig {
+            port: 0, data_dir: tmp.path().to_path_buf(), workspace_root: None, python: None, worker_script: None,
+            api_base_override: None, literature_endpoints: research_tools::LiteratureEndpoints::default(),
+            open_window: false, print_url_json: false, eval_timeout_s: 30, core_exe: None, claude_exe: None, agy_exe: None,
+            connection_env: Some(std::collections::BTreeMap::new()), chatgpt_test: Some(crate::chatgpt::offline_test_hooks()),
+        };
+        let st = Arc::new(DesktopState::new(cfg.clone(), crate::auth::AuthGuard::new(1).unwrap(), Arc::new(crate::sse::SseHub::new()), crate::chatgpt::ChatGptHub::new(&cfg).unwrap()));
+        let sid_cli = "s-cli-steer";
+        st.save_meta(&SessionMeta { id: sid_cli.into(), title: "CLI".into(), created_ms: 1, ..SessionMeta::default() }).unwrap();
+        st.active_turns.lock().unwrap().insert(sid_cli.into());
+        st.cli_turns.lock().unwrap().insert(sid_cli.into(), (crate::cli_turn::CliRouteKind::Claude, cli_route::StopHandle::new()));
+
+        let err = handle_post_steer(&st, sid_cli, br#"{"text":"redirect"}"#).unwrap_err();
+        assert_eq!(err.0, 409);
+        assert!(err.1.contains("subscription-CLI"), "{}", err.1);
+        let (code, prom) = handle_explain_promote(&st, sid_cli, br#"{"target":"steer","text":"note"}"#).unwrap();
+        assert_eq!((code, prom["mode"].as_str()), (200, Some("prompt")));
+        assert!(st.hitl.drain_steers(sid_cli).is_empty());
     }
 }

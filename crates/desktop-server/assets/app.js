@@ -8,7 +8,7 @@ import {
   removeOptimisticUserMessage, renderApprovalCard, renderSessionStream, resetLiveTurnState,
   resolveApprovalCard, setStreamStatus,
 } from '/assets/stream.js';
-import { initComposer, setComposerBusy, setComposerPrompt } from '/assets/composer.js';
+import { initComposer, setComposerBusy, setComposerPrompt, setComposerRoute } from '/assets/composer.js';
 import { applySession, getModelChoice, initModelPicker, loadModels, noModelReason, rememberForSession } from '/assets/model_picker.js';
 import { initConnect, openConnect } from '/assets/connect.js';
 import { applySessionEffort, initEffortPicker, openEffortWindow, rememberEffortForSession, setReasoningEffort } from '/assets/effort_picker.js';
@@ -46,6 +46,8 @@ async function boot() {
   wireShellControls();
   wireCanvasTabs();
   wirePostMessageBridge();
+  window.addEventListener('pagehide', closeSse);
+  window.addEventListener('beforeunload', closeSse);
 
   initSessionRail({ onFilterMode: (mode) => { state.railFilterMode = mode; renderSessionList(); } });
 
@@ -141,7 +143,7 @@ async function boot() {
     return;
   }
 
-  initWorkbench({ onNotify: showToast, onConnectionsUpdated: () => refreshEmptyHeroIfVisible() });
+  initWorkbench({ onNotify: showToast, onConnectionsUpdated: () => refreshEmptyHeroIfVisible(), getActiveSessionId: () => state.activeSessionId });
   await Promise.all([checkHealth(), loadModels(false), refreshSessionList(), loadSubagents()]);
 
   const firstActive = state.sessions.find((s) => !s.archived);
@@ -283,6 +285,8 @@ function resetToBlankState() {
   renderSessionGrantsPill(el.grantsPill, []);
   syncWorkspaceIndicators('');
   applySessionTelemetry(null, false);
+  refreshConventionsState();
+  setComposerRoute(null);
   setComposerBusy(false);
   setStreamStatus('Ready', 'ok');
   updateCanvasTabCounts({ dag: 0, sources: 0, sidetalk: 0 });
@@ -371,9 +375,9 @@ async function selectSession(id) {
     const messageStreamEl = document.getElementById('message-stream');
     pendingCps.forEach((cp) => renderCheckpointCard(messageStreamEl, id, cp, checkpointOpts(id)));
     applySession(id, sess);
+    setComposerRoute(sess.route || null);
     applySessionEffort(id, sess);
-    if (typeof sess?.meta?.pinned_conventions === 'string') refreshConventionsState(sess.meta.pinned_conventions);
-    else refreshConventionsState();
+    refreshConventionsState(typeof sess?.meta?.pinned_conventions === 'string' ? sess.meta.pinned_conventions : null);
     applySessionTelemetry(sess.stats, Array.isArray(sess.messages) && sess.messages.length > 0);
     const isRunning = Boolean(sess.running);
     const hasApprovals = Boolean(sess.pending_approvals && sess.pending_approvals.length > 0);
@@ -439,8 +443,6 @@ function connectSessionSse(id) {
     turn_complete: async (d) => {
       if (state.activeSessionId !== id) return;
       finalizeLiveThinking();
-      setComposerBusy(false);
-      setStreamStatus('Ready', 'ok');
       try {
         const sess = await api.getSession(id);
         if (state.activeSessionId !== id) return;
@@ -458,6 +460,7 @@ function connectSessionSse(id) {
           resetLiveTurnState();
         }
         applySession(id, sess);
+        setComposerRoute(sess.route || null);
         finishLivePipeline('ok', sess && sess.stats);
       } catch {
         if (state.activeSessionId !== id) return;
@@ -466,6 +469,8 @@ function connectSessionSse(id) {
         finishLivePipeline('ok', null);
       }
       if (state.activeSessionId === id) {
+        setComposerBusy(false);
+        setStreamStatus('Ready', 'ok');
         await Promise.all([refreshSessionList(), refreshWorkspaceFiles(id), refreshDag(id), loadSessionSources(id)]);
       } else await refreshSessionList();
     },
@@ -495,13 +500,14 @@ async function refreshSessionRoute(id) {
   if (state.activeSessionId !== id) return;
   try {
     const sess = await api.getSession(id);
-    if (state.activeSessionId === id) applySession(id, sess);
+    if (state.activeSessionId === id) { applySession(id, sess); setComposerRoute(sess.route || null); }
   } catch { /* ignore */ }
 }
 
 async function handleSendPrompt(sessionId, prompt, opts) {
   resetLiveTurnState();
   appendUserMessage(prompt, { optimistic: true });
+  setComposerRoute(opts.provider || null);
   setComposerBusy(true);
   setStreamStatus('Thinking...', 'accent');
   startLivePipeline(opts);

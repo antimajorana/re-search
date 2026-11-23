@@ -202,6 +202,12 @@ export function promoteExplain(sessionId, payload) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(sessionId)}/explain/promote`, payload);
 }
 
+export function setSessionConventions(sessionId, pinnedConventions) {
+  return rawJson('PUT', `/api/sessions/${encodeURIComponent(sessionId)}/conventions`, {
+    pinned_conventions: pinnedConventions,
+  });
+}
+
 export function getProviderSettings() {
   return rawJson('GET', '/api/settings/providers');
 }

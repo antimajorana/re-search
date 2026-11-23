@@ -23,6 +23,8 @@ let callbacks = {};
 let stagedFiles = [];
 let submitting = false;
 let turnRunning = false;
+let defaultSendHtml = '';
+let currentRoute = null;
 let defaultPlaceholder = 'Ask a derivation, run SymPy, or audit arXiv TeX...';
 
 export function initComposer(opts = {}) {
@@ -31,6 +33,7 @@ export function initComposer(opts = {}) {
   inputEl = document.getElementById('composer-input');
   if (inputEl && inputEl.placeholder) defaultPlaceholder = inputEl.placeholder;
   sendEl = document.getElementById('composer-send');
+  defaultSendHtml = sendEl ? sendEl.innerHTML : 'Send';
   stopEl = document.getElementById('composer-stop');
   topbarStopEl = document.getElementById('topbar-stop-btn');
   uploadEl = document.getElementById('composer-upload-input');
@@ -127,17 +130,30 @@ export function setComposerPrompt(text, focusInput = true) {
   if (focusInput) inputEl.focus();
 }
 
+const CLI_ROUTES = new Set(['claude-cli', 'claude-code-cli', 'antigravity']);
+const canSteer = () => !CLI_ROUTES.has(currentRoute);
+
 function syncButtons() {
+  const steerMode = turnRunning && canSteer();
   if (sendEl) {
-    sendEl.disabled = submitting;
+    sendEl.disabled = submitting || (turnRunning && !canSteer());
     sendEl.hidden = false;
-    sendEl.textContent = turnRunning ? 'Steer' : 'Send';
-    sendEl.classList.toggle('is-steer', turnRunning);
-    sendEl.title = turnRunning ? 'Send live steer to active turn (Enter)' : 'Send prompt (Enter)';
-    sendEl.setAttribute('aria-label', turnRunning ? 'Steer active turn' : 'Send prompt');
+    if (steerMode) {
+      sendEl.textContent = 'Steer';
+      sendEl.classList.add('is-steer');
+      sendEl.title = 'Send live steer to active turn (Enter)';
+      sendEl.setAttribute('aria-label', 'Steer active turn');
+    } else {
+      if (defaultSendHtml && !sendEl.querySelector('svg')) sendEl.innerHTML = defaultSendHtml;
+      sendEl.classList.remove('is-steer');
+      sendEl.title = turnRunning
+        ? 'Live steering is only available on in-core API/ChatGPT sessions'
+        : 'Send prompt (Enter)';
+      sendEl.setAttribute('aria-label', 'Send prompt');
+    }
   }
   if (inputEl) {
-    inputEl.placeholder = turnRunning ? 'Steer the active turn (injected at next step)...' : defaultPlaceholder;
+    inputEl.placeholder = steerMode ? 'Steer the active turn (injected at next step)...' : defaultPlaceholder;
   }
   if (stopEl) {
     stopEl.hidden = !turnRunning;
@@ -151,6 +167,11 @@ function syncButtons() {
 
 export function setComposerBusy(busy) {
   turnRunning = !!busy;
+  syncButtons();
+}
+
+export function setComposerRoute(route) {
+  currentRoute = route || null;
   syncButtons();
 }
 
@@ -253,6 +274,10 @@ async function flushStagedUploads(sessionId) {
 async function handleSubmit() {
   if (submitting) return;
   if (turnRunning) {
+    if (!canSteer()) {
+      notify('Live steering is only available on in-core API/ChatGPT sessions.');
+      return;
+    }
     const text = inputEl ? inputEl.value.trim() : '';
     if (!text || typeof callbacks.onSteerTurn !== 'function') return;
     try {

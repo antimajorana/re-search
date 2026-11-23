@@ -208,6 +208,10 @@ pub fn resume_autonomous_research_loop(
             }
         }
     }
+    crate::guardrails::upsert_pinned_conventions_in_prompt(
+        &mut system_prompt,
+        auto_cfg.guardrails.pinned_conventions.as_deref(),
+    )?;
     if roles.human.is_some() {
         crate::interaction::upsert_interactive_prompt_section(
             &mut system_prompt,
@@ -243,6 +247,7 @@ pub fn resume_autonomous_research_loop(
             "use_strategist": auto_cfg.use_strategist,
             "interactive_plan_mode": auto_cfg.interactive_plan_mode,
             "pause_after_explore": auto_cfg.pause_after_explore,
+            "pinned_conventions": auto_cfg.guardrails.pinned_conventions,
             "history_messages": messages.len(),
             "tool_defs": tool_defs_json(&defs),
         }),

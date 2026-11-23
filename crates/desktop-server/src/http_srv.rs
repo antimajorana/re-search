@@ -239,6 +239,9 @@ fn dispatch_api(
         ("POST", ["api", "sessions", id, "explain", "promote"]) => {
             write_api_res(&mut stream, crate::hitl::handle_explain_promote(state, id, &req.body));
         }
+        ("PUT", ["api", "sessions", id, "conventions"]) => {
+            write_api_res(&mut stream, crate::hitl::handle_put_session_conventions(state, id, &req.body));
+        }
         ("POST", ["api", "sessions", id, "stop"]) => {
             write_api_res(&mut stream, crate::turn_control::handle_stop_turn(state, id));
         }

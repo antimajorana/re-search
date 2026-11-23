@@ -356,8 +356,8 @@ textarea.text-input { height: auto; padding: 8px 10px; }
 .form-grid { display: grid; gap: 12px; }
 .form-row { display: grid; gap: 4px; }
 .form-row label { font-size: 12.5px; font-weight: 500; color: var(--ink-secondary); }
-.toast-stack { position: fixed; top: 16px; right: 16px; z-index: 80; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
-.toast-item { padding: 9px 14px; border-radius: var(--radius-sm); background: var(--bg-elevated); border: 1px solid var(--border-strong); box-shadow: var(--shadow-md); font-size: 13px; color: var(--ink-primary); }
+.toast-stack { position: fixed; top: 56px; right: 16px; z-index: 80; display: flex; flex-direction: column; gap: 8px; max-width: min(380px, calc(100vw - 32px)); pointer-events: none; }
+.toast-item { padding: 9px 14px; border-radius: var(--radius-sm); background: var(--bg-elevated); border: 1px solid var(--border-strong); box-shadow: var(--shadow-md); font-size: 12.5px; line-height: 1.4; color: var(--ink-primary); overflow-wrap: anywhere; }
 
 /* Model picker (composer) and the subscription-route note beside it */
 .model-picker { max-width: 196px; min-width: 120px; text-overflow: ellipsis; }
@@ -426,7 +426,9 @@ textarea.text-input { height: auto; padding: 8px 10px; }
 .branch-card.is-selected { border-color: var(--accent); background: var(--accent-soft); }
 .branch-card-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12.5px; font-weight: 600; }
 .branch-approach { font-size: 13px; font-weight: 600; color: var(--ink-primary); }
-.branch-summary { font-size: 12px; color: var(--ink-secondary); line-height: 1.45; white-space: pre-wrap; max-height: 150px; overflow-y: auto; }
+.branch-summary { font-size: 12px; color: var(--ink-secondary); line-height: 1.45; max-height: 150px; overflow-y: auto; }
+.branch-summary.rich-prose p { margin: 0 0 4px; }
+.branch-summary.rich-prose p:last-child { margin-bottom: 0; }
 .branch-tools { display: flex; flex-wrap: wrap; gap: 4px; font-size: 11px; color: var(--ink-muted); }
 .steer-badge-row { display: flex; justify-content: flex-end; }
 .steer-badge-pill {

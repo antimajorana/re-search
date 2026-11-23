@@ -81,8 +81,9 @@ export function renderSessionStream(sessionId, sessionPayload) {
   const messages = Array.isArray(sessionPayload?.messages) ? sessionPayload.messages : [];
   const traces = Array.isArray(sessionPayload?.traces) ? sessionPayload.traces : [];
   const pending = Array.isArray(sessionPayload?.pending_approvals) ? sessionPayload.pending_approvals : [];
+  const pendingCps = Array.isArray(sessionPayload?.pending_checkpoints) ? sessionPayload.pending_checkpoints : [];
 
-  if (messages.length === 0 && traces.length === 0 && pending.length === 0) {
+  if (messages.length === 0 && traces.length === 0 && pending.length === 0 && pendingCps.length === 0) {
     renderEmptyHero(inner);
     return;
   }

@@ -28,6 +28,7 @@ export function initWorkbench(opts = {}) {
   wireModePresets();
   wireConventionsPopover();
   wireCanvasResizerAndViews();
+  wireResponsiveDrawers();
   wireKeyboardShortcuts();
   refreshConventionsState();
   refreshConnectionBadge(false);
@@ -161,10 +162,14 @@ export function applySessionTelemetry(stats, hasMessages = false) {
   const s = stats || {};
   const proofCount = Number(s.proof_entries) || 0;
   const rounds = Number(s.verification_rounds) || 0;
+  const delegCount = Number(s.delegation_count) || 0;
+  const honestyWarn = Number(s.honesty_warnings) || 0;
   const vStatus = String(s.verified_status || 'none');
   const tokTotal = (Number(s.input_tokens) || 0) + (Number(s.output_tokens) || 0);
+  const workerTok = (Number(s.worker_input_tokens) || 0) + (Number(s.worker_output_tokens) || 0);
+  const allTok = tokTotal + workerTok;
 
-  if (!hasMessages && proofCount === 0 && rounds === 0) {
+  if (!hasMessages && proofCount === 0 && rounds === 0 && delegCount === 0 && honestyWarn === 0) {
     bar.hidden = true;
     return;
   }
@@ -181,10 +186,12 @@ export function applySessionTelemetry(stats, hasMessages = false) {
   if (vStatus === 'verified') metaParts.push('✓ Verified');
   else if (vStatus === 'unverified') metaParts.push('⚠ Unverified');
   if (proofCount > 0) metaParts.push(`${proofCount} DAG step${proofCount === 1 ? '' : 's'}`);
+  if (delegCount > 0) metaParts.push(`${delegCount} worker${delegCount === 1 ? '' : 's'}`);
+  if (honestyWarn > 0) metaParts.push(`⚠ ${honestyWarn} honesty`);
   if (rounds > 0) metaParts.push(`${rounds} check${rounds === 1 ? '' : 's'}`);
-  if (tokTotal > 0) {
-    const tokFmt = tokTotal >= 1000 ? `${(tokTotal / 1000).toFixed(1)}k tok` : `${tokTotal} tok`;
-    metaParts.push(tokFmt);
+  if (allTok > 0) {
+    const tokFmt = allTok >= 1000 ? `${(allTok / 1000).toFixed(1)}k tok` : `${allTok} tok`;
+    metaParts.push(workerTok > 0 ? `${tokFmt} (+${workerTok >= 1000 ? `${(workerTok / 1000).toFixed(1)}k` : workerTok} w)` : tokFmt);
   }
   updatePipelineMeta(metaParts.join(' · ') || 'Session ready', null);
 }
@@ -222,6 +229,7 @@ function wireModePresets() {
         if (group) group.removeAttribute('data-interactive');
         if (vChip) vChip.setAttribute('aria-pressed', mode === 'direct' ? 'false' : 'true');
         if (sChip) sChip.setAttribute('aria-pressed', mode === 'deep' ? 'true' : 'false');
+        if (pauseChip) pauseChip.setAttribute('aria-pressed', 'false');
       }
       syncFromChips();
     });
@@ -233,7 +241,12 @@ function wireModePresets() {
     });
   }
   for (const chip of [vChip, sChip]) {
-    if (chip) chip.addEventListener('click', () => setTimeout(syncFromChips, 0));
+    if (chip) {
+      chip.addEventListener('click', () => {
+        if (group) group.removeAttribute('data-interactive');
+        syncFromChips();
+      });
+    }
   }
   syncFromChips();
 }
@@ -293,12 +306,19 @@ function wireConventionsPopover() {
   if (saveBtn && input) {
     saveBtn.addEventListener('click', async () => {
       saveBtn.disabled = true;
+      const trimmed = input.value.trim();
+      const sid = typeof callbacks.getActiveSessionId === 'function' ? callbacks.getActiveSessionId() : null;
       try {
-        await api.updateProviderSettings({ pinned_conventions: input.value.trim() });
-        currentConventions = input.value.trim();
+        if (sid) await api.setSessionConventions(sid, trimmed);
+        else await api.updateProviderSettings({ pinned_conventions: trimmed });
+        currentConventions = trimmed;
         syncConventionsIndicators();
         closePop();
-        notify(currentConventions ? 'Pinned conventions saved for prompts & Verifier.' : 'Pinned conventions cleared.');
+        notify(
+          sid
+            ? (trimmed ? 'Session conventions saved for Orchestrator, workers & Verifier.' : 'Session conventions cleared.')
+            : (trimmed ? 'Default conventions saved for prompts & Verifier.' : 'Default conventions cleared.')
+        );
       } catch (err) {
         notify(`Could not save conventions: ${err.message}`);
       } finally {
@@ -314,6 +334,21 @@ export async function refreshConventionsState(overrideText) {
     syncConventionsIndicators();
     return;
   }
+  const sid = overrideText !== null && typeof callbacks.getActiveSessionId === 'function'
+    ? callbacks.getActiveSessionId()
+    : null;
+  if (sid) {
+    try {
+      const sess = await api.getSession(sid);
+      if (typeof sess?.meta?.pinned_conventions === 'string') {
+        currentConventions = sess.meta.pinned_conventions;
+        syncConventionsIndicators();
+        return;
+      }
+    } catch {
+      // Fall back to global provider settings
+    }
+  }
   try {
     const s = await api.getProviderSettings();
     currentConventions = String((s && s.pinned_conventions) || '');
@@ -328,12 +363,13 @@ function syncConventionsIndicators() {
   const btn = document.getElementById('conventions-btn');
   const qInput = document.getElementById('quick-conventions-input');
   const advInput = document.getElementById('set-conventions');
+  const sid = typeof callbacks.getActiveSessionId === 'function' ? callbacks.getActiveSessionId() : null;
   if (btn) {
     btn.setAttribute('aria-pressed', has ? 'true' : 'false');
     btn.title = has ? `Pinned conventions active: ${currentConventions.slice(0, 120)}` : 'Pin metric signature, units, or notation conventions';
   }
   if (qInput && document.activeElement !== qInput) qInput.value = currentConventions;
-  if (advInput && document.activeElement !== advInput) advInput.value = currentConventions;
+  if (advInput && !sid && document.activeElement !== advInput) advInput.value = currentConventions;
 }
 
 // --- 4. Resizable Right Canvas + LaTeX View Switcher + Tab Badges ---
@@ -441,6 +477,41 @@ export async function refreshConnectionBadge(refresh = false) {
     callbacks.onConnectionsUpdated(connectedCount);
   }
   return connectedCount;
+}
+
+function wireResponsiveDrawers() {
+  const shell = document.getElementById('app-shell');
+  const railToggle = document.getElementById('rail-toggle');
+  const canvasToggle = document.getElementById('canvas-toggle');
+  if (!shell) return;
+  let wasNarrow1120 = null;
+  let wasNarrow780 = null;
+  const syncForWidth = () => {
+    const isNarrow1120 = window.innerWidth <= 1120;
+    const isNarrow780 = window.innerWidth <= 780;
+    if (isNarrow1120 && wasNarrow1120 !== true) {
+      shell.setAttribute('data-canvas-open', 'false');
+      if (canvasToggle) canvasToggle.setAttribute('aria-expanded', 'false');
+    }
+    if (isNarrow780 && wasNarrow780 !== true) {
+      shell.setAttribute('data-rail-open', 'false');
+    }
+    wasNarrow1120 = isNarrow1120;
+    wasNarrow780 = isNarrow780;
+  };
+  syncForWidth();
+  window.addEventListener('resize', syncForWidth);
+  railToggle?.addEventListener('click', () => {
+    if (window.innerWidth <= 960 && shell.getAttribute('data-rail-open') === 'true') {
+      shell.setAttribute('data-canvas-open', 'false');
+      if (canvasToggle) canvasToggle.setAttribute('aria-expanded', 'false');
+    }
+  });
+  canvasToggle?.addEventListener('click', () => {
+    if (window.innerWidth <= 960 && shell.getAttribute('data-canvas-open') === 'true') {
+      shell.setAttribute('data-rail-open', 'false');
+    }
+  });
 }
 
 function wireKeyboardShortcuts() {

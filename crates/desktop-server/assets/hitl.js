@@ -55,7 +55,7 @@ function buildBranchGridHtml(branches) {
           <span class="badge ${statusCls}">${statusTxt}</span>
         </div>
         <div class="branch-approach">${escapeHtml(b?.approach || `Approach ${num}`)}</div>
-        <div class="branch-summary">${escapeHtml(b?.summary || b?.error || '')}</div>
+        <div class="branch-summary rich-prose"></div>
         ${toolsHtml}
       </div>
     `;
@@ -111,6 +111,12 @@ export function renderCheckpointCard(streamEl, sessionId, prompt, { onResolved, 
   renderRichInto(card.querySelector('.checkpoint-question'), String(prompt.question || ''));
   if (prompt.context) {
     renderRichInto(card.querySelector('.checkpoint-context'), String(prompt.context));
+  }
+  if (branches.length) {
+    const sumEls = card.querySelectorAll('.branch-summary');
+    branches.forEach((b, idx) => {
+      if (sumEls[idx]) renderRichInto(sumEls[idx], String(b?.summary || b?.error || ''));
+    });
   }
 
   let selectedBranchOption = null;
