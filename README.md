@@ -1,34 +1,84 @@
 # reSearch
 
-A small, tamper-evident Rust research core and loopback desktop workbench for mathematics and theoretical physics. Symbolic/numerical checks run inside a zero-capability Windows 11 AppContainer sandbox (`sympy_eval`), while workspace inspection, document ingestion, arXiv/literature lookup, deterministic TeX/citation auditing, hash-chained proof graphs, counterfactual forking, reproducible exports, and the embedded desktop UI are orchestrated by the core supervisor.
+> **Core philosophy:** *Models propose; deterministic computations, independent verifiers, and tamper-evident ledgers decide.*
 
-**Read [THREAT-MODEL.md](THREAT-MODEL.md) for what AppContainer contains, how CSRF/workspace approvals work, and what remains outside the boundary.**
+**reSearch** is a small, tamper-evident Rust research core and loopback desktop workbench built for mathematics and theoretical physics. Instead of trusting a single chat thread to write proofs, run uncontained scripts on your machine, and grade its own homework, reSearch separates **generating ideas** from **executing code**, **auditing manuscripts**, and **certifying steps**.
 
-## How reSearch Is Designed (Architecture & Logic)
+Every Python/SymPy calculation runs inside a **zero-capability Windows 11 AppContainer sandbox** (`sympy_eval`), while local `.tex`/`.bib` workspace inspection, arXiv/literature ingestion, deterministic TeX/citation auditing, Lean 4 type-checking, hash-chained Proof DAGs, counterfactual branching, interactive human checkpoints, and the offline KaTeX UI are supervised by the Rust core.
 
-reSearch combines **OpenTorus** (fail-closed policy clamps, zero-capability Windows 11 AppContainer sandbox, loopback WebView2 isolation, and tamper-evident SHA-256 ledger), **open-math-harness** (context-isolated Orchestrator → Worker delegation, Ultramath parallel exploration, and deterministic Lean 4 checking with anti-cheat), and **solver-agent** (structured Campaign Phases, artifact-aware `honesty.lint`, and zero-bias verification) into four isolated layers so a model can never silently execute arbitrary code, mutate local files, or overclaim unverified evidence as proof:
+**Security boundary first:** Read [THREAT-MODEL.md](THREAT-MODEL.md) for what the AppContainer isolates, how CSRF and workspace approvals work, and what remains outside the boundary.
 
-```
+---
+
+## Contents
+
+1. [Why reSearch Exists (In Plain English)](#1-why-research-exists-in-plain-english)
+2. [Quick Start (3 Minutes)](#2-quick-start-3-minutes)
+3. [Mental Model: Follow One Derivation Through All 5 Layers](#3-mental-model-follow-one-derivation-through-all-5-layers)
+4. [Working Interactively: Modes, Live Steering & Explain](#4-working-interactively-modes-live-steering--explain)
+5. [Meet the Agents (Built-in Roles & Custom Subagents)](#5-meet-the-agents-built-in-roles--custom-subagents)
+6. [Tool & Computation Approvals](#6-tool--computation-approvals)
+7. [Connecting Providers, Billing Safety & Confinement](#7-connecting-providers-billing-safety--confinement)
+8. [Desktop Launch, Configuration & Headless Flags](#8-desktop-launch-configuration--headless-flags)
+9. [CLI Reference (`run`, `fork`, `diff`, `export`, `verify`)](#9-cli-reference-run-fork-diff-export-verify)
+10. [Codebase Map (13 Crates) & Running Tests](#10-codebase-map-13-crates--running-tests)
+11. [Licence](#11-licence)
+
+---
+
+## 1. Why reSearch Exists (In Plain English)
+
+Ordinary AI coding/chat assistants fail on serious mathematical and physics derivations in four predictable ways:
+
+| Failure Mode in Standard Chats | How reSearch Solves It |
+| --- | --- |
+| **Context bloat:** long SymPy tracebacks, huge arXiv `.tex` sources, and failed Lean attempts pollute the main conversation. | **Context-isolated Workers:** heavy SymPy retries, paper reading, Lean proofs, and parallel explorations run in clean short-lived worker contexts and return only concise verified summaries + `e-N` Proof-DAG IDs. |
+| **Self-grading bias:** the same context that dropped a minus sign also "verifies" its own final answer. | **Zero-bias Stateless Verifiers:** in `Verified`, `Deep`, and `Interactive` modes, a fresh Verifier sees only the prompt, the Proof DAG, `<pinned_conventions>`, Lean results, and deterministic `tex_audit` XML — never the solver's scratch reasoning. |
+| **"Evidence" dressed up as "proof":** saying *"SymPy confirmed / q.e.d."* when a check failed or never ran. | **Typed Proof DAG + Honesty Linter:** symbolic/numerical checks, literature facts, and proof steps have separate node types, and `honesty.lint` cross-checks final prose against actual ledger & artifact evidence. |
+| **Silent execution / local edits:** arbitrary Python or file writes happen behind your back. | **Fail-closed Policy + AppContainer:** every tool call crosses the Rust router (`policy`), is SHA-256 hash-chained into `ledger.db`, and Python runs inside a zero-capability AppContainer (no network, no user files, no DPAPI, no env secrets). |
+
+---
+
+## 2. Quick Start (3 Minutes)
+
+1. **Launch the desktop window:**
+   Run `re-search-app.exe` (or `re-search desktop` / Start menu shortcut **reSearch** on Windows 11, or `re-search ui` to open a single-use `http://127.0.0.1:<port>/?launch=...` tab in your default browser).
+2. **Connect at least one provider:**
+   Click **Settings & Guide → Providers** (bottom-left) and connect Sign in with ChatGPT, Claude Code, Anthropic/OpenAI/Gemini API, local Ollama, or (if explicitly acknowledged) Google Antigravity.
+3. **Set your math conventions & rigor:**
+   Click **Conventions** next to the composer to pin metric signatures, natural units, or Fourier prefactors, and pick a mode: **`Direct`**, **`✓ Verified`** (recommended default), **`✦ Deep`**, or **`Interactive`**.
+4. **Optionally attach a paper folder:**
+   Click **Workspace** to point the session at a local `.tex`/`.bib` directory (or drop `.tex`, `.bib`, `.pdf`, `.zip` files directly with **Attach**).
+5. **Run & inspect:**
+   Watch the live pipeline stepper (**Orchestrator → Proof DAG → Verifier → Strategist**), inspect equations in **Canvas → LaTeX / Proof DAG**, ask clarifying questions safely in **Explain**, or steer mid-turn.
+
+---
+
+## 3. Mental Model: Follow One Derivation Through All 5 Layers
+
+reSearch synthesizes three architectural patterns — **OpenTorus** (fail-closed policy clamps, AppContainer sandbox, loopback WebView2 isolation, SHA-256 ledger), **open-math-harness** (Orchestrator → Worker delegation, Ultramath parallel exploration, Lean 4 anti-cheat), and **solver-agent** (Campaign Phases, artifact-aware `honesty.lint`, zero-bias verification):
+
+```text
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ 1. Desktop Shell & Loopback Server (desktop-app + desktop-server)          │
 │    WebView2 locked to 127.0.0.1 (header CSRF + Origin) · Offline KaTeX UI  │
-│    Structured Delegation/Lean/Honesty Cards · Agents & Models · Sources    │
+│    Live Pipeline Bar · HITL Cards · Proof DAG / LaTeX / Sources / Explain  │
 └───────────────────────────────────┬────────────────────────────────────────┘
                                     │ spawns / supervises turn
 ┌───────────────────────────────────▼────────────────────────────────────────┐
 │ 2. Orchestrator, Workers & Zero-Bias Verification (agent / cli-route)      │
-│    Phases  │ INGEST → EXPLORE → COMPUTE → SYNTHESIZE → VERIFY → REVISE →   │
-│            │ COMPLETE                                                      │
-│    Workers │ Compute · Literature · Lean Prover · Parallel Explorer (2–4x) │
-│            │ + Custom Subagents (isolated contexts, no final_answer)       │
+│    Phases  │ INGEST -> EXPLORE -> COMPUTE -> SYNTHESIZE -> VERIFY ->       │
+│            │ REVISE -> COMPLETE                                            │
+│    Workers │ Compute · Literature · Lean Prover · Parallel Explorer (2-4x) │
+│            │ + Custom Subagents (isolated contexts; cannot finalize)       │
 │    Gates   │ lean_check (anti-cheat) · honesty.lint (evidence != proof)    │
-│            │ Stateless Step/Full Verifiers (≤3x) + Strategist (Deep mode)  │
+│            │ Stateless Step/Full Verifiers (<=3x) + Strategist (Deep mode) │
 └───────────────┬──────────────────────────────────────────┬─────────────────┘
                 │ every tool call goes through Router      │ append-only events
 ┌───────────────▼──────────────────────────┐   ┌───────────▼─────────────────┐
 │ 3. Fail-Closed Policy & Approval Router  │   │ 4. SHA-256 Proof-DAG Ledger │
 │    policy (Allow / Ask / Deny clamps)    │   │    Shared DAG · Provenance  │
-│    Desktop auto-approve / per-call UI    │   │    delegate.* + honesty.lint│
+│    Desktop auto-approve or per-call card │   │    delegate.* + honesty.lint│
 └───────────────┬──────────────────────────┘   └─────────────────────────────┘
                 │ sympy_eval only (EffectClass::ExecuteCode)
 ┌───────────────▼────────────────────────────────────────────────────────────┐
@@ -37,162 +87,100 @@ reSearch combines **OpenTorus** (fail-closed policy clamps, zero-capability Wind
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### How the SHA-256 Ledger Connects Isolated Workers
-- **Shared Proof-DAG Memory:** Delegated workers run in short-lived isolated contexts (so bulky SymPy tracebacks, arXiv downloads, Lean compiler loops, or parallel explorations never bloat the Orchestrator's window) and exchange verified state through typed Proof-DAG entries (`e-1`, `e-2`, …). Workers are barred in Rust from recursive delegation or recording `final_answer`.
-- **`evidence != proof` Anti-Overclaiming Gate:** Computations (`symbolic_computation` / `numerical_computation`) and literature lookups are typed separately from proved derivations/theorems. At the end of a turn, the artifact-aware **Honesty Linter** (`honesty.lint`) cross-checks claims in the response against actual Proof-DAG entries, `lean_check` outcomes, and workspace artifacts, surfacing a warning notice whenever evidence is misrepresented as proof.
-- **Zero-Bias Verification:** Stateless `Step Verifier` and `Full Solution Verifier` inspect only the problem, Proof-DAG dependencies, deterministic `tex_audit` XML, and `lean_check` results—never the Orchestrator's or workers' private chain-of-thought.
-- **Routing & Token Provenance:** Every delegated worker logs `delegate.start`, `delegate.turn`, and `delegate.end` events in `ledger.db` (plus raw model responses in content-addressed blobs), recording the resolved model, automatic smaller-model vs explicit per-agent `routing_reason`, input/output tokens, tools used, and produced `proof_entries`.
+Here is what happens step-by-step during a typical derivation:
 
-### 1. Agents in reSearch (Built-in + Custom Subagents)
-- **Orchestrator & Campaign Phases:** The primary research agent (`RESEARCH_SYSTEM_PROMPT`). Progresses through structured Campaign Phases (`INGEST -> EXPLORE -> COMPUTE -> SYNTHESIZE -> VERIFY -> REVISE -> COMPLETE`), delegates specialized subtasks to isolated workers, records typed Proof-DAG conclusions (`ledger_append`), and patches `.tex` manuscripts.
-- **Compute Worker (`delegate_compute`):** Isolated symbolic/numerical specialist running `sympy_eval`, `check_expression_sanity`, and computation `ledger_append` steps inside the AppContainer sandbox, returning verified values and `e-N` IDs.
-- **Literature Worker (`delegate_literature`):** Isolated literature and workspace reader running `arxiv_search`, `literature_search`, `doc_ingest`, and `fs_read` on large `.tex`/PDF extracts so bulky source text stays out of the Orchestrator's context.
-- **Lean Prover Worker (`delegate_lean`) & Lean 4 Checker (`lean_check` / `POST /api/sessions/{id}/lean/check`):** Drafts Lean 4 formalizations and runs deterministic Lean 4 checking with strict anti-cheat enforcement that blocks `sorry`, `admit`, and unproven/forbidden axioms (`sorryAx` / custom axioms) while reporting exact diagnostics and hints.
-- **Parallel Explorer / Ultramath (`delegate_explore`):** Spawns 2–4 candidate derivation or proof approaches concurrently in isolated branches, comparing outcomes, token usage, and generated Proof-DAG entries before returning branch summaries to the Orchestrator.
-- **Custom Subagent Delegation (`delegate_subagent`):** Invokes any user-saved custom subagent on a focused subtask within its configured `tools_profile`, model, and sandbox boundaries.
-- **Step Verifier & Full Solution Verifier:** Stateless zero-bias auditors inspecting individual Proof-DAG nodes (`depends_on` ancestors + `tex_audit` XML) or full-round solutions in **Verified** and **Deep** modes (up to 3 rounds) to catch missing assumptions, sign errors, or broken references.
-- **Research Strategist:** Advisory recovery planner invoked automatically in **Deep** mode when the Verifier rejects a draft, proposing structural repairs before revision.
-- **Honesty Linter (`honesty.lint`):** Artifact-aware post-turn check enforcing `evidence != proof` and flagging unverified or overclaimed statements in the UI stream and ledger.
-- **Proof Narrator & Explain Assistant:** **Proof Narrator** synthesizes an exposition sheet from accepted Proof-DAG steps (`Proof DAG -> Narrate Proof`); **Explain** answers questions about notation or `e-N` steps on an isolated thread without mutating the Proof DAG and exports `.md` (`explain_md`) or `.html` (`explain_html`).
-- **Per-Agent Models, Automatic Smaller-Model Routing & Subagent Builder:** Under **Settings -> Agents & Models**, worker roles (`compute_worker`, `literature_worker`, `lean_worker`, `explorer_worker`) default to **`Default (Auto Smaller Model)`** for fast, low-cost delegation while verification/narrative agents default to **`Default (Follow Orchestrator)`**, and every built-in agent can be pinned to a dedicated model (`agent_models`). You can also describe a specialist in plain English and invoke the **Subagent Builder Agent** (`POST /api/subagents/draft`) to save custom subagents in `<data_dir>/subagents.json` under the same `v0.4-research` policy and sandbox boundaries.
+1. **Structured Campaign Phases:** The Orchestrator moves explicitly through `INGEST -> EXPLORE -> COMPUTE -> SYNTHESIZE -> VERIFY -> REVISE -> COMPLETE`.
+2. **Delegation Without Context Pollution:** Instead of doing brute-force algebra inline, the Orchestrator calls `delegate_compute` (or `delegate_literature` / `delegate_lean` / `delegate_explore` / `delegate_subagent`). Each worker starts with a clean context, retries its own errors, logs `delegate.start` / `delegate.turn` / `delegate.end` with `routing_reason` and token usage, and writes durable `e-N` nodes (`symbolic_computation`, `numerical_computation`, etc.) into SQLite `ledger.db` (plus full transcripts as content-addressed SHA-256 blobs). Workers are **barred in Rust** from calling `delegate_*` recursively or writing `final_answer`.
+3. **Router & Sandbox Enforcement:** Whenever Python runs (`sympy_eval`), the Router hashes the canonical request + policy version + worker epoch, records an approval decision, and sends the code to a single `worker` running `sympy`, `mpmath`, and `numpy` inside an AppContainer that cannot touch the network or your disk.
+4. **Honesty Check (`honesty.lint`):** After the Orchestrator produces prose, the artifact-aware Honesty Linter scans claims like *"Lean 4 verified"*, *"SymPy confirmed"*, or *"q.e.d."* against actual passing Proof-DAG entries, `lean_check` verdicts, and accepted verification events, displaying a warning banner whenever proof is overstated.
+5. **Independent Verification & Revision (`<= 3` rounds):** In `Verified`, `Deep`, and `Interactive` modes, calculation guardrails ensure computations are interpreted by a `result` entry (`depends_on: ["e-1"]`), then the stateless **Full Solution Verifier** accepts or rejects with concrete issues/counterexamples. In **Deep** mode, rejection automatically invokes the **Research Strategist** to plan repairs before revision.
 
-### 2. Interactive Human-in-the-Loop (Live Steer, Checkpoints, Branch Picker & Promote from Explain)
-- **Mid-Turn Live Steering (`POST /api/sessions/{id}/steer`, SSE `steer_queued`):** While an Orchestrator turn is running, the composer's submit button becomes **Steer** (`#composer-send`) so you can inject guidance mid-turn without interrupting the session. Queued steers render as `Steer queued -> ...` badges in the stream, emit `human.steer` events in `ledger.db`, and are injected as `<human_steer>` context at the Orchestrator's next step.
-- **`ask_user` Checkpoints (`POST /api/sessions/{id}/checkpoints/{checkpoint_id}`, SSE `checkpoint_requested` / `checkpoint_resolved`):** The Orchestrator can pause for high-level mathematical decisions, convention choices, or clarifications (`ask_user`, never for low-level tool permissions). Pending and answered checkpoints render inline in the stream with clickable options, free-text response inputs, and immutable `human.checkpoint_requested` / `human.decision` ledger records.
-- **Interactive Plan-First Rigor Mode (`Interactive` preset):** Selecting **Interactive** alongside `Direct`, `Verified`, and `Deep` enables the Verifier and **Pause on Explore**, instructing the Orchestrator to propose a numbered plan via `ask_user` (`kind: "plan"`) for approval or revision before executing heavy worker delegations.
-- **Ultramath Branch Picker (`Pause on Explore` / `pause_after_explore`):** Toggling **Pause on Explore** in the Conventions popover (automatically enabled in `Interactive` mode) pauses after parallel `delegate_explore` runs and presents side-by-side branch cards (`Branch N+1`, approach, summary, tools used) so you can adopt a branch, combine approaches, or steer the next phase.
-- **Promote from Explain (`POST /api/sessions/{id}/explain/promote`):** Responses in Canvas -> **Explain** offer **Pin to Conventions** (persisting insights into pinned conventions) and **Send to Orchestrator** (dispatching as a live steer if a turn is active, or loading into the composer when idle).
+---
 
-### 3. Tool & Computation Approvals ("Agents Propose, Policy & Ledger Govern")
-- **Policy Clamps (`crates/policy`):** `crates/policy` clamps `ExecuteCode` (`sympy_eval`), `WriteWorkspace` (`fs_write`, `latex_patch`, `latex_compile`), and `NetworkRead` (`arxiv_search`, `literature_search`) to `Ask` at the policy layer; the CLI route (`re-search run`) always requires interactive terminal confirmation.
-- **Default-On Desktop Auto-Approval (`auto_approve_tools`):** On the desktop server, **Settings -> Advanced -> Tool & Computation Approvals** (`auto_approve_tools`) is enabled by default so sandboxed `sympy_eval` runs (still isolated inside a zero-capability Windows 11 AppContainer), workspace writes, and literature lookups run uninterrupted. `UiApprover` checks `auto_approve_tools` before displaying UI approval cards and still fail-closed records `approval.answered` in `ledger.db` before any tool executes.
-- **Opt-In Manual Cards & Session Continuity (`Approve for Session`):** Unchecking `auto_approve_tools` switches desktop chats back to manual approval cards on every call or once per session (`Approve for Session` records an in-memory session grant, revocable anytime via the topbar `Session allowed: ... ×` pill / `DELETE /api/sessions/{id}/grants`).
+## 4. Working Interactively: Modes, Live Steering & Explain
 
-### 4. Model Selection, Reasoning Effort & Automatic Model Discovery
-- **Reasoning Effort Mini-Window:** Picking a model automatically opens a compact secondary popover (re-openable anytime via `Effort: ...`) to choose `Default`, `Low`, `Medium`, `High`, `Extra High`, or `Max`. The core translates this cleanly per provider (`output_config.effort` on Anthropic Messages, `reasoning_effort` on OpenAI Chat Completions, `reasoning.effort` on ChatGPT Responses, `thinkingConfig.thinkingLevel` on Gemini, and `--effort` on `claude`/`agy` CLIs), omitting the field whenever `Default` is selected.
-- **Automatic Live Model Discovery:** `GET /api/models` caches provider lists for 10 minutes (`?refresh=1` forces a refresh). The UI automatically checks on expiry / window focus and marks newly released provider models with `✦ New`.
-
-### 5. Direct Academic Source Links & In-App Source Reader
-- Literature search results, tool trace citations, and ingested session sources display direct clickable links (`Open Paper ↗`, `PDF ↗`, `DOI ↗`) strictly validated against an HTTPS academic allowlist (`arxiv.org`, `doi.org`, `inspirehep.net`, `semanticscholar.org`, `crossref.org`) so external links open safely in your OS handler without ever letting the WebView2 window navigate off `127.0.0.1`.
-- Ingested archives and manuscripts in Canvas -> **Sources** also provide a **Read Source** viewer modal (`GET /api/sessions/{id}/workspace/file?root=sources&path=...`) with Rendered KaTeX and Raw text views.
-
-### 6. App Architecture: Desktop Lifecycle & Cryptography
-- **Tamper-Evident Ledger & Tombstone Deletion:** Every prompt, model response, tool call, approval decision, and Proof-DAG node is SHA-256 hash-chained (`re-search.event.v1`). Deleting a chat hides it via a local `meta.json` tombstone while keeping local workspace files untouched and preserving append-only ledger integrity.
-- **Counterfactual Forking & Export:** `re-search fork` and Proof DAG branching clone history up to sequence `N` with a modified assumption; `export` packages `.tex`, `.html`, or reproducible `.zip` bundles.
-
-## Layout
-
-| Crate | What it is |
-| --- | --- |
-| `crates/policy` | Pure allow / ask / deny engine (`ReadWorkspace`, `WriteWorkspace`, `NetworkRead`, `ExecuteCode`). No I/O; `serde` only. |
-| `crates/ledger` | Append-only, SHA-256 hash-chained SQLite event store (`PRAGMA user_version = 3`) and content-addressed blob directory. |
-| `crates/tools` | Tool registry, policy router, digest- and epoch-bound approvals (plus human opt-in session grants for `network-read` literature queries). |
-| `crates/research-tools` | Stage 6 tools: `fs_list`, `fs_read`, `doc_ingest`, `fs_write`, `latex_patch`, `latex_compile`, `tex_audit`, `arxiv_search`, `literature_search`, `ledger_append`, `ledger_supersede`, `ledger_query`, `check_expression_sanity`. |
-| `crates/worker` | Python worker (`sympy`, `mpmath`, `numpy`) under Windows `AppContainerSandbox` / `JobObjectSandbox`. |
-| `crates/agent` | Multi-provider streaming HTTP transports (`Anthropic`, `OpenAI`, `Ollama`, `Gemini`, and the Responses-API `ChatGPT` plan route), autonomous Orchestrator–Verifier–Strategist research loop, Stage 7 guardrails, Step & Full Verifiers, Narrator, Explain, and verified resume. |
-| `crates/export` | Verified counterfactual `fork`, structural branch `diff`, and `.tex`/`.html`/`.zip` `export`. |
-| `crates/desktop-server` | Loopback `127.0.0.1` HTTP + SSE desktop server (`std::net` + `httparse`, zero `tokio`), `UiApprover` diff broker, and embedded offline KaTeX UI. |
-| `crates/desktop-app` | `re-search-app`: the re:Search window. One process runs the desktop server and one locked-down WebView2 window (`wry` + `tao`, Windows only); the token is delivered in a request header, never in a URL. The only crate with GUI dependencies. |
-| `crates/mcp-server` | `core`: the stdio MCP server (registers `research-tools` automatically when `CORE_WORKSPACE`, `CORE_ENABLE_RESEARCH_TOOLS=1` or session `sources/` exists). |
-| `crates/chatgpt-auth` | Sign in with ChatGPT (OpenAI's preview flow for open-source apps): PKCE sign-in with a one-shot `127.0.0.1` callback, RS256 ID-token checks against OpenAI's JWKS, DPAPI-encrypted token storage, serialized refresh with rotating refresh tokens, revocation. No `tokio`. |
-| `crates/cli-route` | The vendor-CLI routes shared by the console and the desktop: drives the unmodified Claude Code CLI (`claude.exe`) and the labelled Antigravity CLI (`agy.exe`) — job object, prompt on stdin, init check, stream mapping, loopback approval relay with caller check, `core` tool set, environment-credential refusal and history replay. No `tokio`, no `rmcp`. |
-| `crates/cli` | `re-search`: CLI supervisor supporting `run`, `resume`, `ui`, `desktop`, `fork`, `diff`, `export`, `show`, `sessions`, and `verify`. |
-
-## Build and test
-
-Core unit, research-tool, agent, export, desktop-server, desktop-app (pure config and lock-down rules; no display or WebView2 needed), and CLI route tests run on both **Linux and Windows** against in-test loopback mock servers:
-
-```bash
-cargo build
-cargo test -p policy -p ledger -p tools -p research-tools -p agent -p chatgpt-auth -p export -p cli-route -p desktop-server -p desktop-app -p cli
-```
-
-The Sign in with ChatGPT flow tests (`chatgpt-auth` `tests/flow.rs` and two-process `tests/vault_lock_multiprocess.rs` DPAPI suites, desktop-server `tests/chatgpt_route.rs`) run against a loopback mock of OpenAI's auth and API hosts (no network, no browser) and need Windows, because tokens are stored with DPAPI; non-Windows unit/integration tests verify fail-closed refusal, cross-process `VaultLock` exclusion, and pure OAuth/JWT/callback logic on Linux too.
-
-The subscription-CLI routes are tested with scripted fake CLIs (`cli_route::testkit`, compiled with `rustc` at test time); the desktop-server tests that spawn a CLI inside a Windows Job Object (`claude_cli_route`, `claude_cli_env`, `claude_cli_guards`, and the four turn-spawning tests in `antigravity_route`) run on Windows only, while the remaining `antigravity_route` gate/env/model/label tests run on both Linux and Windows. Desktop Markdown/LaTeX/CSS rendering and XSS escaping are tested against the vendored offline KaTeX `0.19.1` bundle via `node --test crates/desktop-server/tests/math_render.test.mjs` (also run by `cargo test -p desktop-server --test ui_math`).
-
-Windows AppContainer containment probes require **Windows 11 + Python (SymPy and NumPy)**:
-
-```powershell
-$env:RE_SEARCH_PYTHON = "C:\path\to\python.exe"
-cargo test -p worker -- --nocapture
-cargo test -p cli --test contained_router -- --nocapture
-```
-
-## Desktop UI (`re-search-app`, `re-search desktop`, `re-search ui`)
-
-The local CSRF-protected desktop server offers offline KaTeX rendering, live token and reasoning streaming with a universal **Stop** button across all routes, an autonomous **Orchestrator -> Independent Verifier -> Strategist -> Revise** loop when **Verifier** is toggled on, a native Windows folder picker attaching workspaces to the active session in-place (`PUT /api/sessions/{id}/workspace`), toggleable desktop tool auto-approval (`auto_approve_tools`) or session-scoped opt-in approvals (*Approve for Session* vs *Approve Once*), a live SSE proof-DAG inspector, LaTeX canvas, literature/sources drawer, counterfactual fork/diff, and isolated Explain with `.md`/`.html` export. There are two ways to show it:
-
-- **Its own window (Windows 11, WebView2 runtime).** `re-search-app.exe` starts the server and opens a window titled *reSearch*; closing the window stops the server. It needs no console and no browser (Microsoft Edge itself need not be installed, only the WebView2 Evergreen runtime). Only one instance runs per logon session; a second launch exits quietly. `re-search desktop` starts `re-search-app.exe` from its own directory when it is there and only `--data-dir`/`--workspace`/`--python`/`--worker-script`/`--port`/`--core-exe`/`--claude`/`--agy` were given; otherwise it behaves like `re-search ui`.
-- **The default browser.** `re-search ui` opens `http://127.0.0.1:<port>/?launch=…` in the default browser using a single-use, 60-second launch nonce (never the real API token); the first page load redeems it for the token in `<meta>` and sets the stream cookie, and any replay returns `403`.
-
-```bash
-cargo build -p desktop-app -p cli          # target/debug/re-search-app.exe and re-search.exe
-re-search-app --workspace ./paper --data-dir ./data --python C:\path\to\python.exe
-re-search desktop --workspace ./paper --data-dir ./data
-re-search ui --workspace ./paper --data-dir ./data
-```
-
-`re-search-app` settings, in order of precedence: the flags above (plus `--core-exe EXE` and `--claude EXE` for the Claude subscription route, `--agy EXE` for the Antigravity route); then `RE_SEARCH_PYTHON`, `RE_SEARCH_DATA`, `RE_SEARCH_WORKER_SCRIPT`, `RE_SEARCH_CLAUDE` (each with a `RESEARCH_CORE_*` fallback), plus `RE_SEARCH_CORE_EXE` and `RE_SEARCH_AGY`; then an optional `re-search-app.json` next to the executable (keys `python`, `worker_script`, `data_dir`, `workspace`, `core_exe`, `claude`, `agy`; relative paths are relative to that directory); then the defaults (`%LOCALAPPDATA%\re-search`, `python/worker.py` next to the executable when a Python is set, `core.exe` next to the executable, `claude.exe` from `PATH` or the npm install location, and `agy.exe` from `PATH` or WinGet's folders). A Start-menu shortcut gets no useful environment, so use the JSON file there. Startup errors appear in a message box. WebView2 keeps its (InPrivate) profile folder in `%LOCALAPPDATA%\re-search\webview`.
-
-The server listens on `127.0.0.1` only. Every `/api/` route except `/api/health` needs the per-launch token in the `X-ReSearch-Token` header; a separate cookie opens only the event stream and export downloads. A workspace may not overlap the data directory. See [THREAT-MODEL.md](THREAT-MODEL.md).
-
-Useful headless/automation flags: `--port PORT`, `--no-open true`, `--print-url-json true`, `--api-base URL`, `--arxiv-base URL`, `--inspire-base URL`, `--crossref-base URL`, `--core-exe EXE`, `--claude EXE`, `--agy EXE`.
-
-### Connecting a model and picking one
-
-Open **Settings & Guide -> Providers** (bottom of the left rail; shortcut name on Windows: `reSearch`). It lists every way reSearch can reach a model, each with a green *Connected* badge or one thing to do:
-
-| Provider | How to connect | What re:Search checks |
+### Choosing Your Rigor Preset
+| Preset | Best For | What Runs |
 | --- | --- | --- |
-| ChatGPT (your subscription, Sign in with ChatGPT) | Press **Continue with ChatGPT**, then *Open in browser* (or *Copy link* and paste it into a browser), sign in to ChatGPT and allow re:Search to use your plan. Windows only for now. | Signed in, the ID token checked, and ChatGPT plan use (`chatgpt.tokens.use.direct`) granted; the status shows the account. |
-| Claude (your subscription, via Claude Code) | Install Claude Code and sign in once by running `claude` in a terminal. No key. | `claude.exe` is found (`--claude`, `RE_SEARCH_CLAUDE`, `PATH`, npm location) and no environment credential would bill instead of the subscription; the status shows `claude --version`. |
-| Antigravity (your Google plan) — vendor-sandboxed, not confined to re:Search tools | Install the Antigravity CLI and sign in once by running `agy` in a terminal. Then read the warning on its Connect row and press *I understand the risk: enable this route*. No key. | `agy.exe` is found (`--agy`, `RE_SEARCH_AGY`, `PATH`, WinGet's folders), no environment credential would replace your Google login, and you acknowledged the warning; `agy --version` runs only after acknowledgement. |
-| Anthropic API | Paste an API key and press Save (or set `ANTHROPIC_API_KEY`). | A key is saved or set. |
-| OpenAI API | Paste an API key and press Save (or set `OPENAI_API_KEY`). | A key is saved or set. |
-| Google Gemini API | Paste an API key and press Save (or set `GEMINI_API_KEY` / `GOOGLE_API_KEY`). | A key is saved or set. |
-| Ollama (models on this computer) | Install and start Ollama; press *Check again*. | Its model list answers at `http://127.0.0.1:11434` (or the address under Advanced). |
+| **`Direct`** | Quick look-ups, brainstorms, formatting `.tex` | Orchestrator + tools (single pass; no post-turn Verifier loop). |
+| **`✓ Verified`** *(default)* | Derivations, symbolic checks, paper claims | Orchestrator + Calculation Guard + Stateless Full Verifier (up to 3 rounds). |
+| **`✦ Deep`** | Hard open problems likely to need course-correction | Everything in `Verified` + **Research Strategist** diagnosis after any rejection. |
+| **`Interactive`** | High-stakes projects where you want to steer the roadmap | Turns on **Verifier** + **Pause on Explore** and instructs the Orchestrator to propose a numbered plan via `ask_user` (`kind: "plan"`) before heavy execution. |
 
-A saved key is never shown again; *Remove saved key* deletes it from `providers.json`. The status says whether the key a turn would use is the saved one or comes from the environment (`RE_SEARCH_API_KEY` takes precedence for every API provider in turns). A provider counts as connected only with its own key (saved, or its own variable): the generic `RE_SEARCH_API_KEY` is tied to a provider only when `RE_SEARCH_PROVIDER` names it, and it is never sent to list another provider's models. When re:Search is started with `--api-base` / `RE_SEARCH_API_BASE`, no model list is fetched (that one address would receive every provider's key); the dropdown then shows re:Search's built-in model names. Addresses (base URLs), tool auto-approval (`auto_approve_tools`), and pinned conventions are under **Advanced**; per-agent model assignments are under **Agents & Models**.
+*Tip:* You can customize active agents directly in the **Conventions** popover (`Verifier`, `Strategist`, `Pause on Explore`). All presets also pair with the compact **Reasoning Effort** selector (`Default`, `Low`, `Medium`, `High`, `Extra High`, `Max`) — when set to `Default`, reSearch omits provider reasoning parameters.
 
-The composer has one model dropdown, grouped by connected provider; choosing an entry sets both the provider and the model of the next message. The lists are live: `GET /api/models` asks each connected provider for its current models (Anthropic, OpenAI and Gemini `…/models`, Ollama `/api/tags`; OpenAI's list is narrowed to chat models), keeps them for 10 minutes (`?refresh=1` asks again; saving or removing a key or address clears them), and marks one recommended model per provider. A provider whose list call fails keeps its last list (or re:Search's default model) with a note that gives only the kind of failure (for example `auth (HTTP 401)` or `timeout`), never the provider's message. The Claude subscription offers the CLI's aliases (`fable`, `opus`, `sonnet`, `haiku`), which always mean the latest model of that name. With nothing connected the dropdown shows *No model connected* and a **Connect** button appears beside it. Once a session's first turn has started, it stays on its route: models on other routes are greyed out in the dropdown (start a new session to switch between subscription-CLI routes and API providers). The last choice is remembered per session in the browser's `localStorage` (no secret is stored there). Sessions on the Claude route show "runs Claude Code (your login)" beside the dropdown; ChatGPT-plan sessions show "runs on your ChatGPT plan" and run on re:Search's own (API) route. Both routes (`GET /api/connections`, `GET /api/models`) need the token like every other `/api/` route.
+### Interactive Human-in-the-Loop Controls
+- **Mid-Turn Live Steering (`POST /api/sessions/{id}/steer`):** During active in-core API or ChatGPT turns, the Send button switches to **`Steer`**. Submitting a note queues a `human.steer` ledger event, shows a `Steer queued -> ...` badge, and injects `<human_steer>...</human_steer>` at the Orchestrator's very next step (without killing in-progress work). *Note:* Live steering is refused with HTTP `409` on subscription-CLI turns (`claude-cli` / `antigravity`).
+- **High-Level Decision Checkpoints (`ask_user`):** The Orchestrator can pause to ask mathematical, convention, or plan questions — never for low-level tool permissions. Checkpoints appear inline with quick-pick option buttons and a free-text note field (`human.checkpoint_requested` / `human.decision`), and clicking **Stop** unblocks any waiting checkpoint cleanly.
+- **Ultramath Branch Picker (`Pause on Explore`):** When enabled, `delegate_explore` evaluates 2–4 competing Ansaetze concurrently in isolated branches, then pauses to display side-by-side **KaTeX-rendered branch cards** so you can adopt one branch, combine ideas, or add steering notes (`human_selection`).
+- **Isolated `Explain` Tab (`Canvas -> Explain`):** Ask clarifying questions about notation or specific `e-1` steps on a **completely isolated side-talk thread** (`sidetalk:<session>`) without mutating the Proof DAG. Export conversations as Markdown (`.md`) or standalone HTML (`.html`), or promote any insight back to the main workflow:
+  - **Pin to Conventions** appends to the session's pinned conventions (`<= 2000` chars; long answers auto-trim cleanly).
+  - **Send to Orchestrator** injects directly as a live steer if an API/ChatGPT turn is running, or loads the note into the main composer when idle.
+- **Session vs Global Conventions:** Clicking **Conventions** edits and clears conventions for the **active session** (`PUT /api/sessions/{id}/conventions`), which persist across reloads and are upserted into the Orchestrator prompt on resumed turns as well as all workers and verifiers. When no session is active (or under **Settings → Advanced**), you edit global default conventions for new sessions.
 
-### Desktop sessions on your ChatGPT plan (`chatgpt`)
+---
 
-re:Search can use your ChatGPT subscription through **Sign in with ChatGPT**, OpenAI's official flow for open-source and locally hosted apps ([documentation](https://developers.openai.com/siwc/token-sharing-open-source)). OpenAI describes it as a **preview**; its rules and limits may change. Usage counts toward your ChatGPT plan's limits (for Plus, the five-hour limit is shared with every other app on your plan); review it at chatgpt.com/settings/usage.
+## 5. Meet the Agents (Built-in Roles & Custom Subagents)
 
-- **Connect.** In **Connect**, press *Continue with ChatGPT*. re:Search shows the sign-in link with *Open in browser* (re:Search asks Windows to open it in your default browser, only when you click) and *Copy link*. Sign in, allow re:Search to use your plan, and the browser returns to a one-time address on `127.0.0.1`; the Connect row turns green. The link stays valid for 5 minutes. Declining plan use keeps the sign-in without using your plan and offers *Allow ChatGPT plan* (which repeats OAuth with `prompt=consent`) alongside *Sign out*.
-- **Use.** Pick a model under *ChatGPT (your subscription, Sign in with ChatGPT)* in the model dropdown (the list is your account's, from `GET https://api.openai.com/v1/models`, entries marked for display). The model runs in re:Search's own loop through the Responses API (`store: false`, streaming), so tools, policy, approval cards and the ledger work exactly as with an API key. The composer shows "runs on your ChatGPT plan". A session is recorded as provider `chatgpt-responses` with the model; no token is ever recorded.
-- **What is stored where.** `%LOCALAPPDATA%\re-search\chatgpt\registration.dpapi` (this computer's host ID and re:Search's issued client ID) and `credentials.dpapi` (the ID, access and refresh tokens, expiry and granted scopes), both encrypted with Windows DPAPI for your Windows user. Nothing is in `providers.json`, the browser, the ledger or the session folders. Tokens are renewed automatically shortly before they expire (within 5 minutes, or half the token's lifetime if that is shorter, and not before the server's `earliest_refresh_at` unless the token has expired), and retried once on HTTP 401, serialized across processes via `<data_dir>/chatgpt/.lock`. That is an operating-system file lock, released automatically when its holder exits; while another re:Search process holds it, the operation fails after 10 s with "another ChatGPT sign-in operation is in progress".
-- **Sign out.** *Sign out* in Connect first deletes the tokens on this computer (the host ID and client ID are kept for the next sign-in), then revokes the session at OpenAI (discovering `revocation_endpoint` once from `https://auth.openai.com/.well-known/openid-configuration`, pinned to `auth.openai.com`, with the documented URL as fallback; at most 45 s in all, with no lock held, so the Connect panel and other sessions are not blocked). If OpenAI does not confirm, Connect says so; you can also disconnect re:Search in ChatGPT Settings.
-- **Limits.** Windows only for now (other systems refuse to store the tokens). The tokens go only to `auth.openai.com` and `api.openai.com`: `--api-base` and saved addresses do not apply to this route, and it takes no API key. The console (`re-search run --route api`) does not offer it.
+Configure models per agent anytime under **Settings & Guide → Agents & Models**:
 
-### Desktop sessions on your Claude subscription (`claude-cli`)
+| Agent | Role Key | Default Model Policy | Core Responsibility |
+| --- | --- | --- | --- |
+| **Orchestrator** | `orchestrator` | User-selected model | Leads Campaign Phases, delegates subtasks, writes `result`/`final_answer` DAG steps and LaTeX patches. |
+| **Compute Worker** | `compute_worker` | **Auto Smaller Model** | Iterative `sympy_eval` + `check_expression_sanity` inside AppContainer + computation DAG nodes. |
+| **Literature Worker** | `literature_worker` | **Auto Smaller Model** | `arxiv_search`, `literature_search`, `doc_ingest`, `fs_read` on bulky papers/TeX files. |
+| **Lean Prover Worker** | `lean_worker` | **Auto Smaller Model** | Formalizes claims in Lean 4 without `sorry`, `admit`, or custom axioms; iterates on `lean_check` diagnostics. |
+| **Parallel Explorer** | `explorer_worker` | **Auto Smaller Model** | Ultramath multi-branch runner (`delegate_explore`, 2–4 concurrent branches, read/compute-only). |
+| **Step / Full Verifier** | `step_verifier`, `full_verifier` | Follow Orchestrator | Zero-bias stateless auditors checking DAG ancestors, `tex_audit` XML, and Lean checks. |
+| **Research Strategist** | `strategist` | Follow Orchestrator | Diagnoses rejected proof attempts in `Deep` mode to plan structural revisions. |
+| **Proof Narrator / Explain / Builder** | `narrator`, `sidetalk`, `subagent_builder` | Follow Orchestrator | `Narrate Proof` sheets, isolated **Explain** Q&A, and generating custom specialist profiles. |
 
-A desktop session can run on the Claude subscription you are signed into in the Claude Code CLI instead of an API key: create the session or send the message with `{"provider": "claude-cli", "model": "<alias>"}` (default model `sonnet`). re:Search then starts the unmodified `claude.exe` for each turn, exactly as `re-search run --route cli` does on the console: the model gets only re:Search's tools (served by `core.exe` over MCP, with the session's workspace and the research policy `v0.4-research`), every tool call goes through the router in `core.exe`, and approvals appear as the usual approval cards. The UI receives the same events as on the API route. Such sessions are recorded as route `claude-code-cli`, "external loop, partial provenance", and `GET /api/sessions/{id}` reports the route. A session stays on the route it started with.
+- **Automatic Smaller-Model Routing:** By default, worker roles pick a faster, cheaper model from connected live catalogs (`Catalog::pick_smaller_model`), recording the choice in `routing_reason`. Override any role explicitly to pin your preferred model.
+- **Custom Subagents (`<data_dir>/subagents.json`):** Describe a specialist in plain English in **Agents & Models** and click **Generate with AI Agent** to draft a role (`read_only`, `compute`, or `full_research` tool profile, optional model, effort, and rigor including `interactive`). Invokable directly from the composer pill (`Agent: ...`) or via `delegate_subagent` — still strictly bound by `v0.4-research` policy and AppContainer isolation.
 
-- **Billing safety.** If `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` or `CLAUDE_CODE_USE_FOUNDRY` is set in re:Search's environment, the turn is refused with an error naming the variable, because the CLI would use it instead of your subscription. Unset it, use the API-key route, or set `RE_SEARCH_ALLOW_CLAUDE_ENV_AUTH=1` to proceed anyway. The turn is also aborted when Claude Code itself reports an `apiKeySource` other than `"none"` (for example an `apiKeyHelper` in managed settings), with the same opt-in. The same rules apply to `re-search run --route cli`. A session whose first turn was refused before it started can still be used with an API model.
-- **Narrate proof and Explain questions** need an in-core API-route provider (Anthropic, OpenAI, Gemini, Ollama, or signed-in ChatGPT): they use their per-agent model configured under **Settings -> Agents & Models**, else the model picked in the dropdown when it is on the API route; with a subscription-CLI model (`claude-cli` or `antigravity`) picked and no per-agent override set they use the first configured API provider, and say so when there is none.
-- **Prompt on stdin.** The prompt is written to the CLI's standard input, never put on its command line (both routes).
-- **Later turns.** The CLI keeps no state between turns (`--no-session-persistence`), so the second and later turns start with a delimited transcript of this session's earlier messages and final replies, read from the ledger (the most recent turns up to about 24,000 characters; the prompt says when older turns were left out). Tool calls and results are not replayed.
-- **Stop.** `POST /api/sessions/{id}/stop` (token required; wired to the composer **Stop** button) cancels both subscription-CLI turns (killing the CLI process tree) and in-core API / ChatGPT turns (via cooperative `CancelToken`), denies open approval cards, and records `session.abort` (`"stopped": true`); closing the app window does the same for every running turn.
+---
 
-### Desktop sessions on your Google Antigravity plan (`antigravity`) — vendor-sandboxed, not confined to re:Search tools
+## 6. Tool & Computation Approvals
 
-A desktop session can run on the Google plan you are signed into in the Antigravity CLI (`agy`). **Read this before you use it.**
+- **Policy Clamps (`crates/policy`):** `ExecuteCode` (`sympy_eval`), `WriteWorkspace` (`fs_write`, `latex_patch`, `latex_compile`), and `NetworkRead` (`arxiv_search`, `literature_search`) are statically clamped to `Ask`.
+- **Desktop Default (`auto_approve_tools = true`):** Out of the box, the desktop app enables **Settings → Advanced → Auto-approve computations, workspace writes & literature lookups** so contained SymPy scripts, TeX patches, and arXiv lookups run smoothly while still logging every decision to `ledger.db` (`approval.answered`) before execution.
+- **Manual Review Mode:** Uncheck `auto_approve_tools` anytime to inspect live syntax-highlighted Python code and unified `.tex` diffs on inline approval cards, choosing **Decline**, **Approve Once**, or **Approve for Session** (revocable via the topbar `Session allowed: ... ×` pill).
+- **Console (`re-search run`):** Never auto-approves; every `Ask`-classed tool prompts interactively on the terminal.
 
-- **Terms risk.** Google's terms for consumer plans may treat driving the Antigravity CLI from third-party software such as re:Search as unsupported or as a breach, which could put your Google account at risk. re:Search does not decide this for you: the route stays off until you acknowledge the warning on its Connect row (stored in `ui_settings.json` as `antigravity_ack`; *Withdraw acknowledgement* turns it off again and stops any running Antigravity turn). `agy.exe` is not spawned (`--version` or `models`) until you acknowledge. The builder of this route read no Google terms document; the warning paraphrases what the user was told and quotes nothing.
-- **What "vendor-sandboxed, not confined to re:Search tools" means.** On the Claude route the model has *only* re:Search's tools. Here the Antigravity CLI keeps its own built-in tools (terminal commands, file reads and writes, web fetches, a browser) and they cannot be removed. re:Search passes a per-session `--settings` object that selects Default agent mode (nothing auto-approved; not `auto`), `toolPermission: request-review`, the terminal sandbox, no access outside the workspace, **denies** `command(*)`, `read_file(*)`, `write_file(*)`, `read_url(*)`, `execute_url(*)`, and **allows** only `mcp(core/*)`; it also passes `--sandbox`. Whether those rules hold is up to the CLI. Concretely, these re:Search guarantees do **not** hold for anything the CLI runs itself: re:Search's router and policy, its approval cards, its ledger record of the call and result, and the AppContainer around re:Search's Python worker. re:Search's own tools (served by `core.exe`) still go through the router, the policy `v0.4-research` and your approval cards, exactly as on the Claude route.
-- **Seen, never hidden.** Every built-in or non-core tool step the CLI reports (`step_update` for anything outside the verified `core` tool set) is recorded as a `vendor.builtin_tool` ledger event and shown as a warning line in the conversation, whether the CLI reports it running, denied, failed or finished. re:Search only sees what the CLI prints.
-- **Other MCP servers.** There is no per-session MCP flag. re:Search writes `sessions/<id>/agy/.agents/mcp_config.json` (the CLI's workspace config; it holds the turn's session token, is written only after version/stop checks, and is deleted when the turn ends, is stopped or fails, and swept when left behind) naming only `core`. MCP servers from your global Antigravity configuration still load; their tools have no rule in re:Search's settings and default to *Ask*, which print mode soft-denies, unless your own Antigravity settings allow them.
-- **Use.** Pick a model under *Antigravity (your Google plan) — vendor-sandboxed, not confined to re:Search tools* in the dropdown (from `agy models`, cached for 10 minutes; a small built-in list, marked as such, if it never answered). The composer shows "runs the Antigravity CLI (your Google login) — vendor-sandboxed, not confined to re:Search tools" (and keeps the confinement label when reopening the session even if Antigravity is later withdrawn or disconnected). The prompt goes on the CLI's standard input as one stream-json `user` event (`--input-format stream-json`; never `-p`). Sessions are recorded as route `antigravity`, confinement `vendor-sandboxed`, with the exact flags; `GET /api/sessions/{id}` reports the route, confinement and label. A session stays on its route; later turns replay a bounded transcript, as on the Claude route; *Stop* works the same way. Desktop only: the console (`re-search run`) does not offer this route.
-- **Credentials.** re:Search never reads or copies the CLI's login. If `GEMINI_API_KEY`, `GOOGLE_GEMINI_BASE_URL` or `AGY_ADC_AUTH` is set in re:Search's environment, the turn is refused (naming the variable, never its value), because the CLI could then use an API key, another endpoint or Application Default Credentials instead of your plan; `RE_SEARCH_ALLOW_AGY_ENV_AUTH=1` proceeds anyway. Note that `GEMINI_API_KEY` is also the Gemini API route's key variable.
-- **Updates.** The Antigravity CLI updates itself (observed while building this route: 1.5.13 became 1.5.14 after `agy models`). The route was written against 1.5.14; a different version is recorded as `cli.version_warning`.
-- **Not verified:** no live turn was run (no prompt was ever sent to a model through `agy`); every test uses a scripted fake `agy` (the Windows-only `JobObjectSandbox` and DPAPI test suites and offline visual WebView2 rendering in `re-search-app` have been verified on Windows 11; `cargo test` itself opens no WebView2 display window). See the "Not verified" lists in [THREAT-MODEL.md](THREAT-MODEL.md).
+---
 
-## CLI Research Mode, Fork, Diff, Export & Verify
+## 7. Connecting Providers, Billing Safety & Confinement
 
-Attach `--workspace DIR` (or `--enable-research-tools true`) on `--route api` / `resume` to enable the Stage 6-7 research policy (`v0.4-research`), console unified-diff approvals for `fs_write`/`latex_patch`, a per-call approval for every model-initiated `arxiv_search`/`literature_search` (showing the query), pinned conventions, and verifier/calculation guardrails:
+| Provider | How to Connect | Security / Billing Highlights |
+| --- | --- | --- |
+| **ChatGPT Plan** *(Windows)* | **Continue with ChatGPT** → sign in in browser → grant plan use. | Official OpenAI preview flow; DPAPI-encrypted tokens (`%LOCALAPPDATA%\re-search\chatgpt\*.dpapi`), cross-process `.lock`, Responses API (`store: false`). Shared with your ChatGPT plan limits; **does not apply `--api-base`**. |
+| **Claude Subscription** (`claude-cli`) | Install Claude Code (`claude.exe`) and sign in via terminal. | Drives unmodified `claude.exe` on `fable`/`opus`/`sonnet`/`haiku`; tools served strictly by `core.exe`. **Billing guard:** refuses to run if `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, Bedrock/Vertex/Foundry vars, or non-`"none"` `apiKeySource` is present unless `RE_SEARCH_ALLOW_CLAUDE_ENV_AUTH=1`. |
+| **Google Antigravity** (`antigravity`) | Sign in to `agy.exe`, read the Connect warning, click **I understand the risk**. | **Vendor-sandboxed, NOT confined to reSearch tools.** Third-party CLI automation may conflict with Google consumer terms. reSearch passes `--settings` denying built-in commands/files/URLs plus `--sandbox`, shows all non-core steps as `vendor.builtin_tool` warnings, and refuses if `GEMINI_API_KEY`/`GOOGLE_GEMINI_BASE_URL`/`AGY_ADC_AUTH` is set unless `RE_SEARCH_ALLOW_AGY_ENV_AUTH=1`. *Live turns not verified (fake-`agy` test suite only; see [THREAT-MODEL.md](THREAT-MODEL.md)).* |
+| **Anthropic / OpenAI / Gemini API** | Paste API key in Providers (or set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`). | Stored locally in `providers.json`, never re-displayed or sent to browser `localStorage`; scrubbed from HTTP errors and blobs. |
+| **Ollama (Local)** | Start Ollama at `http://127.0.0.1:11434` (configurable in Advanced) → **Check again**. | Runs 100% locally via OpenAI-compatible API; zero external traffic. |
+
+**Important route rules:**
+- **Route lock:** Once a session starts its first turn, it stays on its route (API/ChatGPT vs `claude-cli` vs `antigravity`); start a new session to switch routes.
+- **Side-features on CLI routes:** **Narrate Proof** and **Explain** always require an API-route model (configured per-agent or first available API provider). On `claude-cli` and `antigravity`, later turns replay a bounded transcript (~24,000 chars) on stdin rather than native tool history.
+- **Safe Literature Links:** External links (`Open Paper ↗`, `PDF ↗`, `DOI ↗`) are strictly allowlisted (`arxiv.org`, `doi.org`, `inspirehep.net`, `semanticscholar.org`, `crossref.org`) and open in your OS handler without navigating the WebView2 window off `127.0.0.1`; archives open inside the **Read Source** modal (`Rendered` KaTeX / `Raw`).
+
+---
+
+## 8. Desktop Launch, Configuration & Headless Flags
+
+Settings precedence for `re-search-app.exe` (and desktop UI launches):
+1. **CLI flags:** `--workspace DIR`, `--data-dir DIR`, `--python EXE`, `--worker-script PY`, `--port PORT`, `--core-exe EXE`, `--claude EXE`, `--agy EXE`
+2. **Environment variables:** `RE_SEARCH_PYTHON`, `RE_SEARCH_DATA`, `RE_SEARCH_WORKER_SCRIPT`, `RE_SEARCH_CLAUDE` (plus `RESEARCH_CORE_*` fallbacks), `RE_SEARCH_CORE_EXE`, `RE_SEARCH_AGY`
+3. **`re-search-app.json` next to the executable** *(used by Start-menu launches where env vars aren't set; relative paths resolve next to the binary)* — keys: `python`, `worker_script`, `data_dir`, `workspace`, `core_exe`, `claude`, `agy`
+4. **Defaults:** `%LOCALAPPDATA%\re-search`, sibling `python/worker.py` + `core.exe`, and `claude.exe` / `agy.exe` from `PATH` or default install folders
+
+Headless & test automation flags (`re-search ui`): `--port PORT`, `--no-open true`, `--print-url-json true`, `--api-base URL` (disables `/models` fetches so keys aren't leaked to a single mock endpoint), `--arxiv-base URL`, `--inspire-base URL`, `--crossref-base URL`. Server binds strictly to `127.0.0.1`, requires `X-ReSearch-Token` on `/api/*`, uses a scoped stream cookie for SSE/exports, and refuses `--workspace` overlapping `--data-dir`.
+
+---
+
+## 9. CLI Reference (`run`, `fork`, `diff`, `export`, `verify`)
+
+Pass `--workspace DIR` (or `--enable-research-tools true`) on `--route api` / `resume` to enable the full `v0.4-research` research policy (minimal `v0.2` uses `sympy_eval` and `ledger_note` only):
 
 ```bash
 re-search run --route api --provider anthropic --workspace ./paper --data-dir ./data \
@@ -204,12 +192,50 @@ re-search export s-<id> --format zip --out ./out/proof.zip --data-dir ./data
 re-search verify s-<id> --data-dir ./data
 ```
 
-When neither `--workspace` nor `--enable-research-tools true` is passed on `--route api`, `re-search` uses the minimal `v0.2` built-in policy (`sympy_eval`, `ledger_note`). `--route cli` (the default; your Claude subscription through the unmodified Claude Code CLI) always uses the `v0.2` tools and policy and passes the prompt on stdin.
+Also available: `re-search desktop`, `re-search ui`, `re-search show <session>`, `re-search sessions`, and `POST /api/sessions/{id}/stop` (universal **Stop** button across API, ChatGPT, and CLI routes).
 
-**Console behaviour change (Stage 9b):** `re-search run --route cli` now refuses to start while `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` or `CLAUDE_CODE_USE_FOUNDRY` is set (earlier versions ignored them, and the Claude CLI then billed that credential instead of your subscription). It exits with code `2` before starting `claude.exe`, naming the variable (never its value) on stderr. Unset the variable, use `--route api`, or set `RE_SEARCH_ALLOW_CLAUDE_ENV_AUTH=1` to proceed anyway. A turn whose `system/init` reports an `apiKeySource` other than `"none"` is aborted (exit `3`) unless the same opt-in is set.
+**Exit codes:** `0` = completed · `1` = tampered/missing/corrupt on `resume`/`verify` · `2` = CLI usage, config, billing-guard, drift, or lock error · `3` = aborted turn/guardrail/transport error · `4` = legacy unchained schema · `5` = model refusal.
 
-Exit codes: `0` = completed, `1` = tampered/missing/corrupt on `resume`/`verify`, `2` = CLI usage, config, drift, or lock error, `3` = aborted turn/guardrail/transport error, `4` = legacy unchained schema, `5` = model refusal.
+---
 
-## Licence
+## 10. Codebase Map (13 Crates) & Running Tests
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE). `rmcp` (Apache-2.0) is used strictly in `crates/mcp-server` and stays excluded from all other crates.
+| Crate | Purpose |
+| --- | --- |
+| `crates/policy` | Pure `Allow / Ask / Deny` clamps (`serde` only; zero I/O, zero `tokio`/`rmcp`/`windows-sys`). |
+| `crates/ledger` | Append-only SHA-256 hash-chained SQLite store (`user_version = 3`) + content-addressed blob directory. |
+| `crates/tools` | Tool registry, router, canonical JSON, digest/epoch-bound approvals, session grants. |
+| `crates/research-tools` | `fs_list`/`fs_read`/`fs_write`, `doc_ingest`, `latex_patch`/`latex_compile`/`tex_audit`, literature clients, `ledger_*`, `lean_check`, sanity checks. |
+| `crates/worker` | Python worker (`sympy`, `mpmath`, `numpy`) in Windows `AppContainerSandbox` / `JobObjectSandbox`. |
+| `crates/agent` | Streaming provider transports, Campaign Phases, Orchestrator–Verifier–Strategist loop, Workers (`delegate`/`explore`), `honesty.lint`, `interaction` HITL, Narrator, Explain, lossless resume. |
+| `crates/export` | Counterfactual `fork`, structural branch `diff`, `.tex`/`.html`/`.zip` `export`. |
+| `crates/desktop-server` | Loopback `127.0.0.1` HTTP + SSE server (`std::net` + `httparse`, zero `tokio`), `HitlHub`, `UiApprover`, offline KaTeX UI. |
+| `crates/desktop-app` | `re-search-app`: WebView2 (`wry` + `tao`, Windows only) locked to loopback with header CSRF token. Only crate with GUI deps. |
+| `crates/mcp-server` | `core`: stdio MCP server (**only** crate depending on `rmcp`). |
+| `crates/chatgpt-auth` | ChatGPT PKCE OAuth, RS256 JWKS verification, DPAPI token store, cross-process `VaultLock`. |
+| `crates/cli-route` | Unmodified `claude.exe` and `agy.exe` supervisors (stdin prompts, init checks, loopback approvals, bounded history replay). |
+| `crates/cli` | `re-search` CLI binary (`run`, `resume`, `ui`, `desktop`, `fork`, `diff`, `export`, `show`, `sessions`, `verify`). |
+
+```bash
+# Core Rust suite (Linux & Windows against in-test loopback mocks)
+cargo build
+cargo test -p policy -p ledger -p tools -p research-tools -p agent -p chatgpt-auth -p export -p cli-route -p desktop-server -p desktop-app -p cli
+
+# Offline KaTeX 0.19.1, XSS, Trace Cards & HITL UI tests
+node --test crates/desktop-server/tests/math_render.test.mjs crates/desktop-server/tests/hitl_ui.test.mjs
+```
+
+Windows 11 AppContainer sandbox probes require Python with `sympy` and `numpy`:
+
+```powershell
+$env:RE_SEARCH_PYTHON = "C:\path\to\python.exe"
+cargo test --workspace --no-fail-fast
+```
+
+Windows-only integration suites cover DPAPI `VaultLock` (`chatgpt-auth`, `desktop-server/chatgpt_route`) and Job-Object CLI route spawning (`claude_cli_*`, `antigravity_route` turn tests) using loopback mocks and scripted fake CLIs.
+
+---
+
+## 11. Licence
+
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE). `rmcp` (Apache-2.0) is isolated strictly in `crates/mcp-server` and excluded from all other crates.
