@@ -9,7 +9,7 @@ use crate::guardrails::{
     build_research_system_prompt, check_computation_interpretation, check_final_answer_gate,
     GuardrailConfig,
 };
-use crate::honesty::{infer_campaign_phase, lint_honesty, CampaignPhase};
+use crate::honesty::{infer_campaign_phase, lint_honesty_with_ledger, CampaignPhase};
 use crate::resume::{rehydrate_history, verify_and_read, ResumeConfig};
 use crate::runner::{
     run_turn_leg, tool_defs_json, AgentConfig, Audit, EventSink, LegResult, LoopParams, SessionOutcome,
@@ -351,7 +351,7 @@ fn drive_autonomous_rounds(
 
         let dag = read_proof_dag(audit.ledger, audit.session)?;
         let events = audit.ledger.read_session(audit.session).map_err(|e| e.to_string())?;
-        let honesty = lint_honesty(&leg.last_text, &dag, &events);
+        let honesty = lint_honesty_with_ledger(&leg.last_text, &dag, &events, audit.ledger);
         audit.emit("honesty.lint", serde_json::to_value(&honesty).unwrap())?;
         if !honesty.passed {
             audit.sink.on_thinking_delta(&format!(

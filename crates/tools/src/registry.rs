@@ -45,6 +45,7 @@ pub struct CallCtx<'a> {
     /// without respawning a fresh worker.
     pub required_epoch: Option<u64>,
     ran_epoch: AtomicU64,
+    worker_request_id: AtomicU64,
 }
 
 impl<'a> CallCtx<'a> {
@@ -55,7 +56,15 @@ impl<'a> CallCtx<'a> {
         ledger: &'a Mutex<Ledger>,
         required_epoch: Option<u64>,
     ) -> Self {
-        CallCtx { session, caller, call_id, ledger, required_epoch, ran_epoch: AtomicU64::new(0) }
+        CallCtx {
+            session,
+            caller,
+            call_id,
+            ledger,
+            required_epoch,
+            ran_epoch: AtomicU64::new(0),
+            worker_request_id: AtomicU64::new(0),
+        }
     }
 
     /// Record the worker epoch (`>= 1`) that actually executed this call while
@@ -63,6 +72,19 @@ impl<'a> CallCtx<'a> {
     pub fn record_worker_epoch(&self, epoch: u64) {
         assert!(epoch > 0, "worker epoch must be >= 1");
         self.ran_epoch.store(epoch, Ordering::Release);
+    }
+
+    /// Record which request actually executed in the worker, under its lock.
+    pub fn record_worker_execution(&self, epoch: u64, request_id: u64) {
+        self.record_worker_epoch(epoch);
+        self.worker_request_id.store(request_id, Ordering::Release);
+    }
+
+    pub(crate) fn worker_request_id(&self) -> Option<u64> {
+        match self.worker_request_id.load(Ordering::Acquire) {
+            0 => None,
+            n => Some(n),
+        }
     }
 
     pub(crate) fn worker_epoch(&self) -> Option<u64> {

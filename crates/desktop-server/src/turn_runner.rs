@@ -495,7 +495,7 @@ pub(crate) fn build_desktop_router(
             let (result, ran_epoch) = w
                 .evaluate_in_epoch(code, timeout, ctx.required_epoch)
                 .map_err(|e| e.to_string())?;
-            ctx.record_worker_epoch(ran_epoch);
+            ctx.record_worker_execution(ran_epoch, w.last_request_id());
             Ok(result)
         }),
     );

@@ -1,6 +1,6 @@
 //! Structural branch diffing across verified session branches (F14).
 
-use crate::BranchDiffReport;
+use crate::{latex::collect_proof_items, BranchDiffReport};
 use ledger::{canonical_json, Event, Ledger};
 use serde_json::Value;
 use similar::TextDiff;
@@ -20,29 +20,28 @@ fn extract_proof_entries(events: &[Event]) -> Vec<Value> {
 }
 
 fn extract_final_answer(events: &[Event]) -> Option<String> {
-    let from_proof = events
-        .iter()
-        .rev()
-        .find(|ev| {
-            ev.kind == "proof.entry"
-                && ev.payload.get("entry_type").and_then(Value::as_str) == Some("final_answer")
-        })
-        .and_then(|ev| {
-            ev.payload
-                .get("details")
-                .or_else(|| ev.payload.get("summary"))
-                .or_else(|| ev.payload.get("latex"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        });
-    if from_proof.is_some() {
-        return from_proof;
+    let mut final_entries = collect_proof_items(events)
+        .into_iter()
+        .filter(|entry| entry.entry_type == "final_answer")
+        .peekable();
+    if final_entries.peek().is_some() {
+        return final_entries
+            .filter(|entry| entry.status != "superseded")
+            .max_by_key(|entry| entry.seq)
+            .and_then(|entry| {
+                [Some(entry.details), Some(entry.summary), entry.latex]
+                    .into_iter()
+                    .flatten()
+                    .find(|text| !text.trim().is_empty())
+            });
     }
     events
         .iter()
         .rev()
-        .find(|ev| ev.kind == "model.text")
-        .and_then(|ev| ev.payload.get("text").and_then(Value::as_str).map(str::to_string))
+        .filter(|ev| ev.kind == "model.text")
+        .filter_map(|ev| ev.payload["text"].as_str())
+        .find(|text| !text.trim().is_empty())
+        .map(str::to_string)
 }
 
 fn format_branch_summary(entries: &[Value], final_answer: Option<&str>) -> String {

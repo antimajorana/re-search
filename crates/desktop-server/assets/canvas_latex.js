@@ -10,6 +10,8 @@ let saveBtn = null;
 let auditBtn = null;
 let auditResultsEl = null;
 let currentSessionId = null;
+let workspaceRequest = 0;
+let fileRequest = 0;
 let originalContent = '';
 let previewTimer = null;
 let notifyFn = () => {};
@@ -68,11 +70,32 @@ function updateLineCount() {
   lineCountEl.textContent = `${lines} line${lines === 1 ? '' : 's'}`;
 }
 
+function showFile(text, ready) {
+  originalContent = text;
+  clearTimeout(previewTimer);
+  if (editorEl) {
+    editorEl.value = text;
+    editorEl.disabled = !ready;
+  }
+  if (saveBtn) saveBtn.disabled = !ready;
+  if (auditBtn) auditBtn.disabled = !ready;
+  if (auditResultsEl) auditResultsEl.hidden = true;
+  updateLineCount();
+  renderLatexDocumentPreview(previewEl, text);
+}
+
 export async function refreshWorkspaceFiles(sessionId) {
-  currentSessionId = sessionId;
+  const request = ++workspaceRequest;
+  if (sessionId !== currentSessionId) {
+    currentSessionId = sessionId;
+    fileRequest += 1;
+    if (fileSelectEl) fileSelectEl.replaceChildren();
+    showFile('', false);
+  }
   if (!sessionId || !fileSelectEl) return;
   try {
     const data = await api.getWorkspace(sessionId);
+    if (request !== workspaceRequest) return;
     const entries = Array.isArray(data && data.files)
       ? data.files
       : Array.isArray(data && data.entries)
@@ -89,6 +112,10 @@ export async function refreshWorkspaceFiles(sessionId) {
       opt.value = '';
       opt.textContent = 'draft.tex (scratch)';
       fileSelectEl.appendChild(opt);
+      if (prev || editorEl?.disabled) {
+        fileRequest += 1;
+        showFile('', true);
+      }
       return;
     }
     for (const p of texFiles) {
@@ -106,17 +133,15 @@ export async function refreshWorkspaceFiles(sessionId) {
 }
 
 async function loadLatexFile(sessionId, relPath) {
+  const request = ++fileRequest;
+  showFile('', false);
   try {
     const data = await api.getWorkspace(sessionId, relPath);
+    if (request !== fileRequest) return;
     const content = (data && (data.content || data.text)) || '';
-    originalContent = content;
-    if (editorEl) {
-      editorEl.value = content;
-      updateLineCount();
-      renderLatexDocumentPreview(previewEl, content);
-    }
+    showFile(content, true);
   } catch (err) {
-    notifyFn(`Could not load ${relPath}: ${err.message}`);
+    if (request === fileRequest) notifyFn(`Could not load ${relPath}: ${err.message}`);
   }
 }
 
@@ -125,6 +150,9 @@ async function handleSavePatch() {
     notifyFn('Select or create a session first.');
     return;
   }
+  if (saveBtn?.disabled) return;
+  const sessionId = currentSessionId;
+  const request = fileRequest;
   const path = fileSelectEl && fileSelectEl.value ? fileSelectEl.value : 'draft.tex';
   const nextText = editorEl ? editorEl.value : '';
   const payload = originalContent
@@ -133,13 +161,15 @@ async function handleSavePatch() {
 
   try {
     if (saveBtn) saveBtn.disabled = true;
-    await api.patchLatex(currentSessionId, payload);
-    originalContent = nextText;
-    notifyFn(`Saved patch to ${path}`);
+    await api.patchLatex(sessionId, payload);
+    if (request === fileRequest) {
+      originalContent = nextText;
+      notifyFn(`Saved patch to ${path}`);
+    }
   } catch (err) {
-    notifyFn(`Save failed: ${err.message}`);
+    if (request === fileRequest) notifyFn(`Save failed: ${err.message}`);
   } finally {
-    if (saveBtn) saveBtn.disabled = false;
+    if (request === fileRequest && saveBtn) saveBtn.disabled = false;
   }
 }
 
@@ -148,16 +178,19 @@ async function handleTexAudit() {
     notifyFn('Select or create a session first.');
     return;
   }
+  if (auditBtn?.disabled) return;
+  const sessionId = currentSessionId;
+  const request = fileRequest;
   const path = fileSelectEl && fileSelectEl.value ? fileSelectEl.value : undefined;
   const candidate_tex = editorEl && editorEl.value.trim() ? editorEl.value : undefined;
   try {
     if (auditBtn) auditBtn.disabled = true;
-    const report = await api.runTexAudit(currentSessionId, { path, candidate_tex });
-    renderAuditReport(report);
+    const report = await api.runTexAudit(sessionId, { path, candidate_tex });
+    if (request === fileRequest) renderAuditReport(report);
   } catch (err) {
-    notifyFn(`TeX Audit failed: ${err.message}`);
+    if (request === fileRequest) notifyFn(`TeX Audit failed: ${err.message}`);
   } finally {
-    if (auditBtn) auditBtn.disabled = false;
+    if (request === fileRequest && auditBtn) auditBtn.disabled = false;
   }
 }
 

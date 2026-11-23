@@ -184,6 +184,13 @@ fn autonomous_loop_rejects_consults_strategist_revises_accepts_and_resumes_lossl
     assert!(round2_last_msg.contains("Sign of excitation energy inverted"), "{round2_last_msg}");
     assert!(round2_last_msg.contains("Delta = 1 gives +2"), "{round2_last_msg}");
     assert!(round2_last_msg.contains("positive branch"), "{round2_last_msg}");
+    let proof = research_tools::read_proof_dag(&ledger, session).unwrap();
+    assert_eq!(proof.entries[0].status, research_tools::ProofStatus::Superseded);
+    let correction = proof.entries.iter().find(|e| e.entry_type == "correction").unwrap();
+    assert_eq!(proof.entries[0].superseded_by.as_deref(), Some(correction.entry_id.as_str()));
+    let second_review = serde_json::to_string(&verifier.seen_requests()[1].messages).unwrap();
+    assert!(second_review.contains("Revised: energy gap"));
+    assert!(!second_review.contains("sign error"));
 
     // Follow-up Leg 2 resume must rehydrate Round 1 + `autonomous.feedback` + Round 2 losslessly!
     let solver_leg2 = MockTransport::new("anthropic-messages", vec![anthropic_text_reply("m-leg2", "Follow-up verified.")]);

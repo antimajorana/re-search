@@ -56,57 +56,71 @@ pub(crate) fn ensure_active_final_answer_entry(
     last_text: &str,
 ) -> Result<(), String> {
     let dag = read_proof_dag(audit.ledger, audit.session)?;
-    let has_fresh_final = dag.entries.iter().any(|e| {
+    let fresh_final = dag.entries.iter().rev().find(|e| {
         e.seq > leg_start_seq && e.entry_type == "final_answer" && e.status != ProofStatus::Superseded
     });
-    if has_fresh_final {
-        return Ok(());
-    }
-    let prior_finals: Vec<String> = dag
-        .entries
-        .iter()
-        .filter(|e| e.entry_type == "final_answer" && e.status != ProofStatus::Superseded)
-        .map(|e| e.entry_id.clone())
-        .collect();
-    let deps: Vec<String> = dag
-        .entries
-        .iter()
-        .filter(|e| e.entry_type != "final_answer" && e.status != ProofStatus::Superseded)
-        .map(|e| e.entry_id.clone())
-        .collect();
-    let details: String = if last_text.trim().is_empty() {
-        "(empty candidate response)".to_string()
+    let new_id = if let Some(entry) = fresh_final {
+        entry.entry_id.clone()
     } else {
-        last_text.chars().take(15_500).collect()
-    };
-    let out = router.try_call(
-        "supervisor:autonomous",
-        LEDGER_APPEND,
-        &json!({
+        let deps: Vec<_> = dag
+            .entries
+            .iter()
+            .filter(|e| e.entry_type != "final_answer" && e.status != ProofStatus::Superseded)
+            .map(|e| &e.entry_id)
+            .collect();
+        let details: String = if last_text.trim().is_empty() {
+            "(empty candidate response)".to_string()
+        } else {
+            last_text.chars().take(15_500).collect()
+        };
+        append_supervisor_entry(router, audit, &json!({
             "entry_type": "final_answer",
             "summary": format!("Candidate solution (verification round {round})"),
             "details": details,
             "depends_on": deps,
-        }),
-    )?;
-    audit.flush_interleaved()?;
-    if let CallOutcome::Ok(val) = out {
-        if let Some(new_id) = val.get("entry_id").and_then(Value::as_str) {
-            for old_id in prior_finals {
-                let _ = router.try_call(
-                    "supervisor:autonomous",
-                    LEDGER_SUPERSEDE,
-                    &json!({
-                        "entry_id": old_id,
-                        "replaced_by": new_id,
-                        "reason": format!("Superseded by revised candidate in round {round}"),
-                    }),
-                )?;
-            }
-            audit.flush_interleaved()?;
+        }))?
+    };
+
+    let rejected: Vec<_> = dag
+        .entries
+        .iter()
+        .filter(|e| e.seq <= leg_start_seq && e.entry_type == "final_answer" && e.status == ProofStatus::Rejected)
+        .map(|e| &e.entry_id)
+        .collect();
+    if rejected.is_empty() {
+        return Ok(());
+    }
+    let reason = format!("Revised candidate recorded in {new_id}");
+    let correction_id = append_supervisor_entry(router, audit, &json!({
+        "entry_type": "correction",
+        "summary": "Replace rejected final answer",
+        "details": reason,
+        "depends_on": [new_id],
+    }))?;
+    for entry_id in rejected {
+        let outcome = router.try_call(
+            "supervisor:autonomous",
+            LEDGER_SUPERSEDE,
+            &json!({ "entry_id": entry_id, "replaced_by": correction_id, "reason": reason }),
+        )?;
+        audit.flush_interleaved()?;
+        if let CallOutcome::Denied(err) | CallOutcome::Error(err) = outcome {
+            return Err(format!("could not supersede rejected final answer {entry_id}: {err}"));
         }
     }
     Ok(())
+}
+
+fn append_supervisor_entry(router: &Router, audit: &mut Audit<'_>, args: &Value) -> Result<String, String> {
+    let outcome = router.try_call("supervisor:autonomous", LEDGER_APPEND, args)?;
+    audit.flush_interleaved()?;
+    match outcome {
+        CallOutcome::Ok(value) => value["entry_id"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| "ledger_append returned no entry ID".into()),
+        CallOutcome::Denied(err) | CallOutcome::Error(err) => Err(format!("could not record proof entry: {err}")),
+    }
 }
 
 pub(crate) fn maybe_run_strategist(

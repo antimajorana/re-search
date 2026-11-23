@@ -17,11 +17,19 @@ pub(crate) struct ProofItem {
     pub depends_on: Vec<String>,
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ReplayWorker {
+    LegacyLeg(u64),
+    Recorded { instance: String, epoch: u64 },
+}
+
 pub(crate) struct SympyCall {
     pub seq: u64,
     pub call_id: String,
     pub code: String,
     pub output: String,
+    pub worker: ReplayWorker,
+    pub execution_order: u64,
 }
 
 pub(crate) struct SessionExportData {
@@ -79,7 +87,7 @@ pub(crate) fn load_session_export_data(data_dir: &Path, session: &str) -> Result
     })
 }
 
-fn collect_proof_items(events: &[Event]) -> Vec<ProofItem> {
+pub(crate) fn collect_proof_items(events: &[Event]) -> Vec<ProofItem> {
     let mut map: BTreeMap<String, ProofItem> = BTreeMap::new();
     let mut order = Vec::new();
     for ev in events {
@@ -169,42 +177,69 @@ fn resolve_slot(ledger: &Ledger, slot: Option<&Value>) -> String {
 }
 
 fn collect_sympy_calls(ledger: &Ledger, events: &[Event]) -> Vec<SympyCall> {
-    let mut results_by_id: BTreeMap<String, String> = BTreeMap::new();
-    for ev in events {
-        if ev.kind == "tool.result" {
-            if let Some(cid) = ev.payload.get("call_id").and_then(Value::as_str) {
-                let ok = ev.payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
-                let txt = resolve_slot(ledger, ev.payload.get(if ok { "result" } else { "error" }));
-                results_by_id.insert(cid.to_string(), txt);
-            }
-        }
-    }
+    let mut pending = BTreeMap::new();
+    let mut leg_seq = 0;
     let mut calls = Vec::new();
     for ev in events {
-        if ev.kind == "tool.request"
-            && ev.payload.get("tool").and_then(Value::as_str) == Some("sympy_eval")
-        {
-            let call_id = ev
-                .payload
-                .get("call_id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let args_raw = resolve_slot(ledger, ev.payload.get("args"));
-            let code = serde_json::from_str::<Value>(&args_raw)
-                .ok()
-                .and_then(|v| v.get("code").and_then(Value::as_str).map(str::to_string))
-                .unwrap_or_default();
-            if !code.trim().is_empty() {
+        if matches!(ev.kind.as_str(), "session.start" | "session.resume") {
+            leg_seq = ev.seq;
+        }
+        let Some(call_id) = ev.payload.get("call_id").and_then(Value::as_str) else {
+            continue;
+        };
+        match ev.kind.as_str() {
+            "tool.request" if ev.payload.get("tool").and_then(Value::as_str) == Some("sympy_eval") => {
+                pending.insert(call_id, (ev, leg_seq));
+            }
+            "tool.denied" => {
+                pending.remove(call_id);
+            }
+            "tool.result" => {
+                let Some((request, request_leg)) = pending.remove(call_id) else {
+                    continue;
+                };
+                if ev.payload.get("ok").and_then(Value::as_bool) != Some(true) {
+                    continue;
+                }
+                let output = resolve_slot(ledger, ev.payload.get("result"));
+                let Ok(result) = serde_json::from_str::<Value>(&output) else {
+                    continue;
+                };
+                // The worker reports Python exceptions inside a successful RPC result.
+                if !result.is_object() || !result["error"].is_null() {
+                    continue;
+                }
+                let args_raw = resolve_slot(ledger, request.payload.get("args"));
+                let Ok(args) = serde_json::from_str::<Value>(&args_raw) else {
+                    continue;
+                };
+                let Some(code) = args["code"].as_str().filter(|code| !code.trim().is_empty()) else {
+                    continue;
+                };
+                let execution = &ev.payload["worker_execution"];
+                let (worker, execution_order) = match (
+                    execution["instance"].as_str(),
+                    execution["epoch"].as_u64(),
+                    execution["request_id"].as_u64(),
+                ) {
+                    (Some(instance), Some(epoch), Some(request_id)) => {
+                        (ReplayWorker::Recorded { instance: instance.into(), epoch }, request_id)
+                    }
+                    _ => (ReplayWorker::LegacyLeg(request_leg), ev.seq),
+                };
                 calls.push(SympyCall {
-                    seq: ev.seq,
-                    output: results_by_id.remove(&call_id).unwrap_or_default(),
-                    call_id,
-                    code,
+                    seq: request.seq,
+                    call_id: call_id.into(),
+                    code: code.into(),
+                    output,
+                    worker,
+                    execution_order,
                 });
             }
+            _ => {}
         }
     }
+    calls.sort_by_key(|call| call.seq);
     calls
 }
 

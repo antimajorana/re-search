@@ -61,16 +61,25 @@ pub struct VerificationReport {
     pub event_seq: u64,
 }
 
-fn load_problem_and_entries(
+fn load_context_and_entries(
     ledger: &Ledger,
     session: &str,
 ) -> Result<(String, Vec<ProofEntry>), String> {
     let events = ledger
         .read_session(session)
         .map_err(|e| format!("cannot read session `{session}`: {e}"))?;
-    let prompts: Vec<&str> = events
+    let turns = events
         .iter()
-        .filter(|e| e.kind == "session.start" || e.kind == "session.resume")
+        .filter(|e| e.kind == "session.start" || e.kind == "session.resume");
+    // Each turn records its own conventions, including when the setting is cleared.
+    let pinned_conventions = turns
+        .clone()
+        .next_back()
+        .and_then(|e| e.payload.get("pinned_conventions"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    let prompts: Vec<&str> = turns
         .filter_map(|e| e.payload.get("prompt").and_then(Value::as_str))
         .filter(|p| !p.trim().is_empty())
         .collect();
@@ -89,13 +98,18 @@ fn load_problem_and_entries(
             )
         }
     };
+    let mut context = format!("<problem_prompt>\n{problem_prompt}\n</problem_prompt>");
+    if let Some(conventions) = pinned_conventions {
+        let conventions = conventions.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+        context.push_str(&format!("\n\n<pinned_conventions>\n{conventions}\n</pinned_conventions>"));
+    }
     let dag = read_proof_dag(ledger, session)?;
     let entries = if !dag.entries.is_empty() {
         dag.entries
     } else {
         materialize_proof_entries(&events)
     };
-    Ok((problem_prompt, entries))
+    Ok((context, entries))
 }
 
 fn collect_ancestor_slice(entries: &[ProofEntry], target_id: &str) -> Result<Vec<ProofEntry>, String> {
@@ -214,7 +228,7 @@ struct VerifierParams<'a> {
     target_entry_id: &'a str,
     kind: &'a str,
     entries_slice: &'a [ProofEntry],
-    problem_prompt: &'a str,
+    problem_context: &'a str,
     model: &'a str,
     cancel: Option<&'a CancelToken>,
 }
@@ -229,7 +243,7 @@ fn execute_verifier(
     let target_entry_id = params.target_entry_id;
     let kind = params.kind;
     let entries_slice = params.entries_slice;
-    let problem_prompt = params.problem_prompt;
+    let problem_context = params.problem_context;
     let model = params.model;
     if model.trim().is_empty() {
         return Err("verifier model name must not be empty".into());
@@ -252,8 +266,8 @@ fn execute_verifier(
     let tex_audit_xml = format_deterministic_tex_audit_xml(&tex_audit);
     let system_prompt = if kind == "full" {
         "You are an independent stateless full-solution verifier (full_verification). \
-         Judge mathematical soundness strictly from `<problem_prompt>`, `<proof_entries>`, and \
-         `<deterministic_tex_audit>`. Note: `<problem_prompt>` may contain a `Latest user request to verify:` \
+         Judge mathematical soundness strictly from `<problem_prompt>`, any `<pinned_conventions>`, \
+         `<proof_entries>`, and `<deterministic_tex_audit>`. `<problem_prompt>` may contain a `Latest user request to verify:` \
          section followed by `Earlier session prompts (context):` — always judge whether `target_entry_id` \
          rigorously solves the Latest user request (using earlier prompts only as background/notation context; \
          never reject a follow-up proof merely for not re-proving an earlier turn's result). \
@@ -263,15 +277,15 @@ fn execute_verifier(
          Respond in JSON with {verdict: \"accepted\"|\"rejected\", summary, counterexample, issues}."
     } else {
         "You are an independent stateless step verifier (step_verification). \
-         Judge the target proof step strictly from `<problem_prompt>`, its `depends_on` ancestor \
-         entries, and `<deterministic_tex_audit>`. If `<problem_prompt>` separates `Latest user request to verify:` \
+         Judge the target proof step strictly from `<problem_prompt>`, any `<pinned_conventions>`, \
+         its `depends_on` ancestor entries, and `<deterministic_tex_audit>`. If `<problem_prompt>` separates `Latest user request to verify:` \
          from `Earlier session prompts (context):`, use the latest request as the active goal. \
          If rejecting, state constructively what fails and what fix or alternative step would work. \
          Respond in JSON with {verdict: \"accepted\"|\"rejected\", summary, counterexample, issues}."
     };
     let user_prompt = format!(
         "target_entry_id: {target_entry_id}\nverification_kind: {kind}\n\n\
-         <problem_prompt>\n{problem_prompt}\n</problem_prompt>\n\n\
+         {problem_context}\n\n\
          {}\n\n{tex_audit_xml}",
         format_entries_xml(entries_slice)
     );
@@ -382,7 +396,7 @@ pub fn verify_step(
     entry_id: &str,
     model: &str,
 ) -> Result<VerificationReport, String> {
-    let (problem_prompt, entries) = load_problem_and_entries(ledger, session)?;
+    let (problem_context, entries) = load_context_and_entries(ledger, session)?;
     let slice = collect_ancestor_slice(&entries, entry_id)?;
     execute_verifier(
         transport,
@@ -393,7 +407,7 @@ pub fn verify_step(
             target_entry_id: entry_id,
             kind: "step",
             entries_slice: &slice,
-            problem_prompt: &problem_prompt,
+            problem_context: &problem_context,
             model,
             cancel: None,
         },
@@ -420,7 +434,7 @@ pub fn verify_full_solution_cancellable(
     model: &str,
     cancel: Option<&CancelToken>,
 ) -> Result<VerificationReport, String> {
-    let (problem_prompt, entries) = load_problem_and_entries(ledger, session)?;
+    let (problem_context, entries) = load_context_and_entries(ledger, session)?;
     let active: Vec<ProofEntry> = entries
         .into_iter()
         .filter(|e| e.status != ProofStatus::Superseded)
@@ -442,7 +456,7 @@ pub fn verify_full_solution_cancellable(
             target_entry_id: &target_entry_id,
             kind: "full",
             entries_slice: &active,
-            problem_prompt: &problem_prompt,
+            problem_context: &problem_context,
             model,
             cancel,
         },

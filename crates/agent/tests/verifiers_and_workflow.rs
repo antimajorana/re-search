@@ -271,7 +271,14 @@ fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_block
     let ledger = Ledger::open(&tmp.path).unwrap();
     let env = ResearchEnv::new(&tmp.path);
 
-    ledger.append_with_hash(session, "session.start", 1, &json!({ "route": "api", "prompt": "Prove Z" })).unwrap();
+    ledger
+        .append_with_hash(
+            session,
+            "session.start",
+            1,
+            &json!({ "route": "api", "prompt": "Prove Z", "pinned_conventions": "Use mostly-plus metric." }),
+        )
+        .unwrap();
     // Main solver bias text that MUST NOT appear in stateless verifier prompt.
     ledger.append_with_hash(session, "model.text", 1, &json!({ "text": "SOLVER_PRIVATE_BIAS_TOKEN" })).unwrap();
     ledger
@@ -327,6 +334,8 @@ fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_block
     };
     assert!(user_txt.contains("Prove Z") && user_txt.contains("e-1") && user_txt.contains("e-2"));
     assert!(user_txt.contains("<deterministic_tex_audit"));
+    assert!(user_txt.contains("<pinned_conventions>\nUse mostly-plus metric.\n</pinned_conventions>"));
+    assert!(reqs[0].system.as_deref().unwrap().contains("<pinned_conventions>"));
     assert!(!user_txt.contains("SOLVER_PRIVATE_BIAS_TOKEN"));
     assert!(!user_txt.contains("UNRELATED_BRANCH_TOKEN"));
 
@@ -359,9 +368,20 @@ fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_block
         )
         .unwrap();
 
+    ledger
+        .append_with_hash(
+            session,
+            "session.resume",
+            1,
+            &json!({ "prompt": "Check this citation", "pinned_conventions": "Use mostly-minus metric and q < 0." }),
+        )
+        .unwrap();
     let tr_full = CapturingTransport::new(
         "anthropic-messages",
-        vec![CapturingTransport::text_reply("claude-haiku-4-5", &accepted_json)],
+        vec![
+            CapturingTransport::text_reply("claude-haiku-4-5", &accepted_json),
+            CapturingTransport::text_reply("claude-haiku-4-5", &accepted_json),
+        ],
     );
     let fres = verify_full_solution(&tr_full, &ledger, &env, session, "claude-haiku-4-5").unwrap();
     assert_eq!(fres.verdict, VerificationVerdict::Rejected, "withdrawn arXiv blocker must force Rejected");
@@ -371,6 +391,23 @@ fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_block
         _ => panic!(),
     };
     assert!(!full_user_txt.contains("UNRELATED_BRANCH_TOKEN"));
+    assert!(!full_user_txt.contains("mostly-plus"));
+    assert!(full_user_txt.contains("<pinned_conventions>\nUse mostly-minus metric and q &lt; 0.\n</pinned_conventions>"));
+    assert!(tr_full.captured()[0].system.as_deref().unwrap().contains("<pinned_conventions>"));
+
+    ledger
+        .append_with_hash(
+            session,
+            "session.resume",
+            1,
+            &json!({ "prompt": "Check again", "pinned_conventions": "" }),
+        )
+        .unwrap();
+    verify_full_solution(&tr_full, &ledger, &env, session, "claude-haiku-4-5").unwrap();
+    let reqs = tr_full.captured();
+    let ContentBlock::Text { text } = &reqs[1].messages[0].content[0] else { panic!() };
+    assert!(!text.contains("<pinned_conventions>"));
+    assert!(!text.contains("mostly-minus"));
 
     let evs = ledger.read_session(session).unwrap();
     assert!(evs.iter().any(|e| e.kind == "proof.verification_attempt" && e.payload["phase"] == "started"));

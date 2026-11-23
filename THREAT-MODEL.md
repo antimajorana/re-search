@@ -841,9 +841,8 @@ exactly as on the API-key route; the session records `route: "api"`,
 The user chose to build this route knowing two things it cannot fix: Google's terms
 for consumer plans may treat third-party wrapping of the Antigravity CLI as
 unsupported or as a breach (account risk, the user's own), and the CLI's built-in
-tools are outside re:Search's control. Every surface labels it "vendor-sandboxed,
-not confined to re:Search tools" (Connect row, model group, composer note, start
-event, session API `confinement`/`route_label`, this file, README).
+tools are outside re:Search's control. The Connect row, model group, composer
+note, start event and session API identify the route as vendor-sandboxed.
 
 - **Gate.** `POST /api/connections/antigravity/acknowledge` (header token) stores
   `antigravity_ack {acknowledged_ms, notice_version}` in `ui_settings.json`

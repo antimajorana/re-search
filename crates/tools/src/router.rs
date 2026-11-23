@@ -53,6 +53,7 @@ pub struct Router {
     session: String,
     approver: Arc<dyn Approver>,
     store: ApprovalStore,
+    worker_instance: String,
 }
 
 impl Router {
@@ -64,6 +65,7 @@ impl Router {
             session: session.to_string(),
             approver,
             store: ApprovalStore::new(),
+            worker_instance: random_hex(16),
         }
     }
 
@@ -396,7 +398,15 @@ impl Router {
         match handler.call(&ctx, args) {
             Ok(value) => {
                 let stored = self.inline_or_blob(&canonical_json(&value))?;
-                self.record("tool.result", json!({ "call_id": call_id, "ok": true, "result": stored }))?;
+                let mut payload = json!({ "call_id": call_id, "ok": true, "result": stored });
+                if let (Some(epoch), Some(request_id)) = (ctx.worker_epoch(), ctx.worker_request_id()) {
+                    payload["worker_execution"] = json!({
+                        "instance": self.worker_instance,
+                        "epoch": epoch,
+                        "request_id": request_id,
+                    });
+                }
+                self.record("tool.result", payload)?;
                 if scope == ApprovalScope::WorkerSession {
                     if let (Some(grant_digest), Some(ran_ep)) = (bind_session_digest, ctx.worker_epoch()) {
                         let live_now = epoch_src.and_then(|e| e.live_epoch());

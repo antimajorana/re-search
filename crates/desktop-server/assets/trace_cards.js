@@ -368,15 +368,17 @@ export function buildRecoveryPrompt(action, ctx = {}) {
 
 export function buildVerificationVerdictCard(msgPayload, onInspectStep, onRecoveryAction) {
   if (!msgPayload) return null;
-  const verifications = Array.isArray(msgPayload.verifications) ? msgPayload.verifications : [];
-  const status = msgPayload.verified_status || '';
-  if (!status && verifications.length === 0) return null;
+  const status = msgPayload.verified_status;
+  if (status !== 'verified' && status !== 'unverified') return null;
+  const verifications = Array.isArray(msgPayload.verifications)
+    ? msgPayload.verifications.filter((v) => v && v.verified_status)
+    : [];
 
-  const latest = verifications.length > 0 ? verifications[verifications.length - 1] : null;
-  const isVerified = status === 'verified' || (!status && latest && latest.verdict === 'accepted');
+  const latest = verifications.findLast((v) => v.verified_status === status);
+  const isVerified = status === 'verified';
   const rounds = Number(msgPayload.verification_rounds) || verifications.length || 1;
   const targetId = String(msgPayload.verified_entry_id || (latest && latest.target_entry_id) || '');
-  const summary = String((latest && latest.summary) || (isVerified ? 'All active Proof-DAG steps passed stateless verification.' : 'Independent Verifier reported unresolved issues.'));
+  const summary = String((latest && latest.summary) || (isVerified ? 'The Independent Verifier accepted the final answer.' : 'Independent Verifier reported unresolved issues.'));
   const issues = Array.isArray(latest && latest.issues) ? latest.issues : [];
   const recovery = typeof msgPayload.recovery === 'string' ? msgPayload.recovery.trim() : '';
 

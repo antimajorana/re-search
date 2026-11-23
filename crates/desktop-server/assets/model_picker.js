@@ -201,7 +201,7 @@ function openConnect() {
   if (typeof callbacks.onOpenConnect === 'function') callbacks.onOpenConnect();
 }
 
-const AGY_FALLBACK_NOTE = 'Antigravity CLI';
+const AGY_FALLBACK_NOTE = 'Antigravity CLI · vendor-sandboxed';
 
 // The route a session is bound to, as the server decides it: fixed once a turn has
 // recorded `session.start` (route "claude-code-cli" or "antigravity" for a subscription
@@ -260,7 +260,7 @@ export function noModelReason() {
     return 'This session runs on your Claude subscription (Claude Code), which is not available right now. Start a new session to use another model.';
   }
   if (routeLock === AGY_ROUTE_ID) {
-    return 'This session uses the Antigravity CLI, which is unavailable right now. Start a new session to use another model.';
+    return 'This session uses the Antigravity CLI. Check its availability under Settings → Providers, or start a new session to use another model.';
   }
   return "This session runs in re:Search's own loop (an API provider or your ChatGPT plan), and none is connected right now. Start a new session to use a subscription CLI.";
 }

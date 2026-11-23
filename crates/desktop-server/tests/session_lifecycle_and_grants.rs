@@ -7,12 +7,69 @@ mod common;
 
 use common::{drain_http_request, launch_cookie, raw_http, test_cfg};
 use desktop_server::start_desktop_server;
+use export::{fork_session, ForkOptions};
 use ledger::Ledger;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 use tempfile::TempDir;
+
+#[test]
+fn ledger_only_forks_expose_their_immediate_parent_and_fork_details() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let ledger = Ledger::open(&data_dir).unwrap();
+    let original = "s-original";
+    ledger
+        .append_with_hash(original, "session.start", 1, &json!({ "prompt": "Solve for x" }))
+        .unwrap();
+    let child = fork_session(
+        &data_dir,
+        &ForkOptions {
+            parent_session: original.to_string(),
+            at_seq: 1,
+            modified_assumption: Some("x is positive".to_string()),
+        },
+    )
+    .unwrap();
+    let child_head = ledger.read_session(&child.new_session).unwrap().last().unwrap().seq;
+    let grandchild = fork_session(
+        &data_dir,
+        &ForkOptions {
+            parent_session: child.new_session.clone(),
+            at_seq: child_head,
+            modified_assumption: Some("x is even".to_string()),
+        },
+    )
+    .unwrap();
+
+    let srv = start_desktop_server(test_cfg(&data_dir, None, None, None)).unwrap();
+    let port = srv.addr.port();
+    let headers = [("X-ReSearch-Token", srv.info.token.as_str())];
+    let (status, _, list) = raw_http(port, "GET", "/api/sessions", &headers, b"");
+    assert_eq!(status, 200);
+    let list: Value = serde_json::from_slice(&list).unwrap();
+    let sessions = list["sessions"].as_array().unwrap();
+    for fork in [&child, &grandchild] {
+        let row = sessions.iter().find(|row| row["id"] == fork.new_session).unwrap();
+        assert_eq!(row["parent_session"], fork.parent_session);
+    }
+
+    let path = format!("/api/sessions/{}", grandchild.new_session);
+    let (status, _, detail) = raw_http(port, "GET", &path, &headers, b"");
+    assert_eq!(status, 200);
+    let detail: Value = serde_json::from_slice(&detail).unwrap();
+    assert_eq!(
+        detail["fork_info"],
+        json!({
+            "parent_session": child.new_session,
+            "forked_at_seq": child_head,
+            "modified_assumption": "x is even"
+        })
+    );
+    srv.shutdown();
+}
 
 #[test]
 fn archive_unarchive_and_delete_preserve_ledger_chain_and_workspace_files() {

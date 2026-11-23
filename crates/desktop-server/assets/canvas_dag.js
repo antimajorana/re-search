@@ -27,8 +27,11 @@ let forkInputEl = null;
 let diffPanelEl = null;
 
 let currentSessionId = null;
+let sessionRevision = 0;
+let dagRequest = 0;
 let currentDag = null;
 let selectedEntry = null;
+let forkPoint = null;
 let nodeCoords = new Map();
 let callbacks = {};
 let viewState = { scale: 1, tx: 16, ty: 16, contentW: 420, contentH: 240, hasAutoFit: false, userAdjusted: false };
@@ -49,7 +52,7 @@ export function initDagCanvas(opts = {}) {
   document.getElementById('dag-verify-btn')?.addEventListener('click', handleVerifyChain);
   document.getElementById('dag-narrate-btn')?.addEventListener('click', handleNarrateProof);
   document.getElementById('dag-fork-btn')?.addEventListener('click', () => openForkBarForSeq());
-  document.getElementById('fork-cancel-btn')?.addEventListener('click', () => { if (forkBarEl) forkBarEl.hidden = true; });
+  document.getElementById('fork-cancel-btn')?.addEventListener('click', closeForkBar);
   document.getElementById('fork-confirm-btn')?.addEventListener('click', handleConfirmFork);
 
   document.getElementById('dag-zoom-in')?.addEventListener('click', () => zoomAroundCenter(1.25));
@@ -201,13 +204,20 @@ function wirePanAndWheel() {
 }
 
 function openForkBarForSeq(seqOverride) {
-  if (!forkBarEl) return;
-  const shouldOpen = seqOverride !== undefined || forkBarEl.hidden;
-  forkBarEl.hidden = !shouldOpen;
-  if (shouldOpen && forkSeqEl) {
-    const seq = seqOverride ?? (selectedEntry ? selectedEntry.seq : latestSeq());
-    forkSeqEl.textContent = String(seq || 1);
+  if (!forkBarEl || !currentSessionId || document.getElementById('fork-confirm-btn')?.disabled) return;
+  if (seqOverride === undefined && !forkBarEl.hidden) {
+    closeForkBar();
+    return;
   }
+  const atSeq = Number(seqOverride ?? selectedEntry?.seq ?? latestSeq()) || undefined;
+  forkPoint = { atSeq };
+  forkBarEl.hidden = false;
+  if (forkSeqEl) forkSeqEl.textContent = String(atSeq ?? 'latest');
+}
+
+function closeForkBar() {
+  forkPoint = null;
+  if (forkBarEl) forkBarEl.hidden = true;
 }
 
 function latestSeq() {
@@ -216,30 +226,48 @@ function latestSeq() {
 }
 
 export async function refreshDag(sessionId) {
+  const request = ++dagRequest;
   const isNewSession = sessionId !== currentSessionId;
-  currentSessionId = sessionId;
   if (isNewSession) {
+    currentSessionId = sessionId;
+    sessionRevision += 1;
+    currentDag = null;
     selectedEntry = null;
     viewState.hasAutoFit = false;
     viewState.userAdjusted = false;
+    closeForkBar();
+    if (forkInputEl) forkInputEl.value = '';
+    if (verifyBadgeEl) verifyBadgeEl.hidden = true;
+    if (diffPanelEl) diffPanelEl.hidden = true;
+    for (const id of ['dag-verify-btn', 'dag-narrate-btn', 'fork-confirm-btn']) {
+      const button = document.getElementById(id);
+      if (button) button.disabled = false;
+    }
+    const narrateBtn = document.getElementById('dag-narrate-btn');
+    if (narrateBtn) narrateBtn.textContent = 'Narrate Proof';
+    renderEmptySvg(sessionId ? 'Loading proof graph…' : 'Select a session to view its proof graph.');
     renderDagNodeDetail(detailEl, null, []);
+    callbacks.onDagCount?.(0);
   }
   if (!sessionId || !svgEl) return 0;
   try {
     const dag = await api.getDag(sessionId);
+    if (request !== dagRequest) return 0;
     currentDag = dag;
-    renderDagSvg(dag, isNewSession);
     const entries = Array.isArray(dag && dag.entries) ? dag.entries : [];
-    if (selectedEntry) {
-      const refreshed = entries.find((e) => e.entry_id === selectedEntry.entry_id);
-      if (refreshed) renderDetailForEntry(refreshed);
-    }
-    if (typeof callbacks.onDagCount === 'function') callbacks.onDagCount(entries.length);
+    const oldSelection = selectedEntry;
+    selectedEntry = oldSelection && entries.find((e) => e.entry_id === oldSelection.entry_id);
+    renderDagSvg(dag, isNewSession);
+    if (oldSelection) renderDetailForEntry(selectedEntry);
+    callbacks.onDagCount?.(entries.length);
     return entries.length;
   } catch {
+    if (request !== dagRequest) return 0;
+    currentDag = null;
+    selectedEntry = null;
     renderEmptySvg('No proof graph recorded yet.');
     renderDagNodeDetail(detailEl, null, []);
-    if (typeof callbacks.onDagCount === 'function') callbacks.onDagCount(0);
+    callbacks.onDagCount?.(0);
     return 0;
   }
 }
@@ -434,9 +462,14 @@ function selectNode(entry) {
 }
 
 async function handleVerifyChain() {
-  if (!currentSessionId) return;
+  const sessionId = currentSessionId;
+  const revision = sessionRevision;
+  const button = document.getElementById('dag-verify-btn');
+  if (!sessionId || button?.disabled) return;
+  if (button) button.disabled = true;
   try {
-    const rep = await api.verifySession(currentSessionId);
+    const rep = await api.verifySession(sessionId);
+    if (revision !== sessionRevision) return;
     if (verifyBadgeEl) {
       const head = String(rep.head_hash || rep.chain_head || '').slice(0, 12);
       const evCount = rep.event_count ?? rep.events_verified ?? 0;
@@ -445,34 +478,45 @@ async function handleVerifyChain() {
       verifyBadgeEl.className = 'badge ok';
       verifyBadgeEl.textContent = `Verified ${head || 'SHA-256'} (${evCount} ev, ${blobs} blobs)`;
     }
-    await refreshDag(currentSessionId);
+    await refreshDag(sessionId);
   } catch (err) {
-    if (verifyBadgeEl) {
+    if (revision === sessionRevision && verifyBadgeEl) {
       verifyBadgeEl.hidden = false;
       verifyBadgeEl.className = 'badge err';
       verifyBadgeEl.textContent = `Verify failed: ${err.message}`;
     }
+  } finally {
+    if (revision === sessionRevision && button) button.disabled = false;
   }
 }
 
 async function handleConfirmFork() {
-  if (!currentSessionId) return;
-  const at_seq = Number(selectedEntry && selectedEntry.seq ? selectedEntry.seq : latestSeq()) || 1;
+  const sessionId = currentSessionId;
+  const revision = sessionRevision;
+  const button = document.getElementById('fork-confirm-btn');
+  if (!sessionId || !forkPoint || button?.disabled) return;
+  const at_seq = forkPoint.atSeq;
   const modified_assumption = forkInputEl && forkInputEl.value.trim() ? forkInputEl.value.trim() : undefined;
+  if (button) button.disabled = true;
   try {
-    const receipt = await api.forkSession(currentSessionId, { at_seq, modified_assumption });
-    if (forkBarEl) forkBarEl.hidden = true;
-    if (forkInputEl) forkInputEl.value = '';
+    const receipt = await api.forkSession(sessionId, { at_seq, modified_assumption });
+    if (revision === sessionRevision) {
+      closeForkBar();
+      if (forkInputEl) forkInputEl.value = '';
+    }
     const newId = receipt.new_session || receipt.id;
     if (newId) {
-      try {
-        const diff = await api.diffSessions(currentSessionId, newId);
-        renderBranchDiff(diff);
-      } catch { /* Optional diff summary */ }
-      if (typeof callbacks.onForkCreated === 'function') callbacks.onForkCreated(newId);
+      let diff;
+      if (revision === sessionRevision) {
+        try { diff = await api.diffSessions(sessionId, newId); } catch { /* Optional diff summary */ }
+      }
+      await callbacks.onForkCreated?.(newId, revision === sessionRevision);
+      if (currentSessionId === newId) renderBranchDiff(diff);
     }
   } catch (err) {
-    if (typeof callbacks.onNotify === 'function') callbacks.onNotify(`Fork failed: ${err.message}`);
+    if (revision === sessionRevision) callbacks.onNotify?.(`Fork failed: ${err.message}`);
+  } finally {
+    if (revision === sessionRevision && button) button.disabled = false;
   }
 }
 
@@ -489,20 +533,23 @@ function renderBranchDiff(diff) {
 }
 
 async function handleNarrateProof() {
-  if (!currentSessionId) return;
+  const sessionId = currentSessionId;
+  const revision = sessionRevision;
   const narrateBtn = document.getElementById('dag-narrate-btn');
+  if (!sessionId || narrateBtn?.disabled) return;
   if (narrateBtn) {
     narrateBtn.disabled = true;
     narrateBtn.textContent = 'Narrating...';
   }
   try {
-    const res = await api.narrateSession(currentSessionId, sideModelPayload());
+    const res = await api.narrateSession(sessionId, sideModelPayload());
+    if (revision !== sessionRevision) return;
     const text = (res && (res.narrative || res.markdown || res.text)) || JSON.stringify(res);
     if (typeof callbacks.onNarrativeReady === 'function') callbacks.onNarrativeReady(text);
   } catch (err) {
-    if (typeof callbacks.onNotify === 'function') callbacks.onNotify(`Narration failed: ${err.message}`);
+    if (revision === sessionRevision) callbacks.onNotify?.(`Narration failed: ${err.message}`);
   } finally {
-    if (narrateBtn) {
+    if (revision === sessionRevision && narrateBtn) {
       narrateBtn.disabled = false;
       narrateBtn.textContent = 'Narrate Proof';
     }

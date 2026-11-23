@@ -89,6 +89,7 @@ function updatePipelineMeta(roundText, timerText) {
 export function updatePipelineFromEvent(kind, payload = {}) {
   const bar = document.getElementById('pipeline-bar');
   if (bar && bar.hidden) bar.hidden = false;
+  if (payload.verification_invalidated) setStageState('verifier', 'idle');
 
   if (kind === 'solver_stream' || kind === 'model.request') {
     setStageState('solver', 'active');
@@ -103,11 +104,10 @@ export function updatePipelineFromEvent(kind, payload = {}) {
     const dagKind = String(payload.kind || '');
     if (dagKind === 'proof.entry' || dagKind === 'proof.supersede') {
       setStageState('ledger', 'done');
-    } else if (dagKind === 'proof.verification') {
-      const v = payload.payload && payload.payload.verdict;
+    } else if (dagKind === 'proof.verification' && payload.verified_status) {
       setStageState('solver', 'done');
       setStageState('ledger', 'done');
-      setStageState('verifier', v === 'accepted' ? 'done' : 'warn');
+      setStageState('verifier', payload.verified_status === 'verified' ? 'done' : 'warn');
     }
   } else if (kind === 'thinking_delta') {
     const txt = String(payload.delta || payload.text || '');

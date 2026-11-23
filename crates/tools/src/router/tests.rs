@@ -127,7 +127,7 @@ fn fixture_with_policy(name: &str, mode: Mode, policy_version: &str, sess_tool_d
         sess_tool_def,
         epoch.clone(),
         Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
-            runs_s.fetch_add(1, Ordering::SeqCst);
+            let request_id = runs_s.fetch_add(1, Ordering::SeqCst) as u64 + 1;
             let mut fail = ep_s.fail_next.lock().unwrap();
             if *fail {
                 *fail = false;
@@ -139,11 +139,11 @@ fn fixture_with_policy(name: &str, mode: Mode, policy_version: &str, sess_tool_d
                 if current != Some(req) {
                     return Err(format!("epoch mismatch: expected {req}, got {current:?}"));
                 }
-                ctx.record_worker_epoch(req);
+                ctx.record_worker_execution(req, request_id);
             } else {
                 let next = current.unwrap_or(1);
                 ep_s.set_epoch(next);
-                ctx.record_worker_epoch(next);
+                ctx.record_worker_execution(next, request_id);
             }
             Ok(json!({ "echo": args["x"] }))
         }),
@@ -306,6 +306,15 @@ fn uncontained_worker_forces_per_call_once_approval() {
     let events = ledger.read_session("s").unwrap();
     assert!(!events.iter().any(|e| e.kind == "approval.session_bound"));
     assert!(!events.iter().any(|e| e.kind == "approval.session_reused"));
+    let executions: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind == "tool.result")
+        .map(|e| &e.payload["worker_execution"])
+        .collect();
+    let instance = executions[0]["instance"].as_str().unwrap();
+    assert!(!instance.is_empty());
+    assert_eq!(executions[0], &json!({ "instance": instance, "epoch": 1, "request_id": 1 }));
+    assert_eq!(executions[1], &json!({ "instance": instance, "epoch": 1, "request_id": 2 }));
     for e in &events {
         match e.kind.as_str() {
             "tool.request" => assert_eq!(e.payload["approval_scope"], "once"),

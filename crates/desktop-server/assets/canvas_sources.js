@@ -26,6 +26,10 @@ let sidetalkStreamEl = null;
 let sidetalkFormEl = null;
 let sidetalkInputEl = null;
 let currentSessionId = null;
+let sessionRevision = 0;
+let sourcesRequest = 0;
+let sidetalkRequest = 0;
+let sidetalkHistory = Promise.resolve();
 let notifyFn = () => {};
 let onSelectStepRef = () => {};
 let onCountsChange = () => {};
@@ -77,13 +81,29 @@ export function initSourcesAndSidetalk(opts = {}) {
 }
 
 export async function refreshSourcesAndSidetalk(sessionId) {
-  currentSessionId = sessionId;
+  if (sessionId !== currentSessionId) {
+    currentSessionId = sessionId;
+    sessionRevision += 1;
+    for (const container of [sourcesListEl, sidetalkStreamEl, litResultsEl]) {
+      if (container) container.replaceChildren();
+    }
+    if (sidetalkInputEl) sidetalkInputEl.value = '';
+    lastSourcesCount = 0;
+    lastSidetalkCount = 0;
+    onCountsChange({ sources: 0, sidetalk: 0 });
+    const dialog = document.getElementById('source-reader-dialog');
+    if (dialog) dialog.hidden = true;
+    readerState.sessionId = null;
+  }
   if (!sessionId) return;
-  await Promise.all([loadSessionSources(sessionId), loadSidetalk(sessionId)]);
+  sidetalkHistory = loadSidetalk(sessionId);
+  await Promise.all([loadSessionSources(sessionId), sidetalkHistory]);
 }
 
 async function handleLiteratureSearch() {
-  if (!currentSessionId) {
+  const sessionId = currentSessionId;
+  const revision = sessionRevision;
+  if (!sessionId) {
     notifyFn('Select or create a session first.');
     return;
   }
@@ -99,14 +119,15 @@ async function handleLiteratureSearch() {
   };
 
   try {
-    const resp = await api.searchLiterature(currentSessionId, payload);
+    const resp = await api.searchLiterature(sessionId, payload);
+    if (revision !== sessionRevision) return;
     const items = Array.isArray(resp) ? resp : resp.results || resp.papers || resp.hits || [];
     renderLiteratureHits(items);
     if (payload.include_source) {
-      await loadSessionSources(currentSessionId);
+      await loadSessionSources(sessionId);
     }
   } catch (err) {
-    notifyFn(`Literature search failed: ${err.message}`);
+    if (revision === sessionRevision) notifyFn(`Literature search failed: ${err.message}`);
   }
 }
 
@@ -159,9 +180,12 @@ function renderLiteratureHits(items) {
 }
 
 export async function loadSessionSources(sessionId) {
-  if (!sourcesListEl || !sessionId) return;
+  if (!sourcesListEl || !sessionId || sessionId !== currentSessionId) return;
+  const revision = sessionRevision;
+  const request = ++sourcesRequest;
   try {
     const sess = await api.getSession(sessionId);
+    if (revision !== sessionRevision || request !== sourcesRequest) return;
     const sources = Array.isArray(sess && sess.sources) ? sess.sources : [];
     lastSourcesCount = sources.length;
     onCountsChange({ sources: lastSourcesCount, sidetalk: lastSidetalkCount });
@@ -210,8 +234,11 @@ export async function loadSessionSources(sessionId) {
 
 async function loadSidetalk(sessionId) {
   if (!sidetalkStreamEl || !sessionId) return;
+  const revision = sessionRevision;
+  const request = ++sidetalkRequest;
   try {
     const data = await api.getSidetalk(sessionId);
+    if (revision !== sessionRevision || request !== sidetalkRequest) return;
     const turns = Array.isArray(data) ? data : data.turns || data.messages || [];
     lastSidetalkCount = turns.length;
     onCountsChange({ sources: lastSourcesCount, sidetalk: lastSidetalkCount });
@@ -235,21 +262,27 @@ export async function askInExplain(question) {
 }
 
 async function handleSidetalkSubmit() {
-  if (!currentSessionId || !sidetalkInputEl) return;
+  const sessionId = currentSessionId;
+  const revision = sessionRevision;
+  if (!sessionId || !sidetalkInputEl) return;
   const question = sidetalkInputEl.value.trim();
   if (!question) return;
   sidetalkInputEl.value = '';
+  await sidetalkHistory;
+  if (revision !== sessionRevision) return;
   appendSidetalkPair(question, 'Thinking...');
   const pendingNode = sidetalkStreamEl ? sidetalkStreamEl.lastElementChild : null;
 
   try {
-    const resp = await api.postSidetalk(currentSessionId, { question, ...sideModelPayload() });
+    const resp = await api.postSidetalk(sessionId, { question, ...sideModelPayload() });
+    if (revision !== sessionRevision) return;
     const answer = (resp && (resp.answer || resp.text || resp.a)) || '';
     if (pendingNode) pendingNode.remove();
     appendSidetalkPair(question, answer);
     lastSidetalkCount += 1;
     onCountsChange({ sources: lastSourcesCount, sidetalk: lastSidetalkCount });
   } catch (err) {
+    if (revision !== sessionRevision) return;
     if (pendingNode) pendingNode.remove();
     appendSidetalkPair(question, `Error: ${err.message}`);
   }
@@ -257,6 +290,8 @@ async function handleSidetalkSubmit() {
 
 function appendSidetalkPair(question, answer) {
   if (!sidetalkStreamEl) return;
+  const sessionId = currentSessionId;
+  const revision = sessionRevision;
   if (sidetalkStreamEl.children.length === 1 && !sidetalkStreamEl.firstElementChild.classList.contains('source-card')) {
     sidetalkStreamEl.innerHTML = '';
   }
@@ -276,7 +311,9 @@ function appendSidetalkPair(question, answer) {
     badge.type = 'button';
     badge.className = 'pill-btn sm';
     badge.textContent = `Inspect ${stepId}`;
-    badge.addEventListener('click', () => onSelectStepRef(stepId));
+    badge.addEventListener('click', () => {
+      if (revision === sessionRevision) onSelectStepRef(stepId);
+    });
     refsBox.appendChild(badge);
   }
   const ansText = String(answer ?? '').trim();
@@ -286,14 +323,16 @@ function appendSidetalkPair(question, answer) {
     pinBtn.className = 'pill-btn sm';
     pinBtn.textContent = 'Pin to Conventions';
     pinBtn.addEventListener('click', async () => {
-      if (!currentSessionId) return;
+      if (revision !== sessionRevision || !sessionId) return;
       pinBtn.disabled = true;
       try {
         const clean = ansText.length > 1500 ? `${ansText.slice(0, 1500).trimEnd()}…` : ansText;
-        const resp = await api.promoteExplain(currentSessionId, { target: 'conventions', text: clean });
+        const resp = await api.promoteExplain(sessionId, { target: 'conventions', text: clean });
+        if (revision !== sessionRevision) return;
         if (typeof callbacks.onConventionsPromoted === 'function') callbacks.onConventionsPromoted(resp);
         notifyFn(ansText.length > 1500 ? 'Pinned trimmed Explain excerpt to session conventions.' : 'Pinned Explain note to conventions.');
       } catch (err) {
+        if (revision !== sessionRevision) return;
         if (err && err.status === 400 && /2000|exceeds/i.test(err.message || '')) {
           notifyFn('Conventions limit (2000 chars) reached — trim existing conventions in the Conventions popover.');
           const pop = document.getElementById('conventions-popover');
@@ -312,11 +351,12 @@ function appendSidetalkPair(question, answer) {
     sendBtn.className = 'pill-btn sm';
     sendBtn.textContent = 'Send to Orchestrator';
     sendBtn.addEventListener('click', async () => {
-      if (!currentSessionId) return;
+      if (revision !== sessionRevision || !sessionId) return;
       sendBtn.disabled = true;
       try {
         const sendText = ansText.length > 3900 ? `${ansText.slice(0, 3900).trimEnd()}…` : ansText;
-        const resp = await api.promoteExplain(currentSessionId, { target: 'steer', text: sendText });
+        const resp = await api.promoteExplain(sessionId, { target: 'steer', text: sendText });
+        if (revision !== sessionRevision) return;
         if (resp && resp.mode === 'steer') {
           notifyFn('Sent to active Orchestrator as live steer.');
         } else {
@@ -326,7 +366,7 @@ function appendSidetalkPair(question, answer) {
           notifyFn('Loaded Explain note into composer.');
         }
       } catch (err) {
-        notifyFn(`Could not send to Orchestrator: ${err.message}`);
+        if (revision === sessionRevision) notifyFn(`Could not send to Orchestrator: ${err.message}`);
       } finally {
         sendBtn.disabled = false;
       }
@@ -338,6 +378,7 @@ function appendSidetalkPair(question, answer) {
 }
 
 let readerState = { sessionId: null, files: [], currentPath: '', text: '', mode: 'rendered', links: [] };
+let readerRequest = 0;
 
 function wireSourceReaderModal() {
   const dlg = document.getElementById('source-reader-dialog');
@@ -365,7 +406,7 @@ async function openSourceReader(sessionId, src, files, extLinks) {
   const titleEl = document.getElementById('source-reader-title');
   const fileSel = document.getElementById('source-reader-file');
   const linksEl = document.getElementById('source-reader-ext-links');
-  if (!dlg) return;
+  if (!dlg || sessionId !== currentSessionId) return;
   readerState = { sessionId, files, currentPath: files[0] || '', text: '', mode: 'rendered', links: extLinks || [] };
   if (titleEl) titleEl.textContent = resolveSourceTitle(src);
   if (linksEl) linksEl.innerHTML = renderSourceLinkChips(extLinks);
@@ -381,14 +422,20 @@ async function openSourceReader(sessionId, src, files, extLinks) {
 async function loadSourceReaderFile(relPath) {
   const bodyEl = document.getElementById('source-reader-body');
   if (!relPath || !readerState.sessionId || !bodyEl) return;
+  const revision = sessionRevision;
+  const request = ++readerRequest;
   readerState.currentPath = relPath;
+  readerState.text = '';
   bodyEl.innerHTML = '<div style="color:var(--ink-muted);font-size:13px;">Loading source...</div>';
   try {
     const data = await api.readSourceFile(readerState.sessionId, relPath);
+    if (revision !== sessionRevision || request !== readerRequest) return;
     readerState.text = (data && (data.content || data.text)) || '';
     renderReaderContent();
   } catch (err) {
-    bodyEl.innerHTML = `<div class="badge err">Could not read file: ${escapeHtml(err.message)}</div>`;
+    if (revision === sessionRevision && request === readerRequest) {
+      bodyEl.innerHTML = `<div class="badge err">Could not read file: ${escapeHtml(err.message)}</div>`;
+    }
   }
 }
 

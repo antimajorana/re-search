@@ -38,6 +38,8 @@ const state = {
 };
 
 const el = {};
+let sessionSelection = 0;
+let sessionLoading = false;
 
 document.addEventListener('DOMContentLoaded', boot);
 
@@ -119,10 +121,13 @@ async function boot() {
   initLatexCanvas({ onNotify: showToast });
   initDagCanvas({
     onDagCount: (n) => { state.tabCounts.dag = n; updateCanvasTabCounts(state.tabCounts); },
-    onForkCreated: async (newId) => {
-      state.railFilterMode = 'active';
+    onForkCreated: async (newId, open) => {
+      const selection = sessionSelection;
       await refreshSessionList();
-      await selectSession(newId);
+      if (open && selection === sessionSelection) {
+        state.railFilterMode = 'active';
+        await selectSession(newId);
+      }
       showToast(`Forked session ${newId}`);
     },
     onExplainStep: (entry) => {
@@ -215,10 +220,12 @@ function wireShellControls() {
     if (cur) handleDeleteSession(cur);
   });
   el.grantsPill?.addEventListener('click', async () => {
-    if (!state.activeSessionId) return;
+    const id = state.activeSessionId;
+    const selection = sessionSelection;
+    if (!id) return;
     try {
-      await api.revokeSessionGrants(state.activeSessionId);
-      renderSessionGrantsPill(el.grantsPill, []);
+      await api.revokeSessionGrants(id);
+      if (selection === sessionSelection) renderSessionGrantsPill(el.grantsPill, []);
       showToast('Session tool approvals reset — next tool call will ask again.');
     } catch (err) {
       showToast(`Could not reset approvals: ${err.message}`);
@@ -290,21 +297,27 @@ function syncWorkspaceIndicators(wsRoot) {
 }
 
 function resetToBlankState() {
+  sessionSelection += 1;
+  sessionLoading = false;
   closeSse();
   state.activeSessionId = null;
   resetLiveTurnState();
+  refreshWorkspaceFiles(null);
+  refreshDag(null);
   refreshSourcesAndSidetalk(null);
   if (el.sessionTitle) el.sessionTitle.textContent = 'New research';
   if (el.topbarArchiveBtn) el.topbarArchiveBtn.hidden = true;
   if (el.topbarDeleteBtn) el.topbarDeleteBtn.hidden = true;
   renderSessionGrantsPill(el.grantsPill, []);
   syncWorkspaceIndicators('');
+  finishLivePipeline();
   applySessionTelemetry(null, false);
   refreshConventionsState();
   setComposerRoute(null);
   setComposerBusy(false);
   setStreamStatus('Ready', 'ok');
-  updateCanvasTabCounts({ dag: 0, sources: 0, sidetalk: 0 });
+  state.tabCounts = { dag: 0, sources: 0, sidetalk: 0 };
+  updateCanvasTabCounts(state.tabCounts);
   renderSessionList();
   renderSessionStream(null, { messages: [] });
 }
@@ -358,6 +371,7 @@ async function createAndSelectSession(opts = {}) {
 }
 
 async function ensureActiveSession() {
+  if (sessionLoading) return null;
   if (state.activeSessionId) return state.activeSessionId;
   return createAndSelectSession({});
 }
@@ -371,12 +385,30 @@ function checkpointOpts(id) {
 
 async function selectSession(id) {
   if (!id) return;
+  const selection = ++sessionSelection;
+  const changed = state.activeSessionId !== id;
   state.activeSessionId = id;
+  sessionLoading = true;
+  if (changed) {
+    resetLiveTurnState();
+    if (el.sessionTitle) el.sessionTitle.textContent = state.sessions.find((s) => s.id === id)?.title || id;
+    renderSessionStream(id, { messages: [] });
+    syncWorkspaceIndicators('');
+    renderSessionGrantsPill(el.grantsPill, []);
+    finishLivePipeline();
+    applySessionTelemetry(null, false);
+    setComposerRoute(null);
+    setComposerBusy(false);
+    setStreamStatus('Loading…', 'accent');
+  }
+  const canvas = Promise.all([refreshWorkspaceFiles(id), refreshDag(id), refreshSourcesAndSidetalk(id)]);
   renderSessionList();
   connectSessionSse(id);
 
   try {
     const sess = await api.getSession(id);
+    if (selection !== sessionSelection) return;
+    sessionLoading = false;
     if (el.sessionTitle) el.sessionTitle.textContent = sess.title || id;
     if (el.topbarArchiveBtn) {
       el.topbarArchiveBtn.hidden = false;
@@ -402,15 +434,21 @@ async function selectSession(id) {
       hasApprovals ? 'Awaiting Approval' : pendingCps.length > 0 ? 'Awaiting Input' : isRunning ? 'Running...' : 'Ready',
       hasPending ? 'warn' : isRunning ? 'accent' : 'ok'
     );
-    await Promise.all([refreshWorkspaceFiles(id), refreshDag(id), refreshSourcesAndSidetalk(id)]);
+    await canvas;
   } catch (err) {
-    showToast(`Failed to load session ${id}: ${err.message}`);
+    if (selection === sessionSelection) {
+      sessionLoading = false;
+      setComposerBusy(false);
+      setStreamStatus('Error', 'err');
+      showToast(`Failed to load session ${id}: ${err.message}`);
+    }
   }
 }
 
 function connectSessionSse(id) {
   closeSse();
-  const isAct = () => state.activeSessionId === id;
+  const selection = sessionSelection;
+  const isAct = () => selection === sessionSelection && state.activeSessionId === id;
   state.eventSource = api.openSessionEvents(id, {
     text_delta: (d) => { if (!isAct()) return; setComposerBusy(true); setStreamStatus('Streaming...', 'accent'); updatePipelineFromEvent('solver_stream', d); handleTextDelta(d); },
     thinking_delta: (d) => { if (!isAct()) return; setComposerBusy(true); updatePipelineFromEvent('thinking_delta', d); handleThinkingDelta(d); },
@@ -456,11 +494,11 @@ function connectSessionSse(id) {
       if (d && d.kind === 'vendor.builtin_tool') appendWarningLine(formatBuiltinToolWarning(d.data || {}));
     },
     turn_complete: async (d) => {
-      if (state.activeSessionId !== id) return;
+      if (!isAct()) return;
       finalizeLiveThinking();
       try {
         const sess = await api.getSession(id);
-        if (state.activeSessionId !== id) return;
+        if (!isAct()) return;
         const msgs = Array.isArray(sess?.messages) ? sess.messages : [];
         const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
         renderSessionGrantsPill(el.grantsPill, sess.session_grants || []);
@@ -478,19 +516,19 @@ function connectSessionSse(id) {
         setComposerRoute(sess.route || null);
         finishLivePipeline('ok', sess && sess.stats);
       } catch {
-        if (state.activeSessionId !== id) return;
+        if (!isAct()) return;
         finalizeLiveAssistant((d && d.text) || '');
         resetLiveTurnState();
         finishLivePipeline('ok', null);
       }
-      if (state.activeSessionId === id) {
+      if (isAct()) {
         setComposerBusy(false);
         setStreamStatus('Ready', 'ok');
         await Promise.all([refreshSessionList(), refreshWorkspaceFiles(id), refreshDag(id), loadSessionSources(id)]);
       } else await refreshSessionList();
     },
     turn_error: (d) => {
-      if (state.activeSessionId !== id) return;
+      if (!isAct()) return;
       finalizeLiveThinking();
       finalizeLiveOnError();
       resetLiveTurnState();
@@ -513,30 +551,37 @@ function connectSessionSse(id) {
 
 async function refreshSessionRoute(id) {
   if (state.activeSessionId !== id) return;
+  const selection = sessionSelection;
   try {
     const sess = await api.getSession(id);
-    if (state.activeSessionId === id) { applySession(id, sess); setComposerRoute(sess.route || null); }
+    if (selection === sessionSelection) { applySession(id, sess); setComposerRoute(sess.route || null); }
   } catch { /* ignore */ }
 }
 
 async function handleSendPrompt(sessionId, prompt, opts) {
-  resetLiveTurnState();
-  appendUserMessage(prompt, { optimistic: true });
-  setComposerRoute(opts.provider || null);
-  setComposerBusy(true);
-  setStreamStatus('Thinking...', 'accent');
-  startLivePipeline(opts);
+  const selection = sessionSelection;
+  const isActive = () => selection === sessionSelection && sessionId === state.activeSessionId;
+  if (isActive()) {
+    resetLiveTurnState();
+    appendUserMessage(prompt, { optimistic: true });
+    setComposerRoute(opts.provider || null);
+    setComposerBusy(true);
+    setStreamStatus('Thinking...', 'accent');
+    startLivePipeline(opts);
+  }
   try {
     await api.sendMessage(sessionId, { prompt, ...opts });
-    confirmOptimisticUserMessage();
+    if (isActive()) confirmOptimisticUserMessage();
     rememberForSession(sessionId, { provider: opts.provider, model: opts.model });
     rememberEffortForSession(sessionId, opts.reasoning_effort);
     refreshSessionList();
   } catch (err) {
-    removeOptimisticUserMessage();
-    setComposerBusy(false);
-    setStreamStatus('Ready', 'ok');
-    finishLivePipeline('error', null);
+    if (isActive()) {
+      removeOptimisticUserMessage();
+      setComposerBusy(false);
+      setStreamStatus('Ready', 'ok');
+      finishLivePipeline('error', null);
+    }
     throw err;
   }
 }
@@ -568,11 +613,17 @@ async function handleAttachWorkspace(workspaceRoot) {
     if (createdId) showToast(`Attached workspace: ${workspaceRoot}`);
     return;
   }
+  const id = state.activeSessionId;
+  const selection = sessionSelection;
   try {
-    const sess = await api.setSessionWorkspace(state.activeSessionId, workspaceRoot);
+    const sess = await api.setSessionWorkspace(id, workspaceRoot);
+    if (selection !== sessionSelection) {
+      await refreshSessionList();
+      return;
+    }
     syncWorkspaceIndicators((sess && sess.workspace_root) || workspaceRoot);
     refreshEmptyHeroIfVisible();
-    await Promise.all([refreshSessionList(), refreshWorkspaceFiles(state.activeSessionId)]);
+    await Promise.all([refreshSessionList(), refreshWorkspaceFiles(id)]);
     showToast(`Attached workspace: ${(sess && sess.workspace_root) || workspaceRoot}`);
   } catch (err) {
     showToast(`Could not attach workspace: ${err.message}`);

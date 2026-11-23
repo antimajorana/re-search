@@ -47,7 +47,8 @@ pub(crate) fn build_reproducible_zip(data_dir: &Path, data: &SessionExportData) 
     ledger_bytes.push(b'\n');
     entries.insert("ledger.json".into(), ledger_bytes);
 
-    let mut script_paths = Vec::new();
+    let mut worker_indexes = BTreeMap::new();
+    let mut workers: Vec<Vec<(u64, String)>> = Vec::new();
     for call in &data.sympy_calls {
         let rel = format!("code/step_{}.py", call.seq);
         let mut content = format!(
@@ -59,7 +60,11 @@ pub(crate) fn build_reproducible_zip(data_dir: &Path, data: &SessionExportData) 
             content.push('\n');
         }
         entries.insert(rel.clone(), content.into_bytes());
-        script_paths.push(rel);
+        let index = *worker_indexes.entry(&call.worker).or_insert_with(|| {
+            workers.push(Vec::new());
+            workers.len() - 1
+        });
+        workers[index].push((call.execution_order, rel));
     }
 
     let sources_dir = data_dir.join("sessions").join(&data.session).join("sources");
@@ -67,8 +72,27 @@ pub(crate) fn build_reproducible_zip(data_dir: &Path, data: &SessionExportData) 
         collect_sources_into_map(&sources_dir, &sources_dir, &mut entries)?;
     }
 
-    entries.insert("run_all_checks.py".into(), build_runner_script(&script_paths).into_bytes());
-    entries.insert("REPRODUCE.md".into(), build_reproduce_md(data, &script_paths).into_bytes());
+    let replay_workers: Vec<Vec<String>> = workers
+        .into_iter()
+        .map(|mut steps| {
+            steps.sort_by_key(|(order, _)| *order);
+            steps.into_iter().map(|(_, path)| path).collect()
+        })
+        .collect();
+    entries.insert("run_all_checks.py".into(), include_bytes!("replay_checks.py").to_vec());
+    entries.insert(
+        "_re_search_runtime/replay_steps.json".into(),
+        serde_json::to_vec_pretty(&replay_workers).map_err(|e| e.to_string())?,
+    );
+    entries.insert(
+        "_re_search_runtime/worker.py".into(),
+        include_bytes!("../../../python/worker.py").to_vec(),
+    );
+    entries.insert(
+        "_re_search_runtime/solver_calc.py".into(),
+        include_bytes!("../../../python/solver_calc.py").to_vec(),
+    );
+    entries.insert("REPRODUCE.md".into(), build_reproduce_md(data).into_bytes());
 
     let buf = Cursor::new(Vec::new());
     let mut writer = ZipWriter::new(buf);
@@ -114,34 +138,7 @@ fn collect_sources_into_map(
     Ok(())
 }
 
-fn build_runner_script(scripts: &[String]) -> String {
-    let list_lit = scripts
-        .iter()
-        .map(|s| format!("    {s:?},"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "#!/usr/bin/env python3\n\
-         \"\"\"Replay all extracted computation checks in order.\"\"\"\n\
-         import pathlib\nimport subprocess\nimport sys\n\n\
-         ROOT = pathlib.Path(__file__).resolve().parent\n\
-         SCRIPTS = [\n{list_lit}\n]\n\n\
-         def main() -> int:\n    \
-             for rel in SCRIPTS:\n        \
-                 path = ROOT / rel\n        \
-                 print(f'[run_all_checks] running {{rel}}...')\n        \
-                 res = subprocess.run([sys.executable, str(path)], cwd=str(ROOT), check=False)\n        \
-                 if res.returncode != 0:\n            \
-                     print(f'[run_all_checks] FAILED: {{rel}} (exit {{res.returncode}})', file=sys.stderr)\n            \
-                     return res.returncode\n    \
-             print(f'[run_all_checks] passed {{len(SCRIPTS)}} check(s)')\n    \
-             return 0\n\n\
-         if __name__ == '__main__':\n    \
-             raise SystemExit(main())\n"
-    )
-}
-
-fn build_reproduce_md(data: &SessionExportData, scripts: &[String]) -> String {
+fn build_reproduce_md(data: &SessionExportData) -> String {
     format!(
         "# Reproducibility Bundle: `{}`\n\n\
          - **Chain Head SHA-256**: `{}`\n\
@@ -149,13 +146,16 @@ fn build_reproduce_md(data: &SessionExportData, scripts: &[String]) -> String {
          - **Policy Version**: `{}`\n\
          - **Extracted Checks**: {}\n\n\
          ## Verification Steps\n\n\
-         1. Replay extracted computational checks:\n   ```bash\n   python3 run_all_checks.py\n   ```\n\
+         1. Replay successful computations from a trusted bundle with Python and SymPy installed. \
+         The runner executes the exported code locally and shares a Python namespace within each recorded worker lifetime. \
+         Older ledgers group checks by session start or resume because they lack worker restart records. \
+         Later steps that relied on side effects of a failed calculation may need to be rewritten.\n   ```bash\n   python3 run_all_checks.py\n   ```\n\
          2. Inspect the hash-chained session audit log in `ledger.json`.\n\
          3. Compile `report.tex` (with `references.bib`) or open `report.html`.\n",
         data.session,
         data.head_hash,
         data.model,
         data.policy_version,
-        scripts.len()
+        data.sympy_calls.len()
     )
 }

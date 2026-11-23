@@ -8,7 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const crateRoot = path.resolve(__dirname, '..');
 const assetsDir = path.join(crateRoot, 'assets');
 
-function mockDom() {
+function mockDom(ids = []) {
   const makeEl = (tag = 'div') => {
     const classes = new Set();
     const listeners = {};
@@ -17,6 +17,7 @@ function mockDom() {
       className: '',
       dataset: {},
       children: [],
+      get childElementCount() { return this.children.length; },
       attributes: {},
       style: {},
       value: '',
@@ -36,17 +37,25 @@ function mockDom() {
         contains: (c) => classes.has(c),
       },
       setAttribute: (k, v) => { el.attributes[k] = String(v); },
+      removeAttribute: (k) => { delete el.attributes[k]; },
       getAttribute: (k) => el.attributes[k] ?? null,
       appendChild: (c) => { el.children.push(c); return c; },
+      append: (...children) => el.children.push(...children),
+      replaceChildren: (...children) => { el.children = children; },
       addEventListener: (ev, fn) => { (listeners[ev] ||= []).push(fn); },
+      click: () => Promise.all((listeners.click || []).map((fn) => fn())),
       querySelector: () => null,
       querySelectorAll: () => [],
       focus: () => {},
     };
     return el;
   };
+  const elements = new Map(ids.map((id) => [id, makeEl()]));
   return {
     createElement: (tag) => makeEl(tag),
+    createElementNS: (_ns, tag) => makeEl(tag),
+    getElementById: (id) => elements.get(id) || null,
+    querySelectorAll: () => [],
   };
 }
 
@@ -57,6 +66,117 @@ async function importAsset(name, replacements = {}) {
   }
   return import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`);
 }
+
+function assetStub(code) {
+  return JSON.stringify(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
+}
+
+test('Proof graph stays with the selected session and forks at the displayed sequence', async () => {
+  const api = {
+    getDag: () => new Promise(() => {}),
+    forkSession: async (id, payload) => {
+      forkCalls.push([id, payload]);
+      return { new_session: 'forked' };
+    },
+    diffSessions: async () => ({}),
+    verifySession: () => new Promise((resolve) => { finishVerify = resolve; }),
+  };
+  const forkCalls = [];
+  let finishVerify;
+  const previousDoc = globalThis.document;
+  const doc = mockDom([
+    'proof-dag-svg', 'dag-node-detail', 'dag-verify-badge', 'dag-verify-btn',
+    'dag-fork-btn', 'dag-fork-bar', 'fork-seq-label', 'fork-confirm-btn',
+  ]);
+  globalThis.document = doc;
+  globalThis.canvasTestApi = api;
+  try {
+    const dag = await importAsset('canvas_dag.js', {
+      "'/assets/api.js'": assetStub(
+        'export const { getDag, forkSession, diffSessions, verifySession } = new Proxy({}, { get: (_, method) => (...args) => globalThis.canvasTestApi[method](...args) });',
+      ),
+      "'/assets/math.js'": assetStub('export const escapeHtml = String;'),
+      "'/assets/model_picker.js'": assetStub('export const getModelChoice = () => null;'),
+      "'/assets/canvas_dag_detail.js'": assetStub(
+        "export const renderDagNodeDetail = (element, entry) => { element.textContent = entry?.entry_id || ''; };",
+      ),
+    });
+    const el = (id) => doc.getElementById(id);
+    dag.initDagCanvas();
+    let finishOldDag;
+    api.getDag = (id) => id === 'old'
+      ? new Promise((resolve) => { finishOldDag = resolve; })
+      : Promise.resolve({ entries: [{ entry_id: 'e-b', seq: 4 }, { entry_id: 'e-c', seq: 8 }] });
+    const oldDag = dag.refreshDag('old');
+    await dag.refreshDag('current');
+    finishOldDag({ entries: [{ entry_id: 'e-stale', seq: 12 }] });
+    await oldDag;
+    dag.selectNodeById('e-b');
+    assert.equal(el('dag-node-detail').textContent, 'e-b');
+    await el('dag-fork-btn').click();
+    assert.equal(el('fork-seq-label').textContent, '4');
+    dag.selectNodeById('e-c');
+    await el('fork-confirm-btn').click();
+    assert.deepEqual(forkCalls, [['current', { at_seq: 4, modified_assumption: undefined }]]);
+    const verifying = el('dag-verify-btn').click();
+    await dag.refreshDag(null);
+    finishVerify({ head_hash: 'old-hash' });
+    await verifying;
+    assert.equal(el('dag-verify-badge').hidden, true);
+    assert.equal(el('dag-fork-bar').hidden, true);
+    assert.match(el('proof-dag-svg').innerHTML, /Select a session/);
+  } finally {
+    globalThis.document = previousDoc;
+    delete globalThis.canvasTestApi;
+  }
+});
+
+test('Late LaTeX file responses cannot replace or be saved into a different session', async () => {
+  let finishOldFile;
+  const saved = [];
+  const previousDoc = globalThis.document;
+  const doc = mockDom(['latex-file-select', 'latex-editor', 'latex-save-btn']);
+  globalThis.document = doc;
+  globalThis.canvasTestApi = {
+    getWorkspace: async (id, path) => {
+      if (!path) return { files: [`${id}.tex`] };
+      if (id === 'old') return new Promise((resolve) => { finishOldFile = resolve; });
+      return { content: 'Current proof' };
+    },
+    patchLatex: async (id, patch) => { saved.push([id, patch]); },
+  };
+  try {
+    const latex = await importAsset('canvas_latex.js', {
+      "'/assets/api.js'": assetStub(
+        'export const getWorkspace = (...args) => globalThis.canvasTestApi.getWorkspace(...args); export const patchLatex = (...args) => globalThis.canvasTestApi.patchLatex(...args);',
+      ),
+      "'/assets/math.js'": assetStub('export const escapeHtml = String; export const renderLatexDocumentPreview = () => {};'),
+    });
+    const editor = doc.getElementById('latex-editor');
+    const save = doc.getElementById('latex-save-btn');
+    latex.initLatexCanvas();
+    const oldFile = latex.refreshWorkspaceFiles('old');
+    await Promise.resolve();
+    const currentFile = latex.refreshWorkspaceFiles('current');
+    assert.equal(editor.value, '');
+    assert.equal(save.disabled, true);
+    await save.click();
+    assert.deepEqual(saved, []);
+    await currentFile;
+    finishOldFile({ content: 'Stale proof' });
+    await oldFile;
+    assert.equal(editor.value, 'Current proof');
+    editor.value = 'Revised proof';
+    await save.click();
+    assert.deepEqual(saved, [['current', { path: 'current.tex', search: 'Current proof', replace: 'Revised proof', content: 'Revised proof' }]]);
+    await latex.refreshWorkspaceFiles(null);
+    assert.equal(editor.value, '');
+    assert.equal(save.disabled, true);
+  } finally {
+    globalThis.document = previousDoc;
+    delete globalThis.canvasTestApi;
+  }
+});
 
 test('Stage 14/15 UI contracts: interactive rigor, session conventions, CLI steer guard, delegation & honesty cards', async () => {
   const indexHtml = fs.readFileSync(path.join(assetsDir, 'index.html'), 'utf8');
@@ -156,4 +276,65 @@ test('Stage 14/15 UI contracts: interactive rigor, session conventions, CLI stee
   } finally {
     globalThis.document = prevDoc;
   }
+});
+
+test('Antigravity consent requires confirmation and can be withdrawn from Settings', async (t) => {
+  const calls = [];
+  const notice = "Review Antigravity's terms and built-in tool access.";
+  let allow = false;
+  let acknowledged = false;
+  let changed = 0;
+  const dom = mockDom(['settings-dialog', 'connect-list']);
+  const previousDocument = globalThis.document;
+  const previousWindow = globalThis.window;
+  t.after(() => {
+    globalThis.document = previousDocument;
+    globalThis.window = previousWindow;
+    delete globalThis.connectConsentApi;
+  });
+  globalThis.document = dom;
+  globalThis.window = {
+    confirm: (message) => {
+      assert.ok(message.includes(notice));
+      return allow;
+    },
+  };
+  globalThis.connectConsentApi = {
+    getConnections: async () => ({ connections: [{
+      id: 'antigravity',
+      label: 'Antigravity',
+      found: true,
+      connected: acknowledged,
+      acknowledged,
+      warning: notice,
+      acknowledge_action: 'acknowledge',
+      withdraw_action: 'withdraw',
+    }] }),
+    connectionAction: async (provider, action) => {
+      calls.push([provider, action]);
+      acknowledged = action === 'acknowledge';
+    },
+    getProviderSettings: async () => ({}),
+  };
+  const api = 'export const { getConnections, connectionAction, getProviderSettings } = globalThis.connectConsentApi;';
+  const connect = await importAsset('connect.js', {
+    "'/assets/api.js'": JSON.stringify(`data:text/javascript;base64,${Buffer.from(api).toString('base64')}`),
+  });
+  connect.initConnect({ onChanged: () => { changed += 1; } });
+  await connect.openConnect();
+  const warning = () => dom.getElementById('connect-list').children[0].children.find((el) => el.className === 'connect-warning');
+  const button = () => warning().children.find((el) => el.className === 'connect-actions').children[0];
+  assert.equal(warning().children[1].textContent, notice);
+  assert.equal(button().textContent, 'I understand the risk');
+  await button().click();
+  assert.deepEqual(calls, []);
+  allow = true;
+  await button().click();
+  assert.deepEqual(calls, [['antigravity', 'acknowledge']]);
+  assert.equal(button().textContent, 'Withdraw acknowledgement');
+  allow = false;
+  await button().click();
+  assert.deepEqual(calls, [['antigravity', 'acknowledge'], ['antigravity', 'withdraw']]);
+  assert.equal(button().textContent, 'I understand the risk');
+  assert.equal(changed, 2);
 });

@@ -1,6 +1,6 @@
 //! Deterministic honesty linter and campaign phase inference over the hash-chained ledger.
 
-use ledger::Event;
+use ledger::{Event, Ledger};
 use research_tools::ProofDag;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -71,32 +71,16 @@ const PROOF_PHRASES: &[&str] = &[
     "q.e.d.",
 ];
 
-fn lean_result_is_verified(payload: &Value) -> bool {
-    let Some(res) = payload.get("result") else {
-        return false;
-    };
-    if res.get("status").and_then(Value::as_str) == Some("verified") {
-        return true;
+fn tool_result_value(payload: &Value, ledger: Option<&Ledger>) -> Option<Value> {
+    let result = payload.get("result")?;
+    if let Some(text) = result.get("inline").and_then(Value::as_str).or_else(|| result.as_str()) {
+        return serde_json::from_str(text).ok();
     }
-    let check_str = |s: &str| -> bool {
-        if let Ok(parsed) = serde_json::from_str::<Value>(s) {
-            if parsed.get("status").and_then(Value::as_str) == Some("verified") {
-                return true;
-            }
-        }
-        s.contains("\"status\":\"verified\"") || s.contains("\"status\": \"verified\"")
-    };
-    if let Some(inline) = res.get("inline").and_then(Value::as_str) {
-        if check_str(inline) {
-            return true;
-        }
+    if let Some(hash) = result.get("blob").and_then(Value::as_str) {
+        let bytes = ledger?.get_blob(hash).ok()?;
+        return serde_json::from_slice(&bytes).ok();
     }
-    if let Some(raw) = res.as_str() {
-        if check_str(raw) {
-            return true;
-        }
-    }
-    false
+    result.is_object().then(|| result.clone())
 }
 
 fn find_claim(candidate_text: &str, lower_ascii: &str, phrases: &[&str]) -> Option<String> {
@@ -109,8 +93,26 @@ fn find_claim(candidate_text: &str, lower_ascii: &str, phrases: &[&str]) -> Opti
     None
 }
 
-/// Audit candidate prose against recorded `sympy_eval`, `lean_check`, and Verifier evidence.
+/// Audit candidate prose against evidence available in the supplied events.
 pub fn lint_honesty(candidate_text: &str, dag: &ProofDag, events: &[Event]) -> HonestyReport {
+    lint_with_results(candidate_text, dag, events, None)
+}
+
+pub(crate) fn lint_honesty_with_ledger(
+    candidate_text: &str,
+    dag: &ProofDag,
+    events: &[Event],
+    ledger: &Ledger,
+) -> HonestyReport {
+    lint_with_results(candidate_text, dag, events, Some(ledger))
+}
+
+fn lint_with_results(
+    candidate_text: &str,
+    dag: &ProofDag,
+    events: &[Event],
+    ledger: Option<&Ledger>,
+) -> HonestyReport {
     let mut tool_by_call_id: HashMap<&str, &str> = HashMap::new();
     let mut has_sympy_ok = false;
     let mut has_lean_verified = false;
@@ -133,9 +135,14 @@ pub fn lint_honesty(candidate_text: &str, dag: &ProofDag, events: &[Event]) -> H
                     continue;
                 };
                 match tool_by_call_id.get(cid).copied() {
-                    Some("sympy_eval") => has_sympy_ok = true,
-                    Some("lean_check") if lean_result_is_verified(&ev.payload) => {
-                        has_lean_verified = true;
+                    Some("sympy_eval") if !has_sympy_ok => {
+                        has_sympy_ok = tool_result_value(&ev.payload, ledger).is_some_and(|result| {
+                            result.get("value").is_some() && result["error"].is_null()
+                        });
+                    }
+                    Some("lean_check") if !has_lean_verified => {
+                        has_lean_verified = tool_result_value(&ev.payload, ledger)
+                            .is_some_and(|result| result["status"].as_str() == Some("verified"));
                     }
                     _ => {}
                 }
@@ -245,12 +252,18 @@ mod tests {
         assert_eq!(rep.findings.iter().filter(|f| f.severity == "warning").count(), 1);
         assert!(rep.findings[2].reason.contains("evidence != proof"));
 
-        // Failed tool.result or non-verified lean status must NOT satisfy the checks.
+        // Both transport and evaluation failures leave the claims unbacked.
         let unbacked = vec![
             ev(1, "tool.request", json!({"call_id": "c1", "tool": "sympy_eval"})),
             ev(2, "tool.result", json!({"call_id": "c1", "ok": false, "error": {"inline": "boom"}})),
             ev(3, "tool.request", json!({"call_id": "c2", "tool": "lean_check"})),
-            ev(4, "tool.result", json!({"call_id": "c2", "ok": true, "result": {"inline": "{\"status\":\"sorry_found\"}"}})),
+            ev(4, "tool.result", json!({"call_id": "c2", "ok": true, "result": {
+                "inline": json!({"status": "sorry_found", "diagnostics": [{"status": "verified"}]}).to_string()
+            }})),
+            ev(5, "tool.request", json!({"call_id": "c3", "tool": "sympy_eval"})),
+            ev(6, "tool.result", json!({"call_id": "c3", "ok": true, "result": {
+                "inline": json!({"value": null, "error": {"type": "ValueError", "message": "math error"}}).to_string()
+            }})),
         ];
         let rep_fail = lint_honesty("Checked with SymPy and checked by Lean.", &dag, &unbacked);
         assert_eq!(rep_fail.findings.len(), 2);
@@ -271,6 +284,37 @@ mod tests {
         let dag_acc = ProofDag { latest_full_verification_accepted: true, ..Default::default() };
         let rep_ver = lint_honesty("Rigorously proven via our derivation.", &dag_acc, &[]);
         assert!(rep_ver.passed && rep_ver.has_verifier_accepted);
+    }
+
+    #[test]
+    fn lint_reads_verified_tool_results_stored_as_blobs() {
+        let temp = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(temp.path()).unwrap();
+        let sympy = json!({"value": null, "stdout": "x".repeat(5000)});
+        let lean = json!({"status": "verified", "stdout": "x".repeat(5000)});
+        let events: Vec<Event> = [("sympy_eval", sympy), ("lean_check", lean)]
+            .into_iter()
+            .enumerate()
+            .flat_map(|(index, (tool, result))| {
+                let result = serde_json::to_vec(&result).unwrap();
+                let blob = ledger.put_blob(&result).unwrap();
+                let seq = index as u64 * 2 + 1;
+                [
+                    ev(seq, "tool.request", json!({"call_id": tool, "tool": tool})),
+                    ev(seq + 1, "tool.result", json!({"call_id": tool, "ok": true, "result": {
+                        "blob": blob, "bytes": result.len()
+                    }})),
+                ]
+            })
+            .collect();
+        let report = lint_honesty_with_ledger(
+            "Checked with SymPy and checked by Lean.",
+            &ProofDag::default(),
+            &events,
+            &ledger,
+        );
+        assert!(report.has_sympy_ok && report.has_lean_verified);
+        assert!(report.passed);
     }
 
     #[test]

@@ -449,7 +449,7 @@ test('Stage 10 UI wiring: Stop button, live text_delta streaming, session litera
   assert.match(streamJs, /Approve for Session/, 'Literature approval card must offer Approve for Session');
   assert.match(streamJs, /export function handleTextDelta/, 'Stream must handle incremental text_delta events');
   assert.match(composerJs, /pickWorkspaceFolder/, 'Workspace button must invoke native folder picker endpoint');
-  assert.match(appJs, /setSessionWorkspace\(state\.activeSessionId/, 'Workspace attach must update active session in-place');
+  assert.match(appJs, /const id = state\.activeSessionId;[\s\S]*setSessionWorkspace\(id, workspaceRoot\)/, 'Workspace attach must update active session in-place');
   assert.match(apiJs, /'text_delta'/, 'EventSource client must subscribe to text_delta');
 });
 
@@ -486,10 +486,18 @@ test('Stage 11 Workbench UI: pipeline stepper, rigor presets, conventions popove
     .replace("'/assets/source_links.js'", srcLinksDataUrl);
   const dataUrl = `data:text/javascript;base64,${Buffer.from(traceSrc, 'utf8').toString('base64')}`;
   const traceMod = await import(dataUrl);
+  const workbenchSrc = fs
+    .readFileSync(path.join(assetsDir, 'workbench.js'), 'utf8')
+    .replace("'/assets/math.js'", mathUrl)
+    .replace("'/assets/api.js'", JSON.stringify(pathToFileURL(path.join(assetsDir, 'api.js')).href));
+  const workbenchMod = await import(`data:text/javascript;base64,${Buffer.from(workbenchSrc, 'utf8').toString('base64')}`);
 
   const prevDoc = globalThis.document;
   try {
+    const stages = new Map();
     globalThis.document = {
+      getElementById: () => null,
+      querySelector: (selector) => ({ setAttribute: (_name, value) => stages.set(selector, value) }),
       createElement: (tag) => ({
         tagName: tag.toUpperCase(),
         className: '',
@@ -525,15 +533,38 @@ test('Stage 11 Workbench UI: pipeline stepper, rigor presets, conventions popove
       verified_status: 'unverified',
       verification_rounds: 2,
       verifications: [{
+        kind: 'full',
+        verified_status: 'unverified',
         verdict: 'rejected',
         target_entry_id: 'e-2',
         summary: 'Sign mismatch <img src=x onerror=alert(2)>',
         issues: [{ severity: 'major', entry_id: 'e-2', description: 'Missing <script>x</script> factor' }],
+      }, {
+        kind: 'step',
+        verdict: 'accepted',
+        target_entry_id: 'e-9',
+        summary: 'Checked one step.',
       }],
     });
     assert.ok(verdictCard && verdictCard.className.includes('is-unverified'));
     assert.match(verdictCard.innerHTML, /Unverified Draft/);
+    assert.match(verdictCard.innerHTML, /Inspect e-2/);
+    assert.match(verdictCard.innerHTML, /Sign mismatch/);
     assertNoXss(verdictCard.innerHTML);
+    assert.equal(traceMod.buildVerificationVerdictCard({
+      verifications: [{ kind: 'step', verdict: 'accepted', target_entry_id: 'e-2' }],
+    }), null);
+    const verifierStage = '#pipeline-bar [data-stage="verifier"]';
+    workbenchMod.updatePipelineFromEvent('dag_updated', {
+      kind: 'proof.verification', payload: { kind: 'step', verdict: 'accepted' },
+    });
+    assert.equal(stages.get(verifierStage), undefined);
+    workbenchMod.updatePipelineFromEvent('dag_updated', {
+      kind: 'proof.verification', payload: { kind: 'full', verdict: 'accepted' }, verified_status: 'verified',
+    });
+    assert.equal(stages.get(verifierStage), 'done');
+    workbenchMod.updatePipelineFromEvent('dag_updated', { kind: 'proof.entry', verification_invalidated: true });
+    assert.equal(stages.get(verifierStage), 'idle');
 
     // Stage 12 literature card links + XSS neutralization
     const litCard = traceMod.buildStructuredTraceCard({

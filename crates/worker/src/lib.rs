@@ -123,6 +123,12 @@ impl Worker {
         self.spawn_count
     }
 
+    /// Serial number of the most recent request. Read this under the worker lock
+    /// immediately after a successful evaluation to record its execution order.
+    pub fn last_request_id(&self) -> u64 {
+        self.next_id - 1
+    }
+
     /// Handle for querying the live worker epoch without taking the worker lock.
     pub fn epoch_handle(&self) -> EpochHandle {
         EpochHandle(self.epoch.clone())

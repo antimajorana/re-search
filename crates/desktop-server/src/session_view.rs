@@ -1,6 +1,7 @@
 //! SSE live event sink (`text_delta`, `thinking_delta`, `round_reset`, `tool_trace`,
 //! `dag_updated`) and lossless session view reconstruction from ledger events.
 
+use crate::session_summary::FinalAnswerVerification;
 use crate::sse::SseHub;
 use agent::EventSink;
 use ledger::AppendedEvent;
@@ -14,6 +15,7 @@ pub(crate) struct SseEventSink {
     pub(crate) final_text: String,
     streamed_thinking_in_turn: bool,
     tool_calls: HashMap<String, (String, Value)>,
+    verification: FinalAnswerVerification,
 }
 
 impl SseEventSink {
@@ -24,6 +26,7 @@ impl SseEventSink {
             final_text: String::new(),
             streamed_thinking_in_turn: false,
             tool_calls: HashMap::new(),
+            verification: FinalAnswerVerification::default(),
         }
     }
 
@@ -57,6 +60,9 @@ impl EventSink for SseEventSink {
     }
 
     fn on_event(&mut self, receipt: &AppendedEvent, kind: &str, data: &Value) -> Result<(), String> {
+        let had_verdict = self.verification.status.is_some();
+        let answer_verdict = self.verification.observe(kind, data);
+        let verification_invalidated = had_verdict && self.verification.status.is_none();
         match kind {
             "model.request" => {
                 self.streamed_thinking_in_turn = false;
@@ -155,7 +161,13 @@ impl EventSink for SseEventSink {
                 self.sse.emit(
                     &self.session_id,
                     "dag_updated",
-                    json!({ "seq": receipt.seq, "kind": kind, "payload": data }),
+                    json!({
+                        "seq": receipt.seq,
+                        "kind": kind,
+                        "payload": data,
+                        "verified_status": answer_verdict,
+                        "verification_invalidated": verification_invalidated,
+                    }),
                 );
             }
             // Includes `human.steer`, `human.checkpoint_requested`, `human.decision`, `explain.promoted`.
@@ -163,7 +175,12 @@ impl EventSink for SseEventSink {
                 self.sse.emit(
                     &self.session_id,
                     "session_event",
-                    json!({ "seq": receipt.seq, "kind": kind, "data": data }),
+                    json!({
+                        "seq": receipt.seq,
+                        "kind": kind,
+                        "data": data,
+                        "verification_invalidated": verification_invalidated,
+                    }),
                 );
             }
         }
@@ -187,10 +204,26 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
     let mut pending_thinking = String::new();
     let mut tool_calls: HashMap<String, (String, Value)> = HashMap::new();
     let mut lit_titles: HashMap<String, String> = HashMap::new();
+    let mut verification = FinalAnswerVerification::default();
 
     for ev in events {
+        let had_verdict = verification.status.is_some();
+        let answer_verdict = verification.observe(&ev.kind, &ev.payload);
+        if had_verdict
+            && verification.status.is_none()
+            && !matches!(ev.kind.as_str(), "session.start" | "session.resume")
+        {
+            if let Some(last) = messages.last_mut()
+                .filter(|m| is_primary_assistant(m))
+                .and_then(Value::as_object_mut)
+            {
+                last.remove("verified_status");
+                last.remove("verified_entry_id");
+            }
+        }
         match ev.kind.as_str() {
             "session.start" | "session.resume" => {
+                pending_verifications.clear();
                 if let Some(prompt) = ev.payload.get("prompt").and_then(Value::as_str) {
                     messages.push(json!({ "role": "user", "text": prompt, "seq": ev.seq }));
                 }
@@ -251,9 +284,13 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                 let verdict = ev.payload.get("verdict").and_then(Value::as_str).unwrap_or("");
                 let summary = ev.payload.get("summary").and_then(Value::as_str).unwrap_or("");
                 let target = ev.payload.get("target_entry_id").and_then(Value::as_str).unwrap_or("");
-                let line = format!("[Verifier {verdict} `{target}`: {summary}]\n");
+                let kind = ev.payload["kind"].as_str().unwrap_or("");
+                let scope = if kind == "step" { "Step Verifier" } else { "Verifier" };
+                let line = format!("[{scope} {verdict} `{target}`: {summary}]\n");
                 let v_obj = json!({
                     "seq": ev.seq,
+                    "kind": kind,
+                    "verified_status": answer_verdict,
                     "verdict": verdict,
                     "target_entry_id": target,
                     "summary": summary,
@@ -267,7 +304,10 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                     } else {
                         last["verifications"] = json!([v_obj]);
                     }
-                    last["verified_status"] = json!(if verdict == "accepted" { "verified" } else { "unverified" });
+                    if let Some(status) = answer_verdict {
+                        last["verified_status"] = json!(status);
+                        last["verified_entry_id"] = if status == "verified" { json!(target) } else { Value::Null };
+                    }
                 } else {
                     pending_thinking.push_str(&line);
                     pending_verifications.push(v_obj);
@@ -305,6 +345,7 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
             "guardrail.warning" => {
                 if let Some(last) = messages.last_mut().filter(|m| is_primary_assistant(m)) {
                     last["verified_status"] = json!("unverified");
+                    last["verified_entry_id"] = Value::Null;
                     if let Some(rec) = ev.payload.get("recovery").and_then(Value::as_str).filter(|s| !s.is_empty()) {
                         last["recovery"] = json!(rec);
                     }
@@ -315,11 +356,9 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                     if let Some(rounds) = ev.payload.get("verification_rounds").and_then(Value::as_u64) {
                         last["verification_rounds"] = json!(rounds);
                     }
-                    if let Some(vid) = ev.payload.get("verified_entry_id").and_then(Value::as_str) {
-                        last["verified_entry_id"] = json!(vid);
-                        last["verified_status"] = json!("verified");
-                    } else if ev.payload.get("outcome").and_then(Value::as_str) == Some("completed_unverified") {
+                    if ev.payload["outcome"].as_str() == Some("completed_unverified") {
                         last["verified_status"] = json!("unverified");
+                        last["verified_entry_id"] = Value::Null;
                     }
                 }
             }
@@ -460,6 +499,101 @@ mod tests {
             prev_hash: "0".repeat(64),
             event_hash: "1".repeat(64),
         }
+    }
+
+    #[test]
+    fn step_verdicts_and_unscoped_receipts_do_not_verify_the_answer() {
+        let mut events = vec![
+            ev(1, "session.start", json!({ "prompt": "Prove A" })),
+            ev(2, "proof.entry", json!({ "entry_id": "e-1", "entry_type": "derivation" })),
+            ev(3, "proof.entry", json!({ "entry_id": "e-2", "entry_type": "final_answer" })),
+            ev(4, "model.text", json!({ "text": "Proof of A" })),
+            ev(5, "proof.verification", json!({ "kind": "step", "target_entry_id": "e-2", "verdict": "accepted" })),
+        ];
+        let stats = summarize_session_events(&events);
+        assert_eq!(stats["verified_status"], "none");
+        assert_eq!(stats["accepted_entries"], 1);
+        assert_eq!(stats["verification_rounds"], 0);
+        let (messages, _, _) = reconstruct_session_view(&events);
+        assert!(messages[1]["verified_status"].is_null());
+        assert_eq!(messages[1]["verifications"][0]["kind"], "step");
+        assert!(messages[1]["thinking"].as_str().unwrap().contains("Step Verifier accepted"));
+
+        events.extend([
+            ev(6, "proof.verification", json!({ "target_entry_id": "e-2", "verdict": "accepted" })),
+            ev(7, "proof.verification", json!({ "kind": "full", "target_entry_id": "e-1", "verdict": "accepted" })),
+            ev(8, "session.end", json!({ "outcome": "completed", "verified_entry_id": "e-2" })),
+        ]);
+        assert_eq!(summarize_session_events(&events)["verified_status"], "none");
+        assert!(reconstruct_session_view(&events).0[1]["verified_status"].is_null());
+    }
+
+    #[test]
+    fn full_verdict_applies_only_to_the_current_active_final_answer() {
+        let mut events = vec![
+            ev(1, "session.start", json!({ "prompt": "Prove A" })),
+            ev(2, "proof.entry", json!({ "entry_id": "e-1", "entry_type": "final_answer" })),
+            ev(3, "model.text", json!({ "text": "Proof of A" })),
+            ev(4, "proof.verification", json!({ "kind": "full", "target_entry_id": "e-1", "verdict": "accepted" })),
+            ev(5, "proof.verification", json!({ "kind": "step", "target_entry_id": "e-1", "verdict": "rejected" })),
+            ev(6, "session.end", json!({ "outcome": "completed", "verified_entry_id": "e-1" })),
+        ];
+        assert_eq!(summarize_session_events(&events)["verified_status"], "verified");
+        assert_eq!(reconstruct_session_view(&events).0[1]["verified_entry_id"], "e-1");
+
+        events.extend([
+            ev(7, "session.resume", json!({ "prompt": "Prove B" })),
+            ev(8, "model.text", json!({ "text": "Proof of B" })),
+            ev(9, "proof.verification", json!({ "kind": "full", "target_entry_id": "e-1", "verdict": "accepted" })),
+        ]);
+        let (messages, _, _) = reconstruct_session_view(&events);
+        assert_eq!(messages[1]["verified_status"], "verified");
+        assert!(messages[3]["verified_status"].is_null());
+        assert_eq!(summarize_session_events(&events)["verified_status"], "none");
+
+        events.extend([
+            ev(10, "proof.entry", json!({ "entry_id": "e-2", "entry_type": "final_answer" })),
+            ev(11, "proof.verification", json!({ "kind": "full", "target_entry_id": "e-2", "verdict": "accepted" })),
+        ]);
+        assert_eq!(reconstruct_session_view(&events).0[3]["verified_entry_id"], "e-2");
+        assert_eq!(summarize_session_events(&events)["verified_status"], "verified");
+
+        events.extend([
+            ev(12, "proof.entry", json!({ "entry_id": "e-3", "entry_type": "final_answer" })),
+            ev(13, "proof.supersede", json!({ "entry_id": "e-2", "replaced_by": "e-3" })),
+            ev(14, "proof.verification", json!({ "kind": "full", "target_entry_id": "e-2", "verdict": "accepted" })),
+        ]);
+        assert!(reconstruct_session_view(&events).0[3]["verified_status"].is_null());
+        assert_eq!(summarize_session_events(&events)["verified_status"], "none");
+    }
+
+    #[test]
+    fn live_verification_status_follows_current_final_answer() {
+        let sse = Arc::new(SseHub::new());
+        let (_, frames) = sse.subscribe("s-live");
+        let mut sink = SseEventSink::new(sse, "s-live");
+        let mut receipt = AppendedEvent {
+            seq: 0,
+            ts_ms: 0,
+            prev_hash: String::new(),
+            event_hash: String::new(),
+        };
+        let mut emit = |kind, payload| -> Value {
+            receipt.seq += 1;
+            EventSink::on_event(&mut sink, &receipt, kind, &payload).unwrap();
+            let crate::sse::SseFrame::Event { data, .. } = frames.try_recv().unwrap() else {
+                panic!("expected a live event");
+            };
+            serde_json::from_str(&data).unwrap()
+        };
+
+        emit("proof.entry", json!({ "entry_id": "e-1", "entry_type": "final_answer" }));
+        let step = emit("proof.verification", json!({ "kind": "step", "target_entry_id": "e-1", "verdict": "accepted" }));
+        assert!(step["verified_status"].is_null());
+        let full = emit("proof.verification", json!({ "kind": "full", "target_entry_id": "e-1", "verdict": "accepted" }));
+        assert_eq!(full["verified_status"], "verified");
+        let replacement = emit("proof.entry", json!({ "entry_id": "e-2", "entry_type": "final_answer" }));
+        assert_eq!(replacement["verification_invalidated"], true);
     }
 
     #[test]

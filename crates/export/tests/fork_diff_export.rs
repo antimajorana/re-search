@@ -8,7 +8,6 @@ use export::{
 };
 use ledger::Ledger;
 use serde_json::{json, Value};
-use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -241,10 +240,108 @@ fn fork_and_branch_diff_preserve_prefix_copy_sources_exclude_sidetalk_and_reject
 }
 
 #[test]
+fn branch_diff_uses_active_final_answers_and_falls_back_to_nonblank_fields() {
+    let tmp = TempDir::new("diff-active-final");
+    let ledger = Ledger::open(&tmp.path).unwrap();
+    let base = "s-plain";
+    let target = "s-proof";
+    ledger
+        .append_with_hash(base, "model.text", 1, &json!({ "text": "Plain reply" }))
+        .unwrap();
+    ledger
+        .append_with_hash(target, "model.text", 1, &json!({ "text": "Superseded draft" }))
+        .unwrap();
+    ledger
+        .append_with_hash(
+            target,
+            "proof.entry",
+            1,
+            &json!({ "entry_id": "e-1", "entry_type": "final_answer", "details": null, "summary": " ", "latex": "x = 2" }),
+        )
+        .unwrap();
+    ledger
+        .append_with_hash(
+            target,
+            "proof.entry",
+            1,
+            &json!({ "entry_id": "e-2", "entry_type": "final_answer", "details": "Superseded draft" }),
+        )
+        .unwrap();
+    ledger
+        .append_with_hash(
+            target,
+            "proof.entry",
+            1,
+            &json!({ "entry_id": "e-3", "entry_type": "correction", "details": "Reject the later draft" }),
+        )
+        .unwrap();
+    ledger
+        .append_with_hash(target, "proof.supersede", 1, &json!({ "entry_id": "e-2", "replaced_by": "e-3" }))
+        .unwrap();
+
+    let diff = compute_branch_diff(&ledger, base, target).unwrap();
+    assert_eq!(diff.base_final_answer.as_deref(), Some("Plain reply"));
+    assert_eq!(diff.target_final_answer.as_deref(), Some("x = 2"));
+
+    ledger
+        .append_with_hash(target, "proof.supersede", 1, &json!({ "entry_id": "e-1", "replaced_by": "e-3" }))
+        .unwrap();
+    let diff = compute_branch_diff(&ledger, base, target).unwrap();
+    assert_eq!(diff.target_final_answer, None);
+}
+
+#[test]
 fn export_tex_html_and_reproducible_zip_and_replay_checks() {
     let tmp = TempDir::new("export-formats");
     let session = "s-export01";
     seed_parent_session(&tmp.path, session);
+
+    let ledger = Ledger::open(&tmp.path).unwrap();
+    let append = |kind, payload| ledger.append_with_hash(session, kind, 1, &payload).unwrap().seq;
+    let request = |id, code| {
+        append("tool.request", json!({
+            "call_id": id, "tool": "sympy_eval", "args": { "inline": json!({ "code": code }).to_string() },
+        }))
+    };
+    let pass = |id| append("tool.result", json!({
+        "call_id": id, "ok": true, "result": { "inline": "{}" },
+    }));
+    request("legacy-follow-up", "assert x == 3\nassert simplify('u-u') == 0");
+    pass("legacy-follow-up");
+    append("session.resume", json!({ "prompt": "Check the next result" }));
+    request("legacy-resume", "assert 'x' not in globals()");
+    pass("legacy-resume");
+
+    let denied = request("denied", "raise AssertionError('denied')");
+    append("tool.denied", json!({ "call_id": "denied", "why": "declined" }));
+    let unexecuted = request("unexecuted", "raise AssertionError('never executed')");
+    let failed = request("failed", "raise AssertionError('failed')");
+    append("tool.result", json!({
+        "call_id": "failed", "ok": false, "error": { "inline": "worker timed out" },
+    }));
+    let raised = request("raised", "raise AssertionError('Python exception')");
+    append("tool.result", json!({
+        "call_id": "raised", "ok": true,
+        "result": { "inline": r#"{"error":{"type":"AssertionError"}}"# },
+    }));
+
+    // Request and result ledger order can differ from worker execution order.
+    let second = request("second", "assert x == 5");
+    let first = request("first", "x = 5\nimport math\nmath.replay_test = 5");
+    let record_execution = |id, instance, epoch, request_id| {
+        append("tool.result", json!({
+            "call_id": id, "ok": true, "result": { "inline": "{}" },
+            "worker_execution": { "instance": instance, "epoch": epoch, "request_id": request_id },
+        }))
+    };
+    record_execution("second", "worker-one", 1, 2);
+    record_execution("first", "worker-one", 1, 1);
+    let restart_code = "import math\nassert 'x' not in globals()\nassert not hasattr(math, 'replay_test')";
+    request("restart", restart_code);
+    record_execution("restart", "worker-one", 2, 3);
+    request("new-worker", restart_code);
+    record_execution("new-worker", "worker-two", 1, 1);
+    drop(ledger);
 
     assert_eq!(ExportFormat::parse("tex").unwrap(), ExportFormat::Tex);
     assert_eq!(ExportFormat::parse("html").unwrap(), ExportFormat::Html);
@@ -294,18 +391,18 @@ fn export_tex_html_and_reproducible_zip_and_replay_checks() {
     ] {
         assert!(names.contains(&req.to_string()), "missing `{req}` in zip: {names:?}");
     }
-    let step_py = names.iter().find(|n| n.starts_with("code/step_") && n.ends_with(".py")).cloned().expect("code/step_*.py");
+    let step_path = |seq| format!("code/step_{seq}.py");
+    for omitted in [denied, unexecuted, failed, raised] {
+        assert!(!names.contains(&step_path(omitted)));
+    }
+    assert_eq!(names.iter().filter(|name| name.starts_with("code/step_")).count(), 7);
 
     let extract_dir = tmp.path.join("unzipped");
-    std::fs::create_dir_all(extract_dir.join("code")).unwrap();
-    for target in ["ledger.json", "run_all_checks.py", "REPRODUCE.md", &step_py] {
-        let mut f = archive.by_name(target).unwrap();
-        let mut buf = Vec::new();
-        f.read_to_end(&mut buf).unwrap();
-        let dest = extract_dir.join(target);
-        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
-        std::fs::write(&dest, buf).unwrap();
-    }
+    archive.extract(&extract_dir).unwrap();
+    let manifest = std::fs::read(extract_dir.join("_re_search_runtime/replay_steps.json")).unwrap();
+    let manifest: Vec<Vec<String>> = serde_json::from_slice(&manifest).unwrap();
+    assert_eq!(manifest[2], [step_path(first), step_path(second)]);
+    assert_eq!(manifest.iter().map(Vec::len).collect::<Vec<_>>(), [2, 1, 2, 1, 1]);
     let ledger_doc: Value = serde_json::from_slice(&std::fs::read(extract_dir.join("ledger.json")).unwrap()).unwrap();
     assert_eq!(ledger_doc["head_hash"], head_hash);
 
@@ -331,5 +428,6 @@ fn export_tex_html_and_reproducible_zip_and_replay_checks() {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
+        assert!(String::from_utf8_lossy(&out.stdout).contains("passed 7 check(s)"));
     }
 }

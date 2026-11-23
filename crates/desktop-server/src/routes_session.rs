@@ -51,6 +51,23 @@ pub fn handle_health() -> ApiResult {
     ))
 }
 
+fn session_fork_info(meta: Option<&SessionMeta>, events: &[ledger::Event]) -> Option<ForkInfo> {
+    meta.and_then(|m| m.fork_info.clone()).or_else(|| {
+        // Nested forks inherit earlier markers from their parent's event prefix.
+        events
+            .iter()
+            .rev()
+            .filter(|event| matches!(event.kind.as_str(), "session.fork" | "session.forked"))
+            .find_map(|event| {
+                Some(ForkInfo {
+                    parent_session: event.payload["parent_session"].as_str()?.to_string(),
+                    forked_at_seq: event.payload["parent_seq"].as_u64().unwrap_or_default(),
+                    modified_assumption: event.payload["modified_assumption"].as_str().map(str::to_string),
+                })
+            })
+    })
+}
+
 pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
     let ledger = state.open_ledger().map_err(internal)?;
     let ledger_ids = ledger.sessions().map_err(|e| internal(e.to_string()))?;
@@ -78,18 +95,7 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
             .find(|e| e.kind == "session.start")
             .and_then(|e| e.payload.get("prompt").and_then(Value::as_str))
             .map(|p| clip_title(p, 52));
-        let fork_info = meta.as_ref().and_then(|m| m.fork_info.as_ref());
-        let parent_session = fork_info.map(|f| f.parent_session.clone()).or_else(|| {
-            events
-                .iter()
-                .find(|e| e.kind == "session.forked")
-                .and_then(|e| {
-                    e.payload
-                        .get("parent_session")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-        });
+        let parent_session = session_fork_info(meta.as_ref(), &events).map(|fork| fork.parent_session);
         let title = meta
             .as_ref()
             .map(|m| m.title.clone())
@@ -272,13 +278,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
     let pending = state.pending_for_session(session_id);
     let (route, provenance) = crate::cli_turn::session_route(meta.as_ref(), &events);
     let is_agy = route.as_str() == Some(crate::state::ANTIGRAVITY_ROUTE);
-    let fork_info = meta.as_ref().and_then(|m| m.fork_info.clone()).or_else(|| {
-        events.iter().find(|e| e.kind == "session.forked").map(|e| ForkInfo {
-            parent_session: e.payload["parent_session"].as_str().unwrap_or("").to_string(),
-            forked_at_seq: e.payload["parent_seq"].as_u64().unwrap_or(0),
-            modified_assumption: e.payload["modified_assumption"].as_str().map(str::to_string),
-        })
-    });
+    let fork_info = session_fork_info(meta.as_ref(), &events);
 
     let events_json: Vec<Value> = events
         .iter()
