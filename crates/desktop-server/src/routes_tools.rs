@@ -263,6 +263,32 @@ pub fn handle_tex_audit(state: &DesktopState, session_id: &str, body: &[u8]) -> 
     Ok((200, serde_json::to_value(report).map_err(|e| internal(e.to_string()))?))
 }
 
+pub fn handle_lean_check(state: &Arc<DesktopState>, session_id: &str, body: &[u8]) -> ApiResult {
+    validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
+    if !state.session_exists(session_id).map_err(internal)? {
+        return Err(not_found(format!("session `{session_id}` not found")));
+    }
+    let val = parse_json_body(body)?;
+    let obj = val
+        .as_object()
+        .ok_or_else(|| bad("request body must be a JSON object"))?;
+    let mut args = serde_json::Map::new();
+    for key in ["path", "code", "allow_axioms"] {
+        if let Some(v) = obj.get(key).filter(|v| !v.is_null()) {
+            args.insert(key.to_string(), v.clone());
+        }
+    }
+    let env = Arc::new(state.research_env_for_session(session_id).map_err(bad)?);
+    let router =
+        crate::turn_runner::build_lean_router(Arc::clone(state), env, session_id).map_err(internal)?;
+    match router.try_call("user:desktop-lean", research_tools::LEAN_CHECK, &Value::Object(args)) {
+        Ok(tools::CallOutcome::Ok(output)) => Ok((200, output)),
+        Ok(tools::CallOutcome::Denied(reason)) => Err((403, reason)),
+        Ok(tools::CallOutcome::Error(reason)) => Err(bad(reason)),
+        Err(reason) => Err(internal(reason)),
+    }
+}
+
 pub fn handle_literature(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiResult {
     validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
     if !state.session_exists(session_id).map_err(internal)? {

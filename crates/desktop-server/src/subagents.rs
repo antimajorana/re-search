@@ -21,6 +21,14 @@ pub const MAX_GOAL_CHARS: usize = 2000;
 const RESERVED_IDS: &[&str] = &[
     "solver",
     "orchestrator",
+    "compute-worker",
+    "compute_worker",
+    "literature-worker",
+    "literature_worker",
+    "lean-worker",
+    "lean_worker",
+    "explorer-worker",
+    "explorer_worker",
     "step-verifier",
     "full-verifier",
     "strategist",
@@ -65,7 +73,43 @@ pub fn builtin_agents_json() -> Vec<Value> {
             "role": "Primary Derivation & Research Agent",
             "when": "Runs on every turn in Direct, Verified, and Deep modes.",
             "category": "research",
-            "summary": "Reads workspace/arXiv sources, runs sandboxed Python/SymPy via `sympy_eval`, records typed Proof-DAG steps (`ledger_append`), and writes or patches LaTeX manuscripts."
+            "summary": "Plans derivations, delegates heavy calculations (`delegate_compute`), paper reading (`delegate_literature`), Lean proofs (`delegate_lean`), parallel exploration (`delegate_explore`), and custom specialists (`delegate_subagent`), records typed Proof-DAG steps (`ledger_append`), and writes or patches LaTeX manuscripts."
+        }),
+        json!({
+            "id": "compute-worker",
+            "role_key": "compute_worker",
+            "name": "Compute Worker",
+            "role": "Isolated Symbolic & Numerical Worker",
+            "when": "Invoked by Orchestrator via `delegate_compute` for iterative Python/SymPy scripts.",
+            "category": "worker",
+            "summary": "Runs sandboxed `sympy_eval` and `check_expression_sanity` checks in an isolated context with traceback retries, records `symbolic_computation`/`numerical_computation` Proof-DAG entries, and returns concise summaries."
+        }),
+        json!({
+            "id": "literature-worker",
+            "role_key": "literature_worker",
+            "name": "Literature Worker",
+            "role": "Isolated Literature & Source Reader",
+            "when": "Invoked by Orchestrator via `delegate_literature` for arXiv lookups, ingestion, and bulky `.tex` files.",
+            "category": "worker",
+            "summary": "Searches `arxiv_search`/`literature_search`, ingests papers via `doc_ingest`, inspects workspace/source files (`fs_list`/`fs_read`), and extracts exact theorems, conventions, and citation links without bloating Orchestrator context."
+        }),
+        json!({
+            "id": "lean-worker",
+            "role_key": "lean_worker",
+            "name": "Lean Prover Worker",
+            "role": "Isolated Lean 4 Formalization Worker",
+            "when": "Invoked by Orchestrator via `delegate_lean` for machine-checked Lean 4 proofs.",
+            "category": "worker",
+            "summary": "Formalizes mathematical claims in Lean 4 without `sorry`, `admit`, or unproven `axiom` declarations and runs `lean_check` through the dedicated Lean policy router."
+        }),
+        json!({
+            "id": "explorer-worker",
+            "role_key": "explorer_worker",
+            "name": "Parallel Explorer (Ultramath)",
+            "role": "Concurrent Multi-Branch Exploration Worker",
+            "when": "Invoked by Orchestrator via `delegate_explore` to test 2–4 candidate approaches in parallel.",
+            "category": "worker",
+            "summary": "Evaluates competing Ansaetze or proof strategies concurrently in read/compute-only branches without mutating the Proof DAG, returning per-branch viability, checks, and obstructions."
         }),
         json!({
             "id": "step-verifier",

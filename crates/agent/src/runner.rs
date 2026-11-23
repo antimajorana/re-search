@@ -110,6 +110,7 @@ pub(crate) struct LoopParams<'a> {
     pub(crate) mask_keep_recent: Option<(usize, usize)>,
     pub(crate) cancel: Option<&'a CancelToken>,
     pub(crate) emit_end_event: bool,
+    pub(crate) delegation: Option<&'a crate::delegate::DelegationConfig<'a>>,
 }
 
 pub(crate) struct LegResult {
@@ -211,6 +212,7 @@ pub fn run_agent_loop(
             mask_keep_recent: None,
             cancel: None,
             emit_end_event: true,
+            delegation: None,
         },
     )
 }
@@ -232,7 +234,7 @@ pub(crate) fn run_turn_leg(
 ) -> Result<LegResult, String> {
     let info = transport.info();
     let caller = format!("agent:{}:{}", info.provider, audit.session);
-    let tool_specs: Vec<ToolSpec> = router
+    let mut tool_specs: Vec<ToolSpec> = router
         .registry()
         .defs()
         .iter()
@@ -242,6 +244,9 @@ pub(crate) fn run_turn_leg(
             input_schema: d.input_schema.clone(),
         })
         .collect();
+    if let Some(dcfg) = params.delegation {
+        tool_specs.extend(crate::delegate::delegation_tool_specs(dcfg));
+    }
     let started = Instant::now();
     let mut messages = params.initial_messages;
 
@@ -381,7 +386,7 @@ pub(crate) fn run_turn_leg(
                     return Ok(LegResult { outcome, messages, last_turn: turn, last_text: String::new() });
                 }
                 messages.push(Message { role: Role::Assistant, content: resp.content.clone() });
-                let results = dispatch_tool_calls(audit, router, &caller, turn, &resp.content, params.cancel)?;
+                let results = dispatch_tool_calls(audit, router, &caller, turn, &resp.content, params.cancel, params.delegation)?;
                 if params.cancel.is_some_and(CancelToken::is_cancelled) {
                     messages.push(Message { role: Role::User, content: results });
                     let outcome = abort_stopped(audit, leg_turns)?;
@@ -515,6 +520,7 @@ fn dispatch_tool_calls(
     turn: u32,
     content: &[ContentBlock],
     cancel: Option<&CancelToken>,
+    delegation: Option<&crate::delegate::DelegationConfig<'_>>,
 ) -> Result<Vec<ContentBlock>, String> {
     let mut results = Vec::new();
     for block in content {
@@ -523,6 +529,11 @@ fn dispatch_tool_calls(
         };
         let (is_error, content_text) = if cancel.is_some_and(CancelToken::is_cancelled) {
             (true, "DENIED: stopped by user".to_string())
+        } else if crate::delegate::is_delegation_tool(name) {
+            match delegation {
+                Some(dcfg) => crate::delegate::run_delegation_call(audit, router, dcfg, id, name, input, cancel)?,
+                None => (true, "DENIED: delegation is not enabled for this session".to_string()),
+            }
         } else {
             let outcome = router.try_call(caller, name, input)?;
             audit.flush_interleaved()?;

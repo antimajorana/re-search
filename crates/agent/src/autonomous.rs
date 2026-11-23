@@ -9,6 +9,7 @@ use crate::guardrails::{
     build_research_system_prompt, check_computation_interpretation, check_final_answer_gate,
     GuardrailConfig,
 };
+use crate::honesty::{infer_campaign_phase, lint_honesty, CampaignPhase};
 use crate::resume::{rehydrate_history, verify_and_read, ResumeConfig};
 use crate::runner::{
     run_turn_leg, tool_defs_json, AgentConfig, Audit, EventSink, LegResult, LoopParams, SessionOutcome,
@@ -16,19 +17,20 @@ use crate::runner::{
 use crate::transport::{CancelToken, ContentBlock, Message, ProviderKind, Role, Transport};
 use crate::verifiers::{verify_full_solution_cancellable, VerificationVerdict};
 use ledger::Ledger;
-use research_tools::ResearchEnv;
+use research_tools::{read_proof_dag, ResearchEnv};
 use serde_json::json;
 use std::time::Instant;
 use tools::{Router, ToolDef};
 
 pub const DEFAULT_MAX_VERIFICATION_ROUNDS: u32 = 3;
 
-/// Optional independent role transports & models for Verifier and Strategist.
-/// When `verifier` or `strategist` is `None`, falls back to the Solver transport/model.
+/// Optional independent role transports & models for Verifier, Strategist, and Worker delegation.
+/// When `verifier` or `strategist` is `None`, falls back to the Orchestrator transport/model.
 #[derive(Default)]
 pub struct AutonomousRoles<'a> {
     pub verifier: Option<(&'a dyn Transport, &'a str)>,
     pub strategist: Option<(&'a dyn Transport, &'a str)>,
+    pub delegation: Option<crate::delegate::DelegationConfig<'a>>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,7 +78,14 @@ pub fn run_autonomous_research_loop(
     } else {
         cfg.system_prompt.as_str()
     };
-    let system_prompt = build_research_system_prompt(base_prompt, &auto_cfg.guardrails)?;
+    let mut system_prompt = build_research_system_prompt(base_prompt, &auto_cfg.guardrails)?;
+    if let Some(dcfg) = roles.delegation.as_ref() {
+        let sec = crate::delegate::format_delegation_prompt_section(dcfg);
+        if !sec.is_empty() {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&sec);
+        }
+    }
     let session = router.session();
     let info = solver_transport.info();
     let defs = router.registry().defs();
@@ -171,11 +180,20 @@ pub fn resume_autonomous_research_loop(
     }
 
     let base_sys = cfg.system_prompt.as_deref().unwrap_or(&inspection.system_prompt);
-    let system_prompt = if base_sys == crate::runner::DEFAULT_SYSTEM_PROMPT {
+    let mut system_prompt = if base_sys == crate::runner::DEFAULT_SYSTEM_PROMPT {
         build_research_system_prompt(RESEARCH_SYSTEM_PROMPT, &auto_cfg.guardrails)?
     } else {
         base_sys.to_string()
     };
+    if let Some(dcfg) = roles.delegation.as_ref() {
+        if !system_prompt.contains("Orchestrator -> Worker Delegation:") {
+            let sec = crate::delegate::format_delegation_prompt_section(dcfg);
+            if !sec.is_empty() {
+                system_prompt.push_str("\n\n");
+                system_prompt.push_str(&sec);
+            }
+        }
+    }
 
     let mut audit = Audit { ledger, session, sink, last_seq: inspection.resumed_from_seq };
     audit.emit(
@@ -256,6 +274,11 @@ fn drive_autonomous_rounds(
             audit.emit("session.abort", json!({ "reason": reason }))?;
             return Ok(SessionOutcome::Aborted { turns: turns_used, reason });
         }
+        let start_events = audit.ledger.read_session(audit.session).map_err(|e| e.to_string())?;
+        let start_phase = infer_campaign_phase(&start_events);
+        if !matches!(start_phase, CampaignPhase::Verify | CampaignPhase::Revise | CampaignPhase::Complete) {
+            audit.emit("campaign.phase", json!({ "phase": CampaignPhase::Synthesize.as_str() }))?;
+        }
         let leg_start_seq = audit.last_seq;
         let leg: LegResult = run_turn_leg(
             solver_transport,
@@ -272,6 +295,7 @@ fn drive_autonomous_rounds(
                 mask_keep_recent: Some((auto_cfg.guardrails.step_mask_keep, auto_cfg.guardrails.step_mask_stride)),
                 cancel,
                 emit_end_event: false,
+                delegation: roles.delegation.as_ref(),
             },
         )?;
 
@@ -292,6 +316,17 @@ fn drive_autonomous_rounds(
             });
         };
 
+        let dag = read_proof_dag(audit.ledger, audit.session)?;
+        let events = audit.ledger.read_session(audit.session).map_err(|e| e.to_string())?;
+        let honesty = lint_honesty(&leg.last_text, &dag, &events);
+        audit.emit("honesty.lint", serde_json::to_value(&honesty).unwrap())?;
+        if !honesty.passed {
+            audit.sink.on_thinking_delta(&format!(
+                "\n[Honesty Linter: {} finding(s) flagged]\n",
+                honesty.findings.len()
+            ));
+        }
+
         if auto_cfg.guardrails.calculation_mode {
             if let Err(calc_err) = check_computation_interpretation(audit.ledger, audit.session) {
                 if !calc_repair_attempted && turns_used < max_turns_budget {
@@ -305,6 +340,7 @@ fn drive_autonomous_rounds(
                          entry in `depends_on`) to interpret the calculation, append/update your `final_answer`, \
                          and state the complete final response.\n</guardrail_feedback>"
                     );
+                    audit.emit("campaign.phase", json!({ "phase": CampaignPhase::Revise.as_str() }))?;
                     inject_feedback(audit, &mut messages, 0, "calculation_mode", &fb)?;
                     continue;
                 }
@@ -315,6 +351,7 @@ fn drive_autonomous_rounds(
         }
 
         if !auto_cfg.guardrails.verification_mode {
+            audit.emit("campaign.phase", json!({ "phase": CampaignPhase::Complete.as_str() }))?;
             audit.emit(
                 "session.end",
                 json!({
@@ -342,6 +379,7 @@ fn drive_autonomous_rounds(
             "\n[Verifier round {round}/{max_rounds} ({v_model}): auditing active Proof DAG & LaTeX...]\n"
         ));
 
+        audit.emit("campaign.phase", json!({ "phase": CampaignPhase::Verify.as_str() }))?;
         let report = match verify_full_solution_cancellable(
             v_transport,
             audit.ledger,
@@ -371,6 +409,7 @@ fn drive_autonomous_rounds(
                 "[Verifier ACCEPTED `{}`: {}]\n",
                 report.target_entry_id, report.summary
             ));
+            audit.emit("campaign.phase", json!({ "phase": CampaignPhase::Complete.as_str() }))?;
             audit.emit(
                 "session.end",
                 json!({
@@ -402,6 +441,7 @@ fn drive_autonomous_rounds(
                     "banner": warn,
                 }),
             )?;
+            audit.emit("campaign.phase", json!({ "phase": CampaignPhase::Complete.as_str() }))?;
             audit.emit(
                 "session.end",
                 json!({
@@ -425,7 +465,8 @@ fn drive_autonomous_rounds(
             &report,
             cancel,
         )?;
-        let feedback = build_revision_prompt(&report, round, max_rounds, strategist_note.as_deref());
+        let feedback = build_revision_prompt(&report, round, max_rounds, strategist_note.as_deref(), &honesty);
+        audit.emit("campaign.phase", json!({ "phase": CampaignPhase::Revise.as_str() }))?;
         inject_feedback(audit, &mut messages, round, &report.target_entry_id, &feedback)?;
     }
 }

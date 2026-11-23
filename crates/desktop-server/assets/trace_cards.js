@@ -148,6 +148,114 @@ function formatWorkspaceCard(toolName, argsObj, outObj, rawOut) {
   };
 }
 
+const DELEGATION_TITLES = {
+  delegate_compute: 'Compute Worker',
+  delegate_literature: 'Literature Worker',
+  delegate_lean: 'Lean Prover Worker',
+  delegate_explore: 'Parallel Explorer (Ultramath)',
+  lean_check: 'Lean 4 Checker',
+};
+
+function formatDelegationCard(toolName, argsObj, outObj, rawOut) {
+  const title = toolName === 'delegate_subagent'
+    ? `Subagent · ${(outObj && outObj.worker_name) || (argsObj && argsObj.subagent_id) || 'Custom'}`
+    : (DELEGATION_TITLES[toolName] || toolName);
+  const tag = String(
+    (outObj && outObj.model) ||
+    (toolName === 'lean_check' && outObj && outObj.status) ||
+    'Running...'
+  );
+
+  const metaParts = [];
+  if (outObj && typeof outObj === 'object') {
+    if (outObj.turns !== undefined && outObj.turns !== null) {
+      const t = Number(outObj.turns) || 0;
+      metaParts.push(`${t} turn${t === 1 ? '' : 's'}`);
+    }
+    if (outObj.input_tokens !== undefined || outObj.output_tokens !== undefined) {
+      const totalTok = (Number(outObj.input_tokens) || 0) + (Number(outObj.output_tokens) || 0);
+      metaParts.push(`${totalTok} tokens`);
+    }
+    if (outObj.branch_count !== undefined && outObj.branch_count !== null) {
+      const bc = Number(outObj.branch_count) || 0;
+      metaParts.push(`${bc} branch${bc === 1 ? '' : 'es'}`);
+    } else if (Array.isArray(outObj.branches)) {
+      const bc = outObj.branches.length;
+      metaParts.push(`${bc} branch${bc === 1 ? '' : 'es'}`);
+    }
+    if (outObj.routing_reason) metaParts.push(String(outObj.routing_reason));
+    if (Array.isArray(outObj.tools_used) && outObj.tools_used.length > 0) {
+      metaParts.push(`tools: ${outObj.tools_used.map(String).join(', ')}`);
+    }
+    if (toolName === 'lean_check') {
+      if (outObj.status) metaParts.push(`status: ${String(outObj.status)}`);
+      if (Array.isArray(outObj.axioms)) {
+        metaParts.push(`axioms: ${outObj.axioms.length ? outObj.axioms.map(String).join(', ') : 'none'}`);
+      } else if (outObj.axioms) {
+        metaParts.push(`axioms: ${String(outObj.axioms)}`);
+      }
+      if (Array.isArray(outObj.diagnostics)) {
+        metaParts.push(`${outObj.diagnostics.length} diagnostic${outObj.diagnostics.length === 1 ? '' : 's'}`);
+      } else if (typeof outObj.diagnostics === 'number') {
+        metaParts.push(`${outObj.diagnostics} diagnostic${outObj.diagnostics === 1 ? '' : 's'}`);
+      }
+      if (outObj.hint) metaParts.push(`hint: ${String(outObj.hint)}`);
+    }
+  }
+  const metaHtml = metaParts.length > 0
+    ? `<div class="sc-meta-line">${escapeHtml(metaParts.join(' · '))}</div>`
+    : '';
+
+  const taskText = String((argsObj && (argsObj.task || argsObj.problem || argsObj.statement || argsObj.path)) || '').trim();
+  const taskHtml = taskText
+    ? `<div class="sc-meta-line">${escapeHtml(taskText.slice(0, 260))}${taskText.length > 260 ? '…' : ''}</div>`
+    : '';
+
+  const proofEntries = outObj && Array.isArray(outObj.proof_entries) ? outObj.proof_entries : [];
+  const jumpsHtml = proofEntries.length > 0
+    ? `<div class="sc-head-left">${proofEntries
+        .map((eid) => String(eid || '').trim())
+        .filter(Boolean)
+        .map((eid) => `<button type="button" class="pill-btn sm sc-step-jump" data-step-id="${escapeHtml(eid)}">Inspect ${escapeHtml(eid)} ↗</button>`)
+        .join('')}</div>`
+    : '';
+
+  let bodyDetail = '';
+  if (outObj && Array.isArray(outObj.branches) && outObj.branches.length > 0) {
+    const items = outObj.branches.slice(0, 6).map((b, i) => {
+      const bo = b && typeof b === 'object' ? b : { summary: String(b || '') };
+      const label = String(bo.approach || bo.name || bo.label || bo.branch || `Branch ${i + 1}`);
+      const stat = bo.status !== undefined ? String(bo.status) : (typeof bo.ok === 'boolean' ? (bo.ok ? 'ok' : 'error') : '');
+      const bModel = bo.model ? ` · ${String(bo.model)}` : '';
+      const bSum = String(bo.summary || bo.result || bo.error || '').trim();
+      return `<li><strong>${escapeHtml(label)}</strong>${stat || bModel ? ` <code>${escapeHtml(`${stat}${bModel}`.trim())}</code>` : ''}${bSum ? `: ${escapeHtml(bSum.slice(0, 220))}${bSum.length > 220 ? '…' : ''}` : ''}</li>`;
+    }).join('');
+    bodyDetail += `<ul class="sc-hit-list">${items}</ul>`;
+  }
+  if (outObj && outObj.summary) {
+    const sum = String(outObj.summary).trim();
+    bodyDetail += `<div class="sc-summary-line">${escapeHtml(sum.slice(0, 500))}${sum.length > 500 ? '…' : ''}</div>`;
+  }
+  if (toolName === 'lean_check' && outObj && Array.isArray(outObj.diagnostics) && outObj.diagnostics.length > 0) {
+    const diags = outObj.diagnostics.slice(0, 4).map((d) => {
+      const msg = typeof d === 'string' ? d : String((d && (d.message || d.msg || d.data)) || JSON.stringify(d));
+      return `<li>${escapeHtml(msg.slice(0, 220))}</li>`;
+    }).join('');
+    bodyDetail += `<ul class="sc-hit-list">${diags}</ul>`;
+  }
+  if (outObj && outObj.error) {
+    bodyDetail += `<pre class="trace-io sc-err-io">${escapeHtml(String(outObj.error).slice(0, 600))}</pre>`;
+  } else if (!outObj && rawOut) {
+    bodyDetail += `<pre class="trace-io">${escapeHtml(String(rawOut).slice(0, 600))}</pre>`;
+  }
+
+  return {
+    title,
+    tag,
+    bodyHtml: `${metaHtml}${taskHtml}${jumpsHtml}${bodyDetail}`,
+  };
+}
+
 export function buildStructuredTraceCard(tr, opts = {}) {
   seqCounter += 1;
   const toolName = String((tr && (tr.tool || tr.tool_id)) || 'tool');
@@ -169,6 +277,12 @@ export function buildStructuredTraceCard(tr, opts = {}) {
     spec = formatLedgerCard(toolName, argsObj, outObj);
   } else if (toolName === 'arxiv_search' || toolName === 'literature_search' || toolName === 'ingest_source') {
     spec = formatLiteratureCard(toolName, argsObj, outObj, rawOutStr);
+  } else if (
+    toolName === 'delegate_compute' || toolName === 'delegate_literature' ||
+    toolName === 'delegate_lean' || toolName === 'delegate_explore' ||
+    toolName === 'delegate_subagent' || toolName === 'lean_check'
+  ) {
+    spec = formatDelegationCard(toolName, argsObj, outObj, rawOutStr);
   } else if (/^(fs_|latex_|tex_audit)/.test(toolName)) {
     spec = formatWorkspaceCard(toolName, argsObj, outObj, rawOutStr);
   }
@@ -213,9 +327,14 @@ export function buildStructuredTraceCard(tr, opts = {}) {
     }
   }
 
-  const stepBtn = box.querySelector('.sc-step-jump');
-  if (stepBtn && typeof opts.onInspectStep === 'function') {
-    stepBtn.addEventListener('click', () => opts.onInspectStep(spec.stepId));
+  if (typeof opts.onInspectStep === 'function') {
+    const btns = typeof box.querySelectorAll === 'function'
+      ? box.querySelectorAll('.sc-step-jump')
+      : [box.querySelector && box.querySelector('.sc-step-jump')].filter(Boolean);
+    for (const btn of btns) {
+      const targetId = (btn.dataset && btn.dataset.stepId) || spec.stepId;
+      if (targetId) btn.addEventListener('click', () => opts.onInspectStep(targetId));
+    }
   }
   return box;
 }
@@ -267,5 +386,38 @@ export function buildVerificationVerdictCard(msgPayload, onInspectStep) {
   if (btn && targetId && typeof onInspectStep === 'function') {
     btn.addEventListener('click', () => onInspectStep(targetId));
   }
+  return card;
+}
+
+export function buildHonestyNoticeCard(honesty) {
+  if (!honesty || !Array.isArray(honesty.findings) || honesty.findings.length === 0) return null;
+  const card = document.createElement('div');
+  card.className = 'trace-item structured-trace verdict-card is-unverified honesty-notice';
+  const count = honesty.findings.length;
+  const summaryHtml = honesty.summary
+    ? `<div class="sc-summary-line">${escapeHtml(String(honesty.summary))}</div>`
+    : '';
+  const itemsHtml = honesty.findings.map((f) => {
+    const fo = f && typeof f === 'object' ? f : { reason: String(f || '') };
+    const sev = String(fo.severity || 'warn');
+    const sevTone = /^(error|blocker|critical|high)$/i.test(sev) ? 'err' : 'warn';
+    const claim = fo.claim ? `<code>${escapeHtml(String(fo.claim))}</code> ` : '';
+    const reason = fo.reason ? escapeHtml(String(fo.reason)) : '';
+    const suggestion = fo.suggestion
+      ? `<div class="sc-meta-line">Suggestion: ${escapeHtml(String(fo.suggestion))}</div>`
+      : '';
+    return `<li><span class="badge ${sevTone}">${escapeHtml(sev)}</span> ${claim}${reason}${suggestion}</li>`;
+  }).join('');
+
+  card.innerHTML = `
+    <div class="trace-head">
+      <div class="sc-head-left">
+        <span class="badge warn">⚠ Honesty Linter</span>
+        <span class="verdict-meta">${count} finding${count === 1 ? '' : 's'}</span>
+      </div>
+    </div>
+    ${summaryHtml}
+    <ul class="sc-hit-list">${itemsHtml}</ul>
+  `;
   return card;
 }

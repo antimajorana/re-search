@@ -9,8 +9,11 @@
 pub mod anthropic;
 pub mod autonomous;
 pub(crate) mod autonomous_prompts;
+pub mod delegate;
+pub mod explore;
 pub mod gemini;
 pub mod guardrails;
+pub mod honesty;
 pub(crate) mod http;
 pub mod model_list;
 pub mod narrator;
@@ -36,12 +39,20 @@ pub use autonomous::{
     resume_autonomous_research_loop, run_autonomous_research_loop, AutonomousConfig, AutonomousRoles,
     DEFAULT_MAX_VERIFICATION_ROUNDS, RESEARCH_SYSTEM_PROMPT,
 };
+pub use delegate::{
+    allowed_tools_for_profile, compute_worker_tools, lean_worker_tools, literature_worker_tools,
+    CustomSubagentDelegation, DelegatedWorkerSpec, DelegationConfig, DEFAULT_WORKER_MAX_TURNS,
+    DELEGATE_COMPUTE, DELEGATE_LEAN, DELEGATE_LITERATURE, DELEGATE_SUBAGENT, MAX_WORKER_MAX_TURNS,
+    WORKER_MAX_TOKENS,
+};
+pub use explore::{explore_worker_tools, DELEGATE_EXPLORE, EXPLORE_BRANCH_MAX_TURNS, MAX_EXPLORE_BRANCHES};
 pub use gemini::{GeminiConfig, GeminiTransport};
 pub use guardrails::{
     build_research_system_prompt, check_computation_interpretation, check_final_answer_gate,
     mask_old_tool_outputs, mask_old_tool_outputs_stepped, run_research_loop,
     validate_pinned_conventions, GuardrailConfig,
 };
+pub use honesty::{infer_campaign_phase, lint_honesty, CampaignPhase, HonestyFinding, HonestyReport};
 pub use narrator::{build_derivation_sheet, narrate_session, NarrationReport};
 pub use openai::{OpenAiConfig, OpenAiTransport};
 pub use presets::{ModelEndpointSpec, PresetKind, RoleAssignment};

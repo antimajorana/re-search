@@ -2,6 +2,7 @@
 //! for [`crate::autonomous`].
 
 use crate::autonomous::{AutonomousConfig, AutonomousRoles};
+use crate::honesty::HonestyReport;
 use crate::runner::Audit;
 use crate::strategist::{
     consult_strategist_cancellable, count_strategist_consultations, mandatory_strategist_required,
@@ -13,30 +14,35 @@ use research_tools::{read_proof_dag, ProofStatus, LEDGER_APPEND, LEDGER_SUPERSED
 use serde_json::{json, Value};
 use tools::{CallOutcome, Router};
 
-/// Clean-room default system prompt for research sessions, teaching convention pinning,
-/// primary-literature source verification, symbolic/numerical sanity checks, and Proof-DAG discipline.
+/// Clean-room default system prompt for the Orchestrator, teaching convention pinning,
+/// worker delegation (`delegate_compute`, `delegate_literature`, `delegate_lean`,
+/// `delegate_explore`), honesty (`evidence != proof`), Proof-DAG discipline, and synthesis.
 pub const RESEARCH_SYSTEM_PROMPT: &str = "\
-You are re:Search, a rigorous mathematical and theoretical-physics research assistant operating \
-inside an auditable, hash-chained workspace.\n\n\
+You are re:Search, the Orchestrator of a rigorous mathematical and theoretical-physics research \
+workspace backed by an auditable, hash-chained ledger.\n\n\
 Workflow & Tool Discipline:\n\
 1. Pin Conventions First: State conventions explicitly (metric signature, Fourier/normalization \
 factors, operator grading, lattice/indexing conventions) and record foundational assumptions via \
 `ledger_append` (`entry_type: \"assumption\"`).\n\
-2. Ground Primary Literature: When citing theorems, definitions, or papers, verify exact statements \
-using `arxiv_search` (supports inline prefixes such as `au:Author AND ti:Keyword`, `cat:math-ph`, \
-or bare arXiv IDs; pass `include_source: true` and `section_filter` to unpack `.tar.gz`/`.gz` LaTeX \
-e-prints into `sources`) and `literature_search`. Read unpacked TeX files via `fs_list` / `fs_read` \
-(`root: \"sources\"`) rather than guessing citations from memory.\n\
-3. Compute & Sanity-Check: Use `sympy_eval` and `check_expression_sanity` to verify algebraic \
-identities, commutators, signs, prefactors, dimensional consistency, small-system exact checks, \
-and limiting cases. Never claim a symbolic check succeeded unless `sympy_eval` actually ran.\n\
-4. Maintain the Proof DAG: Record key derivations (`derivation`), verified calculations \
-(`symbolic_computation` / `numerical_computation`), interpreted conclusions (`result` citing prior \
-steps in `depends_on`), and your complete concluding synthesis (`final_answer` via `ledger_append`). \
-If an earlier Proof-DAG entry is flawed, supersede it explicitly with `ledger_supersede`.\n\
-5. Self-Contained Exposition: Write clear, publication-grade Markdown and LaTeX (`$...$`, `$$...$$`, \
-`\\begin{align*}...\\end{align*}`) stating hypotheses, definitions, intermediate lemmas, and conclusions \
-without hand-waving.";
+2. Delegate Specialist Work (or use direct tools when delegation is absent): \
+Delegate heavy symbolic/numerical Python scripts, traceback retries, and `check_expression_sanity` \
+to `delegate_compute` (or call `sympy_eval` / `check_expression_sanity` directly). \
+Delegate arXiv/literature searches, ingestion, and bulky `.tex` reading under `sources` to \
+`delegate_literature` (or use `arxiv_search`, `literature_search`, `fs_list`, `fs_read` directly \
+rather than guessing citations from memory). \
+Delegate Lean 4 formalization and `lean_check` machine-checked proofs to `delegate_lean`. \
+Use `delegate_explore` to test 2..=4 competing strategies or Ansaetze concurrently before committing.\n\
+3. Honesty & Evidence Discipline (`evidence != proof`): Never claim `SymPy confirmed`, \
+`Lean verified`, `Lean 4 verified`, or `rigorously proved` / `Q.E.D.` without matching \
+ledger-backed verification (a succeeding `sympy_eval`, a `lean_check` with status `\"verified\"`, \
+or an accepted full Verifier review).\n\
+4. Maintain the Proof DAG: Record derivations (`derivation`), verified calculations \
+(`symbolic_computation` / `numerical_computation`), interpreted conclusions (`result` citing \
+dependencies in `depends_on`) via `ledger_append`, and your complete concluding synthesis \
+(`final_answer`). Supersede flawed entries explicitly with `ledger_supersede`.\n\
+5. Synthesize Self-Contained Exposition: Write clear, publication-grade Markdown and LaTeX \
+(`$...$`, `$$...$$`, `\\begin{align*}...\\end{align*}`) stating hypotheses, definitions, \
+intermediate lemmas, and conclusions without hand-waving.";
 
 pub(crate) fn ensure_active_final_answer_entry(
     router: &Router,
@@ -150,6 +156,7 @@ pub(crate) fn build_revision_prompt(
     round: u32,
     max_rounds: u32,
     strategist_advice: Option<&str>,
+    honesty: &HonestyReport,
 ) -> String {
     let mut out = format!(
         "<verification_feedback round=\"{round}\" max_rounds=\"{max_rounds}\" target=\"{}\">\n\
@@ -164,6 +171,13 @@ pub(crate) fn build_revision_prompt(
         out.push_str("Issues to resolve:\n");
         for iss in &report.issues {
             out.push_str(&format!("- [{}] {}\n", iss.severity, iss.message));
+        }
+    }
+    let honesty_errs: Vec<_> = honesty.findings.iter().filter(|f| f.severity == "error").collect();
+    if !honesty_errs.is_empty() {
+        out.push_str("Honesty Linter errors to resolve:\n");
+        for f in honesty_errs {
+            out.push_str(&format!("- `{}`: {} ({})\n", f.claim, f.reason, f.suggestion));
         }
     }
     if let Some(advice) = strategist_advice.filter(|a| !a.trim().is_empty()) {

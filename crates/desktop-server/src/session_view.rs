@@ -199,6 +199,10 @@ pub(crate) fn summarize_session_events(events: &[ledger::Event]) -> Value {
     let mut verification_rounds = 0u64;
     let mut input_tokens = 0u64;
     let mut output_tokens = 0u64;
+    let mut worker_input_tokens = 0u64;
+    let mut worker_output_tokens = 0u64;
+    let mut delegation_count = 0u64;
+    let mut honesty_warnings = 0u64;
     let mut model = String::new();
     let mut verified_status = "none";
 
@@ -217,6 +221,23 @@ pub(crate) fn summarize_session_events(events: &[ledger::Event]) -> Value {
                     input_tokens += u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
                     output_tokens += u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
                 }
+            }
+            "delegate.end" | "explore.end" => {
+                delegation_count += 1;
+                worker_input_tokens += ev.payload.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
+                worker_output_tokens += ev.payload.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
+            }
+            "honesty.lint" => {
+                let passed = ev.payload.get("passed").and_then(Value::as_bool).unwrap_or(false);
+                honesty_warnings = if passed {
+                    0
+                } else {
+                    ev.payload
+                        .get("findings")
+                        .and_then(Value::as_array)
+                        .map(|f| f.len() as u64)
+                        .unwrap_or(0)
+                };
             }
             "proof.entry" => {
                 proof_entries += 1;
@@ -247,6 +268,7 @@ pub(crate) fn summarize_session_events(events: &[ledger::Event]) -> Value {
             _ => {}
         }
     }
+    let campaign_phase = agent::infer_campaign_phase(events).as_str();
 
     json!({
         "proof_entries": proof_entries,
@@ -255,6 +277,11 @@ pub(crate) fn summarize_session_events(events: &[ledger::Event]) -> Value {
         "verified_status": verified_status,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        "worker_input_tokens": worker_input_tokens,
+        "worker_output_tokens": worker_output_tokens,
+        "delegation_count": delegation_count,
+        "honesty_warnings": honesty_warnings,
+        "campaign_phase": campaign_phase,
         "model": model,
     })
 }
@@ -446,8 +473,83 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
             "vendor.builtin_tool" => {
                 messages.push(json!({ "role": "warning", "text": builtin_tool_warning(&ev.payload), "seq": ev.seq }));
             }
+            "delegate.end" => {
+                let wname = ev
+                    .payload
+                    .get("worker_name")
+                    .or_else(|| ev.payload.get("worker"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("Worker");
+                let model = ev.payload.get("model").and_then(Value::as_str).unwrap_or("");
+                let turns = ev.payload.get("turns").and_then(Value::as_u64).unwrap_or(0);
+                let inp = ev.payload.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
+                let out = ev.payload.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
+                pending_thinking.push_str(&format!(
+                    "[Worker {wname} ({model}): {turns} turn(s), {inp}+{out} tok]\n"
+                ));
+            }
+            "explore.end" => {
+                let model = ev.payload.get("model").and_then(Value::as_str).unwrap_or("");
+                let branches = ev.payload.get("branch_count").and_then(Value::as_u64).unwrap_or(0);
+                let turns = ev.payload.get("turns").and_then(Value::as_u64).unwrap_or(0);
+                let inp = ev.payload.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
+                let out = ev.payload.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
+                pending_thinking.push_str(&format!(
+                    "[Ultramath Explorer ({model}): {branches} branches, {turns} turns, {inp}+{out} tok]\n"
+                ));
+            }
+            "honesty.lint" => {
+                if let Some(last) = messages.last_mut().filter(|m| is_primary_assistant(m)) {
+                    last["honesty"] = ev.payload.clone();
+                }
+            }
+            "campaign.phase" => {}
             _ => {}
         }
     }
     (messages, traces, sources)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ev(seq: u64, kind: &str, payload: Value) -> ledger::Event {
+        ledger::Event {
+            session: "s-view".into(),
+            seq,
+            ts_ms: seq as i64 * 10,
+            kind: kind.into(),
+            schema_version: 1,
+            payload,
+            prev_hash: "0".repeat(64),
+            event_hash: "1".repeat(64),
+        }
+    }
+
+    #[test]
+    fn summarizes_and_reconstructs_delegation_honesty_and_phase() {
+        let events = vec![
+            ev(1, "session.start", json!({ "prompt": "Check", "model": "claude-sonnet-4-6" })),
+            ev(2, "campaign.phase", json!({ "phase": "EXPLORE" })),
+            ev(3, "explore.end", json!({ "model": "claude-haiku-4-5", "branch_count": 2, "turns": 4, "input_tokens": 30, "output_tokens": 12 })),
+            ev(4, "delegate.end", json!({ "worker": "compute_worker", "worker_name": "Compute Worker", "model": "claude-haiku-4-5", "turns": 2, "input_tokens": 40, "output_tokens": 15 })),
+            ev(5, "model.text", json!({ "text": "Done." })),
+            ev(6, "honesty.lint", json!({ "passed": false, "findings": [{ "severity": "warning", "claim": "q.e.d." }] })),
+        ];
+        let stats = summarize_session_events(&events);
+        assert_eq!(stats["worker_input_tokens"], 70);
+        assert_eq!(stats["worker_output_tokens"], 27);
+        assert_eq!(stats["delegation_count"], 2);
+        assert_eq!(stats["honesty_warnings"], 1);
+        assert_eq!(stats["campaign_phase"], "EXPLORE");
+
+        let (msgs, _, _) = reconstruct_session_view(&events);
+        assert_eq!(msgs.len(), 2);
+        let think = msgs[1]["thinking"].as_str().unwrap();
+        assert!(think.contains("[Ultramath Explorer (claude-haiku-4-5): 2 branches, 4 turns, 30+12 tok]"));
+        assert!(think.contains("[Worker Compute Worker (claude-haiku-4-5): 2 turn(s), 40+15 tok]"));
+        assert_eq!(msgs[1]["honesty"]["passed"], false);
+        assert_eq!(msgs[1]["honesty"]["findings"][0]["claim"], "q.e.d.");
+    }
 }

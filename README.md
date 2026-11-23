@@ -6,26 +6,29 @@ A small, tamper-evident Rust research core and loopback desktop workbench for ma
 
 ## How reSearch Is Designed (Architecture & Logic)
 
-reSearch separates reasoning, policy, durable state, and execution into four isolated layers so a model can never silently execute arbitrary code or mutate your local files:
+reSearch combines **OpenTorus** (fail-closed policy clamps, zero-capability Windows 11 AppContainer sandbox, loopback WebView2 isolation, and tamper-evident SHA-256 ledger), **open-math-harness** (context-isolated Orchestrator → Worker delegation, Ultramath parallel exploration, and deterministic Lean 4 checking with anti-cheat), and **solver-agent** (structured Campaign Phases, artifact-aware `honesty.lint`, and zero-bias verification) into four isolated layers so a model can never silently execute arbitrary code, mutate local files, or overclaim unverified evidence as proof:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ 1. Desktop Shell & Loopback Server (desktop-app + desktop-server)          │
 │    WebView2 locked to 127.0.0.1 (header CSRF + Origin) · Offline KaTeX UI  │
-│    Model Picker + Effort Mini-Window · Subagent Builder · Source Reader    │
+│    Structured Delegation/Lean/Honesty Cards · Agents & Models · Sources    │
 └───────────────────────────────────┬────────────────────────────────────────┘
                                     │ spawns / supervises turn
 ┌───────────────────────────────────▼────────────────────────────────────────┐
-│ 2. Agent & Multi-Role Verification Loop (agent / cli-route)                │
-│    Direct  │ Verified (Orchestrator → Calc Guard → Stateless Verifier, ≤3x)│
-│    Deep    │ + Research Strategist error diagnosis & revision plan         │
-│    Routes  │ In-core API (Anthropic/OpenAI/ChatGPT/Gemini/Ollama) or CLI   │
+│ 2. Orchestrator, Workers & Zero-Bias Verification (agent / cli-route)      │
+│    Phases  │ INGEST → EXPLORE → COMPUTE → SYNTHESIZE → VERIFY → REVISE →   │
+│            │ COMPLETE                                                      │
+│    Workers │ Compute · Literature · Lean Prover · Parallel Explorer (2–4x) │
+│            │ + Custom Subagents (isolated contexts, no final_answer)       │
+│    Gates   │ lean_check (anti-cheat) · honesty.lint (evidence != proof)    │
+│            │ Stateless Step/Full Verifiers (≤3x) + Strategist (Deep mode)  │
 └───────────────┬──────────────────────────────────────────┬─────────────────┘
                 │ every tool call goes through Router      │ append-only events
 ┌───────────────▼──────────────────────────┐   ┌───────────▼─────────────────┐
 │ 3. Fail-Closed Policy & Approval Router  │   │ 4. SHA-256 Proof-DAG Ledger │
-│    policy (Allow / Ask / Deny clamps)    │   │    SQLite v3 + Blob Store   │
-│    Desktop auto-approve / per-call UI    │   │    Hash-chained & exportable│
+│    policy (Allow / Ask / Deny clamps)    │   │    Shared DAG · Provenance  │
+│    Desktop auto-approve / per-call UI    │   │    delegate.* + honesty.lint│
 └───────────────┬──────────────────────────┘   └─────────────────────────────┘
                 │ sympy_eval only (EffectClass::ExecuteCode)
 ┌───────────────▼────────────────────────────────────────────────────────────┐
@@ -34,14 +37,24 @@ reSearch separates reasoning, policy, durable state, and execution into four iso
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### How the SHA-256 Ledger Connects Isolated Workers
+- **Shared Proof-DAG Memory:** Delegated workers run in short-lived isolated contexts (so bulky SymPy tracebacks, arXiv downloads, Lean compiler loops, or parallel explorations never bloat the Orchestrator's window) and exchange verified state through typed Proof-DAG entries (`e-1`, `e-2`, …). Workers are barred in Rust from recursive delegation or recording `final_answer`.
+- **`evidence != proof` Anti-Overclaiming Gate:** Computations (`symbolic_computation` / `numerical_computation`) and literature lookups are typed separately from proved derivations/theorems. At the end of a turn, the artifact-aware **Honesty Linter** (`honesty.lint`) cross-checks claims in the response against actual Proof-DAG entries, `lean_check` outcomes, and workspace artifacts, surfacing a warning notice whenever evidence is misrepresented as proof.
+- **Zero-Bias Verification:** Stateless `Step Verifier` and `Full Solution Verifier` inspect only the problem, Proof-DAG dependencies, deterministic `tex_audit` XML, and `lean_check` results—never the Orchestrator's or workers' private chain-of-thought.
+- **Routing & Token Provenance:** Every delegated worker logs `delegate.start`, `delegate.turn`, and `delegate.end` events in `ledger.db` (plus raw model responses in content-addressed blobs), recording the resolved model, automatic smaller-model vs explicit per-agent `routing_reason`, input/output tokens, tools used, and produced `proof_entries`.
+
 ### 1. Agents in reSearch (Built-in + Custom Subagents)
-- **Orchestrator:** The primary research agent (`RESEARCH_SYSTEM_PROMPT`). Reads attached workspace files or ingested papers, runs Python/SymPy calculations in the sandbox, records typed steps in the Proof DAG (`ledger_append`), and patches `.tex` manuscripts.
-- **Step Verifier:** Stateless auditor inspecting an individual Proof-DAG node together with its `depends_on` ancestors and deterministic `tex_audit` XML.
-- **Full Solution Verifier:** Stateless end-of-round auditor invoked automatically in **Verified** and **Deep** modes (up to 3 rounds). It starts with a clean context (no Orchestrator chain-of-thought) to catch missing assumptions, sign errors, or broken references and produce concrete counterexamples.
-- **Research Strategist:** Advisory recovery planner invoked automatically in **Deep** mode when the Verifier rejects a draft, suggesting structural repairs before the Orchestrator revises.
-- **Proof Narrator:** Synthesizes an exposition/derivation sheet from accepted Proof-DAG steps (`Proof DAG -> Narrate Proof`).
-- **Explain Assistant:** Answers questions about notation, conventions, or specific `e-N` steps inside Canvas -> **Explain** on a separate ledger thread without mutating the main Proof DAG, and supports exporting notes as `.md` (`explain_md`) or standalone `.html` (`explain_html`).
-- **Per-Agent Models, Subagent Builder & Custom Subagents:** Inside **Settings -> Agents & Models**, you can assign dedicated models per built-in agent (`agent_models`, including Orchestrator, Step Verifier, Full Verifier, Research Strategist, Proof Narrator, Explain, and Subagent Builder) or describe a specialist workflow in plain English and invoke the built-in **Subagent Builder Agent** (`POST /api/subagents/draft`) to draft a specialist system prompt, tool focus (`full_research`, `compute`, or `read_only`), optional assigned model, default rigor, and reasoning effort. Saved custom subagents are stored locally in `<data_dir>/subagents.json` and always execute inside the exact same `v0.4-research` policy and sandbox boundaries.
+- **Orchestrator & Campaign Phases:** The primary research agent (`RESEARCH_SYSTEM_PROMPT`). Progresses through structured Campaign Phases (`INGEST -> EXPLORE -> COMPUTE -> SYNTHESIZE -> VERIFY -> REVISE -> COMPLETE`), delegates specialized subtasks to isolated workers, records typed Proof-DAG conclusions (`ledger_append`), and patches `.tex` manuscripts.
+- **Compute Worker (`delegate_compute`):** Isolated symbolic/numerical specialist running `sympy_eval`, `check_expression_sanity`, and computation `ledger_append` steps inside the AppContainer sandbox, returning verified values and `e-N` IDs.
+- **Literature Worker (`delegate_literature`):** Isolated literature and workspace reader running `arxiv_search`, `literature_search`, `doc_ingest`, and `fs_read` on large `.tex`/PDF extracts so bulky source text stays out of the Orchestrator's context.
+- **Lean Prover Worker (`delegate_lean`) & Lean 4 Checker (`lean_check` / `POST /api/sessions/{id}/lean/check`):** Drafts Lean 4 formalizations and runs deterministic Lean 4 checking with strict anti-cheat enforcement that blocks `sorry`, `admit`, and unproven/forbidden axioms (`sorryAx` / custom axioms) while reporting exact diagnostics and hints.
+- **Parallel Explorer / Ultramath (`delegate_explore`):** Spawns 2–4 candidate derivation or proof approaches concurrently in isolated branches, comparing outcomes, token usage, and generated Proof-DAG entries before returning branch summaries to the Orchestrator.
+- **Custom Subagent Delegation (`delegate_subagent`):** Invokes any user-saved custom subagent on a focused subtask within its configured `tools_profile`, model, and sandbox boundaries.
+- **Step Verifier & Full Solution Verifier:** Stateless zero-bias auditors inspecting individual Proof-DAG nodes (`depends_on` ancestors + `tex_audit` XML) or full-round solutions in **Verified** and **Deep** modes (up to 3 rounds) to catch missing assumptions, sign errors, or broken references.
+- **Research Strategist:** Advisory recovery planner invoked automatically in **Deep** mode when the Verifier rejects a draft, proposing structural repairs before revision.
+- **Honesty Linter (`honesty.lint`):** Artifact-aware post-turn check enforcing `evidence != proof` and flagging unverified or overclaimed statements in the UI stream and ledger.
+- **Proof Narrator & Explain Assistant:** **Proof Narrator** synthesizes an exposition sheet from accepted Proof-DAG steps (`Proof DAG -> Narrate Proof`); **Explain** answers questions about notation or `e-N` steps on an isolated thread without mutating the Proof DAG and exports `.md` (`explain_md`) or `.html` (`explain_html`).
+- **Per-Agent Models, Automatic Smaller-Model Routing & Subagent Builder:** Under **Settings -> Agents & Models**, worker roles (`compute_worker`, `literature_worker`, `lean_worker`, `explorer_worker`) default to **`Default (Auto Smaller Model)`** for fast, low-cost delegation while verification/narrative agents default to **`Default (Follow Orchestrator)`**, and every built-in agent can be pinned to a dedicated model (`agent_models`). You can also describe a specialist in plain English and invoke the **Subagent Builder Agent** (`POST /api/subagents/draft`) to save custom subagents in `<data_dir>/subagents.json` under the same `v0.4-research` policy and sandbox boundaries.
 
 ### 2. Tool & Computation Approvals ("Agents Propose, Policy & Ledger Govern")
 - **Policy Clamps (`crates/policy`):** `crates/policy` clamps `ExecuteCode` (`sympy_eval`), `WriteWorkspace` (`fs_write`, `latex_patch`, `latex_compile`), and `NetworkRead` (`arxiv_search`, `literature_search`) to `Ask` at the policy layer; the CLI route (`re-search run`) always requires interactive terminal confirmation.

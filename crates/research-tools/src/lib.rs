@@ -7,6 +7,7 @@ pub mod http_client;
 pub mod ingest;
 pub mod latex_compile;
 pub mod latex_repair;
+pub mod lean_check;
 pub mod literature;
 pub mod pdf;
 pub mod policy_preset;
@@ -31,6 +32,10 @@ pub use ingest::{
 pub use latex_compile::{LatexDiagnostic, LATEX_COMPILE};
 pub use latex_repair::{
     is_likely_tsv_line, repair_json_value_latex, repair_under_escaped_latex, should_skip_json_key,
+};
+pub use lean_check::{
+    lean_check_def, register_lean_tool, run_lean_check, scan_lean_anti_cheat, LeanAntiCheat,
+    LeanDiagnostic, LEAN_CHECK,
 };
 pub use literature::{
     literature_search_def, run_literature_search, LiteratureHit, LiteratureRequest,
@@ -127,6 +132,7 @@ pub struct ResearchEnv {
     pub network_endpoints: LiteratureEndpoints,
     pub latex_compiler_override: Option<PathBuf>,
     pub latex_compile_timeout: Duration,
+    pub lean_override: Option<PathBuf>,
 }
 
 impl ResearchEnv {
@@ -137,6 +143,7 @@ impl ResearchEnv {
             network_endpoints: LiteratureEndpoints::default(),
             latex_compiler_override: None,
             latex_compile_timeout: DEFAULT_LATEX_COMPILE_TIMEOUT,
+            lean_override: None,
         }
     }
 
@@ -165,6 +172,7 @@ impl ResearchEnv {
             network_endpoints: LiteratureEndpoints::default(),
             latex_compiler_override: None,
             latex_compile_timeout: DEFAULT_LATEX_COMPILE_TIMEOUT,
+            lean_override: None,
         })
     }
 
@@ -180,6 +188,11 @@ impl ResearchEnv {
 
     pub fn with_latex_timeout(mut self, timeout: Duration) -> Self {
         self.latex_compile_timeout = timeout;
+        self
+    }
+
+    pub fn with_lean_override(mut self, path: impl Into<PathBuf>) -> Self {
+        self.lean_override = Some(path.into());
         self
     }
 

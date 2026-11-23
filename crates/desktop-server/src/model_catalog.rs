@@ -119,6 +119,43 @@ impl Catalog {
             .unwrap_or(false)
     }
 
+    /// Picks a smaller, faster model for `provider_id` from a healthy live catalog entry,
+    /// skipping non-chat/media models and never returning `primary_model` itself.
+    pub fn pick_smaller_model(&self, provider_id: &str, primary_model: &str) -> Option<String> {
+        const EXCLUDE: &[&str] = &[
+            "embedding",
+            "embed",
+            "tts",
+            "whisper",
+            "image",
+            "audio",
+            "realtime",
+        ];
+        const TIERS: &[&str] = &["haiku", "mini", "flash", "nano"];
+
+        let guard = self.entries.lock().ok()?;
+        let entry = guard.map.get(provider_id)?;
+        if entry.ok_ms.is_none() || entry.last_error.is_some() {
+            return None;
+        }
+        let primary_lower = primary_model.to_ascii_lowercase();
+        for tier in TIERS {
+            for m in &entry.models {
+                let lower = m.id.to_ascii_lowercase();
+                if lower.is_empty() || lower == primary_lower {
+                    continue;
+                }
+                if EXCLUDE.iter().any(|bad| lower.contains(bad)) {
+                    continue;
+                }
+                if lower.contains(tier) {
+                    return Some(m.id.clone());
+                }
+            }
+        }
+        None
+    }
+
     /// The current generation. Read it BEFORE loading keys and base URLs, and pass it to
     /// [`Catalog::fetch`], so a result fetched with settings older than a `clear` is dropped.
     pub fn generation(&self) -> u64 {
@@ -420,6 +457,18 @@ mod tests {
         }
     }
 
+    fn models_entry(ids: &[&str], ok_ms: Option<i64>, last_error: Option<&str>) -> Entry {
+        Entry {
+            models: ids
+                .iter()
+                .map(|id| ListedModel { id: (*id).to_string(), label: (*id).to_string(), created_s: None })
+                .collect(),
+            ok_ms,
+            last_error: last_error.map(str::to_string),
+            checked: Instant::now(),
+        }
+    }
+
     #[test]
     fn a_fetch_begun_before_clear_does_not_repopulate_the_cache() {
         let c = Catalog::default();
@@ -432,5 +481,60 @@ mod tests {
         let (_, now) = c.begin("openai");
         assert!(c.commit(now, "openai", entry("new-key-model")));
         assert_eq!(c.begin("openai").0.unwrap().models[0].id, "new-key-model");
+    }
+
+    #[test]
+    fn pick_smaller_model_prefers_tiers_and_skips_excluded_or_errored() {
+        let c = Catalog::default();
+        let (_, g1) = c.begin("anthropic");
+        assert!(c.commit(
+            g1,
+            "anthropic",
+            models_entry(&["claude-sonnet-4-6", "claude-haiku-4-5"], Some(10), None),
+        ));
+        assert_eq!(
+            c.pick_smaller_model("anthropic", "claude-sonnet-4-6").as_deref(),
+            Some("claude-haiku-4-5")
+        );
+        assert_eq!(c.pick_smaller_model("anthropic", "claude-haiku-4-5"), None);
+
+        let (_, g2) = c.begin("openai");
+        assert!(c.commit(
+            g2,
+            "openai",
+            models_entry(
+                &[
+                    "gpt-4.1",
+                    "text-embedding-3-small",
+                    "gpt-4o-realtime-preview",
+                    "gpt-4o-audio-preview",
+                    "gpt-4o-mini-tts",
+                    "gpt-4.1-nano",
+                    "gpt-4.1-mini",
+                ],
+                Some(20),
+                None,
+            ),
+        ));
+        assert_eq!(
+            c.pick_smaller_model("openai", "gpt-4.1").as_deref(),
+            Some("gpt-4.1-mini")
+        );
+
+        let (_, g3) = c.begin("gemini");
+        assert!(c.commit(
+            g3,
+            "gemini",
+            models_entry(&["gemini-2.5-flash"], Some(30), Some("fetch error")),
+        ));
+        assert_eq!(c.pick_smaller_model("gemini", "gemini-2.5-pro"), None);
+
+        let (_, g4) = c.begin("ollama");
+        assert!(c.commit(
+            g4,
+            "ollama",
+            models_entry(&["llama3-mini"], None, None),
+        ));
+        assert_eq!(c.pick_smaller_model("ollama", "llama3"), None);
     }
 }

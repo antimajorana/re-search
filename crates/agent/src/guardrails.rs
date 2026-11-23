@@ -428,6 +428,7 @@ pub fn run_research_loop(
             mask_keep_recent: Some((guardrails.step_mask_keep, guardrails.step_mask_stride)),
             cancel: None,
             emit_end_event: true,
+            delegation: None,
         },
     )?;
 

@@ -2,7 +2,7 @@
 // structured scientific tool traces, Independent Verifier verdict cards, and live approval cards.
 import * as api from '/assets/api.js';
 import { escapeHtml, highlightPython, highlightUnifiedDiff, renderMathInContainer, renderRichInto } from '/assets/math.js';
-import { buildStructuredTraceCard, buildVerificationVerdictCard } from '/assets/trace_cards.js';
+import { buildHonestyNoticeCard, buildStructuredTraceCard, buildVerificationVerdictCard } from '/assets/trace_cards.js';
 
 const STARTER_PROMPTS = [
   {
@@ -257,6 +257,10 @@ export function appendAssistantMessage(text, thinkingText = '', toolTraces = [],
   if (verdictCard) {
     row.appendChild(verdictCard);
   }
+  if (msgMeta && msgMeta.honesty && msgMeta.honesty.passed === false && Array.isArray(msgMeta.honesty.findings) && msgMeta.honesty.findings.length > 0) {
+    const honestyCard = buildHonestyNoticeCard(msgMeta.honesty);
+    if (honestyCard) row.appendChild(honestyCard);
+  }
 
   inner.appendChild(row);
   scrollToBottom();
@@ -390,6 +394,10 @@ export function finalizeLiveAssistant(finalText, msgMeta = null) {
       if (body) renderRichInto(body, text);
       const verdictCard = buildVerificationVerdictCard(msgMeta, onInspectStep);
       if (verdictCard) liveRow.appendChild(verdictCard);
+      if (msgMeta && msgMeta.honesty && msgMeta.honesty.passed === false && Array.isArray(msgMeta.honesty.findings) && msgMeta.honesty.findings.length > 0) {
+        const honestyCard = buildHonestyNoticeCard(msgMeta.honesty);
+        if (honestyCard) liveRow.appendChild(honestyCard);
+      }
       scrollToBottom();
     } else {
       liveRow.remove();

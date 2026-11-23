@@ -8,9 +8,9 @@ use crate::routes_session::{
     handle_post_message, handle_put_settings, handle_sse_stream,
 };
 use crate::routes_tools::{
-    handle_dag, handle_export, handle_get_sidetalk, handle_latex_patch, handle_literature,
-    handle_narrate, handle_post_sidetalk, handle_tex_audit, handle_upload, handle_verify,
-    handle_workspace, handle_workspace_file,
+    handle_dag, handle_export, handle_get_sidetalk, handle_latex_patch, handle_lean_check,
+    handle_literature, handle_narrate, handle_post_sidetalk, handle_tex_audit, handle_upload,
+    handle_verify, handle_workspace, handle_workspace_file,
 };
 use crate::state::DesktopState;
 use serde_json::{json, Value};
@@ -257,6 +257,9 @@ fn dispatch_api(
         }
         ("POST", ["api", "sessions", id, "tex-audit"]) => {
             write_api_res(&mut stream, handle_tex_audit(state, id, &req.body));
+        }
+        ("POST", ["api", "sessions", id, "lean", "check"]) => {
+            write_api_res(&mut stream, handle_lean_check(state, id, &req.body));
         }
         ("POST", ["api", "sessions", id, "literature"]) => {
             write_api_res(&mut stream, handle_literature(state, id, &req.body));

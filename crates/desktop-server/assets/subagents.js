@@ -4,6 +4,7 @@ import * as api from '/assets/api.js';
 import { escapeHtml } from '/assets/math.js';
 
 const CLI_PROVIDERS = new Set(['claude-cli', 'antigravity']);
+const WORKER_ROLE_KEYS = new Set(['compute_worker', 'literature_worker', 'lean_worker', 'explorer_worker']);
 const STORE_KEY = 're-search-active-subagent';
 
 let builtinList = [];
@@ -325,10 +326,13 @@ function renderSubagentsPanel() {
     for (const b of builtinList) {
       const card = document.createElement('div');
       card.className = 'builtin-card';
+      const categoryBadge = b.category === 'worker'
+        ? 'Worker'
+        : (b.category === 'builder' ? 'Builder' : 'Built-in');
       card.innerHTML = `
         <div style="display:flex;justify-content:space-between;gap:6px;align-items:center;">
           <strong style="font-size:12.5px;">${escapeHtml(b.name)}</strong>
-          <span class="badge">${escapeHtml(b.category === 'builder' ? 'Builder' : 'Built-in')}</span>
+          <span class="badge">${escapeHtml(categoryBadge)}</span>
         </div>
         <div class="builtin-card-role">${escapeHtml(b.role)}</div>
         <div class="builtin-card-desc">${escapeHtml(b.summary)}</div>
@@ -336,7 +340,9 @@ function renderSubagentsPanel() {
       `;
       if (b.role_key) {
         const allowCli = b.role_key === 'orchestrator';
-        const defaultLabel = allowCli ? 'Default (Composer Choice)' : 'Default (Follow Orchestrator)';
+        const defaultLabel = allowCli
+          ? 'Default (Composer Choice)'
+          : (WORKER_ROLE_KEYS.has(b.role_key) ? 'Default (Auto Smaller Model)' : 'Default (Follow Orchestrator)');
         let lastSaved = agentModels[b.role_key] && agentModels[b.role_key].provider && agentModels[b.role_key].model
           ? agentModels[b.role_key]
           : null;

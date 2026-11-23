@@ -17,6 +17,10 @@ pub struct AgentModelSpec {
 
 pub const AGENT_ROLE_KEYS: &[&str] = &[
     "orchestrator",
+    "compute_worker",
+    "literature_worker",
+    "lean_worker",
+    "explorer_worker",
     "step_verifier",
     "full_verifier",
     "strategist",
@@ -24,6 +28,13 @@ pub const AGENT_ROLE_KEYS: &[&str] = &[
     "explain",
     "subagent_builder",
 ];
+
+pub struct BuiltWorkerTransport {
+    pub transport: Box<dyn Transport>,
+    pub provider: String,
+    pub model: String,
+    pub routing_reason: String,
+}
 
 /// Message when Proof Narrator, Explain, or another helper agent has no in-core provider.
 pub const NEEDS_API_PROVIDER: &str = "Proof Narrator and Explain need an API-key provider or Sign in with ChatGPT \
@@ -257,6 +268,89 @@ pub fn resolve_optional_role_transport(
     state.build_transport(p, &m).ok().map(|t| (t, m))
 }
 
+fn build_worker_entry(
+    state: &DesktopState,
+    provider: ProviderKind,
+    model: String,
+    reason: &str,
+) -> Option<BuiltWorkerTransport> {
+    state
+        .build_transport(provider, &model)
+        .ok()
+        .map(|transport| BuiltWorkerTransport {
+            transport,
+            provider: provider.cli_name().to_string(),
+            model,
+            routing_reason: reason.to_string(),
+        })
+}
+
+fn resolve_smaller_or_primary(
+    state: &DesktopState,
+    primary_provider: ProviderKind,
+    primary_model: &str,
+) -> Option<BuiltWorkerTransport> {
+    if let Some(smaller) = state
+        .catalog
+        .pick_smaller_model(primary_provider.cli_name(), primary_model)
+    {
+        if let Some(built) =
+            build_worker_entry(state, primary_provider, smaller, "auto_smaller_catalog_model")
+        {
+            return Some(built);
+        }
+    }
+    build_worker_entry(
+        state,
+        primary_provider,
+        primary_model.to_string(),
+        "isolated_primary_model",
+    )
+}
+
+pub fn resolve_worker_transport(
+    state: &DesktopState,
+    ui: &UiSettings,
+    req: &Value,
+    role: &str,
+    primary_provider: ProviderKind,
+    primary_model: &str,
+) -> Option<BuiltWorkerTransport> {
+    if let Some((p, m)) = req.get(role).and_then(parse_role_obj) {
+        if let Some(built) = build_worker_entry(state, p, m, "request_override") {
+            return Some(built);
+        }
+    }
+    if let Some((p, m)) = role_in_core_model(ui, role) {
+        if let Some(built) = build_worker_entry(state, p, m, "assigned_in_settings") {
+            return Some(built);
+        }
+    }
+    resolve_smaller_or_primary(state, primary_provider, primary_model)
+}
+
+pub fn resolve_custom_subagent_transport(
+    state: &DesktopState,
+    sa: &SubagentDef,
+    primary_provider: ProviderKind,
+    primary_model: &str,
+) -> Option<BuiltWorkerTransport> {
+    if let (Some(p_raw), Some(m_raw)) = (sa.provider.as_deref(), sa.model.as_deref()) {
+        let trimmed_m = m_raw.trim();
+        if !trimmed_m.is_empty() {
+            if let Ok(pk) = ProviderKind::parse(p_raw) {
+                let model = pk.resolve_model(trimmed_m);
+                if let Some(built) =
+                    build_worker_entry(state, pk, model, "subagent_assigned_model")
+                {
+                    return Some(built);
+                }
+            }
+        }
+    }
+    resolve_smaller_or_primary(state, primary_provider, primary_model)
+}
+
 /// Resolves the Orchestrator `(provider, model_requested, model_resolved)` for an in-core turn.
 pub fn resolve_orchestrator_model(
     subagent: Option<&SubagentDef>,
@@ -335,21 +429,36 @@ mod tests {
         let mut map = BTreeMap::new();
         assert!(parse_agent_models_patch(&json!([]), &mut map).is_err());
         assert!(parse_agent_models_patch(&json!({ "unknown_role": null }), &mut map).is_err());
-        // Helper roles forbid CLI routes.
+        // Helper and worker roles forbid CLI routes.
         let err = parse_agent_models_patch(
             &json!({ "narrator": { "provider": "claude-cli", "model": "sonnet" } }),
             &mut map,
         )
         .unwrap_err();
         assert_eq!(err.0, 400);
-        // Orchestrator permits CLI routes.
+        let w_err = parse_agent_models_patch(
+            &json!({ "compute_worker": { "provider": "antigravity", "model": "gemini" } }),
+            &mut map,
+        )
+        .unwrap_err();
+        assert_eq!(w_err.0, 400);
+        // Orchestrator permits CLI routes; worker roles accept API providers.
         parse_agent_models_patch(
-            &json!({ "orchestrator": { "provider": "claude-cli", "model": "sonnet" }, "explain": { "provider": "OpenAI", "model": "gpt-4.1-mini" } }),
+            &json!({
+                "orchestrator": { "provider": "claude-cli", "model": "sonnet" },
+                "explain": { "provider": "OpenAI", "model": "gpt-4.1-mini" },
+                "compute_worker": { "provider": "anthropic", "model": "haiku" },
+                "literature_worker": { "provider": "openai", "model": "gpt-4.1-mini" },
+                "lean_worker": { "provider": "openai", "model": "gpt-4.1-mini" },
+                "explorer_worker": { "provider": "gemini", "model": "gemini-2.5-flash" }
+            }),
             &mut map,
         )
         .unwrap();
         assert_eq!(map["orchestrator"].provider, "claude-cli");
         assert_eq!(map["explain"].provider, "openai");
+        assert_eq!(map["compute_worker"].provider, "anthropic");
+        assert_eq!(map["explorer_worker"].provider, "gemini");
         // Model starting with '-' or containing whitespace fails.
         assert!(parse_agent_models_patch(
             &json!({ "explain": { "provider": "openai", "model": "-bad" } }),
@@ -362,7 +471,18 @@ mod tests {
         )
         .is_err());
         // Null or blank removes role.
-        parse_agent_models_patch(&json!({ "orchestrator": null, "explain": { "provider": "", "model": "" } }), &mut map).unwrap();
+        parse_agent_models_patch(
+            &json!({
+                "orchestrator": null,
+                "explain": { "provider": "", "model": "" },
+                "compute_worker": null,
+                "literature_worker": null,
+                "lean_worker": null,
+                "explorer_worker": null
+            }),
+            &mut map,
+        )
+        .unwrap();
         assert!(map.is_empty());
     }
 

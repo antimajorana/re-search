@@ -140,6 +140,7 @@ fn autonomous_loop_rejects_consults_strategist_revises_accepts_and_resumes_lossl
     let roles = AutonomousRoles {
         verifier: Some((&verifier, "claude-haiku-4-5")),
         strategist: Some((&strategist, "claude-haiku-4-5")),
+        delegation: None,
     };
     let cfg = AgentConfig {
         prompt: "Compute the Kitaev chain excitation gap at mu = 0.".into(),
@@ -186,7 +187,7 @@ fn autonomous_loop_rejects_consults_strategist_revises_accepts_and_resumes_lossl
         "anthropic-messages",
         vec![anthropic_text_reply("v-3", r#"{"verdict":"accepted","summary":"Follow-up sound","issues":[]}"#)],
     );
-    let roles_leg2 = AutonomousRoles { verifier: Some((&verifier_leg2, "claude-haiku-4-5")), strategist: None };
+    let roles_leg2 = AutonomousRoles { verifier: Some((&verifier_leg2, "claude-haiku-4-5")), strategist: None, delegation: None };
     let resume_cfg = ResumeConfig {
         prompt: "What happens for |mu| > 2t?".into(),
         model_requested: "claude-haiku-4-5".into(),
@@ -241,7 +242,7 @@ fn autonomous_loop_emits_warning_instead_of_discarding_when_verifier_rounds_exha
             anthropic_text_reply("v2", r#"{"verdict":"rejected","summary":"Still missing bound","issues":[{"severity":"error","message":"Unbounded operator"}]}"#),
         ],
     );
-    let roles = AutonomousRoles { verifier: Some((&verifier, "claude-haiku-4-5")), strategist: None };
+    let roles = AutonomousRoles { verifier: Some((&verifier, "claude-haiku-4-5")), strategist: None, delegation: None };
     let cfg = AgentConfig {
         prompt: "Prove operator bound.".into(),
         model_requested: "claude-haiku-4-5".into(),

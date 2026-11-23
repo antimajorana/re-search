@@ -279,6 +279,30 @@ fn recover_tool_output(
                 }
                 return Ok(full);
             }
+            "delegate.end" | "explore.end" => {
+                let mut cleaned = ev.payload.clone();
+                if let Some(obj) = cleaned.as_object_mut() {
+                    obj.remove("call_id");
+                    obj.remove("duration_ms");
+                }
+                let canon = tools::canon::canonical_json(&cleaned);
+                if clip_text(&canon) == (recorded_text.to_string(), true) {
+                    return Ok(canon);
+                }
+                if ev.kind == "delegate.end" {
+                    if let Some(h) = ev.payload.get("raw_blob").and_then(Value::as_str) {
+                        let bytes = ledger.get_blob(h).map_err(|e| {
+                            reject(ResumeRejectKind::TamperOrMissing, format!("failed to load blob `{h}`: {e}"))
+                        })?;
+                        let raw = String::from_utf8(bytes)
+                            .map_err(|e| corrupt(format!("delegate.end blob `{h}` is not UTF-8: {e}")))?;
+                        if clip_text(&raw) == (recorded_text.to_string(), true) {
+                            return Ok(raw);
+                        }
+                    }
+                }
+                return Err(corrupt(format!("{} output reconstruction mismatch at seq {}", ev.kind, ev.seq)));
+            }
             "model.tool_result" | "model.response" | "model.request" | "session.start" | "session.resume" => break,
             _ => {}
         }
@@ -484,6 +508,7 @@ pub fn resume_agent_loop(
             mask_keep_recent: None,
             cancel: None,
             emit_end_event: true,
+            delegation: None,
         },
     )
 }
