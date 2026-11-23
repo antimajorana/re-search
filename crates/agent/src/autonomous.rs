@@ -2,8 +2,8 @@
 
 pub use crate::autonomous_prompts::RESEARCH_SYSTEM_PROMPT;
 use crate::autonomous_prompts::{
-    build_revision_prompt, ensure_active_final_answer_entry, format_unverified_banner, inject_feedback,
-    maybe_run_strategist,
+    build_revision_prompt, build_unverified_recovery, ensure_active_final_answer_entry, format_unverified_banner,
+    inject_feedback, maybe_run_strategist,
 };
 use crate::guardrails::{
     build_research_system_prompt, check_computation_interpretation, check_final_answer_gate,
@@ -23,6 +23,7 @@ use std::time::Instant;
 use tools::{Router, ToolDef};
 
 pub const DEFAULT_MAX_VERIFICATION_ROUNDS: u32 = 3;
+const REVISION_TURN_RESERVE: u32 = 8;
 
 /// Optional independent role transports & models for Verifier, Strategist, and Worker delegation.
 /// When `verifier` or `strategist` is `None`, falls back to the Orchestrator transport/model.
@@ -290,15 +291,17 @@ fn drive_autonomous_rounds(
 ) -> Result<SessionOutcome, String> {
     let overall_started = Instant::now();
     let max_rounds = auto_cfg.max_verification_rounds.max(1);
+    let mut effective_turn_budget = max_turns_budget;
     let mut turns_used = 0u32;
     let mut next_turn = initial_start_turn;
     let mut round = 0u32;
     let mut calc_repair_attempted = false;
+    let mut latest_strategist_advice: Option<String> = None;
 
     loop {
-        let remaining_turns = max_turns_budget.saturating_sub(turns_used);
+        let remaining_turns = effective_turn_budget.saturating_sub(turns_used);
         if remaining_turns == 0 {
-            let reason = format!("reached max_turns ({max_turns_budget}) during autonomous verification");
+            let reason = format!("reached max_turns ({effective_turn_budget}) during autonomous verification");
             audit.emit("session.abort", json!({ "reason": reason }))?;
             return Ok(SessionOutcome::Aborted { turns: turns_used, reason });
         }
@@ -359,8 +362,11 @@ fn drive_autonomous_rounds(
 
         if auto_cfg.guardrails.calculation_mode {
             if let Err(calc_err) = check_computation_interpretation(audit.ledger, audit.session) {
-                if !calc_repair_attempted && turns_used < max_turns_budget {
+                if !calc_repair_attempted {
                     calc_repair_attempted = true;
+                    if turns_used >= effective_turn_budget {
+                        effective_turn_budget = turns_used + 2;
+                    }
                     audit.sink.on_thinking_delta(
                         "\n[Calculation guardrail: symbolic computation needs an interpreting `result` entry — prompting Orchestrator...]\n",
                     );
@@ -460,8 +466,15 @@ fn drive_autonomous_rounds(
             report.target_entry_id, report.summary
         ));
 
-        if round >= max_rounds || turns_used >= max_turns_budget {
+        if round >= max_rounds {
+            let latest_dag = read_proof_dag(audit.ledger, audit.session)?;
             let warn = format_unverified_banner(&report, round);
+            let recovery = build_unverified_recovery(
+                &report,
+                round,
+                &latest_dag,
+                latest_strategist_advice.as_deref(),
+            );
             audit.emit(
                 "guardrail.warning",
                 json!({
@@ -469,6 +482,7 @@ fn drive_autonomous_rounds(
                     "target_entry_id": report.target_entry_id,
                     "summary": report.summary,
                     "banner": warn,
+                    "recovery": recovery,
                 }),
             )?;
             audit.emit("campaign.phase", json!({ "phase": CampaignPhase::Complete.as_str() }))?;
@@ -486,6 +500,14 @@ fn drive_autonomous_rounds(
             return Ok(SessionOutcome::Completed { turns: turns_used, stop_reason: "completed_unverified".into() });
         }
 
+        if turns_used >= effective_turn_budget {
+            effective_turn_budget = turns_used + REVISION_TURN_RESERVE;
+            audit.sink.on_thinking_delta(&format!(
+                "[Reserved +{REVISION_TURN_RESERVE} repair turns for verification round {}/{max_rounds}]\n",
+                round + 1
+            ));
+        }
+
         let strategist_note = maybe_run_strategist(
             solver_transport,
             solver_model,
@@ -495,6 +517,9 @@ fn drive_autonomous_rounds(
             &report,
             cancel,
         )?;
+        if strategist_note.is_some() {
+            latest_strategist_advice = strategist_note.clone();
+        }
         let feedback = build_revision_prompt(&report, round, max_rounds, strategist_note.as_deref(), &honesty);
         audit.emit("campaign.phase", json!({ "phase": CampaignPhase::Revise.as_str() }))?;
         inject_feedback(audit, &mut messages, round, &report.target_entry_id, &feedback)?;

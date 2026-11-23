@@ -105,6 +105,41 @@ export function linksForIngestedSource(src) {
   return links;
 }
 
+export function resolveSourceTitle(src) {
+  if (!src || typeof src !== 'object') return 'Source';
+  const rawTitle = typeof src.title === 'string' ? src.title.trim() : '';
+  if (rawTitle && !/^https?:\/\//i.test(rawTitle)) return rawTitle;
+  const candidates = [
+    src.primary_path,
+    ...(Array.isArray(src.files) ? src.files.filter((f) => !String(f).endsWith('__assembled__.tex')) : []),
+    src.assembled_path,
+  ];
+  for (const cand of candidates) {
+    if (!cand || typeof cand !== 'string' || /^https?:\/\//i.test(cand.trim())) continue;
+    const parts = cand.split('/').filter(Boolean);
+    const leaf = parts.length > 1 ? parts.slice(1).join('/') : parts[0];
+    if (leaf && leaf !== '__assembled__.tex') return leaf;
+  }
+  const arxivId =
+    extractArxivId(String(src.origin || '')) ||
+    extractArxivId(String(src.source_id || ''));
+  if (arxivId) return `arXiv Paper ${arxivId}`;
+  return String(src.source_id || 'Uploaded Source');
+}
+
+export function resolveOriginInfo(src) {
+  if (!src || typeof src !== 'object') return { text: '', url: null };
+  const rawOrigin = String(src.origin || '').trim();
+  const arxivId = extractArxivId(rawOrigin);
+  if (arxivId) {
+    const absUrl = `https://arxiv.org/abs/${arxivId}`;
+    return { text: absUrl, url: absUrl };
+  }
+  const safe = safeSourceUrl(rawOrigin);
+  if (safe) return { text: safe, url: safe };
+  return { text: rawOrigin, url: null };
+}
+
 export function renderSourceLinkChips(links) {
   if (!Array.isArray(links) || links.length === 0) return '';
   return links

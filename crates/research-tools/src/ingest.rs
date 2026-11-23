@@ -5,6 +5,7 @@ use crate::archive::{extract_gzip_or_tar_gz, extract_zip_bytes, ArchiveEntry, Ar
 use crate::pdf::{extract_pdf_bytes, PdfExtractStatus};
 use crate::sandbox::{sanitize_rel_components, validate_session_id, SandboxRoot, WorkspaceSandbox};
 pub use crate::tex_bundle::{assemble_tex_bundle, filter_tex_sections, score_tex_entrypoint, TexBundle};
+use crate::tex_bundle::{clean_document_title, extract_document_title};
 use crate::ResearchEnv;
 use ledger::Ledger;
 use policy::EffectClass;
@@ -35,12 +36,15 @@ pub struct IngestRequest<'a> {
     pub raw_bytes: &'a [u8],
     pub source_id_hint: Option<&'a str>,
     pub section_filter: Option<&'a str>,
+    pub title: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IngestedSource {
     pub source_id: String,
     pub origin: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     pub format: String,
     pub status: String,
     pub raw_blob: String,
@@ -121,6 +125,7 @@ fn handle_doc_ingest(env: &ResearchEnv, ctx: &CallCtx<'_>, args: &Value) -> Resu
             raw_bytes: &raw_bytes,
             source_id_hint: None,
             section_filter,
+            title: None,
         },
     )?;
     serde_json::to_value(&report).map_err(|e| e.to_string())
@@ -152,6 +157,7 @@ pub fn ingest_path(
             raw_bytes: &buf,
             source_id_hint: None,
             section_filter,
+            title: None,
         },
     )
 }
@@ -195,8 +201,12 @@ pub fn ingest_bytes(
         written_files.push(norm);
     }
 
-    let primary_path = prepared.primary_rel.map(|p| format!("{source_id}/{p}"));
+    let primary_path = prepared.primary_rel.as_ref().map(|p| format!("{source_id}/{p}"));
     let assembled_path = prepared.assembled_rel.map(|p| format!("{source_id}/{p}"));
+    let title = req
+        .title
+        .and_then(clean_document_title)
+        .or_else(|| extract_document_title(&prepared.materialized, prepared.primary_rel.as_deref()));
 
     let (raw_blob, event_seq) = {
         let guard = ledger.lock().map_err(|_| "ledger lock poisoned".to_string())?;
@@ -211,6 +221,7 @@ pub fn ingest_bytes(
                 &json!({
                     "source_id": source_id,
                     "origin": req.origin,
+                    "title": title,
                     "format": prepared.format,
                     "status": prepared.status,
                     "bytes": req.raw_bytes.len(),
@@ -228,6 +239,7 @@ pub fn ingest_bytes(
     Ok(IngestedSource {
         source_id,
         origin: req.origin.to_string(),
+        title,
         format: prepared.format,
         status: prepared.status,
         raw_blob,

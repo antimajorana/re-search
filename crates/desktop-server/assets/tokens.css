@@ -108,3 +108,10 @@
 [hidden] {
   display: none !important;
 }
+
+.theme-switching .pill-btn,
+.theme-switching .chip-toggle,
+.theme-switching .compact-select,
+.theme-switching .session-item {
+  transition: none !important;
+}

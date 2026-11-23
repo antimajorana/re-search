@@ -9,8 +9,26 @@ use research_tools::{read_proof_dag, ProofEntry, ProofStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-const NARRATOR_MAX_TOKENS: u32 = 4096;
+const NARRATOR_MAX_TOKENS: u32 = 8192;
 const NARRATOR_FALLBACK_MAX_CHARS: usize = 24_000;
+
+const PEDAGOGICAL_NARRATOR_PROMPT: &str = "\
+You are a deeply pedagogical Proof Narrator producing a self-contained, textbook-quality \
+walkthrough for maximum human comprehension.\n\n\
+How to structure and write your exposition:\n\
+1. **Intuition & Roadmap First:** Before introducing dense notation, explain the core physical or \
+mathematical idea in plain language and outline how the key steps fit together.\n\
+2. **Fill In Omitted Intermediate Steps:** Never gloss over transitions with \"it is easy to see\" \
+or \"after some algebra\". Explicitly write out intermediate substitutions, commutators, sign \
+checks, integration-by-parts boundary terms, and limiting arguments so a careful reader can follow \
+every line without guessing.\n\
+3. **Trace Every Hypothesis & Dependency:** Show explicitly where each assumption is needed and why \
+the argument would fail without it. Cite recorded Proof-DAG steps inline as `(e-k)`, while cleanly \
+distinguishing explanatory bridge steps you fill in from recorded ledger claims.\n\
+4. **Conventions, Edge Cases & Honesty:** Restate active conventions consistently. Never invent \
+unverified theorems or hide gaps—if a step is `pending` or unverified, note that candidly.\n\
+5. **Typography & Summary:** Use clear Markdown sections and clean LaTeX (`$...$` inline, `$$...$$` \
+display), ending with a concise **Takeaway & Hypotheses** recap.";
 
 fn format_problem_prompts(events: &[ledger::Event]) -> String {
     let prompts: Vec<&str> = events
@@ -129,8 +147,10 @@ pub fn narrate_session(
 
     let (system_prompt, user_prompt) = if included.is_empty() {
         (
-            "You are a Proof Narrator producing a clear, rigorous read-only walkthrough and \
-             Derivation Sheet from the session's recorded derivation messages.",
+            format!(
+                "{PEDAGOGICAL_NARRATOR_PROMPT}\n\n\
+                 Work strictly from the session's recorded derivation messages and problem prompts below."
+            ),
             format!(
                 "Problem:\n{problem_prompt}\n\n{derivation_sheet}\n\n<session_derivations>\n{fallback_text}\n</session_derivations>"
             ),
@@ -138,25 +158,33 @@ pub fn narrate_session(
     } else {
         let mut proof_text = String::new();
         for e in &included {
+            let deps = if e.depends_on.is_empty() {
+                "none".to_string()
+            } else {
+                e.depends_on.join(", ")
+            };
             proof_text.push_str(&format!(
-                "- {} ({}, {:?}): {}\n  Details: {}\n  LaTeX: {}\n",
+                "- {} ({}, {:?}, depends_on: [{}]): {}\n  Details: {}\n  LaTeX: {}\n",
                 e.entry_id,
                 e.entry_type,
                 e.status,
+                deps,
                 e.summary,
                 e.details,
                 e.latex.as_deref().unwrap_or("")
             ));
         }
         (
-            "You are a Proof Narrator producing a clear, rigorous read-only \
-             walkthrough and Derivation Sheet from the session's accepted and pending proof steps.",
+            format!(
+                "{PEDAGOGICAL_NARRATOR_PROMPT}\n\n\
+                 Base your walkthrough strictly on the accepted and pending Proof-DAG steps below."
+            ),
             format!("Problem:\n{problem_prompt}\n\n{derivation_sheet}\n\nProof steps:\n{proof_text}"),
         )
     };
     let req = ModelRequest {
         model: model.to_string(),
-        system: Some(system_prompt.to_string()),
+        system: Some(system_prompt),
         messages: vec![Message {
             role: Role::User,
             content: vec![ContentBlock::Text { text: user_prompt }],

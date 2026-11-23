@@ -8,22 +8,23 @@ import {
   removeOptimisticUserMessage, renderApprovalCard, renderSessionStream, resetLiveTurnState,
   resolveApprovalCard, setStreamStatus,
 } from '/assets/stream.js';
-import { initComposer, setComposerBusy, setComposerPrompt, setComposerRoute } from '/assets/composer.js';
+import { initComposer, setComposerBusy, setComposerPrompt, setComposerRoute, submitComposerPrompt } from '/assets/composer.js';
 import { applySession, getModelChoice, initModelPicker, loadModels, noModelReason, rememberForSession } from '/assets/model_picker.js';
 import { initConnect, openConnect } from '/assets/connect.js';
 import { applySessionEffort, initEffortPicker, openEffortWindow, rememberEffortForSession, setReasoningEffort } from '/assets/effort_picker.js';
 import { renderGuide } from '/assets/guide.js';
 import { initSubagents, loadSubagents } from '/assets/subagents.js';
 import { initLatexCanvas, refreshWorkspaceFiles } from '/assets/canvas_latex.js';
-import { initDagCanvas, refreshDag, selectNodeById } from '/assets/canvas_dag.js';
-import { initSourcesAndSidetalk, loadSessionSources, refreshSourcesAndSidetalk } from '/assets/canvas_sources.js';
+import { initDagCanvas, onDagTabShown, refreshDag, selectNodeById } from '/assets/canvas_dag.js';
+import { askInExplain, initSourcesAndSidetalk, loadSessionSources, refreshSourcesAndSidetalk } from '/assets/canvas_sources.js';
+import { buildRecoveryPrompt } from '/assets/trace_cards.js';
 import { appendSteerBadge, renderCheckpointCard, resolveCheckpointCard } from '/assets/hitl.js';
 import {
   applySessionTelemetry, finishLivePipeline, getWorkbenchSnapshot, initWorkbench,
   refreshConnectionBadge, refreshConventionsState, setRigorPreset, startLivePipeline,
   updateCanvasTabCounts, updatePipelineFromEvent,
 } from '/assets/workbench.js';
-import { formatBuiltinToolWarning, initSessionRail, renderSessionGrantsPill, renderSessionRailList, updateWorkspaceBadges } from '/assets/session_rail.js';
+import { formatBuiltinToolWarning, initSessionRail, renderSessionGrantsPill, renderSessionRailList, showToast, updateWorkspaceBadges } from '/assets/session_rail.js';
 
 const state = {
   sessions: [],
@@ -91,6 +92,11 @@ async function boot() {
     onPromptPick: (prompt) => setComposerPrompt(prompt, true),
     onNotify: showToast,
     onInspectStep: inspectStepInCanvas,
+    onRecoveryAction: (action, ctx) => {
+      const prompt = buildRecoveryPrompt(action, ctx);
+      if (action === 'explain') { activateCanvasTab('tab-sidetalk'); askInExplain(prompt); }
+      else submitComposerPrompt(prompt);
+    },
     onOpenConnect: openConnect,
     onPickWorkspace: () => el.wsBtn?.click(),
     onOpenConventions: () => document.getElementById('conventions-btn')?.click(),
@@ -118,6 +124,11 @@ async function boot() {
       await refreshSessionList();
       await selectSession(newId);
       showToast(`Forked session ${newId}`);
+    },
+    onExplainStep: (entry) => {
+      activateCanvasTab('tab-sidetalk');
+      const deps = Array.isArray(entry.depends_on) && entry.depends_on.length ? ` (building on ${entry.depends_on.join(', ')})` : '';
+      askInExplain(`Explain proof step ${entry.entry_id}${deps} in detail: give the intuition, fill in all intermediate steps, and justify why it follows from its assumptions.`);
     },
     onNarrativeReady: (md) => { appendAssistantMessage(md); showToast('Proof narrative added to stream.'); },
     onNotify: showToast,
@@ -173,7 +184,10 @@ function restoreTheme() {
 
 function applyTheme(theme) {
   state.theme = theme;
+  document.documentElement.classList.add('theme-switching');
   document.documentElement.setAttribute('data-theme', theme);
+  void document.documentElement.offsetHeight;
+  document.documentElement.classList.remove('theme-switching');
   if (el.themeToggle) el.themeToggle.textContent = theme === 'dark' ? 'Light' : 'Dark';
   window.localStorage.setItem('re-search-theme', theme);
 }
@@ -230,6 +244,7 @@ function activateCanvasTab(activeTabId) {
     }
     pEl?.classList.toggle('is-active', active);
   }
+  if (activeTabId === 'tab-dag') onDagTabShown();
 }
 
 async function checkHealth() {
@@ -573,14 +588,4 @@ function wirePostMessageBridge() {
     else if (msg.type === 're-search:set-prompt' && typeof msg.prompt === 'string') setComposerPrompt(msg.prompt, false);
     else if (msg.type === 're-search:set-theme' && (msg.theme === 'light' || msg.theme === 'dark')) applyTheme(msg.theme);
   });
-}
-
-function showToast(msg) {
-  const stack = document.getElementById('toast-stack');
-  if (!stack) return;
-  const item = document.createElement('div');
-  item.className = 'toast-item';
-  item.textContent = String(msg);
-  stack.appendChild(item);
-  setTimeout(() => item.remove(), 3800);
 }

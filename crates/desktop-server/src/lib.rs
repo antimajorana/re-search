@@ -19,6 +19,7 @@ pub mod routes_session;
 pub mod routes_subagents;
 pub mod routes_tools;
 pub mod session_lifecycle;
+mod session_summary;
 mod session_view;
 pub mod sse;
 pub mod state;

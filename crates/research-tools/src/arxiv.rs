@@ -151,6 +151,7 @@ fn run_arxiv_search_locked(
                     "papers": papers.iter().map(|p| json!({
                         "id": p.id,
                         "base_id": p.base_id,
+                        "title": p.title,
                         "withdrawn": p.withdrawn,
                         "doi": p.doi,
                     })).collect::<Vec<_>>(),
@@ -443,7 +444,7 @@ fn ingest_eprints_direct(
         // Note: `Ledger` allows concurrent connections on SQLite WAL, and here we hold `&Ledger`.
         let temp_ledger = Mutex::new(Ledger::open(&env.data_dir).map_err(|e| e.to_string())?);
         let _ = ledger;
-        paper.source = Some(materialize_eprint(&sandbox, &temp_ledger, session, &paper.id, &url, &bytes, section_filter)?);
+        paper.source = Some(materialize_eprint(&sandbox, &temp_ledger, session, &paper.id, &paper.title, &url, &bytes, section_filter)?);
     }
     Ok(())
 }
@@ -475,21 +476,24 @@ fn ingest_eprints_locked(
             paper.source = Some(json!({ "source_available": false, "reason": "pdf_only" }));
             continue;
         }
-        paper.source = Some(materialize_eprint(&sandbox, ledger, session, &paper.id, &url, &bytes, section_filter)?);
+        paper.source = Some(materialize_eprint(&sandbox, ledger, session, &paper.id, &paper.title, &url, &bytes, section_filter)?);
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn materialize_eprint(
     sandbox: &crate::sandbox::WorkspaceSandbox,
     ledger: &Mutex<Ledger>,
     session: &str,
     paper_id: &str,
+    paper_title: &str,
     origin_url: &str,
     bytes: &[u8],
     section_filter: Option<&str>,
 ) -> Result<Value, String> {
     let hint = format!("arxiv_{}.gz", paper_id.replace('/', "_"));
+    let clean_title = paper_title.trim();
     let ingested = ingest_bytes(
         sandbox,
         ledger,
@@ -500,6 +504,7 @@ fn materialize_eprint(
             raw_bytes: bytes,
             source_id_hint: Some(&hint),
             section_filter,
+            title: (!clean_title.is_empty()).then_some(clean_title),
         },
     )?;
     if ingested.status == "pdf_only" {

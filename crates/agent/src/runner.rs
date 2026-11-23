@@ -11,7 +11,7 @@ use std::time::Instant;
 use tools::{CallOutcome, Router};
 
 pub const EVENT_VERSION: u32 = 1;
-pub const DEFAULT_MAX_TURNS: u32 = 32;
+pub const DEFAULT_MAX_TURNS: u32 = 48;
 pub const DEFAULT_MAX_TOKENS: u32 = 16_384;
 pub const DEFAULT_SYSTEM_PROMPT: &str = "Local re:Search core. `sympy_eval` runs Python/SymPy after the user approves \
     it (each call when uncontained; once per live worker session when sandboxed). `ledger_note` records an unverified \

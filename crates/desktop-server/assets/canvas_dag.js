@@ -1,32 +1,44 @@
-// Tab 2: Proof Graph & Ledger Canvas — layered SVG DAG, SHA-256 chain verify, counterfactual fork, diff, and proof narration.
+// Tab 2: Proof Graph & Ledger Canvas — zoomable/pannable SVG DAG, SHA-256 chain verify, fork, diff, and narration.
 import * as api from '/assets/api.js';
-import { escapeHtml, renderRichInto } from '/assets/math.js';
+import { escapeHtml } from '/assets/math.js';
 import { getModelChoice } from '/assets/model_picker.js';
+import { renderDagNodeDetail } from '/assets/canvas_dag_detail.js';
 
-// The model picker's current {provider, model}. On the Claude subscription route the
-// server picks the first connected API provider (narration and side questions need one).
 function sideModelPayload() {
   const c = getModelChoice();
   return c ? { provider: c.provider, model: c.model } : {};
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+const NODE_W = 176;
+const NODE_H = 58;
+const MIN_SCALE = 0.28;
+const MAX_SCALE = 3.0;
 
 let svgEl = null;
+let viewportEl = null;
+let stageEl = null;
+let zoomResetBtn = null;
 let detailEl = null;
 let verifyBadgeEl = null;
 let forkBarEl = null;
 let forkSeqEl = null;
 let forkInputEl = null;
 let diffPanelEl = null;
+
 let currentSessionId = null;
 let currentDag = null;
 let selectedEntry = null;
+let nodeCoords = new Map();
 let callbacks = {};
+let viewState = { scale: 1, tx: 16, ty: 16, contentW: 420, contentH: 240, hasAutoFit: false, userAdjusted: false };
+let suppressNextNodeClick = false;
 
 export function initDagCanvas(opts = {}) {
   callbacks = opts;
   svgEl = document.getElementById('proof-dag-svg');
+  viewportEl = document.getElementById('dag-viewport');
+  zoomResetBtn = document.getElementById('dag-zoom-reset');
   detailEl = document.getElementById('dag-node-detail');
   verifyBadgeEl = document.getElementById('dag-verify-badge');
   forkBarEl = document.getElementById('dag-fork-bar');
@@ -34,27 +46,168 @@ export function initDagCanvas(opts = {}) {
   forkInputEl = document.getElementById('fork-assumption-input');
   diffPanelEl = document.getElementById('dag-diff-panel');
 
-  const verifyBtn = document.getElementById('dag-verify-btn');
-  const forkBtn = document.getElementById('dag-fork-btn');
-  const forkCancel = document.getElementById('fork-cancel-btn');
-  const forkConfirm = document.getElementById('fork-confirm-btn');
-  const narrateBtn = document.getElementById('dag-narrate-btn');
+  document.getElementById('dag-verify-btn')?.addEventListener('click', handleVerifyChain);
+  document.getElementById('dag-narrate-btn')?.addEventListener('click', handleNarrateProof);
+  document.getElementById('dag-fork-btn')?.addEventListener('click', () => openForkBarForSeq());
+  document.getElementById('fork-cancel-btn')?.addEventListener('click', () => { if (forkBarEl) forkBarEl.hidden = true; });
+  document.getElementById('fork-confirm-btn')?.addEventListener('click', handleConfirmFork);
 
-  if (verifyBtn) verifyBtn.addEventListener('click', handleVerifyChain);
-  if (narrateBtn) narrateBtn.addEventListener('click', handleNarrateProof);
-  if (forkBtn) {
-    forkBtn.addEventListener('click', () => {
-      if (!forkBarEl) return;
-      const open = forkBarEl.hidden;
-      forkBarEl.hidden = !open;
-      if (open && forkSeqEl) {
-        const seq = selectedEntry ? selectedEntry.seq : latestSeq();
-        forkSeqEl.textContent = String(seq || 1);
-      }
-    });
+  document.getElementById('dag-zoom-in')?.addEventListener('click', () => zoomAroundCenter(1.25));
+  document.getElementById('dag-zoom-out')?.addEventListener('click', () => zoomAroundCenter(0.8));
+  document.getElementById('dag-zoom-fit')?.addEventListener('click', () => { viewState.userAdjusted = false; fitDagToView(); });
+  zoomResetBtn?.addEventListener('click', resetZoomOneToOne);
+
+  wirePanAndWheel();
+}
+
+export function onDagTabShown() {
+  if (!viewState.userAdjusted && currentDag && Array.isArray(currentDag.entries) && currentDag.entries.length > 0) {
+    fitDagToView();
   }
-  if (forkCancel) forkCancel.addEventListener('click', () => { if (forkBarEl) forkBarEl.hidden = true; });
-  if (forkConfirm) forkConfirm.addEventListener('click', handleConfirmFork);
+}
+
+function formatSvgSummary(raw) {
+  let s = String(raw || '')
+    .replace(/\\alpha/g, 'α').replace(/\\beta/g, 'β').replace(/\\gamma/g, 'γ')
+    .replace(/\\delta/g, 'δ').replace(/\\Delta/g, 'Δ').replace(/\\epsilon/g, 'ε')
+    .replace(/\\theta/g, 'θ').replace(/\\lambda/g, 'λ').replace(/\\mu/g, 'μ')
+    .replace(/\\pi/g, 'π').replace(/\\sigma/g, 'σ').replace(/\\phi/g, 'φ')
+    .replace(/\\psi/g, 'ψ').replace(/\\omega/g, 'ω').replace(/\\Omega/g, 'Ω')
+    .replace(/\\hbar/g, 'ħ').replace(/[$\\`{}]/g, '')
+    .replace(/\s+/g, ' ').trim();
+  return s.length > 24 ? `${s.slice(0, 23)}…` : s;
+}
+
+function clampScale(s) {
+  return Math.max(MIN_SCALE, Math.min(MAX_SCALE, s));
+}
+
+function viewportSize() {
+  const w = (viewportEl && viewportEl.clientWidth) || (svgEl && svgEl.clientWidth) || 440;
+  const h = (viewportEl && viewportEl.clientHeight) || (svgEl && svgEl.clientHeight) || 320;
+  return { vw: Math.max(200, w), vh: Math.max(180, h) };
+}
+
+function applyViewTransform() {
+  if (stageEl) {
+    stageEl.setAttribute('transform', `translate(${viewState.tx.toFixed(1)}, ${viewState.ty.toFixed(1)}) scale(${viewState.scale.toFixed(4)})`);
+  }
+  if (zoomResetBtn) {
+    zoomResetBtn.textContent = `${Math.round(viewState.scale * 100)}%`;
+  }
+}
+
+export function fitDagToView() {
+  const { vw, vh } = viewportSize();
+  const cw = Math.max(1, viewState.contentW);
+  const ch = Math.max(1, viewState.contentH);
+  const pad = 24;
+  const scale = clampScale(Math.min((vw - pad * 2) / cw, (vh - pad * 2) / ch, 1.15));
+  viewState.scale = scale;
+  viewState.tx = (vw - cw * scale) / 2;
+  viewState.ty = Math.max(14, (vh - ch * scale) / 2);
+  viewState.hasAutoFit = true;
+  applyViewTransform();
+}
+
+function resetZoomOneToOne() {
+  const { vw, vh } = viewportSize();
+  viewState.userAdjusted = true;
+  viewState.scale = 1;
+  viewState.tx = (vw - viewState.contentW) / 2;
+  viewState.ty = Math.max(16, (vh - viewState.contentH) / 2);
+  applyViewTransform();
+}
+
+function zoomAtPoint(factor, cx, cy) {
+  const oldScale = viewState.scale;
+  const nextScale = clampScale(oldScale * factor);
+  if (Math.abs(nextScale - oldScale) < 0.001) return;
+  const ratio = nextScale / oldScale;
+  viewState.tx = cx - (cx - viewState.tx) * ratio;
+  viewState.ty = cy - (cy - viewState.ty) * ratio;
+  viewState.scale = nextScale;
+  viewState.userAdjusted = true;
+  applyViewTransform();
+}
+
+function zoomAroundCenter(factor) {
+  const { vw, vh } = viewportSize();
+  zoomAtPoint(factor, vw / 2, vh / 2);
+}
+
+function centerOnNode(entryId) {
+  const pos = nodeCoords.get(entryId);
+  if (!pos) return;
+  const { vw, vh } = viewportSize();
+  const cx = pos.x + NODE_W / 2;
+  const cy = pos.y + NODE_H / 2;
+  viewState.tx = vw / 2 - cx * viewState.scale;
+  viewState.ty = vh / 2 - cy * viewState.scale;
+  viewState.userAdjusted = true;
+  applyViewTransform();
+}
+
+function wirePanAndWheel() {
+  if (!viewportEl) return;
+  viewportEl.addEventListener('wheel', (ev) => {
+    if (!stageEl || !currentDag || !(currentDag.entries || []).length) return;
+    ev.preventDefault();
+    const rect = viewportEl.getBoundingClientRect();
+    const mx = ev.clientX - rect.left;
+    const my = ev.clientY - rect.top;
+    const factor = ev.deltaY < 0 ? 1.14 : 0.88;
+    zoomAtPoint(factor, mx, my);
+  }, { passive: false });
+
+  let drag = null;
+  viewportEl.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0 || (ev.target && ev.target.closest('.dag-zoom-controls'))) return;
+    drag = {
+      id: ev.pointerId,
+      startX: ev.clientX,
+      startY: ev.clientY,
+      startTx: viewState.tx,
+      startTy: viewState.ty,
+      moved: false,
+    };
+  });
+  viewportEl.addEventListener('pointermove', (ev) => {
+    if (!drag || ev.pointerId !== drag.id) return;
+    const dx = ev.clientX - drag.startX;
+    const dy = ev.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(dx, dy) > 4) {
+      drag.moved = true;
+      viewportEl.classList.add('is-panning');
+    }
+    if (drag.moved) {
+      viewState.tx = drag.startTx + dx;
+      viewState.ty = drag.startTy + dy;
+      viewState.userAdjusted = true;
+      applyViewTransform();
+    }
+  });
+  const endDrag = (ev) => {
+    if (!drag || ev.pointerId !== drag.id) return;
+    if (drag.moved) {
+      suppressNextNodeClick = true;
+      setTimeout(() => { suppressNextNodeClick = false; }, 0);
+    }
+    viewportEl.classList.remove('is-panning');
+    drag = null;
+  };
+  viewportEl.addEventListener('pointerup', endDrag);
+  viewportEl.addEventListener('pointercancel', endDrag);
+}
+
+function openForkBarForSeq(seqOverride) {
+  if (!forkBarEl) return;
+  const shouldOpen = seqOverride !== undefined || forkBarEl.hidden;
+  forkBarEl.hidden = !shouldOpen;
+  if (shouldOpen && forkSeqEl) {
+    const seq = seqOverride ?? (selectedEntry ? selectedEntry.seq : latestSeq());
+    forkSeqEl.textContent = String(seq || 1);
+  }
 }
 
 function latestSeq() {
@@ -63,17 +216,29 @@ function latestSeq() {
 }
 
 export async function refreshDag(sessionId) {
+  const isNewSession = sessionId !== currentSessionId;
   currentSessionId = sessionId;
+  if (isNewSession) {
+    selectedEntry = null;
+    viewState.hasAutoFit = false;
+    viewState.userAdjusted = false;
+    renderDagNodeDetail(detailEl, null, []);
+  }
   if (!sessionId || !svgEl) return 0;
   try {
     const dag = await api.getDag(sessionId);
     currentDag = dag;
-    renderDagSvg(dag);
-    const count = Array.isArray(dag && dag.entries) ? dag.entries.length : 0;
-    if (typeof callbacks.onDagCount === 'function') callbacks.onDagCount(count);
-    return count;
+    renderDagSvg(dag, isNewSession);
+    const entries = Array.isArray(dag && dag.entries) ? dag.entries : [];
+    if (selectedEntry) {
+      const refreshed = entries.find((e) => e.entry_id === selectedEntry.entry_id);
+      if (refreshed) renderDetailForEntry(refreshed);
+    }
+    if (typeof callbacks.onDagCount === 'function') callbacks.onDagCount(entries.length);
+    return entries.length;
   } catch {
     renderEmptySvg('No proof graph recorded yet.');
+    renderDagNodeDetail(detailEl, null, []);
     if (typeof callbacks.onDagCount === 'function') callbacks.onDagCount(0);
     return 0;
   }
@@ -81,8 +246,10 @@ export async function refreshDag(sessionId) {
 
 function renderEmptySvg(msg) {
   if (!svgEl) return;
-  svgEl.setAttribute('viewBox', '0 0 420 200');
-  svgEl.innerHTML = `<text x="210" y="104" text-anchor="middle" fill="var(--ink-muted)" font-size="13">${escapeHtml(msg)}</text>`;
+  stageEl = null;
+  nodeCoords = new Map();
+  svgEl.setAttribute('viewBox', '0 0 420 220');
+  svgEl.innerHTML = `<text x="210" y="112" text-anchor="middle" fill="var(--ink-muted)" font-size="13">${escapeHtml(msg)}</text>`;
 }
 
 function statusPalette(status) {
@@ -98,10 +265,10 @@ function statusPalette(status) {
   }
 }
 
-function renderDagSvg(dag) {
+function renderDagSvg(dag, isNewSession = false) {
   const entries = Array.isArray(dag && dag.entries) ? dag.entries : [];
   if (entries.length === 0) {
-    renderEmptySvg('Proof entries appended via ledger_append appear here.');
+    renderEmptySvg('Proof steps recorded by ledger_append appear here.');
     return;
   }
 
@@ -126,14 +293,15 @@ function renderDagSvg(dag) {
     layers.get(layer).push(e);
   }
 
-  const nodeW = 164;
-  const nodeH = 54;
   const gapX = 28;
-  const gapY = 44;
+  const gapY = 46;
   const maxCols = Math.max(1, ...Array.from(layers.values()).map((arr) => arr.length));
-  const width = Math.max(420, maxCols * (nodeW + gapX) + 40);
-  const height = Math.max(240, layers.size * (nodeH + gapY) + 40);
-  svgEl.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  const width = Math.max(380, maxCols * (NODE_W + gapX));
+  const height = Math.max(200, layers.size * (NODE_H + gapY));
+  viewState.contentW = width;
+  viewState.contentH = height;
+
+  svgEl.removeAttribute('viewBox');
   svgEl.innerHTML = '';
 
   const defs = document.createElementNS(SVG_NS, 'defs');
@@ -144,15 +312,19 @@ function renderDagSvg(dag) {
   `;
   svgEl.appendChild(defs);
 
-  const coords = new Map();
+  stageEl = document.createElementNS(SVG_NS, 'g');
+  stageEl.setAttribute('class', 'dag-stage');
+  svgEl.appendChild(stageEl);
+
+  nodeCoords = new Map();
   const sortedLayers = Array.from(layers.keys()).sort((a, b) => a - b);
   for (const lvl of sortedLayers) {
     const row = layers.get(lvl);
-    const rowW = row.length * nodeW + (row.length - 1) * gapX;
+    const rowW = row.length * NODE_W + (row.length - 1) * gapX;
     const startX = (width - rowW) / 2;
-    const y = 20 + lvl * (nodeH + gapY);
+    const y = 16 + lvl * (NODE_H + gapY);
     row.forEach((entry, idx) => {
-      coords.set(entry.entry_id, { x: startX + idx * (nodeW + gapX), y });
+      nodeCoords.set(entry.entry_id, { x: startX + idx * (NODE_W + gapX), y });
     });
   }
 
@@ -164,34 +336,35 @@ function renderDagSvg(dag) {
   for (const pair of edgePairs) {
     const fromId = Array.isArray(pair) ? pair[0] : pair.from;
     const toId = Array.isArray(pair) ? pair[1] : pair.to;
-    const a = coords.get(fromId);
-    const b = coords.get(toId);
+    const a = nodeCoords.get(fromId);
+    const b = nodeCoords.get(toId);
     if (!a || !b) continue;
     const path = document.createElementNS(SVG_NS, 'path');
-    const x1 = a.x + nodeW / 2;
-    const y1 = a.y + nodeH;
-    const x2 = b.x + nodeW / 2;
+    const x1 = a.x + NODE_W / 2;
+    const y1 = a.y + NODE_H;
+    const x2 = b.x + NODE_W / 2;
     const y2 = b.y;
     const midY = (y1 + y2) / 2;
     path.setAttribute('d', `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`);
     path.setAttribute('fill', 'none');
     path.setAttribute('stroke', 'var(--border-strong)');
-    path.setAttribute('stroke-width', '1.5');
+    path.setAttribute('stroke-width', '1.6');
     path.setAttribute('marker-end', 'url(#dag-arrow)');
-    svgEl.appendChild(path);
+    stageEl.appendChild(path);
   }
 
   for (const entry of entries) {
-    const pos = coords.get(entry.entry_id);
+    const pos = nodeCoords.get(entry.entry_id);
     if (!pos) continue;
     const pal = statusPalette(entry.status);
     const g = document.createElementNS(SVG_NS, 'g');
     g.setAttribute('class', `dag-node${selectedEntry && selectedEntry.entry_id === entry.entry_id ? ' is-selected' : ''}`);
+    g.setAttribute('data-entry-id', entry.entry_id);
     g.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
 
     const rect = document.createElementNS(SVG_NS, 'rect');
-    rect.setAttribute('width', String(nodeW));
-    rect.setAttribute('height', String(nodeH));
+    rect.setAttribute('width', String(NODE_W));
+    rect.setAttribute('height', String(NODE_H));
     rect.setAttribute('rx', '10');
     rect.setAttribute('fill', pal.fill);
     rect.setAttribute('stroke', pal.stroke);
@@ -209,50 +382,55 @@ function renderDagSvg(dag) {
     t2.setAttribute('y', '39');
     t2.setAttribute('font-size', '11.5');
     t2.setAttribute('fill', 'var(--ink-primary)');
-    const sum = String(entry.summary || '');
-    t2.textContent = sum.length > 22 ? `${sum.slice(0, 21)}…` : sum;
+    t2.textContent = formatSvgSummary(entry.summary);
 
     g.appendChild(rect);
     g.appendChild(t1);
     g.appendChild(t2);
-    g.addEventListener('click', () => selectNode(entry));
-    svgEl.appendChild(g);
+    g.addEventListener('click', () => {
+      if (suppressNextNodeClick) return;
+      selectNode(entry);
+    });
+    stageEl.appendChild(g);
+  }
+
+  if (isNewSession || !viewState.hasAutoFit || !viewState.userAdjusted) {
+    fitDagToView();
+  } else {
+    applyViewTransform();
   }
 }
 
-export function selectNodeById(entryId) {
+function updateSelectedHighlight() {
+  if (!stageEl) return;
+  for (const node of stageEl.querySelectorAll('.dag-node')) {
+    node.classList.toggle('is-selected', Boolean(selectedEntry && node.getAttribute('data-entry-id') === selectedEntry.entry_id));
+  }
+}
+
+export function selectNodeById(entryId, centerView = true) {
   if (!currentDag || !Array.isArray(currentDag.entries)) return;
   const found = currentDag.entries.find((e) => e.entry_id === entryId);
-  if (found) selectNode(found);
+  if (found) {
+    selectNode(found);
+    if (centerView) centerOnNode(found.entry_id);
+  }
+}
+
+function renderDetailForEntry(entry) {
+  const entries = (currentDag && currentDag.entries) || [];
+  renderDagNodeDetail(detailEl, entry, entries, {
+    onNotify: callbacks.onNotify,
+    onSelectNode: (id) => selectNodeById(id, true),
+    onExplainStep: (ent) => typeof callbacks.onExplainStep === 'function' && callbacks.onExplainStep(ent),
+    onForkAtStep: (ent) => openForkBarForSeq(ent.seq),
+  });
 }
 
 function selectNode(entry) {
   selectedEntry = entry;
-  if (currentDag) renderDagSvg(currentDag);
-  if (!detailEl) return;
-  const pal = statusPalette(entry.status);
-  detailEl.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
-      <strong>${escapeHtml(entry.entry_id)} (${escapeHtml(entry.entry_type || '')})</strong>
-      <span class="badge" style="color:${pal.ink};border-color:${pal.stroke};background:${pal.fill};">${escapeHtml(entry.status || 'pending')}</span>
-    </div>
-    <div style="font-weight:500;margin-bottom:6px;">${escapeHtml(entry.summary || '')}</div>
-    <div class="node-latex-body rich-prose" style="font-size:12.5px;margin-bottom:8px;"></div>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11.5px;color:var(--ink-muted);">
-      <span>seq ${escapeHtml(String(entry.seq || 0))} · deps: ${escapeHtml((Array.isArray(entry.depends_on) ? entry.depends_on : []).join(', ') || 'none')}</span>
-      <button id="node-verify-step-btn" type="button" class="pill-btn sm">Verify Step</button>
-    </div>
-  `;
-  const rawLatex = String(entry.latex || '').trim();
-  const wrappedLatex = rawLatex
-    ? (/^(\$\$|\\\[|\\begin\{)/.test(rawLatex) ? rawLatex : `$$\n${rawLatex}\n$$`)
-    : '';
-  const latexOrDetails = wrappedLatex ? `${wrappedLatex}\n\n${entry.details || ''}` : (entry.details || '');
-  renderRichInto(detailEl.querySelector('.node-latex-body'), latexOrDetails);
-  const stepBtn = detailEl.querySelector('#node-verify-step-btn');
-  if (stepBtn) {
-    stepBtn.addEventListener('click', () => handleVerifyChain());
-  }
+  updateSelectedHighlight();
+  renderDetailForEntry(entry);
 }
 
 async function handleVerifyChain() {
@@ -290,12 +468,8 @@ async function handleConfirmFork() {
       try {
         const diff = await api.diffSessions(currentSessionId, newId);
         renderBranchDiff(diff);
-      } catch {
-        // Optional diff summary
-      }
-      if (typeof callbacks.onForkCreated === 'function') {
-        callbacks.onForkCreated(newId);
-      }
+      } catch { /* Optional diff summary */ }
+      if (typeof callbacks.onForkCreated === 'function') callbacks.onForkCreated(newId);
     }
   } catch (err) {
     if (typeof callbacks.onNotify === 'function') callbacks.onNotify(`Fork failed: ${err.message}`);
@@ -324,9 +498,7 @@ async function handleNarrateProof() {
   try {
     const res = await api.narrateSession(currentSessionId, sideModelPayload());
     const text = (res && (res.narrative || res.markdown || res.text)) || JSON.stringify(res);
-    if (typeof callbacks.onNarrativeReady === 'function') {
-      callbacks.onNarrativeReady(text);
-    }
+    if (typeof callbacks.onNarrativeReady === 'function') callbacks.onNarrativeReady(text);
   } catch (err) {
     if (typeof callbacks.onNotify === 'function') callbacks.onNotify(`Narration failed: ${err.message}`);
   } finally {

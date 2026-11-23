@@ -1,0 +1,283 @@
+/* Proof DAG Zoomable Viewport, Rich Node Inspector, Verdict Recovery & Source Cards.
+ * Note: Never use bare descendant span/div/* selectors inside KaTeX containers.
+ */
+
+.dag-viewport-wrap {
+  position: relative;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-elevated);
+  background-image: radial-gradient(var(--border-subtle) 1px, transparent 1px);
+  background-size: 18px 18px;
+  height: 330px;
+  min-height: 220px;
+  max-height: 64vh;
+  resize: vertical;
+  overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.dag-viewport {
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.dag-viewport.is-panning {
+  cursor: grabbing;
+}
+
+#proof-dag-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.dag-zoom-controls {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+}
+
+.dag-zoom-btn {
+  height: 24px;
+  min-width: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--ink-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.dag-zoom-btn:hover {
+  background: var(--bg-hover);
+  color: var(--ink-primary);
+}
+.dag-zoom-reset {
+  min-width: 44px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.dag-node {
+  cursor: pointer;
+}
+.dag-node rect {
+  stroke-width: 1.5px;
+  transition: stroke-width var(--transition-fast), filter var(--transition-fast);
+}
+.dag-node:hover rect {
+  stroke-width: 2.25px;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.08));
+}
+.dag-node.is-selected rect {
+  stroke-width: 2.75px;
+  filter: drop-shadow(0 0 0 2px var(--accent-soft));
+}
+
+/* Rich Node Inspector Card */
+.dag-inspector-empty {
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dag-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dag-detail-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dag-detail-id {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-primary);
+}
+
+.dag-seq-label {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+
+.dag-section {
+  margin-bottom: 12px;
+}
+.dag-section:last-child {
+  margin-bottom: 0;
+}
+
+.dag-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-muted);
+  margin-bottom: 5px;
+}
+
+.dag-summary-box {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--ink-primary);
+}
+
+.dag-eq-box {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  overflow-x: auto;
+}
+
+.dag-explanation-box {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink-primary);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.dag-dep-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.dag-dep-label {
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  font-weight: 500;
+  min-width: 68px;
+}
+
+.dag-dep-chip {
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.dag-dep-chip:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.dag-verification-box {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.dag-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 10px;
+  margin-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Rejection Recovery inside Verdict Card */
+.verdict-recovery {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--status-warn-border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.verdict-recovery-body {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-primary);
+}
+
+.verdict-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Sources Card Typography */
+.source-card-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--ink-primary);
+}
+
+.source-origin-row {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--ink-secondary);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+
+.source-origin-link {
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-all;
+}
+.source-origin-link:hover {
+  text-decoration: underline;
+}

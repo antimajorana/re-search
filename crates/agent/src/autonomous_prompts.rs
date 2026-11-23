@@ -10,7 +10,7 @@ use crate::strategist::{
 };
 use crate::transport::{CancelToken, ContentBlock, Message, Role, Transport};
 use crate::verifiers::VerificationReport;
-use research_tools::{read_proof_dag, ProofStatus, LEDGER_APPEND, LEDGER_SUPERSEDE};
+use research_tools::{read_proof_dag, ProofDag, ProofStatus, LEDGER_APPEND, LEDGER_SUPERSEDE};
 use serde_json::{json, Value};
 use tools::{CallOutcome, Router};
 
@@ -36,13 +36,17 @@ Use `delegate_explore` to test 2..=4 competing strategies or Ansaetze concurrent
 `Lean verified`, `Lean 4 verified`, or `rigorously proved` / `Q.E.D.` without matching \
 ledger-backed verification (a succeeding `sympy_eval`, a `lean_check` with status `\"verified\"`, \
 or an accepted full Verifier review).\n\
-4. Maintain the Proof DAG: Record derivations (`derivation`), verified calculations \
-(`symbolic_computation` / `numerical_computation`), interpreted conclusions (`result` citing \
-dependencies in `depends_on`) via `ledger_append`, and your complete concluding synthesis \
-(`final_answer`). Supersede flawed entries explicitly with `ledger_supersede`.\n\
-5. Synthesize Self-Contained Exposition: Write clear, publication-grade Markdown and LaTeX \
-(`$...$`, `$$...$$`, `\\begin{align*}...\\end{align*}`) stating hypotheses, definitions, \
-intermediate lemmas, and conclusions without hand-waving.";
+4. Maintain the Proof DAG: Record assumptions (`assumption`), derivations (`derivation`), \
+verified calculations (`symbolic_computation` / `numerical_computation`), interpreted conclusions \
+(`result` citing dependencies in `depends_on`) via `ledger_append`, and your complete concluding \
+synthesis (`final_answer`). Give EVERY `ledger_append` entry a clear one-line `summary` and a \
+self-contained `details` explanation spelling out the exact steps, equations, and why the result \
+follows from `depends_on` (so inspecting any node in the Proof DAG is immediately readable). \
+Supersede flawed entries explicitly with `ledger_supersede`.\n\
+5. Synthesize Self-Contained Exposition: Write clear, pedagogical Markdown and LaTeX \
+(`$...$`, `$$...$$`, `\\begin{align*}...\\end{align*}`) stating hypotheses, intuition, definitions, \
+intermediate steps without hand-waving, and conclusions. If a target claim fails or hits an \
+obstruction, prove clearly what IS valid under modified hypotheses or provide an explicit counterexample.";
 
 pub(crate) fn ensure_active_final_answer_entry(
     router: &Router,
@@ -187,12 +191,16 @@ pub(crate) fn build_revision_prompt(
     }
     out.push_str(
         "\nInstructions for revision:\n\
-         1. Address every Verifier issue and counterexample rigorously (use `sympy_eval` or \
-         `arxiv_search`/`fs_read` if needed to verify claims or citations).\n\
-         2. Supersede any flawed Proof-DAG entries with `ledger_supersede` and append your \
-         corrected `final_answer` via `ledger_append`.\n\
-         3. Output a complete, self-contained revised answer for the user (do not merely write \
-         a diff against your rejected draft).\n\
+         1. Diagnose whether the rejection is (a) a fixable gap / target mismatch on the right theorem, or \
+         (b) a structural obstruction in your current approach.\n\
+         2. If fixable, repair every Verifier issue rigorously (use `sympy_eval`, `arxiv_search`, or `fs_read` \
+         as needed). If your current proof strategy is obstructed, pivot to a **genuinely different approach** \
+         (you may call `delegate_explore` to test competing strategies concurrently).\n\
+         3. Supersede flawed Proof-DAG entries with `ledger_supersede` and record your revised `final_answer` \
+         via `ledger_append`.\n\
+         4. If the claim cannot hold under the stated hypotheses, prove an explicit counterexample or the \
+         sharpest theorem that IS valid under stated additional assumptions, and explain clearly what is possible.\n\
+         5. Output a complete, self-contained revised exposition (never a bare diff against the rejected draft).\n\
          </verification_feedback>",
     );
     out
@@ -207,6 +215,55 @@ pub(crate) fn format_unverified_banner(report: &VerificationReport, rounds: u32)
         msg.push_str(&format!("> - **[{}]** {}\n", iss.severity, iss.message));
     }
     msg
+}
+
+pub(crate) fn build_unverified_recovery(
+    report: &VerificationReport,
+    rounds: u32,
+    dag: &ProofDag,
+    strategist_advice: Option<&str>,
+) -> String {
+    let verified_ids: Vec<String> = dag
+        .entries
+        .iter()
+        .filter(|e| e.status == ProofStatus::Accepted && e.entry_type != "final_answer")
+        .map(|e| format!("`{}`", e.entry_id))
+        .collect();
+    let compute_ids: Vec<String> = dag
+        .entries
+        .iter()
+        .filter(|e| {
+            e.status != ProofStatus::Superseded
+                && matches!(e.entry_type.as_str(), "symbolic_computation" | "numerical_computation")
+        })
+        .map(|e| format!("`{}`", e.entry_id))
+        .collect();
+    let mut parts = Vec::new();
+    if !verified_ids.is_empty() || !compute_ids.is_empty() {
+        let mut foundations = Vec::new();
+        if !verified_ids.is_empty() {
+            foundations.push(format!("accepted proof steps ({})", verified_ids.join(", ")));
+        }
+        if !compute_ids.is_empty() {
+            foundations.push(format!("recorded computations ({})", compute_ids.join(", ")));
+        }
+        parts.push(format!("**Solid foundation available:** {}.", foundations.join("; ")));
+    }
+    if let Some(advice) = strategist_advice.map(str::trim).filter(|s| !s.is_empty()) {
+        let clipped: String = advice.chars().take(600).collect();
+        parts.push(format!("**Suggested repair direction:** {clipped}"));
+    } else if rounds >= 1 {
+        parts.push(format!(
+            "**Why verification paused after {rounds} round(s):** `{}` did not close verification cleanly ({}).",
+            report.target_entry_id, report.summary
+        ));
+    }
+    parts.push(
+        "**What you can do next:** Choose **Try Another Approach** to test an alternative proof strategy, \
+         **Fix Flagged Issues** to repair the specific gap, or **Discuss in Explain** to examine modified hypotheses."
+            .to_string(),
+    );
+    parts.join("\n\n")
 }
 
 pub(crate) fn inject_feedback(

@@ -66,8 +66,8 @@ impl CliRouteKind {
 
     fn name(self) -> &'static str {
         match self {
-            Self::Claude => "the Claude subscription route",
-            Self::Antigravity => "the Antigravity route (vendor-sandboxed, not confined to re:Search tools)",
+            Self::Claude => "Claude Code",
+            Self::Antigravity => "Antigravity",
         }
     }
 

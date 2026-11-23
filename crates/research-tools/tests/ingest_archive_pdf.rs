@@ -389,3 +389,32 @@ fn f4_tex_bundle_scoring_inlining_cycles_and_provenance_zero_unreferenced_blobs(
     let report = ledger.verify_all().expect("verify_all valid");
     assert_eq!(report.unreferenced_blobs, 0);
 }
+
+#[test]
+fn tex_title_extraction_skips_comments_and_other_title_macros() {
+    let tmp = TempDir::new().unwrap();
+    let ws = tmp.path().join("ws");
+    let data = tmp.path().join("data");
+    fs::create_dir_all(&ws).unwrap();
+    fs::write(
+        ws.join("titled.tex"),
+        "% \\title{Ignored Old Title}\n\\titlerunning{Short}\n\\title{\\textbf{Lieb--Schultz--Mattis} on a Torus}\n\\begin{document}\\end{document}\n",
+    )
+    .unwrap();
+    let env = Arc::new(ResearchEnv::with_workspace(&data, &ws).unwrap());
+    let mut reg = Registry::new();
+    register_research_tools(&mut reg, env);
+    let session = "s-tex-title";
+    let router = Router::new(
+        reg,
+        research_policy(),
+        Ledger::open(&data).unwrap(),
+        session,
+        Arc::new(DenyAskApprover),
+    );
+    let out = router.try_call("agent:test", DOC_INGEST, &json!({"path": "titled.tex"})).unwrap();
+    match out {
+        CallOutcome::Ok(v) => assert_eq!(v["title"], "Lieb--Schultz--Mattis on a Torus"),
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+}

@@ -30,6 +30,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../assets/modals.css"),
         }),
+        "/assets/dag.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/dag.css"),
+        }),
         "/assets/api.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/api.js"),
@@ -89,6 +93,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
         "/assets/canvas_dag.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/canvas_dag.js"),
+        }),
+        "/assets/canvas_dag_detail.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/canvas_dag_detail.js"),
         }),
         "/assets/canvas_sources.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",

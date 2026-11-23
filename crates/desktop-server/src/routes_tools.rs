@@ -70,6 +70,7 @@ pub fn handle_upload(
                 raw_bytes: bytes,
                 source_id_hint: None,
                 section_filter: None,
+                title: None,
             },
         )
         .map_err(bad)?;

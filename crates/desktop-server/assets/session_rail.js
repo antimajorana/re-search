@@ -187,5 +187,17 @@ export function formatBuiltinToolWarning(data = {}) {
   const outcome = data.denied_or_failed
     ? 'reported denied or failed'
     : data.state === 'DONE' ? 'reported finished' : 'reported running';
-  return `Warning: the Antigravity CLI's built-in tool \`${name}\` ${outcome}. It is outside re:Search's tools, policy and approvals; re:Search only records what the CLI reported (vendor-sandboxed, not confined to re:Search tools).`;
+  return `Antigravity built-in tool \`${name}\` ${outcome}.`;
+}
+
+export function showToast(msg) {
+  const stack = document.getElementById('toast-stack');
+  if (!stack) return;
+  const item = document.createElement('div');
+  item.className = 'toast-item';
+  item.title = 'Click to dismiss';
+  item.textContent = String(msg);
+  item.addEventListener('click', () => item.remove());
+  stack.appendChild(item);
+  setTimeout(() => item.remove(), 3800);
 }

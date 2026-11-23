@@ -2,7 +2,10 @@
 import * as api from '/assets/api.js';
 import { escapeHtml, renderLatexDocumentPreview, renderRichInto } from '/assets/math.js';
 import { getModelChoice } from '/assets/model_picker.js';
-import { linksForIngestedSource, linksForPaper, renderSourceLinkChips } from '/assets/source_links.js';
+import {
+  linksForIngestedSource, linksForPaper, renderSourceLinkChips,
+  resolveOriginInfo, resolveSourceTitle,
+} from '/assets/source_links.js';
 
 // The model picker's current {provider, model}. On the Claude subscription route the
 // server picks the first connected API provider (narration and side questions need one).
@@ -173,17 +176,25 @@ export async function loadSessionSources(sessionId) {
       const rawFiles = Array.isArray(src.files) ? src.files : [];
       const readableFiles = Array.from(new Set([src.assembled_path, src.primary_path, ...rawFiles].filter(Boolean)));
       const files = rawFiles.join(', ');
+      const titleText = resolveSourceTitle(src);
+      const originInfo = resolveOriginInfo(src);
       const extLinks = linksForIngestedSource(src);
+      const extraLinks = originInfo.url
+        ? extLinks.filter((lk) => lk.url !== originInfo.url)
+        : extLinks;
+      const originValueHtml = originInfo.url
+        ? `<a class="source-origin-link" href="${escapeHtml(originInfo.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(originInfo.text)} ↗</a>`
+        : `<code>${escapeHtml(originInfo.text)}</code>`;
       card.innerHTML = `
-        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
-          <strong>${escapeHtml(src.primary_path || src.origin || src.source_id || 'source')}</strong>
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
+          <strong class="source-card-title">${escapeHtml(titleText)}</strong>
           <span class="badge">${escapeHtml(src.format || src.status || 'ingested')}</span>
         </div>
-        ${src.origin && src.origin !== src.primary_path ? `<div style="font-size:11.5px;color:var(--ink-secondary);margin-top:3px;">Origin: <code>${escapeHtml(src.origin)}</code></div>` : ''}
+        ${originInfo.text ? `<div class="source-origin-row"><span>Origin:</span>${originValueHtml}</div>` : ''}
         ${files ? `<div style="font-size:11.5px;color:var(--ink-muted);margin-top:4px;">Files: ${escapeHtml(files)}</div>` : ''}
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;">
           ${readableFiles.length ? '<button type="button" class="pill-btn sm primary read-source-btn">Read Source</button>' : ''}
-          ${renderSourceLinkChips(extLinks)}
+          ${renderSourceLinkChips(extraLinks)}
         </div>
       `;
       const readBtn = card.querySelector('.read-source-btn');
@@ -215,6 +226,12 @@ async function loadSidetalk(sessionId) {
   } catch {
     // Empty Explain stream
   }
+}
+
+export async function askInExplain(question) {
+  if (!currentSessionId || !question || !sidetalkInputEl) return;
+  sidetalkInputEl.value = question;
+  await handleSidetalkSubmit();
 }
 
 async function handleSidetalkSubmit() {
@@ -350,7 +367,7 @@ async function openSourceReader(sessionId, src, files, extLinks) {
   const linksEl = document.getElementById('source-reader-ext-links');
   if (!dlg) return;
   readerState = { sessionId, files, currentPath: files[0] || '', text: '', mode: 'rendered', links: extLinks || [] };
-  if (titleEl) titleEl.textContent = src.origin || src.primary_path || src.source_id || 'Source Reader';
+  if (titleEl) titleEl.textContent = resolveSourceTitle(src);
   if (linksEl) linksEl.innerHTML = renderSourceLinkChips(extLinks);
   if (fileSel) {
     fileSel.innerHTML = '';

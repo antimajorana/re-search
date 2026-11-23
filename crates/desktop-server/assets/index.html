@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="/assets/components.css">
   <link rel="stylesheet" href="/assets/workbench.css">
   <link rel="stylesheet" href="/assets/modals.css">
+  <link rel="stylesheet" href="/assets/dag.css">
 </head>
 <body>
   <div id="app-shell" data-rail-open="true" data-canvas-open="true">
@@ -116,9 +117,9 @@
             <button id="conventions-close-btn" type="button" class="icon-btn" aria-label="Close conventions">✕</button>
           </div>
           <div style="font-size:12px;color:var(--ink-secondary);margin-bottom:6px;">
-            Injected into both the Orchestrator and the Independent Verifier on every round so signs, units, and Fourier factors stay consistent.
+            Shared with Orchestrator and Verifier on every round so signs and units stay consistent.
           </div>
-          <textarea id="quick-conventions-input" class="text-input" rows="3" maxlength="2000" placeholder="e.g. Metric signature (-,+,+,+), natural units \hbar = c = 1, periodic boundary conditions..."></textarea>
+          <textarea id="quick-conventions-input" class="text-input" rows="3" maxlength="2000" placeholder="e.g. metric (-,+,+,+), natural units \hbar = c = 1, periodic boundary conditions..."></textarea>
           <div id="conventions-presets" class="conventions-presets"></div>
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;border-top:1px solid var(--border-subtle);padding-top:10px;">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
@@ -148,7 +149,7 @@
 
         <form id="composer-pill" autocomplete="off">
           <div id="composer-files" class="upload-chips" hidden></div>
-          <textarea id="composer-input" rows="1" placeholder="Ask a derivation, run SymPy, or audit arXiv TeX..."></textarea>
+          <textarea id="composer-input" rows="1" placeholder="Ask a derivation, verify a theorem, or audit a paper..."></textarea>
           <div class="composer-bar">
             <div class="composer-left">
               <label class="upload-label" title="Attach up to 5 local .tex, .bib, .pdf, or archive files (max 10 MiB each)">
@@ -264,10 +265,18 @@
                 <button id="fork-confirm-btn" type="button" class="pill-btn sm primary">Create Verified Fork</button>
               </div>
             </div>
-            <div class="dag-canvas-box">
-              <svg id="proof-dag-svg" viewBox="0 0 420 260" aria-label="Proof dependency graph"></svg>
+            <div class="dag-viewport-wrap">
+              <div class="dag-zoom-controls" role="toolbar" aria-label="Proof DAG zoom controls">
+                <button id="dag-zoom-out" type="button" class="dag-zoom-btn" title="Zoom out (−)" aria-label="Zoom out">−</button>
+                <button id="dag-zoom-reset" type="button" class="dag-zoom-btn dag-zoom-reset" title="Reset zoom to 100%" aria-label="Reset zoom to 100%">100%</button>
+                <button id="dag-zoom-in" type="button" class="dag-zoom-btn" title="Zoom in (+)" aria-label="Zoom in">+</button>
+                <button id="dag-zoom-fit" type="button" class="dag-zoom-btn" title="Fit graph to view" aria-label="Fit graph to view">Fit</button>
+              </div>
+              <div id="dag-viewport" class="dag-canvas-box dag-viewport">
+                <svg id="proof-dag-svg" viewBox="0 0 420 260" aria-label="Proof dependency graph"></svg>
+              </div>
             </div>
-            <div id="dag-node-detail" class="dag-detail-card">Select a proof node above to inspect its LaTeX equation, dependencies, and verification status.</div>
+            <div id="dag-node-detail" class="dag-detail-card"><div class="dag-inspector-empty">Click any proof node above to inspect its step explanation, LaTeX equations, and dependencies.</div></div>
             <div id="dag-diff-panel" class="dag-detail-card" hidden></div>
           </div>
         </section>
@@ -310,7 +319,7 @@
         <section id="panel-sidetalk" class="canvas-panel" role="tabpanel" aria-labelledby="tab-sidetalk">
           <div class="sidetalk-layout">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border-subtle);font-size:12px;color:var(--ink-muted);">
-              <span>Explain — clarify notation, check intuition, export notes (.md / .html), or ask about e-1 steps without mutating the Proof DAG.</span>
+              <span>Clarify intuition, notation, or individual steps without changing the Proof DAG.</span>
               <div style="display:flex;gap:6px;flex-shrink:0;">
                 <button id="explain-export-md-btn" type="button" class="pill-btn sm" title="Export Explain conversation as Markdown (.md)">.md</button>
                 <button id="explain-export-html-btn" type="button" class="pill-btn sm" title="Export Explain conversation as standalone HTML (.html)">.html</button>
@@ -343,7 +352,7 @@
 
       <div id="settings-panel-providers" class="settings-tab-panel is-active" data-settings-panel="providers" role="tabpanel">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-          <p class="connect-intro" style="margin:0;">Connect any provider below, then pick a model &amp; effort next to Send. New models are detected automatically.</p>
+          <p class="connect-intro" style="margin:0;">Connect a provider, then pick your model next to Send.</p>
           <button id="refresh-models-btn" type="button" class="pill-btn sm" title="Fetch latest model lists from connected providers">Refresh models</button>
         </div>
         <div id="connect-list" class="connect-list" aria-live="polite"></div>
@@ -430,7 +439,7 @@
       <div id="settings-panel-advanced" class="settings-tab-panel" data-settings-panel="advanced" role="tabpanel">
         <div class="subagent-card" style="padding:12px 14px;">
           <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Tool &amp; Computation Approvals</div>
-          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;"><input id="set-auto-approve-tools" type="checkbox" checked> <span><strong>Auto-approve computations, workspace writes &amp; literature lookups (default on)</strong><br><span style="font-size:11.5px;color:var(--ink-muted);">When enabled, SymPy evaluations (still sandboxed inside Windows AppContainer), workspace edits, and literature lookups run without pausing for approval cards. Uncheck to require manual approval on every tool call or per session.</span></span></label>
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;"><input id="set-auto-approve-tools" type="checkbox" checked> <span><strong>Auto-approve SymPy, workspace writes &amp; literature lookups</strong><br><span style="font-size:11.5px;color:var(--ink-muted);">Sandboxed SymPy checks and workspace edits run without pausing for approval cards.</span></span></label>
         </div>
         <details id="connect-advanced" class="connect-advanced" open>
           <summary>Custom Endpoints &amp; Conventions</summary>

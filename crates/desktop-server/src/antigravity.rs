@@ -1,41 +1,19 @@
-//! The Antigravity route in the desktop UI: its Connect entry, its model group (from
-//! `agy models`), and the person's acknowledgement of its warning.
-//!
-//! The route drives the Antigravity CLI the user signed into (see
-//! [`cli_route::antigravity`]). It is labelled everywhere as "vendor-sandboxed, not
-//! confined to re:Search tools": the CLI's own built-in tools stay in the model's tool list
-//! and are held back only by the CLI honouring the per-session settings re:Search passes.
-//! It also carries a terms risk the person chose to accept. So the route refuses to start
-//! until the person has clicked the acknowledgement in the Connect panel
-//! (`POST /api/connections/antigravity/acknowledge`, stored in `ui_settings.json`); a new
-//! [`NOTICE_VERSION`] asks again. Nothing here acknowledges on the person's behalf.
+//! The Antigravity route in the desktop UI: its Connect entry and model group (from `agy models`).
 
 use crate::model_catalog::CACHE_TTL;
 use crate::routes_session::ApiResult;
-use crate::state::{now_ms, AntigravityAck, DesktopState, ANTIGRAVITY_ROUTE};
-use cli_route::antigravity::{self as agy, Antigravity, AgyModel, ALLOW_ENV_AUTH_VAR, LABEL_SUFFIX};
+use crate::state::{now_ms, DesktopState, ANTIGRAVITY_ROUTE};
+use cli_route::antigravity::{self as agy, Antigravity, AgyModel, ALLOW_ENV_AUTH_VAR};
 use cli_route::VendorCli;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// Label of the route in the Connect panel and the model dropdown.
-pub const AGY_LABEL: &str = "Antigravity (your Google plan) \u{2014} vendor-sandboxed, not confined to re:Search tools";
+pub const AGY_LABEL: &str = "Antigravity (Google)";
 /// Plain-text note shown beside the model of a session on this route.
-pub const AGY_NOTE: &str =
-    "runs the Antigravity CLI (your Google login) \u{2014} vendor-sandboxed, not confined to re:Search tools";
-/// Version of [`TERMS_NOTICE`]; raising it asks the person again.
-pub const NOTICE_VERSION: u32 = 1;
-/// The warning shown before first use. It paraphrases what the person was told; it quotes
-/// no Google document.
-pub const TERMS_NOTICE: &str = "Before you use this route: Google's terms for consumer plans may treat driving the \
-Antigravity CLI from third-party software such as re:Search as unsupported or as a breach, which could put your \
-Google account at risk. This route is vendor-sandboxed, not confined to re:Search tools: the CLI keeps its own \
-built-in tools (terminal commands, file reads and writes, web fetches, a browser). re:Search asks the CLI to deny \
-them and to allow only re:Search's tools, but only the CLI enforces that; anything it runs itself bypasses \
-re:Search's policy, approvals and ledger (re:Search records and shows every built-in tool use the CLI reports). \
-MCP servers from your global Antigravity configuration still load. You use this route at your own risk.";
-const HOW_TO: &str = "Install the Antigravity CLI (agy) and sign in once by running agy in a terminal.";
+pub const AGY_NOTE: &str = "Antigravity CLI";
+const HOW_TO: &str = "Install the Antigravity CLI (`agy`) and sign in once by running `agy` in a terminal.";
 /// Model used when neither the request nor the session names one and the list has it.
 pub const DEFAULT_AGY_MODEL: &str = "gemini-3.8-flash-medium";
 /// Shown when `agy models` has never answered (from the 1.5.13 list captured by the builder).
@@ -56,47 +34,32 @@ pub struct AgyModelCache {
     pub checked: Instant,
 }
 
-/// Whether the person acknowledged the current notice.
-pub fn acknowledged(state: &DesktopState) -> bool {
-    state.load_ui_settings().antigravity_ack.is_some_and(|a| a.notice_version == NOTICE_VERSION)
+/// Compatibility constant referenced by `state::AntigravityAck`.
+pub const NOTICE_VERSION: u32 = 1;
+
+/// Always ready (no warning click-through gate required).
+pub fn acknowledged(_state: &DesktopState) -> bool {
+    true
 }
 
-/// Refusal used by a turn before anything is started.
-pub fn require_acknowledged(state: &DesktopState) -> Result<(), String> {
-    if acknowledged(state) {
-        Ok(())
-    } else {
-        Err(format!(
-            "the Antigravity route ({LABEL_SUFFIX}) needs your acknowledgement first: open Connect and read the warning \
-             on the Antigravity row"
-        ))
-    }
+/// Route availability no longer requires a click-through warning gate.
+pub fn require_acknowledged(_state: &DesktopState) -> Result<(), String> {
+    Ok(())
 }
 
-/// `POST /api/connections/antigravity/acknowledge` (token required): the person clicked the
-/// acknowledgement button in the Connect panel.
-pub fn handle_acknowledge(state: &DesktopState) -> ApiResult {
-    state
-        .update_ui_settings(|ui| {
-            ui.antigravity_ack = Some(AntigravityAck { acknowledged_ms: now_ms(), notice_version: NOTICE_VERSION });
-        })
-        .map_err(|e| (500, e))?;
+/// `POST /api/connections/antigravity/acknowledge` (token required): kept for API compatibility.
+pub fn handle_acknowledge(_state: &DesktopState) -> ApiResult {
     Ok((200, json!({ "ok": true, "acknowledged": true, "notice_version": NOTICE_VERSION })))
 }
 
-/// `POST /api/connections/antigravity/withdraw` (token required): forget the acknowledgement.
+/// `POST /api/connections/antigravity/withdraw` (token required): stops active CLI turns and clears model cache.
 pub fn handle_withdraw(state: &DesktopState) -> ApiResult {
-    state
-        .update_ui_settings(|ui| {
-            ui.antigravity_ack = None;
-        })
-        .map_err(|e| (500, e))?;
     if let Ok(mut cache) = state.agy_models.lock() {
         cache.0 = cache.0.wrapping_add(1);
         cache.1 = None;
     }
     state.stop_cli_turns_of(crate::cli_turn::CliRouteKind::Antigravity);
-    Ok((200, json!({ "ok": true, "acknowledged": false })))
+    Ok((200, json!({ "ok": true, "acknowledged": true })))
 }
 
 /// Whether the route can start a turn now, and why not.
@@ -138,39 +101,19 @@ pub fn agy_status(state: &DesktopState) -> AgyStatus {
             };
         }
     };
-    let ack = acknowledged(state);
-    if !ack {
-        let mut status =
-            "Antigravity CLI found on this computer; read the warning below and acknowledge it before the first use.".to_string();
-        if !allowed.is_empty() {
-            status.push_str(&format!(
-                " {} set and allowed by {ALLOW_ENV_AUTH_VAR}: the CLI may use it instead of your plan.",
-                allowed.join(", ")
-            ));
-        }
-        return AgyStatus {
-            connected: false,
-            found: true,
-            status,
-            how_to: Some("Acknowledge the warning to enable this route.".to_string()),
-            version: None,
-            exe: Some(exe),
-        };
-    }
     let version = match state.agy_version.get() {
         Some(v) => Ok(v.clone()),
         None => run_version(&exe).inspect(|v| {
             let _ = state.agy_version.set(v.clone());
         }),
     };
-    let found = match &version {
-        Ok(v) => format!("Antigravity CLI {v} found; it uses the Google account you signed into by running agy."),
-        Err(e) => format!("Antigravity CLI found, but its version check failed ({e})."),
+    let mut status = match &version {
+        Ok(v) => format!("Antigravity CLI {v} ready."),
+        Err(e) => format!("Antigravity CLI detected (version check failed: {e})."),
     };
-    let mut status = format!("{found} Vendor-sandboxed: its built-in tools are outside re:Search's control.");
     if !allowed.is_empty() {
         status.push_str(&format!(
-            " {} set and allowed by {ALLOW_ENV_AUTH_VAR}: the CLI may use it instead of your plan.",
+            " Using {} via {ALLOW_ENV_AUTH_VAR}.",
             allowed.join(", ")
         ));
     }
@@ -219,10 +162,6 @@ pub fn connection_entry(state: &DesktopState) -> Value {
         "base_url": null,
         "session_note": AGY_NOTE,
         "confinement": agy::CONFINEMENT,
-        "warning": TERMS_NOTICE,
-        "acknowledged": acknowledged(state),
-        "acknowledge_action": "acknowledge",
-        "withdraw_action": "withdraw",
     })
 }
 
@@ -230,13 +169,10 @@ fn model_json(id: &str, label: &str, is_default: bool) -> Value {
     json!({ "id": id, "label": label, "provider": ANTIGRAVITY_ROUTE, "default": is_default })
 }
 
-/// The model group, when the route is usable (found, environment clean, acknowledged).
+/// The model group, when the route is usable (found and clean environment).
 /// `agy models` makes no model call; it is run at most once per [`CACHE_TTL`] (30 s after
 /// a failure), never while holding the cache lock.
 pub fn model_group(state: &DesktopState, refresh: bool) -> Option<Value> {
-    if !acknowledged(state) {
-        return None;
-    }
     let st = agy_status(state);
     let exe = st.exe.filter(|_| st.connected)?;
     let (generation, cached) = state.agy_models.lock().ok().map(|c| (c.0, c.1.clone()))?;
@@ -267,7 +203,7 @@ pub fn model_group(state: &DesktopState, refresh: bool) -> Option<Value> {
             } else {
                 false
             };
-            if !committed || !acknowledged(state) {
+            if !committed {
                 return None;
             }
             (e, "live")

@@ -252,14 +252,22 @@ fn execute_verifier(
     let tex_audit_xml = format_deterministic_tex_audit_xml(&tex_audit);
     let system_prompt = if kind == "full" {
         "You are an independent stateless full-solution verifier (full_verification). \
-         Judge mathematical soundness strictly from the problem statement, proof entries, and \
-         <deterministic_tex_audit>. Respond in JSON with {verdict: \"accepted\"|\"rejected\", \
-         summary, counterexample, issues}."
+         Judge mathematical soundness strictly from `<problem_prompt>`, `<proof_entries>`, and \
+         `<deterministic_tex_audit>`. Note: `<problem_prompt>` may contain a `Latest user request to verify:` \
+         section followed by `Earlier session prompts (context):` — always judge whether `target_entry_id` \
+         rigorously solves the Latest user request (using earlier prompts only as background/notation context; \
+         never reject a follow-up proof merely for not re-proving an earlier turn's result). \
+         If rejecting, make `summary` constructive: state clearly what parts hold, what specific flaw, \
+         obstruction, or prompt mismatch caused rejection, and what alternative proof strategy or modified \
+         assumption could make the claim provable. \
+         Respond in JSON with {verdict: \"accepted\"|\"rejected\", summary, counterexample, issues}."
     } else {
         "You are an independent stateless step verifier (step_verification). \
-         Judge the target proof step strictly from the problem statement, its depends_on ancestor \
-         entries, and <deterministic_tex_audit>. Respond in JSON with {verdict: \"accepted\"|\"rejected\", \
-         summary, counterexample, issues}."
+         Judge the target proof step strictly from `<problem_prompt>`, its `depends_on` ancestor \
+         entries, and `<deterministic_tex_audit>`. If `<problem_prompt>` separates `Latest user request to verify:` \
+         from `Earlier session prompts (context):`, use the latest request as the active goal. \
+         If rejecting, state constructively what fails and what fix or alternative step would work. \
+         Respond in JSON with {verdict: \"accepted\"|\"rejected\", summary, counterexample, issues}."
     };
     let user_prompt = format!(
         "target_entry_id: {target_entry_id}\nverification_kind: {kind}\n\n\

@@ -29,6 +29,7 @@ let currentSessionId = null;
 let onPromptPick = null;
 let onNotify = null;
 let onInspectStep = null;
+let onRecoveryAction = null;
 let onOpenConnect = null;
 let onPickWorkspace = null;
 let onOpenConventions = null;
@@ -42,6 +43,7 @@ export function initStream(opts = {}) {
   onPromptPick = opts.onPromptPick || null;
   onNotify = opts.onNotify || null;
   onInspectStep = opts.onInspectStep || null;
+  onRecoveryAction = opts.onRecoveryAction || null;
   onOpenConnect = opts.onOpenConnect || null;
   onPickWorkspace = opts.onPickWorkspace || null;
   onOpenConventions = opts.onOpenConventions || null;
@@ -124,32 +126,32 @@ function renderEmptyHero(inner) {
   const hero = document.createElement('div');
   hero.className = 'empty-hero';
   hero.innerHTML = `
-    <h1>What are we deriving today?</h1>
-    <p>Agents propose, computations and independent verifiers decide — with sandboxed SymPy, arXiv TeX auditing, and a hash-chained Proof DAG.</p>
+    <h1>What are we proving today?</h1>
+    <p>Sandboxed symbolic checks, literature auditing, and independent Proof-DAG verification.</p>
     <div class="quickstart-strip">
       <div class="quickstart-card">
         <div class="quickstart-head">
-          <span>1. Model Provider</span>
+          <span>1. Provider</span>
           <span class="badge ${connCount > 0 ? 'ok' : 'warn'}">${connCount > 0 ? `${connCount} ready` : 'Setup'}</span>
         </div>
-        <div class="quickstart-desc">${connCount > 0 ? 'Provider connected. Choose your model next to Send or configure per-agent models in Settings.' : 'Connect ChatGPT, Claude Code, Anthropic/OpenAI/Gemini API, or local Ollama.'}</div>
-        <div><button type="button" class="pill-btn sm hero-connect-btn ${connCount > 0 ? '' : 'primary'}">${connCount > 0 ? 'Manage Providers' : 'Connect a Model'}</button></div>
+        <div class="quickstart-desc">${connCount > 0 ? 'Ready. Choose your model next to Send or customize per-agent models in Settings.' : 'Connect ChatGPT, Claude Code, Antigravity, API keys, or local Ollama.'}</div>
+        <div><button type="button" class="pill-btn sm hero-connect-btn ${connCount > 0 ? '' : 'primary'}">${connCount > 0 ? 'Providers' : 'Connect Model'}</button></div>
       </div>
       <div class="quickstart-card">
         <div class="quickstart-head">
-          <span>2. Paper Workspace</span>
+          <span>2. Workspace</span>
           <span class="badge ${wsPath ? 'ok' : ''}">${wsPath ? escapeHtml(basenameOfPath(wsPath)) : 'Optional'}</span>
         </div>
-        <div class="quickstart-desc">${wsPath ? `Attached to ${escapeHtml(wsPath)}. Browse .tex/.bib files in the right Canvas.` : 'Attach a local folder to edit .tex manuscripts, audit citations, and save patches.'}</div>
+        <div class="quickstart-desc">${wsPath ? `Linked to ${escapeHtml(basenameOfPath(wsPath))}. Inspect and edit .tex files in Canvas.` : 'Attach a local folder to read, patch, and audit .tex manuscripts.'}</div>
         <div><button type="button" class="pill-btn sm hero-ws-btn">${wsPath ? 'Switch Folder' : 'Attach Folder'}</button></div>
       </div>
       <div class="quickstart-card">
         <div class="quickstart-head">
-          <span>3. Conventions &amp; Rigor</span>
-          <span class="badge ${hasConv ? 'ok' : 'accent'}">${hasConv ? 'Pinned' : 'Verified Loop'}</span>
+          <span>3. Conventions</span>
+          <span class="badge ${hasConv ? 'ok' : 'accent'}">${hasConv ? 'Pinned' : 'Verified'}</span>
         </div>
-        <div class="quickstart-desc">${hasConv ? 'Custom metric/unit conventions active across Orchestrator & Stateless Verifier.' : 'Pin metric signature, natural units, or Fourier conventions so signs stay exact.'}</div>
-        <div><button type="button" class="pill-btn sm hero-conv-btn">${hasConv ? 'Edit Conventions' : 'Pin Conventions'}</button></div>
+        <div class="quickstart-desc">${hasConv ? 'Active across Orchestrator and Verifier.' : 'Lock metric signature, units, and Fourier factors so signs stay consistent.'}</div>
+        <div><button type="button" class="pill-btn sm hero-conv-btn">${hasConv ? 'Edit' : 'Set Conventions'}</button></div>
       </div>
     </div>
     <div class="starter-grid"></div>
@@ -254,7 +256,7 @@ export function appendAssistantMessage(text, thinkingText = '', toolTraces = [],
     row.appendChild(wrap);
   }
 
-  const verdictCard = buildVerificationVerdictCard(msgMeta, onInspectStep);
+  const verdictCard = buildVerificationVerdictCard(msgMeta, onInspectStep, onRecoveryAction);
   if (verdictCard) {
     row.appendChild(verdictCard);
   }
@@ -393,7 +395,7 @@ export function finalizeLiveAssistant(finalText, msgMeta = null) {
     if (text && text.trim()) {
       const body = liveRow.querySelector('.msg-assistant-body');
       if (body) renderRichInto(body, text);
-      const verdictCard = buildVerificationVerdictCard(msgMeta, onInspectStep);
+      const verdictCard = buildVerificationVerdictCard(msgMeta, onInspectStep, onRecoveryAction);
       if (verdictCard) liveRow.appendChild(verdictCard);
       if (msgMeta && msgMeta.honesty && msgMeta.honesty.passed === false && Array.isArray(msgMeta.honesty.findings) && msgMeta.honesty.findings.length > 0) {
         const honestyCard = buildHonestyNoticeCard(msgMeta.honesty);
@@ -499,11 +501,7 @@ export function renderApprovalCard(req) {
           : '<span class="badge warn">ONCE Approval</span>';
 
   const sessionHint = allowSessionApprove
-    ? (effect === 'execute-code'
-        ? 'Tip: Click "Approve for Session" once to run all sandboxed SymPy steps in this chat without asking every time.'
-        : effect === 'write-workspace'
-          ? 'Tip: Click "Approve for Session" once to allow workspace edits in this chat without asking on every patch.'
-          : 'Tip: Click "Approve for Session" once to allow literature lookups in this chat without asking every time.')
+    ? 'Tip: "Approve for Session" allows this capability for the rest of the chat.'
     : '';
 
   const editPreview = req.edit_preview || null;

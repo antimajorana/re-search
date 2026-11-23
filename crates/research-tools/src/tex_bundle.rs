@@ -353,3 +353,81 @@ pub fn filter_tex_sections(tex: &str, filter: &str) -> String {
         tex.to_string()
     }
 }
+
+pub(crate) fn clean_document_title(raw: &str) -> Option<String> {
+    let mut s = raw.replace("\\\\", " ");
+    for mac in ["\\textbf{", "\\emph{", "\\textit{", "\\textrm{", "\\text{", "\\texorpdfstring{"] {
+        s = s.replace(mac, "{");
+    }
+    let cleaned: String = s.chars().filter(|c| !matches!(c, '{' | '}' | '\r')).collect();
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed: String = collapsed.trim().chars().take(240).collect();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn extract_tex_title(raw_tex: &str) -> Option<String> {
+    let stripped = raw_tex.lines().map(strip_latex_comments_line).collect::<Vec<_>>().join("\n");
+    let mut search_from = 0usize;
+    let rest_after = loop {
+        let rel = stripped[search_from..].find("\\title")?;
+        let idx = search_from + rel;
+        let after = &stripped[idx + 6..];
+        let next_ch = after.chars().next();
+        if next_ch.is_some_and(|c| c.is_ascii_whitespace() || matches!(c, '{' | '[')) {
+            break after;
+        }
+        search_from = idx + 6;
+    };
+    let mut rest = rest_after.trim_start();
+    if rest.starts_with('[') {
+        let close = rest.find(']')?;
+        rest = rest[close + 1..].trim_start();
+    }
+    if !rest.starts_with('{') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut inner_end = None;
+    let mut prev_bs = false;
+    for (i, ch) in rest.char_indices() {
+        if prev_bs {
+            prev_bs = false;
+            continue;
+        }
+        if ch == '\\' {
+            prev_bs = true;
+            continue;
+        }
+        if ch == '{' {
+            depth += 1;
+        } else if ch == '}' {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                inner_end = Some(i);
+                break;
+            }
+        }
+    }
+    let end = inner_end?;
+    clean_document_title(&rest[1..end])
+}
+
+pub(crate) fn extract_document_title(materialized: &BTreeMap<String, String>, primary_rel: Option<&str>) -> Option<String> {
+    let candidates = primary_rel
+        .into_iter()
+        .chain(materialized.keys().map(String::as_str));
+    for key in candidates {
+        let Some(text) = materialized.get(key) else { continue };
+        let low = key.to_ascii_lowercase();
+        if low.ends_with(".tex") || low.ends_with(".ltx") {
+            if let Some(t) = extract_tex_title(text) {
+                return Some(t);
+            }
+        } else if low.ends_with(".md") || low.ends_with(".markdown") {
+            if let Some(line) = text.lines().find(|l| l.trim_start().starts_with("# ")) {
+                return clean_document_title(line.trim_start().trim_start_matches("# "));
+            }
+        }
+    }
+    None
+}

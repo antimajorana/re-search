@@ -130,6 +130,18 @@ export function setComposerPrompt(text, focusInput = true) {
   if (focusInput) inputEl.focus();
 }
 
+export function submitComposerPrompt(text) {
+  if (!inputEl || !text) return false;
+  inputEl.value = text;
+  resizeTextarea();
+  if (!turnRunning && formEl) {
+    formEl.requestSubmit();
+    return true;
+  }
+  inputEl.focus();
+  return false;
+}
+
 const CLI_ROUTES = new Set(['claude-cli', 'claude-code-cli', 'antigravity']);
 const canSteer = () => !CLI_ROUTES.has(currentRoute);
 

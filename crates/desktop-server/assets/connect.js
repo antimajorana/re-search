@@ -1,12 +1,5 @@
 // The Connect panel: one row per provider from GET /api/connections, with a green
-// "Connected" badge or a single action (an API key field + Save, or the how-to for the
-// subscription CLI). Keys are sent once with PUT /api/settings/providers and never shown
-// again. Rows with an `action` (Sign in with ChatGPT) get a sign-in button instead: the
-// server returns the sign-in URL, shown with "Open in browser" (the server opens its own
-// pending URL with the system browser) and "Copy link"; tokens never reach the page.
-// Rows with a `warning` (the Antigravity route) show it in full, and until the person
-// clicks the acknowledgement button (after a confirm dialog) the route stays off; the
-// server stores the acknowledgement and refuses the route without it.
+// "Connected" badge or a single action (an API key field + Save, browser sign-in, or CLI setup).
 // Base URLs, auto-approval toggle and pinned conventions sit behind "Advanced".
 // Every server string is set as textContent, never as HTML.
 import * as api from '/assets/api.js';
@@ -136,7 +129,6 @@ function renderRow(c) {
   if (c.status) row.append(make('div', 'connect-status', c.status));
   if (!c.connected && c.how_to) row.append(make('div', 'connect-howto', c.how_to));
 
-  if (c.warning) renderWarning(c, row);
   if (c.action) return renderActionRow(c, row);
   const needsKey = c.accepts_key && c.key_required !== false;
   if (needsKey && !c.connected) row.append(keyForm(c));
@@ -159,57 +151,6 @@ function renderRow(c) {
   }
   if (actions.childElementCount > 0) row.append(actions);
   return row;
-}
-
-// The route's warning, always shown, with the acknowledgement the person gives (or withdraws).
-function renderWarning(c, row) {
-  const box = make('div', 'connect-warning');
-  box.setAttribute('role', 'note');
-  box.append(make('strong', '', c.acknowledged ? 'Acknowledged warning' : 'Read before first use'));
-  box.append(make('p', '', c.warning));
-  const actions = make('div', 'connect-actions');
-  if (!c.acknowledged && c.acknowledge_action) {
-    const btn = make('button', 'pill-btn sm', 'I understand the risk: enable this route');
-    btn.type = 'button';
-    btn.addEventListener('click', () => acknowledge(c, btn));
-    actions.append(btn);
-  } else if (c.acknowledged && c.withdraw_action) {
-    const btn = make('button', 'pill-btn sm', 'Withdraw acknowledgement');
-    btn.type = 'button';
-    btn.addEventListener('click', () => withdraw(c));
-    actions.append(btn);
-  }
-  if (actions.childElementCount > 0) box.append(actions);
-  row.append(box);
-}
-
-async function acknowledge(c, btn) {
-  if (!window.confirm(`${c.label || c.id}\n\n${c.warning}\n\nEnable this route?`)) return;
-  btn.disabled = true;
-  try {
-    await api.connectionAction(c.id, c.acknowledge_action);
-    const blocked = typeof c.status === 'string' && c.status.startsWith('Blocked:');
-    notify(
-      c.found && !blocked
-        ? `${c.label || c.id}: enabled. It stays vendor-sandboxed, not confined to re:Search tools.`
-        : `${c.label || c.id}: acknowledgement recorded.`
-    );
-  } catch (err) {
-    notify(`Could not save the acknowledgement: ${err.message}`);
-  }
-  await refreshConnections(true);
-  changed();
-}
-
-async function withdraw(c) {
-  try {
-    await api.connectionAction(c.id, c.withdraw_action);
-    notify(`${c.label || c.id}: acknowledgement withdrawn; the route is off.`);
-  } catch (err) {
-    notify(`Could not withdraw: ${err.message}`);
-  }
-  await refreshConnections(false);
-  changed();
 }
 
 // A provider connected by signing in (data-driven: `action` is "signin" or "signout").

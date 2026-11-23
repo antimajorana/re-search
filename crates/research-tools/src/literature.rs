@@ -146,6 +146,7 @@ fn record_fetch(
                 "raw_blob": blob_hash,
                 "hits": hits.iter().map(|h| json!({
                     "id": h.id,
+                    "title": h.title,
                     "doi": h.doi,
                     "arxiv_id": h.arxiv_id,
                     "retracted": h.retracted,

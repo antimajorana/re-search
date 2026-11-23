@@ -339,7 +339,34 @@ export function buildStructuredTraceCard(tr, opts = {}) {
   return box;
 }
 
-export function buildVerificationVerdictCard(msgPayload, onInspectStep) {
+export function buildRecoveryPrompt(action, ctx = {}) {
+  const target = ctx.targetId ? ` (${ctx.targetId})` : '';
+  const summary = String(ctx.summary || '').trim();
+  const topIssues = (Array.isArray(ctx.issues) ? ctx.issues : [])
+    .slice(0, 3)
+    .map((iss) => String(iss.description || iss.message || ''))
+    .filter(Boolean)
+    .join('; ');
+  if (action === 'alternative') {
+    return (
+      `Verification did not accept the draft${target}${summary ? ` (${summary})` : ''}. ` +
+      `Propose and pursue an alternative proof strategy (compare candidate approaches if helpful). ` +
+      `If the exact claim cannot hold as stated, state clearly what is provable under modified assumptions or give an explicit counterexample.`
+    );
+  }
+  if (action === 'fix') {
+    return (
+      `Revise the draft${target} to resolve every flagged Verifier issue` +
+      `${topIssues ? `: ${topIssues}` : ''}. Preserve sound earlier steps, supersede any flawed Proof-DAG entries, and run verification again.`
+    );
+  }
+  return (
+    `Explain why verification rejected ${ctx.targetId || 'the draft'}` +
+    `${summary ? ` (${summary})` : ''}, which parts are already sound, and what alternative approaches or modified hypotheses would succeed.`
+  );
+}
+
+export function buildVerificationVerdictCard(msgPayload, onInspectStep, onRecoveryAction) {
   if (!msgPayload) return null;
   const verifications = Array.isArray(msgPayload.verifications) ? msgPayload.verifications : [];
   const status = msgPayload.verified_status || '';
@@ -351,6 +378,7 @@ export function buildVerificationVerdictCard(msgPayload, onInspectStep) {
   const targetId = String(msgPayload.verified_entry_id || (latest && latest.target_entry_id) || '');
   const summary = String((latest && latest.summary) || (isVerified ? 'All active Proof-DAG steps passed stateless verification.' : 'Independent Verifier reported unresolved issues.'));
   const issues = Array.isArray(latest && latest.issues) ? latest.issues : [];
+  const recovery = typeof msgPayload.recovery === 'string' ? msgPayload.recovery.trim() : '';
 
   const card = document.createElement('div');
   card.className = `verdict-card ${isVerified ? 'is-verified' : 'is-unverified'}`;
@@ -360,14 +388,24 @@ export function buildVerificationVerdictCard(msgPayload, onInspectStep) {
     ? `<button type="button" class="pill-btn sm verdict-step-btn">Inspect ${escapeHtml(targetId)} in DAG ↗</button>`
     : '';
   const issuesHtml = (!isVerified && issues.length > 0)
-    ? `<details class="verdict-issues"><summary>View ${issues.length} flagged issue${issues.length === 1 ? '' : 's'}</summary><ul>${
+    ? `<details class="verdict-issues" open><summary>${issues.length} flagged issue${issues.length === 1 ? '' : 's'}</summary><ul>${
       issues.map((iss) => {
         const sev = escapeHtml(String(iss.severity || 'issue'));
         const loc = iss.entry_id ? `<code>${escapeHtml(String(iss.entry_id))}</code> ` : '';
         const desc = escapeHtml(String(iss.description || iss.message || JSON.stringify(iss)));
-        return `<li><span class="badge warn">${sev}</span> ${loc}${desc}</li>`;
+        return `<li><span class="badge warn">${sev}</span> ${loc}<span class="verdict-issue-desc">${desc}</span></li>`;
       }).join('')
     }</ul></details>`
+    : '';
+  const recoveryHtml = !isVerified
+    ? `<div class="verdict-recovery">
+        ${recovery ? `<div class="verdict-recovery-body rich-prose">${escapeHtml(recovery)}</div>` : ''}
+        <div class="verdict-actions">
+          <button type="button" class="pill-btn sm primary verdict-recover-btn" data-recovery="alternative">Try Another Approach</button>
+          <button type="button" class="pill-btn sm verdict-recover-btn" data-recovery="fix">Fix Flagged Issues</button>
+          <button type="button" class="pill-btn sm verdict-recover-btn" data-recovery="explain">Discuss in Explain</button>
+        </div>
+      </div>`
     : '';
 
   card.innerHTML = `
@@ -378,9 +416,31 @@ export function buildVerificationVerdictCard(msgPayload, onInspectStep) {
       </div>
       ${stepJumpHtml}
     </div>
-    <div class="verdict-summary">${escapeHtml(summary)}</div>
+    <div class="verdict-summary rich-prose">${escapeHtml(summary)}</div>
     ${issuesHtml}
+    ${recoveryHtml}
   `;
+
+  const sumEl = card.querySelector('.verdict-summary');
+  if (sumEl) renderRichInto(sumEl, summary);
+  if (recovery) {
+    const recEl = card.querySelector('.verdict-recovery-body');
+    if (recEl) renderRichInto(recEl, recovery);
+  }
+  if (!isVerified && typeof card.querySelectorAll === 'function') {
+    const issueEls = card.querySelectorAll('.verdict-issue-desc');
+    issueEls.forEach((el, idx) => {
+      const iss = issues[idx];
+      if (iss) renderRichInto(el, String(iss.description || iss.message || ''));
+    });
+    if (typeof onRecoveryAction === 'function') {
+      for (const actBtn of card.querySelectorAll('.verdict-recover-btn')) {
+        actBtn.addEventListener('click', () => {
+          onRecoveryAction(actBtn.dataset.recovery || 'alternative', { targetId, summary, issues });
+        });
+      }
+    }
+  }
 
   const btn = card.querySelector('.verdict-step-btn');
   if (btn && targetId && typeof onInspectStep === 'function') {
