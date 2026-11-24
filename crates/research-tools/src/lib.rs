@@ -231,6 +231,7 @@ pub fn all_research_tool_defs() -> Vec<ToolDef> {
         formal_library::search_formal_library_def(),
         paper_passages::def(),
         investigation::def(),
+        investigation::summary_def(),
         proof_dag::ledger_append_def(),
         proof_dag::ledger_supersede_def(),
         proof_dag::ledger_query_def(),

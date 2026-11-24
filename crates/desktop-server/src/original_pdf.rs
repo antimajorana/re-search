@@ -16,8 +16,10 @@ pub(crate) fn read(
         return Err(not_found("Session not found."));
     }
     let ledger = state.open_ledger().map_err(internal)?;
-    let (_, events) = ledger.read_verified_session(session)
-        .map_err(|_| bad("The source record could not be verified."))?;
+    let (_, events) = ledger.read_verified_session(session).map_err(|err| match err {
+        ledger::Error::UnknownSession(_) => not_found("This session has no saved paper."),
+        _ => bad("The source record could not be verified."),
+    })?;
     let receipt = events.iter().rev()
         .find(|e| e.kind == "source.ingested" && e.payload["source_id"].as_str() == Some(source))
         .map(|e| &e.payload)

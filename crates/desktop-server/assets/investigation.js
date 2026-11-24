@@ -5,6 +5,7 @@ import { createPaperMap } from '/assets/investigation_map.js';
 import { openOriginalPdf } from '/assets/pdf_preview.js';
 
 let callbacks, paperMap, sessionId, session, view, readRevision = 0, submitting = false;
+let summaryTimer = null;
 const byId = id => document.getElementById(id);
 const setupDrafts = new Map();
 
@@ -52,7 +53,9 @@ function syncPdfButton() {
   const pdf = primaryPdf();
   const file = byId('investigation-file').files[0];
   byId('investigation-original').hidden = !pdf || Boolean(file);
-  byId('investigation-pages').hidden = !(file ? /\.pdf$/i.test(file.name) : pdf);
+  const pages = byId('investigation-pages');
+  pages.hidden = !(file ? /\.pdf$/i.test(file.name) : pdf);
+  pages.disabled = pages.hidden;
 }
 
 function selectView(next) {
@@ -130,14 +133,23 @@ function renderOrigin(origin) {
   const open = document.createElement('button');
   open.type = 'button';
   open.className = 'pill-btn sm';
-  open.textContent = 'Open original investigation';
-  open.addEventListener('click', () => callbacks.open(origin.parent_session));
+  open.textContent = origin.node_id ? 'Open original claim' : 'Open original investigation';
+  open.addEventListener('click', async () => {
+    await callbacks.open(origin.parent_session);
+    if (sessionId !== origin.parent_session || !origin.node_id) return;
+    selectView('map');
+    if (!paperMap.openNode(origin.map_seq, origin.node_id)) {
+      showStatus('The linked claim belongs to an earlier map revision. The original claim and sources are preserved in the linked Research session.');
+    }
+  });
   details.append(open);
   el.append(details);
 }
 
 export function showInvestigationSession(id, data) {
   if (!paperMap) return;
+  clearTimeout(summaryTimer);
+  summaryTimer = null;
   readRevision++;
   if (sessionId !== id) {
     if (sessionId && session?.mode === 'investigation') {
@@ -162,6 +174,8 @@ export function showInvestigationSession(id, data) {
   renderOrigin(data?.investigation?.origin);
   if (data?.mode !== 'investigation') return;
   const inv = data.investigation || {};
+  paperMap.updateSummary(inv.summary, Boolean(data.running), Boolean(inv.source_id || inv.map));
+  scheduleSummaryRefresh();
   const select = byId('investigation-existing');
   const previous = select.value || setupDrafts.get(id)?.source || inv.source_id;
   select.replaceChildren(new Option('Select a paper…', ''));
@@ -172,15 +186,12 @@ export function showInvestigationSession(id, data) {
   byId('investigation-existing-wrap').hidden = select.options.length < 2;
   syncPdfButton();
   if (inv.source_id) {
-    byId('investigation-file').disabled = true;
-    select.disabled = true;
     byId('investigation-page-start').value = inv.page_start || '';
     byId('investigation-page-end').value = inv.page_end || '';
-  } else {
-    byId('investigation-file').disabled = false;
-    select.disabled = false;
   }
-  byId('investigation-page-start').disabled = byId('investigation-page-end').disabled = Boolean(inv.source_id);
+  const pinned = Boolean(inv.source_id) || submitting;
+  for (const id of ['investigation-page-start','investigation-page-end','investigation-existing','investigation-file']) byId(id).disabled = pinned;
+  byId('investigation-question').disabled = submitting;
   const setup = byId('investigation-setup');
   setup.hidden = Boolean(inv.map) || Boolean(data.running);
   setup.querySelector('button').disabled = submitting;
@@ -188,6 +199,16 @@ export function showInvestigationSession(id, data) {
   else if (!submitting) showStatus(!inv.map && inv.source_id ? 'A paper map is not yet available. You can try building it again or read the conversation.' : '');
   if (!byId('investigation-question').value && inv.question) byId('investigation-question').value = inv.question;
   paperMap.update(inv, Boolean(data.running), data.events || []);
+}
+
+function scheduleSummaryRefresh() {
+  if (summaryTimer || session?.mode !== 'investigation' || !session.running || session.investigation?.summary) return;
+  const id = sessionId;
+  summaryTimer = setTimeout(async () => {
+    summaryTimer = null;
+    await refreshInvestigation(id);
+    if (sessionId === id) scheduleSummaryRefresh();
+  }, 4000);
 }
 
 export async function refreshInvestigation(id) {
@@ -206,7 +227,7 @@ async function buildMap(event) {
   if (submitting || session?.running) return;
   const id = sessionId;
   const file = byId('investigation-file').files[0];
-  let sourceId = byId('investigation-existing').value;
+  let sourceId = byId('investigation-existing').value || session?.investigation?.source_id;
   if (!file && !sourceId) { showStatus('Choose a primary paper.'); return; }
   if (file && file.size > 10 * 1024 * 1024) { showStatus('This paper exceeds 10 MiB. Choose a smaller file.'); return; }
   const pageRange = {};
@@ -222,10 +243,11 @@ async function buildMap(event) {
   }
   const readingQuestion = byId('investigation-question').value.trim();
   const button = event.currentTarget.querySelector('button');
+  const controls = [...event.currentTarget.querySelectorAll('input, textarea, select')];
   submitting = true;
   button.disabled = true;
+  for (const control of controls) control.disabled = true;
   try {
-    const options = callbacks.requestOptions();
     if (file) {
       showStatus('Adding paper to this session…');
       const content = arrayBufferToBase64(await file.arrayBuffer());
@@ -246,6 +268,7 @@ async function buildMap(event) {
     if (session.sources?.some(item => item.source_id === sourceId && item.status === 'empty_text_layer')) {
       throw new Error('This PDF has no readable text layer. Open the original PDF, or choose a searchable PDF or TeX source to build a map.');
     }
+    const options = callbacks.requestOptions();
     await callbacks.send(id, readingQuestion || 'Map the main results and reasoning in this paper.', {
       ...options, ...pageRange, investigation_source_id: sourceId,
     });
@@ -256,6 +279,7 @@ async function buildMap(event) {
     if (sessionId === id) {
       submitting = false;
       button.disabled = false;
+      for (const control of controls) control.disabled = control.id !== 'investigation-question' && Boolean(session?.investigation?.source_id);
     }
   }
 }
@@ -271,7 +295,8 @@ async function handleClaimAction(action, target, text, edgeFrom) {
   if (action === 'correction') {
     await api.correctInvestigation(id, { ...target, text, ...(edgeFrom ? { edge_from: edgeFrom } : {}) });
   } else {
-    await api.checkInvestigation(id, { ...callbacks.requestOptions(), ...target, action, ...(text ? { prompt: text } : {}) });
+    await api.checkInvestigation(id, { ...callbacks.requestOptions(), ...target, action,
+      ...(edgeFrom ? { edge_from: edgeFrom } : {}), ...(text ? { prompt: text } : {}) });
   }
   if (id === sessionId) await refreshInvestigation(id);
 }

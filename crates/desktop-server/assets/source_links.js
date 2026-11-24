@@ -260,7 +260,7 @@ export function sessionSourcesUsed(session, claimText) {
     const titleMatch = !keys.length && titleKey && byKey.get(titleKey);
     const existing = keys.map(key => byKey.get(key)).find(Boolean)
       || (titleMatch && (!sourceId || !titleMatch.source || titleMatch.source.source_id === sourceId) && titleMatch);
-    const record = existing || { paper, cited: false, steps: new Set(), readers: new Map() };
+    const record = existing || { paper, cited: false, steps: new Set(), readers: new Map(), paperClaims: new Set() };
     for (const key of keys) {
       byKey.set(key, record);
       if (key.startsWith('arxiv:')) {
@@ -317,10 +317,25 @@ export function sessionSourcesUsed(session, claimText) {
   }
   for (const answer of finalAnswerTexts(events)) useText(answer);
 
+  // Count only the papers supporting claims in the selected map revision or its Research handoff.
+  const paperEvent = events.findLast(event => event.kind === 'investigation.map' || event.kind === 'investigation.handoff');
+  const mapNodes = paperEvent?.kind === 'investigation.map' ? paperEvent.payload.nodes
+    : paperEvent?.payload?.dependencies;
+  for (const node of mapNodes || []) {
+    for (const anchor of node.anchors || []) {
+      const record = bySourceId.get(anchor.source_id);
+      if (record) record.paperClaims.add(node.id);
+    }
+  }
+  for (const edge of paperEvent?.payload?.edges || []) {
+    const record = bySourceId.get(edge.anchor?.source_id);
+    if (record) record.paperClaims.add(edge.to);
+  }
+
   for (const payload of sourceSteps.values()) {
     useText([payload.summary, payload.details, payload.latex].filter(Boolean).join('\n'), payload.entry_id);
   }
-  return [...known].filter(record => record.cited || record.steps.size);
+  return [...known].filter(record => record.cited || record.steps.size || record.paperClaims.size);
 }
 
 export function linksForIngestedSource(src) {
@@ -335,7 +350,7 @@ export function linksForIngestedSource(src) {
   };
 
   const rawDirect = safeSourceUrl(src.url);
-  const arxivId = versionedArxivId(src.origin, src.source_id, src.primary_path, rawDirect);
+  const arxivId = versionedArxivId(src.arxiv_cover_id, src.origin, src.source_id, src.primary_path, rawDirect);
   if (rawDirect && !dropsArxivVersion(rawDirect, arxivId)) {
     pushLink('Open Original', rawDirect, 'primary');
   }
@@ -376,7 +391,7 @@ export function resolveOriginInfo(src) {
   if (!src || typeof src !== 'object') return { text: '', url: null };
   const rawOrigin = String(src.origin || '').trim();
   const arxivId = extractArxivId(rawOrigin)
-    && versionedArxivId(rawOrigin, src.source_id, src.primary_path, src.url);
+    && versionedArxivId(src.arxiv_cover_id, rawOrigin, src.source_id, src.primary_path, src.url);
   if (arxivId) {
     const absUrl = `https://arxiv.org/abs/${arxivId}`;
     return { text: absUrl, url: absUrl };

@@ -148,6 +148,43 @@ fn gzip_bytes(raw: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+fn paper_maps_use_extracted_archive_pdfs_and_original_tex_files() {
+    use research_tools::{ingest_bytes, investigation::record, IngestRequest};
+    let tmp = TempDir::new().unwrap();
+    let env = ResearchEnv::new(tmp.path());
+    let db = std::sync::Mutex::new(Ledger::open(tmp.path()).unwrap());
+    for (name, bytes, session, filter) in [
+        ("archive.zip", build_zip(&[("paper.pdf", &build_minimal_pdf(1, Some("A precise scaling law.")), None)]), "s-pdf-map", None),
+        ("paper.tex", b"\\section{Results}\nA precise scaling law.\n".to_vec(), "s-tex-map", Some("Results")),
+    ] {
+        let paper = ingest_bytes(&env.sandbox(), &db, &IngestRequest {
+            session_id: session, file_name: name, origin: "test", raw_bytes: &bytes,
+            source_id_hint: None, section_filter: filter, title: None
+        }).unwrap();
+        let ledger = db.lock().unwrap();
+        for (kind, value) in [("investigation.started",json!({})),("investigation.paper",json!({"source_id":paper.source_id})),
+                              ("investigation.mapping_requested", json!({"source_id":paper.source_id}))] {
+            ledger.append(session,kind,1,&value).unwrap();
+        }
+        let path=paper.primary_path.as_deref().unwrap();
+        let file=env.sandbox().resolve_existing(research_tools::SandboxRoot::Sources,session,path,false).unwrap();
+        let text=fs::read_to_string(file.canonical_target).unwrap();
+        let line=text.lines().position(|s|s.contains("A precise scaling law.")).unwrap()+1;
+        let anchor=json!({"kind":"passage","source_id":paper.source_id,"path":path,"start_line":line,"end_line":line,"excerpt":"A precise scaling law."});
+        let mut map=json!({"title":"Scaling","source_id":paper.source_id,"coverage":"paper","limitations":[],
+            "nodes":[{"id":"result","kind":"result","main":true,"sentence":"The paper reports a scaling law.","anchors":[anchor]}],"edges":[]});
+        if let Some(assembled)=paper.assembled_path {
+            map["nodes"][0]["anchors"][0]["path"]=json!(assembled);
+            assert!(record(&env,&ledger,session,&map).unwrap_err().contains("original source file"));
+            map["nodes"][0]["anchors"][0]["path"]=json!(path);
+        } else {
+            assert_eq!(paper.status,"pdf_only");
+        }
+        assert_eq!(record(&env,&ledger,session,&map).unwrap()["status"],"recorded");
+    }
+}
+
+#[test]
 fn f4_pdf_valid_scanned_caps_and_malformed_safety() {
     // 1. Valid PDF text extraction.
     let valid_pdf = build_minimal_pdf(1, Some("Eigenvalue bound lambda_1 > 0"));

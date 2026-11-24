@@ -199,12 +199,19 @@ fn check_tool_defs_drift(session: &str, payload: &Value, expected_defs: &[ToolDe
         // Existing research sessions can gain the discovery tools and paper-map recorder.
         // The recorder requires a matching Investigation paper in the verified session history.
         // Every recorded tool still has to match its original definition and order.
-        if !same_id && matches!(exp.id.as_str(), "search_formal_library" | "search_paper_passages" | "record_paper_map")
+        if !same_id && matches!(exp.id.as_str(), "search_formal_library" | "search_paper_passages" | "record_paper_map" | "record_paper_summary")
             && exp.effect == policy::EffectClass::ReadWorkspace
         {
             continue;
         }
-        if !same_id || prior.next().and_then(|rec| rec["def_hash"].as_str()) != Some(exp.def_hash().as_str()) {
+        let hash = prior.next().and_then(|rec| rec["def_hash"].as_str());
+        let compatible = same_id && (hash == Some(exp.def_hash().as_str()) || {
+            // Early Investigation sessions recorded this exact schema before the optional answer index.
+            let mut earlier = exp.clone();
+            earlier.id == "record_paper_map" && earlier.input_schema["properties"].as_object_mut()
+                .is_some_and(|p| p.remove("answer_node_ids").is_some()) && hash == Some(earlier.def_hash().as_str())
+        });
+        if !compatible {
             return Err(reject(ResumeRejectKind::Drift, format!("cannot resume session `{session}`: tool definition drift for `{}`", exp.id)));
         }
     }
@@ -212,6 +219,18 @@ fn check_tool_defs_drift(session: &str, payload: &Value, expected_defs: &[ToolDe
         return Err(reject(ResumeRejectKind::Drift, format!("cannot resume session `{session}`: tools were removed or reordered")));
     }
     Ok(())
+}
+
+#[test]
+fn earlier_map_tool_can_gain_only_its_optional_answer_index() {
+    let current = research_tools::investigation::def();
+    let mut earlier = current.clone();
+    earlier.input_schema["properties"].as_object_mut().unwrap().remove("answer_node_ids");
+    let recorded = json!({"tool_defs":[{"id":earlier.id,"def_hash":earlier.def_hash()}]});
+    assert!(check_tool_defs_drift("s-map",&recorded,std::slice::from_ref(&current)).is_ok());
+    let mut changed=current;
+    changed.input_schema["properties"]["nodes"]["type"] = json!("string");
+    assert!(check_tool_defs_drift("s-map",&recorded,&[changed]).is_err());
 }
 
 pub fn inspect_session_for_resume(

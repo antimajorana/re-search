@@ -79,7 +79,8 @@ fn map_is_grounded_and_scoped_to_the_selected_paper_and_session_mode() {
     let db = Mutex::new(Ledger::open(tmp.path()).unwrap());
     let paper = upload(&env, &db, "Scaling.txt", PAPER);
     let other = upload(&env, &db, "Earlier.txt", "An earlier measurement.");
-    let map = shape(&paper, &other);
+    let mut map = shape(&paper, &other);
+    map["answer_node_ids"] = json!(["p", "result"]);
     let ledger = db.lock().unwrap();
     assert!(record(&env, &ledger, SID, &map).is_err());
     ledger
@@ -115,6 +116,7 @@ fn map_is_grounded_and_scoped_to_the_selected_paper_and_session_mode() {
     let saved = &maps[0].payload;
     assert_eq!(saved["request_seq"], request);
     assert_eq!(saved["coverage_basis"], "model_reported");
+    assert_eq!(saved["answer_node_ids"], json!(["p", "result"]));
     assert_eq!(saved["anchors_verified"], true);
     let proof = &saved["nodes"][0]["anchors"][0];
     assert_eq!(proof["source_seq"], paper.event_seq);
@@ -154,6 +156,8 @@ fn map_is_grounded_and_scoped_to_the_selected_paper_and_session_mode() {
         assert!(record(&env, &ledger, SID, &invalid).is_err(), "{invalid}");
     };
     bad(|m| m["source_id"] = json!("another-paper"));
+    bad(|m| m["answer_node_ids"] = json!(["a", "a"]));
+    bad(|m| m["answer_node_ids"] = json!(["unknown"]));
     bad(|m| m["nodes"][0]["anchors"][0]["excerpt"] = json!("an invented quote"));
     bad(|m| m["nodes"][0]["anchors"][0]["start_line"] = json!(1));
     bad(|m| m["nodes"][0]["anchors"][0]["end_line"] = json!(345));
@@ -162,6 +166,11 @@ fn map_is_grounded_and_scoped_to_the_selected_paper_and_session_mode() {
     bad(|m| m["nodes"][0]["anchors"] = json!([]));
     bad(|m| m["nodes"][1]["id"] = json!("a"));
     bad(|m| m["edges"][0]["from"] = json!("missing"));
+    bad(|m| {
+        let mut duplicate = m["edges"][0].clone();
+        duplicate["kind"] = json!("supports");
+        m["edges"].as_array_mut().unwrap().push(duplicate);
+    });
     bad(|m| m["edges"][2]["kind"] = json!("supports"));
     bad(|m| m["limitations"] = json!([]));
     bad(|m| {
@@ -276,6 +285,23 @@ fn selected_pdf_pages_apply_to_every_primary_anchor_and_allow_a_linked_reference
         .unwrap();
     let valid = shape(&paper, &external);
     let outside = anchor(&paper, 1, "A test of scaling", "passage");
+    let mut summary = json!({"source_id":paper.source_id,"what":{"text":"The paper reports a scaling result.","anchors":[outside.clone()]},
+        "why":{"unstated":true},"how":{"unstated":true}});
+    assert!(
+        research_tools::investigation::record_summary(&env, &ledger, SID, &summary)
+            .unwrap_err()
+            .contains("within selected PDF pages")
+    );
+    summary["what"]["anchors"] = valid["nodes"][3]["anchors"].clone();
+    let summary_receipt =
+        research_tools::investigation::record_summary(&env, &ledger, SID, &summary).unwrap();
+    let saved_summary = ledger.read_session(SID).unwrap().pop().unwrap();
+    assert_eq!(
+        saved_summary.seq,
+        summary_receipt["summary_seq"].as_u64().unwrap()
+    );
+    assert_eq!(saved_summary.payload["page_start"], 2);
+    assert_eq!(saved_summary.payload["page_end"], 2);
     let mut wrong = valid.clone();
     wrong["nodes"][0]["anchors"][0] = outside.clone();
     assert!(record(&env, &ledger, SID, &wrong)
@@ -296,4 +322,94 @@ fn selected_pdf_pages_apply_to_every_primary_anchor_and_allow_a_linked_reference
     assert_eq!(saved.seq, result["map_seq"].as_u64().unwrap());
     assert_eq!(saved.payload["page_start"], 2);
     assert_eq!(saved.payload["page_end"], 2);
+}
+
+#[test]
+fn paper_overview_is_source_grounded_and_available_before_the_detailed_map() {
+    use research_tools::investigation::record_summary;
+    let tmp = tempfile::tempdir().unwrap();
+    let env = ResearchEnv::new(tmp.path());
+    let db = Mutex::new(Ledger::open(tmp.path()).unwrap());
+    let paper = upload(&env, &db, "paper.txt", PAPER);
+    let other = upload(&env, &db, "ref.txt", "An earlier measurement.");
+    let ledger = db.lock().unwrap();
+    let map = shape(&paper, &other);
+    let overview = json!({"source_id":paper.source_id,"what":{"text":"The authors study a scaling result.","anchors":[map["nodes"][3]["anchors"][0]]},
+        "why":{"unstated":true},"how":{"text":"They measure the period.","anchors":[map["nodes"][2]["anchors"][0]]}});
+    for (kind, payload) in [
+        ("investigation.started", json!({})),
+        ("investigation.paper", json!({"source_id":paper.source_id})),
+        (
+            "investigation.mapping_requested",
+            json!({"source_id":paper.source_id,"summary_requested":true}),
+        ),
+    ] {
+        ledger.append(SID, kind, 1, &payload).unwrap();
+    }
+    assert!(record(&env, &ledger, SID, &map)
+        .unwrap_err()
+        .contains("record_paper_summary"));
+    for bad_part in [
+        json!({"unstated":true}),
+        json!({"text":"no grounding","anchors":[]}),
+        json!({"text":"wrong source","anchors":[map["nodes"][4]["anchors"][1]]}),
+        json!({"unstated":true,"text":"ambiguous"}),
+    ] {
+        let mut bad = overview.clone();
+        bad["what"] = bad_part;
+        assert!(record_summary(&env, &ledger, SID, &bad).is_err());
+    }
+    let mut bad = overview.clone();
+    bad["how"]["anchors"][0]["excerpt"] = json!("fabricated methods");
+    assert!(record_summary(&env, &ledger, SID, &bad)
+        .unwrap_err()
+        .contains("does not match"));
+    let receipt = record_summary(&env, &ledger, SID, &overview).unwrap();
+    assert_eq!(
+        receipt["summary_seq"],
+        record_summary(&env, &ledger, SID, &overview).unwrap()["summary_seq"]
+    );
+    let saved = Ledger::open(tmp.path())
+        .unwrap()
+        .read_verified_session(SID)
+        .unwrap()
+        .1
+        .pop()
+        .unwrap();
+    assert_eq!(saved.kind, "investigation.summary");
+    assert_eq!(saved.seq, receipt["summary_seq"].as_u64().unwrap());
+    assert_eq!(saved.payload["why"], json!({"unstated":true}));
+    assert_eq!(
+        saved.payload["what"]["anchors"][0]["file_sha256"],
+        ledger::sha256_hex(PAPER.as_bytes())
+    );
+    let graph = record(&env, &ledger, SID, &map).unwrap();
+    assert!(graph["map_seq"].as_u64().unwrap() > saved.seq);
+    bad = overview.clone();
+    bad["what"]["text"] = json!("Changed overview");
+    assert!(record_summary(&env, &ledger, SID, &bad)
+        .unwrap_err()
+        .contains("already saved"));
+    ledger
+        .append(
+            SID,
+            "investigation.mapping_finished",
+            1,
+            &json!({"request_seq":receipt["request_seq"],"status":"mapped"}),
+        )
+        .unwrap();
+    assert!(record_summary(&env, &ledger, SID, &overview).is_err());
+    ledger
+        .append(
+            SID,
+            "investigation.mapping_requested",
+            1,
+            &json!({"source_id":paper.source_id,"summary_requested":true}),
+        )
+        .unwrap();
+    assert!(record(&env, &ledger, SID, &map)
+        .unwrap_err()
+        .contains("record_paper_summary"));
+    let retry = record_summary(&env, &ledger, SID, &overview).unwrap();
+    assert_ne!(retry["summary_seq"], receipt["summary_seq"]);
 }

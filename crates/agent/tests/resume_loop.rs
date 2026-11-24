@@ -492,6 +492,7 @@ fn fail_closed_rejections_write_zero_new_ledger_events() {
             research_tools::formal_library::search_formal_library_def(),
             research_tools::paper_passages::def(),
             research_tools::investigation::def(),
+            research_tools::investigation::summary_def(),
         ]);
         extended.sort_by(|a, b| a.id.cmp(&b.id));
         assert!(inspect_session_for_resume(&ledger, session, builtin::POLICY_VERSION, &extended).is_ok());

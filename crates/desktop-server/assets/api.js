@@ -255,10 +255,15 @@ export function getWorkspace(id, relPath) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/workspace${qs}`);
 }
 
-export function readSourceFile(id, relPath) {
+export function readSourceFile(id, relPath, anchor) {
+  const query = new URLSearchParams({root: 'sources', path: relPath});
+  if (Number.isSafeInteger(anchor?.start_line)) {
+    query.set('start_line', anchor.start_line);
+    query.set('end_line', anchor.end_line ?? anchor.start_line);
+  }
   return rawJson(
     'GET',
-    `/api/sessions/${encodeURIComponent(id)}/workspace/file?root=sources&path=${encodeURIComponent(relPath)}`
+    `/api/sessions/${encodeURIComponent(id)}/workspace/file?${query}`
   );
 }
 

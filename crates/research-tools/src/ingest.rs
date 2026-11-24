@@ -175,6 +175,17 @@ struct PreparedIngestion {
     excerpt: String,
 }
 
+/// The arXiv identifier printed with a subject class on the PDF cover can differ from its filename.
+fn arxiv_cover_stamp(prepared: &PreparedIngestion) -> Option<String> {
+    let (_, first, last) = prepared.page_lines.iter().find(|(page, _, _)| *page == 1)?;
+    let file = prepared.materialized.get(prepared.primary_rel.as_ref()?)?;
+    let cover = file.lines().skip(first.saturating_sub(1)).take(last.saturating_sub(*first) + 1)
+        .collect::<Vec<_>>().join(" ");
+    static STAMP: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let pattern = STAMP.get_or_init(|| regex::Regex::new(r"(?i)\barxiv\s*:\s*([0-9]{4}\.[0-9]{4,5}v[0-9]+)\s*\[[a-z][a-z0-9.\-]+\]").unwrap());
+    pattern.captures(&cover).and_then(|m| m.get(1)).map(|m|m.as_str().to_ascii_lowercase())
+}
+
 /// Validates and extracts `req.raw_bytes`, materializes clean UTF-8 files under
 /// `sessions/<session_id>/sources/<source_id>/`, and records `put_blob` + `"source.ingested"`
 /// atomically under `ledger` lock so failed inputs leave zero unreferenced blobs.
@@ -216,6 +227,7 @@ pub fn ingest_bytes(
     }
 
     let primary_path = prepared.primary_rel.as_ref().map(|p| format!("{source_id}/{p}"));
+    let arxiv_id = arxiv_cover_stamp(&prepared);
     let assembled_path = prepared.assembled_rel.map(|p| format!("{source_id}/{p}"));
     let title = req
         .title
@@ -246,6 +258,7 @@ pub fn ingest_bytes(
                     "files_sha256": files_sha256,
                     "page_count": prepared.page_count,
                     "pdf_page_lines": prepared.page_lines,
+                    "arxiv_cover_id": arxiv_id,
                 }),
             )
             .map_err(|e| format!("source.ingested append failed: {e}"))?;

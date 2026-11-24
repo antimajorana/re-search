@@ -252,6 +252,7 @@
           </form>
           <button id="investigation-original" type="button" class="pill-btn sm" hidden>Open original PDF</button>
           <div id="investigation-status" role="status" hidden></div>
+          <section id="investigation-summary" aria-labelledby="investigation-summary-title" hidden></section>
           <div id="investigation-map"></div>
         </div>
       </section>
@@ -441,14 +442,20 @@
                 <button id="fork-confirm-btn" type="button" class="pill-btn sm primary">Create fork</button>
               </div>
             </div>
-            <div class="dag-viewport-wrap">
+            <div id="dag-views" class="dag-views" role="group" aria-label="Proof view" hidden>
+              <button id="dag-view-graph" class="pill-btn sm" type="button" aria-pressed="true" aria-controls="dag-map">Graph</button>
+              <button id="dag-view-list" class="pill-btn sm" type="button" aria-pressed="false" aria-controls="dag-reading-list">Steps in order</button>
+            </div>
+            <p id="dag-direction" class="dag-direction" hidden>Arrows point from a prerequisite to the step it supports.</p>
+            <ol id="dag-reading-list" class="dag-reading-list" aria-label="Proof steps in dependency order" hidden></ol>
+            <div class="dag-viewport-wrap" id="dag-map">
               <div class="dag-zoom-controls" role="toolbar" aria-label="Proof DAG zoom controls">
                 <button id="dag-zoom-out" type="button" class="dag-zoom-btn" title="Zoom out (−)" aria-label="Zoom out">−</button>
                 <button id="dag-zoom-reset" type="button" class="dag-zoom-btn dag-zoom-reset" title="Reset zoom to 100%" aria-label="Reset zoom to 100%">100%</button>
                 <button id="dag-zoom-in" type="button" class="dag-zoom-btn" title="Zoom in (+)" aria-label="Zoom in">+</button>
                 <button id="dag-zoom-fit" type="button" class="dag-zoom-btn" title="Fit graph to view" aria-label="Fit graph to view">Fit</button>
               </div>
-              <div id="dag-viewport" class="dag-canvas-box dag-viewport">
+              <div id="dag-viewport" class="dag-canvas-box dag-viewport" tabindex="0" aria-label="Proof graph. Use the arrow keys to pan.">
                 <svg id="proof-dag-svg" viewBox="0 0 420 260" aria-label="Proof dependency graph"></svg>
               </div>
             </div>

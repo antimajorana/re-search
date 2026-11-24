@@ -556,7 +556,8 @@ fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
     assert_eq!(scoped["verdict"], "accepted");
     let reopened = call("GET", &format!("/api/sessions/{sid}"), Value::Null).1;
     assert_eq!(reopened["messages"].as_array().unwrap().last().unwrap()["verified_status"], "unverified");
-    assert_eq!(reopened["stats"]["step_checks"], 1);
+    // The rejected e-2 check, its retry, and the accepted e-1 and e-4 checks are all recorded.
+    assert_eq!(reopened["stats"]["step_checks"], 4);
     for format in ["html","tex"] {
         let (code, _, bytes) = raw_http(server.addr.port(), "GET", &format!("/api/sessions/{sid}/export?format={format}"), &auth, b"");
         assert_eq!(code, 200);

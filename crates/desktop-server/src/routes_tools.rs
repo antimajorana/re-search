@@ -155,7 +155,39 @@ pub fn handle_workspace_file(
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| bad("missing `path` query parameter"))?;
+    if root == "sources" && query.contains_key("start_line") {
+        let first = query.get("start_line").and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0)
+            .ok_or_else(|| bad("Invalid source line number."))?;
+        let last = query.get("end_line").map(|v|v.parse::<usize>()).transpose().map_err(|_| bad("Invalid end line."))?.unwrap_or(first);
+        if last < first || last - first > 512 { return Err(bad("Select a passage of up to 513 lines.")); }
+        return source_line_window(&env,session_id,path,first,last);
+    }
     handle_workspace_file_inner(&env, session_id, root, path)
+}
+
+fn source_line_window(env: &research_tools::ResearchEnv, session: &str, path: &str, first: usize, last: usize) -> ApiResult {
+    use research_tools::fs_tools::MAX_FS_READ_FILE_BYTES;
+    use std::io::Read;
+    let file = env.sandbox().resolve_existing(SandboxRoot::Sources,session,path,false).map_err(|e|bad(e.to_string()))?;
+    if !file.metadata.is_file() { return Err(bad("Choose a saved source file.")); }
+    let mut bytes = Vec::new();
+    std::fs::File::open(file.canonical_target).and_then(|f| f.take(MAX_FS_READ_FILE_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(|e|bad(e.to_string()))?;
+    if bytes.len() as u64 > MAX_FS_READ_FILE_BYTES { return Err(bad("Source exceeds the text reader limit.")); }
+    let text = std::str::from_utf8(&bytes).map_err(|_|bad("The source has no readable text."))?;
+    let start = first.saturating_sub(8).max(1);
+    let end = last.saturating_add(8);
+    let mut content = String::new();
+    let mut reached = 0;
+    for (idx,line) in text.split_inclusive('\n').enumerate().skip(start - 1) {
+        reached = idx + 1;
+        if reached > end { break; }
+        if content.len().saturating_add(line.len()) > 1024 * 1024 { return Err(bad("The selected passage is too large to display.")); }
+        content.push_str(line);
+    }
+    if reached < last { return Err(bad("The cited lines are outside this source.")); }
+    Ok((200,json!({"path":path,"content":content,"file_sha256":ledger::sha256_hex(&bytes),
+        "first_line":start,"truncated":reached>end,"partial":start>1 || reached>end})))
 }
 
 fn handle_workspace_file_inner(

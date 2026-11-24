@@ -94,6 +94,14 @@ Use **Canvas → LaTeX** to export a report as `.tex`, `.html` or **Reproducible
 
 Run `python3 run_all_checks.py --verify-only` in the extracted bundle to check archived file hashes. With no flag, the script replays recorded successful computations with your Python privileges. Review the code before executing it and use the dependency versions recorded in the bundle. `re-search verify` checks the stored ledger and artifacts. The proof view shows model review and linked Lean results as separate evidence.
 
+## Reading papers with Investigation
+
+Choose **New investigation** and add a searchable PDF, text or LaTeX source. An optional question focuses exploration after the model maps the paper. A physical page range scopes a PDF that contains multiple works. Scanned pages can be viewed in the PDF reader. Mapping requires readable source text and a connected model.
+
+An arrow points from a prerequisite, cited result or piece of evidence to the claim it supports. The map distinguishes explicit dependencies from inferred ones and records a reason and a passage for each edge. Open a claim to inspect the saved text, its file hash, and the original PDF page when available. The coverage indicator reports how much of the paper the model says it mapped. A checked source anchor verifies the excerpt against saved bytes.
+
+Corrections retain the original interpretation and are attached to a specific map revision. Checks, rechecks and further implications run on request and retain their own results. Starting linked Research carries the selected claim, its assumptions, related source passages and reader corrections into a fresh conversation. The return link opens the original Investigation. Sessions and their evidence are included in project backups.
+
 ## Development checks
 
 In `crates/`, `desktop-app` hosts WebView2 and `desktop-server` runs the loopback HTTP and event stream. `agent` owns in-core turns, providers and review roles. `cli-route` supervises external provider CLIs. `policy` and `tools` enforce capabilities and approvals, `worker` and `research-tools` supply tool implementations, and `ledger` and `export` record and package the results.

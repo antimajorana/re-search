@@ -1,4 +1,5 @@
 import { renderMathTextInto } from '/assets/math.js';
+import { paperQuestionFocus, paperTopology, renderPaperGraph } from '/assets/investigation_graph.js';
 
 function element(tag, className, text) {
   const el = document.createElement(tag);
@@ -44,24 +45,34 @@ const nameOf = kind => kindNames[kind] || 'Claim';
 export function createPaperMap(host, { openSource, openPdf, act }) {
   let inv = {}, busy = false, full = false, query = '', selected = '', signature = '', generation = 0;
   const forms = new Map();
+  const expanded = new Set();
+  let layout = 'graph', highlight = true, disconnectGraph = () => {};
   let indexScroll = 0, actionPending = false, notice = '', formType = '';
   let runEvents = [];
+  let summarySignature = '';
   const panel = document.getElementById('investigation-panel');
 
-  function reset() {
+  function reset(sessionChanged = true) {
     generation++;
     inv = {}; signature = ''; selected = ''; query = ''; full = false; indexScroll = 0;
     forms.clear(); formType = ''; actionPending = false; notice = '';
+    expanded.clear(); highlight = true; layout = 'graph'; disconnectGraph();
     host.replaceChildren();
-    panel.scrollTop = 0;
+    if (sessionChanged) {
+      summarySignature = '';
+      const summary = document.getElementById('investigation-summary');
+      summary.hidden = true; summary.replaceChildren();
+      panel.scrollTop = 0;
+    }
   }
 
   function update(data, running, events) {
     runEvents = events || [];
-    const next = JSON.stringify([data.map_seq, data.map, data.corrections, data.activities, data.question, data.page_start, data.page_end, running]);
+    const next = JSON.stringify([data.map_seq, data.map, data.corrections, data.activities, data.question,
+      data.page_start, data.page_end, data.original_sha256, data.arxiv_cover_id, running]);
     if (next === signature) return;
     if (inv.map_seq !== data.map_seq) {
-      reset();
+      reset(false);
       if (data.map?.nodes?.length && !visibleMapNodes(data.map.nodes, false, '').length) full = true;
     }
     signature = next; inv = data; busy = running;
@@ -101,12 +112,67 @@ export function createPaperMap(host, { openSource, openPdf, act }) {
     }
   }
 
+  function updateSummary(summary, running, hasPaper) {
+    const box = document.getElementById('investigation-summary');
+    const signature = JSON.stringify([summary, summary ? null : running, hasPaper]);
+    if (summarySignature === signature) return;
+    summarySignature = signature;
+    const before = host.getBoundingClientRect().top;
+    const preserve = !panel.hidden && panel.scrollTop > 0 && before <= panel.getBoundingClientRect().top;
+    box.hidden = !(summary || running || hasPaper);
+    box.replaceChildren();
+    if (box.hidden) return;
+    const heading = element('h2', '', 'What, Why, and How');
+    heading.id = 'investigation-summary-title';
+    box.append(heading);
+    if (!summary) {
+      box.append(element('p', 'investigation-meta', running ? 'Reading the paper for a source-backed overview…' :
+        'A source-backed overview is unavailable for this paper.'));
+    } else {
+      for (const [key, title] of [['what','What'], ['why','Why'], ['how','How']]) {
+        const part = summary[key];
+        const row = element('section', 'investigation-summary-part');
+        row.append(element('h3', '', title));
+        const body = element('div');
+        if (part?.text && part.anchors?.length) {
+          body.append(math('p', part.text));
+          sources(body, part.anchors);
+        } else {
+          body.append(element('p', 'investigation-meta', part?.unstated ? 'The reviewed passages do not state this explicitly.' : 'No source-backed statement is available.'));
+        }
+        row.append(body); box.append(row);
+      }
+    }
+    if (preserve) panel.scrollTop += host.getBoundingClientRect().top - before;
+  }
+
   function overview() {
     const map = inv.map;
     host.append(math('h2', map.title || 'Paper map'));
-    if (inv.question) host.append(math('p', inv.question, 'investigation-question-text'));
+    if (inv.original_sha256) {
+      const version = element('details', 'investigation-anchor');
+      version.append(element('summary', '', inv.arxiv_cover_id ? 'Source version · arXiv:' + inv.arxiv_cover_id : 'Source version'),
+        element('small', '', 'Original file SHA-256 · ' + inv.original_sha256));
+      host.append(version);
+    }
+    const question = inv.question === 'Map the main results and reasoning in this paper.' ? '' : inv.question;
+    if (question) host.append(math('p', question, 'investigation-question-text'));
+    const modelSelected = Array.isArray(map.answer_node_ids);
+    const matches = paperQuestionFocus(map, question);
+    if (question && modelSelected) {
+      if (matches.size) {
+        const answers = element('details', 'investigation-anchor');
+        answers.append(element('summary', '', 'Statements selected for your question (' + matches.size + ')'));
+        for (const id of matches.keys()) {
+          const n = map.nodes.find(n => n.id === id);
+          const link = button('', () => go(id), 'investigation-node');
+          link.append(math('span', n.sentence)); answers.append(link);
+        }
+        host.append(answers);
+      } else host.append(element('p', 'investigation-meta', 'The model identified no statement that directly answers this reading question.'));
+    }
     if (inv.page_start && inv.page_end) host.append(element('p', 'investigation-meta', 'PDF pages ' + inv.page_start + '–' + inv.page_end));
-    const summary = element('p', 'investigation-meta', [map.coverage === 'paper' ? 'Paper-wide map' : 'Partial map',
+    const summary = element('p', 'investigation-meta', [map.coverage === 'paper' ? 'Model reports paper-wide coverage' : 'Partial map',
       map.nodes.length + ' statements', (map.edges || []).length + ' connections'].join(' · '));
     host.append(summary);
     if (map.limitations?.length) {
@@ -128,8 +194,17 @@ export function createPaperMap(host, { openSource, openPdf, act }) {
       host.append(history);
     }
     const tools = element('div', 'investigation-map-tools');
+    const layouts = element('div', 'segmented-group');
+    layouts.setAttribute('role', 'group'); layouts.setAttribute('aria-label', 'Paper map layout');
+    for (const [type, label] of [['graph', 'Graph'], ['list', 'Steps in order']]) {
+      const choice = button(label, () => {
+        layout = type; render(); host.querySelector('[data-layout="' + type + '"]')?.focus();
+      }, 'seg-btn' + (layout === type ? ' is-active' : ''));
+      choice.dataset.layout = type; choice.setAttribute('aria-pressed', String(layout === type)); layouts.append(choice);
+    }
+    host.append(layouts);
     const toggle = button(full ? 'Show main results and assumptions' : 'Show all statements', () => {
-      full = !full; query = ''; render();
+      full = !full; query = ''; expanded.clear(); render();
       host.querySelector('.investigation-map-tools button')?.focus();
     });
     toggle.setAttribute('aria-pressed', String(full));
@@ -138,12 +213,42 @@ export function createPaperMap(host, { openSource, openPdf, act }) {
     search.setAttribute('aria-label', 'Find a statement in the whole paper map');
     const groups = element('div', 'investigation-index');
     tools.append(search, toggle);
+    const collapse = button('Collapse expanded branches', () => {
+      expanded.clear(); render(); host.querySelector('.investigation-map-tools input')?.focus();
+    });
+    tools.append(collapse);
+    if (matches.size) {
+      const filter = button(modelSelected ? 'Highlight answers' : 'Highlight question text matches', () => {
+        highlight = !highlight; render();
+        host.querySelector('.investigation-highlight-toggle')?.focus();
+      });
+      filter.classList.add('investigation-highlight-toggle');
+      filter.setAttribute('aria-pressed', String(highlight));
+      filter.title = modelSelected ? 'Show the statements the model selected to answer your reading question and their prerequisites.' :
+        'Matches words in your reading question against suggested questions on individual statements.';
+      tools.append(filter);
+    }
     host.append(tools, groups);
-    function renderGroups() {
+    function renderGroups(startingNode) {
+      disconnectGraph(); disconnectGraph = () => {};
       groups.replaceChildren();
       const nodes = visibleMapNodes(map.nodes, full, query);
-      const sections = query.trim() ? [['Matching statements', nodes]] : full ? [['All statements', nodes]] : [
-        ['Main results', nodes.filter(n => n.kind !== 'assumption')], ['Assumptions', nodes.filter(n => n.kind === 'assumption')]];
+      collapse.hidden = !expanded.size || full || Boolean(query.trim()) || layout !== 'graph';
+      if (layout === 'graph' && !query.trim()) {
+        const shown = new Set([...nodes.map(n => n.id), ...expanded]);
+        if (highlight) for (const id of matches.keys()) shown.add(id);
+        disconnectGraph = renderPaperGraph(groups, map, shown, highlight ? matches : new Map(), card, (ids, origin) => {
+          for (const id of ids) expanded.add(id);
+          renderGroups(origin);
+          const selected = [...groups.querySelectorAll('.investigation-node')].find(c => c.dataset.node === origin);
+          selected?.focus({ preventScroll:true });
+        }, startingNode);
+        return;
+      }
+      const order = paperTopology(map).order;
+      const sorted = new Map(nodes.map(n => [n.id, n]));
+      const sections = [[query.trim() ? 'Matching statements' : full ? 'All statements in dependency order' : 'Main results and assumptions',
+        order.filter(id => sorted.has(id)).map(id => sorted.get(id))]];
       for (const [label, rows] of sections) {
         if (!rows.length) continue;
         groups.append(element('h3', '', label));
@@ -189,7 +294,7 @@ export function createPaperMap(host, { openSource, openPdf, act }) {
     if (kind === 'research' && !forms.has(key)) input.value = 'Under what conditions does this result hold?';
     const updateDraft = () => { draft.text = input.value; forms.set(key, draft); };
     input.addEventListener('input', updateDraft);
-    if (kind === 'correction' && incoming.length) {
+    if (['correction','check','recheck'].includes(kind) && incoming.length) {
       const label = element('label', '', 'Applies to');
       const choice = element('select', 'compact-select');
       choice.add(new Option('This statement', ''));
@@ -303,10 +408,16 @@ export function createPaperMap(host, { openSource, openPdf, act }) {
   }
 
   function render() {
+    disconnectGraph(); disconnectGraph = () => {};
     host.replaceChildren();
     if (!inv.map) return;
     const node = selected && inv.map.nodes.find(n => n.id === selected);
     if (node) detail(node); else overview();
   }
-  return { reset, update };
+  function openNode(mapSeq, id) {
+    if (mapSeq !== inv.map_seq || !inv.map?.nodes?.some(n => n.id === id)) return false;
+    go(id);
+    return true;
+  }
+  return { reset, update, updateSummary, openNode };
 }

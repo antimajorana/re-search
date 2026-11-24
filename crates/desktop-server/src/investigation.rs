@@ -50,7 +50,20 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
         return json!({"origin": start.payload});
     }
     let paper = latest(events, "investigation.paper").map(|e| &e.payload);
+    let source = paper.and_then(|p| {
+        events
+            .iter()
+            .find(|e| e.kind == "source.ingested" && e.payload["source_id"] == p["source_id"])
+    });
     let map = latest(events, "investigation.map");
+    let mapping = latest(events, "investigation.mapping_requested");
+    let summary = latest(events, "investigation.summary");
+    let finished = mapping.and_then(|request| {
+        events.iter().rev().find(|event| {
+            event.kind == "investigation.mapping_finished"
+                && event.payload["request_seq"].as_u64() == Some(request.seq)
+        })
+    });
     let mut activities = Vec::new();
     let mut positions = std::collections::HashMap::new();
     let mut corrections = Vec::new();
@@ -96,6 +109,10 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
         }
     }
     json!({"source_id":paper.and_then(|p| p.get("source_id")), "question":paper.and_then(|p| p.get("question")),
+        "original_sha256":source.and_then(|e|e.payload.get("raw_blob")), "arxiv_cover_id":source.and_then(|e|e.payload.get("arxiv_cover_id")),
+        "summary":summary.map(|e|&e.payload), "summary_seq":summary.map(|e|e.seq),
+        "summary_is_current":summary.is_some_and(|e|e.payload["request_seq"].as_u64()==mapping.map(|m|m.seq)),
+        "mapping_status":finished.map(|e|&e.payload["status"]), "mapping_error":finished.and_then(|e|e.payload.get("error")),
         "page_start":paper.and_then(|p|p.get("page_start")), "page_end":paper.and_then(|p|p.get("page_end")),
         "map_seq":map.map(|e| e.seq), "map":map.map(|e| &e.payload), "corrections":corrections, "activities":activities})
 }
@@ -308,7 +325,7 @@ pub(crate) fn prepare(
                 session,
                 "investigation.mapping_requested",
                 1,
-                &json!({"source_id":source_id,"question":prompt}),
+                &json!({"source_id":source_id,"question":prompt,"summary_requested":true}),
             )
             .map_err(storage)?;
         req["_paper_map_request"] = json!(seq);
@@ -373,8 +390,23 @@ pub(crate) fn handle(
         "corrections" => {
             let correction = json!({"map_seq":map.seq,"node_id":node["id"],"text":text(&val,"text",4000)?,"edge_from":val["edge_from"]});
             let seq = ledger
-                .append(session, "investigation.correction", 1, &correction)
-                .map_err(storage)?;
+                .append_at_head(
+                    session,
+                    "investigation.correction",
+                    1,
+                    &correction,
+                    &events
+                        .last()
+                        .ok_or_else(|| bad("Map missing from session."))?
+                        .event_hash,
+                )
+                .map_err(|err| match err {
+                    ledger::Error::SessionChanged(_) => {
+                        conflict("The session changed. Reopen the claim and retry your correction.")
+                    }
+                    other => storage(other),
+                })?
+                .seq;
             Ok((201, json!({"seq":seq,"correction":correction})))
         }
         "rechecks" => {
