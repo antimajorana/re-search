@@ -22,6 +22,100 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 #[test]
+fn canvas_save_rejects_stale_drafts_before_and_after_approval() {
+    let temp = TempDir::new().unwrap();
+    let workspace = temp.path().join("paper");
+    std::fs::create_dir(&workspace).unwrap();
+    let file = workspace.join("main.tex");
+    std::fs::write(&file, "Current version").unwrap();
+    let srv = start_desktop_server(test_cfg(
+        &temp.path().join("data"),
+        Some(workspace.clone()),
+        None,
+        None,
+    ))
+    .unwrap();
+    let port = srv.addr.port();
+    let token = srv.info.token.clone();
+    common::disable_auto_approve(port, &token);
+    let headers = [
+        ("X-ReSearch-Token", token.as_str()),
+        ("Content-Type", "application/json"),
+    ];
+    let (status, _, body) = raw_http(
+        port,
+        "POST",
+        "/api/sessions",
+        &headers,
+        json!({"workspace_root":workspace}).to_string().as_bytes(),
+    );
+    assert_eq!(status, 200);
+    let session: Value = serde_json::from_slice(&body).unwrap();
+    let base = format!("/api/sessions/{}", session["id"].as_str().unwrap());
+    let patch_url = format!("{base}/latex/patch");
+    let approvals = format!("{base}/approvals");
+    let past = json!(ledger::sha256_hex(b"Original version"));
+    for (name, expected) in [
+        ("main.tex", past.clone()),
+        ("main.tex", Value::Null),
+        ("deleted.tex", past),
+    ] {
+        let payload = json!({"path":name,"content":"Recovered draft","expected_sha256":expected});
+        let (status, _, body) = raw_http(port, "POST", &patch_url, &headers, payload.to_string().as_bytes());
+        assert_eq!(status, 409);
+        assert!(String::from_utf8_lossy(&body).contains("changed on disk"));
+    }
+    let get_pending = || {
+        let (status, _, body) = raw_http(port, "GET", &approvals, &headers, b"");
+        assert_eq!(status, 200);
+        serde_json::from_slice::<Value>(&body).unwrap()["pending"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    assert!(get_pending().is_empty());
+    assert!(!workspace.join("deleted.tex").exists());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "Current version");
+
+    // A second writer can change the file after the valid preview reaches the reader.
+    let result = thread::scope(|scope| {
+        let save = scope.spawn(|| {
+            let payload = json!({"path":"main.tex","content":"Recovered draft","expected_sha256":ledger::sha256_hex(b"Current version")});
+            raw_http(port, "POST", &patch_url, &headers, payload.to_string().as_bytes())
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let approval = loop {
+            if let Some(item) = get_pending().into_iter().next() {
+                break item;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "valid edit did not request approval"
+            );
+            thread::sleep(Duration::from_millis(20));
+        };
+        std::fs::write(&file, "New external edit").unwrap();
+        let reply = json!({"digest":approval["digest"],"approved":true});
+        assert_eq!(
+            raw_http(
+                port,
+                "POST",
+                &format!("{approvals}/{}", approval["call_id"].as_str().unwrap()),
+                &headers,
+                reply.to_string().as_bytes()
+            )
+            .0,
+            200
+        );
+        save.join().unwrap()
+    });
+    assert!((400..500).contains(&result.0));
+    assert!(String::from_utf8_lossy(&result.2).contains("changed on disk"));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "New external edit");
+    srv.shutdown();
+}
+
+#[test]
 fn json_upload_accepts_five_files_at_the_advertised_limit() {
     use std::fmt::Write as _;
 

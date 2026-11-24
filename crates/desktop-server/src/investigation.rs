@@ -60,6 +60,8 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
     let summary = latest(events, "investigation.summary");
     let catalog_request =
         latest(events, "investigation.conventions").and_then(|e| e.payload["request_seq"].as_u64());
+    let resumed = latest(events, "investigation.conventions_resumed")
+        .and_then(|e| e.payload["for_request_seq"].as_u64());
     let conventions = catalog_request
         .and_then(|seq| research_tools::investigation::paper_conventions(events, seq));
     let finished = mapping.and_then(|request| {
@@ -122,7 +124,7 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
         "original_sha256":source.and_then(|e|e.payload.get("raw_blob")), "arxiv_cover_id":source.and_then(|e|e.payload.get("arxiv_cover_id")),
         "summary":summary.map(|e|&e.payload), "summary_seq":summary.map(|e|e.seq),
         "summary_is_current":summary.is_some_and(|e|e.payload["request_seq"].as_u64()==mapping.map(|m|m.seq)),
-        "conventions":conventions, "conventions_requested":mapping.is_some_and(|e|e.payload["conventions_requested"]==true),
+        "conventions":conventions, "conventions_requested":mapping.is_some_and(|e|e.payload["conventions_requested"]==true || resumed==Some(e.seq)),
         "conventions_is_current":catalog_request.is_some() && catalog_request==mapping.map(|e|e.seq),
         "conventions_error":catalog_finish.map(|e|&e.payload["error"]).or_else(||finished.and_then(|e|e.payload.get("conventions_error"))),
         "mapping_status":finished.map(|e|&e.payload["status"]), "mapping_error":finished.and_then(|e|e.payload.get("error")),

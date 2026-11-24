@@ -108,7 +108,10 @@ def check_recovery_example(browser, binary):
             expect(page.locator("#latex-recovery-list option")).to_have_count(2)
             page.get_by_role("button", name="Restore draft").click()
             expect(editor).to_have_value("My recovered derivation")
-            page.locator("#latex-save-btn").click()
+            with page.expect_response(lambda response: response.url.endswith("/latex/patch")) as save:
+                page.locator("#latex-save-btn").click()
+            assert save.value.request.post_data_json["expected_sha256"] == hashlib.sha256(b"First version").hexdigest()
+            assert save.value.status == 409, save.value.text()
             expect(page.locator("#latex-reload-btn")).to_be_visible()
             assert manuscript.read_text(encoding="utf-8") == "An external edit"
 

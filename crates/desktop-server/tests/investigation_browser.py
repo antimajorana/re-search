@@ -157,6 +157,8 @@ def check_investigation(browser, binary):
             page.get_by_role("button", name="Find main results").click()
             brief = page.locator("#investigation-summary")
             expect(brief.get_by_role("heading", name="What, Why, and How")).to_be_visible()
+            expect(page.locator("#pipeline-bar")).to_be_hidden()
+            expect(page.get_by_role("button", name="Conversation", exact=True)).to_be_visible()
             expect(brief).to_contain_text("Reading the paper")
             state["summary"] = scenario["summary"]
             state["conventions"] = scenario["conventions"]
@@ -182,7 +184,8 @@ def check_investigation(browser, binary):
             brief.locator(".investigation-summary-part").first.locator("summary").first.click()
             scenario["running"] = False
             completed = scenario["completed"]
-            state.update(map={**completed, "edges":[], "nodes":[n for n in completed["nodes"] if n["main"]]}, map_seq=11)
+            state.update(map={**completed, "edges":[], "nodes":[n for n in completed["nodes"] if n["main"]]}, map_seq=11,
+                         conventions_error="The provider stopped before the next batch.")
             page.evaluate("() => window.fixtureEventStream.dispatchEvent(new MessageEvent('turn_complete',{data:'{}'}))")
             expect(page.get_by_role("heading", name="Dynamics of a unit mass")).to_be_visible()
             expect(page.locator("#stream-status-pill")).to_have_text("Ready")
@@ -190,15 +193,19 @@ def check_investigation(browser, binary):
             brief.locator(".investigation-summary-part").first.locator("summary").first.click()
             capture_graph_screen(page, "investigation-summary-desktop", brief)
             catalog.locator(":scope > summary").click()
+            expect(catalog).to_contain_text("Conventions review stopped. The provider stopped before the next batch.")
             catalog.get_by_role("button", name="Continue conventions review").click()
             expect(catalog.locator(":scope > summary")).to_contain_text("2 found so far")
+            expect(catalog.locator(":scope > summary")).to_be_focused()
             assert receipts["conventions"]["map_seq"] == 11 and receipts["conventions"]["provider"] == "antigravity"
+            inferred.get_by_role("button", name="Open cited lines").focus()
             for index in range(5):
                 state["conventions"]["items"].append({**scenario["conventions"]["items"][0], "id":"note-"+str(index),
                     "label":"Reading "+str(index), "meaning":"A separate fixture convention."})
             state["conventions"].update(done=True, coverage="partial", limitations=["The appendix was outside the selected pages."])
             scenario["running"] = False
             expect(catalog.locator(":scope > summary")).to_contain_text("7 entries · partial coverage", timeout=15000)
+            expect(inferred.get_by_role("button", name="Open cited lines")).to_be_focused()
             expect(catalog).to_contain_text("The appendix was outside the selected pages.")
             catalog.get_by_role("searchbox").fill("sensor observations")
             expect(catalog.locator("[data-entry]")).to_have_count(1)

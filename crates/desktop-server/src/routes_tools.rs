@@ -7,6 +7,7 @@ use crate::turn_runner::build_desktop_router;
 use agent::{ask_sidetalk, narrate_session, read_sidetalk_thread};
 use export::{export_session_bytes, ExportFormat};
 use research_tools::fs_tools::{handle_fs_list, handle_fs_read};
+use research_tools::write_tools::workspace_edit_sha256;
 use research_tools::{
     ingest_bytes, read_proof_dag, run_arxiv_search, run_literature_search, run_tex_audit,
     validate_session_id, ArxivSearchRequest, AuditOptions, IngestRequest, LiteratureRequest,
@@ -286,6 +287,10 @@ pub fn handle_latex_patch(state: &Arc<DesktopState>, session_id: &str, body: &[u
         (FS_WRITE, json!({ "path": path, "content": content }))
     };
     if let Some(expected) = val.get("expected_sha256") {
+        let current = workspace_edit_sha256(&env, path).map_err(bad)?;
+        if expected != &json!(current) {
+            return Err((409, format!("{path} changed on disk. Copy your edits, then reload the file to reconcile the changes.")));
+        }
         args["expected_sha256"] = expected.clone();
     }
 

@@ -46,15 +46,16 @@ export function createConventionCatalog(host, renderAnchors, find) {
   resume.type = 'button';
   const feedback = textElement('p', '', 'investigation-meta'); feedback.setAttribute('role','status'); feedback.hidden = true;
   host.append(notes, search, sections, resume, feedback);
-  let signature = '', itemSignature = '', catalog = null, mapSeq = null, epoch = 0, pending = false;
+  let signature = '', itemSignature = '', renderedItems = '', catalog = null, mapSeq = null, epoch = 0, pending = false;
   const openItems = new Set();
   function reset() {
-    epoch++; signature = ''; itemSignature = ''; catalog = null; mapSeq = null; pending = false; openItems.clear();
+    epoch++; signature = ''; itemSignature = ''; renderedItems = ''; catalog = null; mapSeq = null; pending = false; openItems.clear();
     resume.hidden = true; feedback.hidden = true;
     host.open = false; host.hidden = true; search.value = ''; search.hidden = true;
     notes.replaceChildren(); sections.replaceChildren();
   }
   function renderItems() {
+    renderedItems = itemSignature;
     const items = filterConventions(catalog?.items || [], search.value);
     const openAnchors = new Set([...sections.querySelectorAll('[data-anchor][open]')].map(a =>
       JSON.stringify([a.closest('[data-entry]').dataset.entry, a.dataset.anchor])));
@@ -93,10 +94,14 @@ export function createConventionCatalog(host, renderAnchors, find) {
       sections.append(group);
     }
   }
+  host.addEventListener('toggle', () => {
+    if (host.open && renderedItems !== itemSignature) renderItems();
+  });
   search.addEventListener('input', renderItems);
   resume.addEventListener('click', async () => {
     if (pending || resume.disabled || mapSeq == null) return;
     const start = epoch;
+    if (document.activeElement === resume) title.focus({preventScroll:true});
     pending = true; resume.disabled = true; feedback.hidden = true;
     try { await find(mapSeq); }
     catch (error) {
@@ -106,7 +111,7 @@ export function createConventionCatalog(host, renderAnchors, find) {
     }
   });
   function update(inv, running) {
-    const next = JSON.stringify([inv.conventions, inv.conventions_requested, inv.conventions_is_current, inv.page_start, inv.source_id, inv.map_seq, running]);
+    const next = JSON.stringify([inv.conventions, inv.conventions_requested, inv.conventions_is_current, inv.conventions_error, inv.page_start, inv.source_id, inv.map_seq, running]);
     if (next === signature) return;
     signature = next;
     catalog = inv.conventions || null;
@@ -122,16 +127,24 @@ export function createConventionCatalog(host, renderAnchors, find) {
     title.textContent = 'Conventions · ' + conventionStatus(catalog, inv.conventions_requested, running, inv.page_start);
     notes.replaceChildren();
     if (catalog && inv.conventions_is_current === false) notes.append(textElement('p', 'Saved catalog from an earlier reading of this paper.'));
+    if (inv.conventions_error && !running && (!catalog?.done || inv.conventions_is_current === false)) {
+      notes.append(textElement('p', 'Conventions review stopped. ' + inv.conventions_error));
+    }
     for (const limitation of catalog?.limitations || []) notes.append(mathElement('p', limitation));
     search.hidden = (catalog?.items?.length || 0) < 7;
     if (search.hidden) search.value = '';
-    const focusedEntry = document.activeElement?.closest?.('.investigation-convention')?.dataset.entry;
-    const itemsNow = JSON.stringify(catalog?.items || []);
-    const changed = itemsNow !== itemSignature;
-    if (changed) { itemSignature = itemsNow; renderItems(); }
+    const active = document.activeElement;
+    const focusedEntry = active?.closest('.investigation-convention')?.dataset.entry;
+    const focusedAnchor = active?.closest('[data-anchor]')?.dataset.anchor;
+    itemSignature = JSON.stringify(catalog?.items || []);
+    const changed = host.open && itemSignature !== renderedItems;
+    if (changed) renderItems();
     if (changed && focusedEntry && host.open) {
       const row = [...sections.querySelectorAll('.investigation-convention')].find(r => r.dataset.entry === focusedEntry);
-      row?.querySelector('summary')?.focus({preventScroll:true});
+      const receipt = row && [...row.querySelectorAll('[data-anchor]')].find(a => a.dataset.anchor === focusedAnchor);
+      const control = receipt && [...receipt.querySelectorAll('summary,button,a')].find(el =>
+        el.tagName === active.tagName && el.textContent === active.textContent);
+      (control || row?.querySelector('summary') || title).focus({preventScroll:true});
     }
     if (preserve) panel.scrollTop += mapEl.getBoundingClientRect().top - before;
   }
