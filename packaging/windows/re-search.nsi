@@ -17,7 +17,7 @@ Unicode true
 
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\reSearch"
 !define APP_MUTEX "Local\ReSearch.Desktop.SingleInstance"
-!define MUI_ICON "../../crates/desktop-app/assets/re-search.ico"
+!define MUI_ICON "..\..\crates\desktop-app\assets\re-search.ico"
 !define MUI_UNICON "${MUI_ICON}"
 
 Name "reSearch"
@@ -34,7 +34,7 @@ VIAddVersionKey "LegalCopyright" "reSearch contributors"
 
 !insertmacro MUI_PAGE_WELCOME
 !ifdef RE_SEARCH_BUNDLED_PYTHON
-  !insertmacro MUI_PAGE_LICENSE "${RE_SEARCH_STAGE}/runtime/LICENSE.txt"
+  !insertmacro MUI_PAGE_LICENSE "${RE_SEARCH_STAGE}\runtime\LICENSE.txt"
 !endif
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_TEXT "Open reSearch from the Start menu. The desktop app uses the Microsoft Edge WebView2 Runtime."
@@ -143,24 +143,25 @@ Section "reSearch"
   SetOverwrite on
   ClearErrors
   SetOutPath "$Stage"
-  File "${RE_SEARCH_STAGE}/re-search-app.exe"
-  File "${RE_SEARCH_STAGE}/re-search.exe"
-  File "${RE_SEARCH_STAGE}/core.exe"
-  File "${RE_SEARCH_STAGE}/LICENSE-APACHE"
-  File "${RE_SEARCH_STAGE}/LICENSE-MIT"
+  ; Windows MakeNSIS requires backslashes when splitting source directories from file patterns.
+  File "${RE_SEARCH_STAGE}\re-search-app.exe"
+  File "${RE_SEARCH_STAGE}\re-search.exe"
+  File "${RE_SEARCH_STAGE}\core.exe"
+  File "${RE_SEARCH_STAGE}\LICENSE-APACHE"
+  File "${RE_SEARCH_STAGE}\LICENSE-MIT"
 !ifdef RE_SEARCH_WEBVIEW2_LOADER
-  File "${RE_SEARCH_STAGE}/WebView2Loader.dll"
+  File "${RE_SEARCH_STAGE}\WebView2Loader.dll"
 !endif
   SetOutPath "$Stage\python"
-  File "${RE_SEARCH_STAGE}/python/worker.py"
-  File "${RE_SEARCH_STAGE}/python/solver_calc.py"
-  File "${RE_SEARCH_STAGE}/python/numerical_validation.py"
-  File "${RE_SEARCH_STAGE}/python/symbolic_validation.py"
+  File "${RE_SEARCH_STAGE}\python\worker.py"
+  File "${RE_SEARCH_STAGE}\python\solver_calc.py"
+  File "${RE_SEARCH_STAGE}\python\numerical_validation.py"
+  File "${RE_SEARCH_STAGE}\python\symbolic_validation.py"
   SetOutPath "$Stage\licenses"
-  File /r "${RE_SEARCH_STAGE}/licenses/*"
+  File /r "${RE_SEARCH_STAGE}\licenses\*"
 !ifdef RE_SEARCH_BUNDLED_PYTHON
   SetOutPath "$Stage\runtime"
-  File /r "${RE_SEARCH_STAGE}/runtime/*"
+  File /r "${RE_SEARCH_STAGE}\runtime\*"
 !endif
   WriteUninstaller "$Stage\uninstall.exe"
   IfErrors stage_failed

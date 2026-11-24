@@ -2,6 +2,8 @@ name: Windows release
 
 on:
   push:
+    branches:
+      - 'release/windows-*'
     tags:
       - 'v*.*.*'
 
@@ -40,11 +42,15 @@ jobs:
         id: version
         run: |
           $version = python -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('Cargo.toml').read_text(encoding='utf-8'))['workspace']['package']['version'])"
-          if ($version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' -or $env:GITHUB_REF_NAME -cne "v$version") {
-            throw "Release tag '$env:GITHUB_REF_NAME' must match the stable workspace version 'v$version'."
+          if ($version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw "The workspace version '$version' must be a stable version."
+          }
+          $tag = "v$version"
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne $tag) {
+            throw "Release tag '$env:GITHUB_REF_NAME' must match the workspace version '$tag'."
           }
           $commit = git rev-parse HEAD
-          "tag=$env:GITHUB_REF_NAME" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
           "commit=$commit" >> $env:GITHUB_OUTPUT
           "artifact=windows-x64-$version" >> $env:GITHUB_OUTPUT
@@ -82,20 +88,45 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          $makensis = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
-          if (-not $makensis) {
-            $makensis = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
-            if (-not (Test-Path -LiteralPath $makensis)) {
-              choco install nsis --yes --no-progress
+          $PSNativeCommandUseErrorActionPreference = $false
+          function Find-MakeNsis {
+            $command = Get-Command makensis.exe -CommandType Application -ErrorAction SilentlyContinue
+            if ($command) { return $command.Source }
+            foreach ($root in ${env:ProgramFiles(x86)}, $env:ProgramFiles) {
+              if ($root) {
+                $candidate = Join-Path $root 'NSIS\makensis.exe'
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+              }
             }
           }
-          if (-not (Test-Path -LiteralPath $makensis -PathType Leaf)) { throw "MakeNSIS was not found." }
-          & $makensis /VERSION
-          $out = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'reSearch-release')
-          $installer = Join-Path $out.FullName $env:INSTALLER_NAME
-          & $makensis /WX "/DRE_SEARCH_VERSION=$env:RELEASE_VERSION" "/DRE_SEARCH_STAGE=$env:INSTALLER_STAGE" "/DRE_SEARCH_INSTALLER=$installer" "/DRE_SEARCH_BUNDLED_PYTHON" 'packaging/windows/re-search.nsi'
-          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw "MakeNSIS did not produce the installer." }
-          "INSTALLER_OUT=$($out.FullName)" >> $env:GITHUB_ENV
+          try {
+            $makensis = Find-MakeNsis
+            if (-not $makensis) {
+              choco install nsis --yes --no-progress
+              if ($LASTEXITCODE -ne 0) { throw "Chocolatey NSIS installation exited with code $LASTEXITCODE." }
+              $makensis = Find-MakeNsis
+            }
+            if (-not $makensis) { throw 'MakeNSIS was not found after installation.' }
+            $version = & $makensis /VERSION
+            if ($LASTEXITCODE -ne 0) { throw "MakeNSIS version check exited with code $LASTEXITCODE." }
+            Write-Host "Using NSIS $version at $makensis"
+            $out = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'reSearch-release')
+            $installer = Join-Path $out.FullName $env:INSTALLER_NAME
+            $script = (Resolve-Path -LiteralPath 'packaging/windows/re-search.nsi').Path
+            $log = @(& $makensis /V2 /WX "/DRE_SEARCH_VERSION=$env:RELEASE_VERSION" "/DRE_SEARCH_STAGE=$env:INSTALLER_STAGE" "/DRE_SEARCH_INSTALLER=$installer" '/DRE_SEARCH_BUNDLED_PYTHON' $script 2>&1)
+            $exitCode = $LASTEXITCODE
+            $log | ForEach-Object { Write-Host $_ }
+            if ($exitCode -ne 0) {
+              $details = ($log | Select-Object -Last 8) -join "`n"
+              throw "MakeNSIS $version exited with code ${exitCode}.`n$details"
+            }
+            if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'MakeNSIS did not produce the installer.' }
+            "INSTALLER_OUT=$($out.FullName)" >> $env:GITHUB_ENV
+          } catch {
+            $message = $_.Exception.Message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=Windows installer::$message"
+            throw
+          }
 
       - name: Ensure WebView2 is available
         run: |
@@ -117,13 +148,26 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          $installer = Join-Path $env:INSTALLER_OUT $env:INSTALLER_NAME
-          $before = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
-          ./packaging/windows/smoke-install.ps1 -Installer $installer -Stage $env:INSTALLER_STAGE -Version $env:RELEASE_VERSION -Target $env:WINDOWS_TARGET
-          $after = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
-          if ($before -ne $after) { throw "Installer bytes changed during verification." }
-          $checksum = Join-Path $env:INSTALLER_OUT 'SHA256SUMS.txt'
-          [IO.File]::WriteAllText($checksum, "$($after.ToLowerInvariant())  $env:INSTALLER_NAME`n", [Text.UTF8Encoding]::new($false))
+          $trace = [Collections.Generic.Queue[string]]::new()
+          try {
+            $installer = Join-Path $env:INSTALLER_OUT $env:INSTALLER_NAME
+            $before = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+            ./packaging/windows/smoke-install.ps1 -Installer $installer -Stage $env:INSTALLER_STAGE -Version $env:RELEASE_VERSION -Target $env:WINDOWS_TARGET *>&1 |
+              ForEach-Object {
+                Write-Host $_
+                if ($trace.Count -ge 8) { [void] $trace.Dequeue() }
+                $trace.Enqueue([string] $_)
+              }
+            $after = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+            if ($before -ne $after) { throw 'Installer bytes changed during verification.' }
+            $checksum = Join-Path $env:INSTALLER_OUT 'SHA256SUMS.txt'
+            [IO.File]::WriteAllText($checksum, "$($after.ToLowerInvariant())  $env:INSTALLER_NAME`n", [Text.UTF8Encoding]::new($false))
+          } catch {
+            $message = ($_.Exception.Message, ($trace -join "`n")) -join "`n"
+            $message = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=Windows installed-app smoke::$message"
+            throw
+          }
 
       - name: Save verified release payload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -138,6 +182,7 @@ jobs:
 
   publish:
     name: Publish verified Windows installer
+    if: github.ref_type == 'tag'
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
