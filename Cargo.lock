@@ -341,6 +341,7 @@ dependencies = [
  "policy",
  "research-tools",
  "serde_json",
+ "tempfile",
  "tools",
  "worker",
 ]

@@ -18,9 +18,8 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = "Local re:Search core. `sympy_eval` runs
     note. Results are computations, not verified claims.";
 
 const RESULT_TEXT_LIMIT: usize = 4000;
-const SET_SESSION_TITLE: &str = "set_session_title";
-const MAX_SESSION_TITLE_CHARS: usize = 72;
-pub const SESSION_TITLE_EVENT: &str = "session.title";
+use tools::builtin::SET_SESSION_TITLE;
+pub use tools::builtin::SESSION_TITLE_EVENT;
 
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -274,18 +273,8 @@ pub(crate) fn run_turn_leg(
              once with a short, specific title in the user's language. Include it alongside your \
              first research tool call when possible, then continue the research.",
         );
-        tool_specs.push(ToolSpec {
-            name: SET_SESSION_TITLE.into(),
-            description: "Give this unnamed research session a concise title based on its main question.".into(),
-            input_schema: json!({
-                "type": "object",
-                "required": ["title"],
-                "additionalProperties": false,
-                "properties": {
-                    "title": { "type": "string", "minLength": 1, "maxLength": MAX_SESSION_TITLE_CHARS }
-                },
-            }),
-        });
+        let def = tools::builtin::session_title_def();
+        tool_specs.push(ToolSpec { name: def.id, description: def.description, input_schema: def.input_schema });
     }
 
     for offset in 0..params.max_turns {
@@ -609,18 +598,10 @@ fn record_session_title(audit: &mut Audit<'_>, input: &Value) -> Result<(bool, S
     {
         return Ok((false, "The session title is already fixed.".into()));
     }
-    let title = input["title"]
-        .as_str()
-        .unwrap_or_default()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if title.is_empty()
-        || title.chars().count() > MAX_SESSION_TITLE_CHARS
-        || title.chars().any(char::is_control)
-    {
-        return Ok((true, format!("Provide a title between 1 and {MAX_SESSION_TITLE_CHARS} characters.")));
-    }
+    let title = match tools::builtin::normalize_session_title(input) {
+        Ok(title) => title,
+        Err(reason) => return Ok((true, reason)),
+    };
     audit.emit(SESSION_TITLE_EVENT, json!({ "title": title }))?;
     Ok((false, "Session title set.".into()))
 }

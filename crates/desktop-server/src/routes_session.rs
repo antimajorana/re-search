@@ -78,6 +78,14 @@ pub(crate) fn model_session_title(events: &[ledger::Event]) -> Option<&str> {
 
 pub(crate) fn session_title(meta: Option<&SessionMeta>, events: &[ledger::Event], id: &str) -> String {
     if meta.is_some_and(SessionMeta::allows_model_title) {
+        if crate::investigation::is_investigation(events) {
+            if let Some(title) = events.iter().find_map(|event| {
+                matches!(event.kind.as_str(), "investigation.summary" | "investigation.map")
+                    .then(|| event.payload["title"].as_str()).flatten().filter(|s| !s.trim().is_empty())
+            }) {
+                return clip_title(title, 80);
+            }
+        }
         if let Some(title) = model_session_title(events) {
             return title.to_string();
         }

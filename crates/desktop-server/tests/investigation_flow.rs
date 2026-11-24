@@ -129,6 +129,7 @@ fn corrected_paper_claim_opens_fresh_research_with_its_evidence_and_assumptions(
         "edges":[{"from":"a","to":"b","kind":"depends_on","basis":"inferred","reason":"The argument uses the fixed endpoints.","anchor":anchor(2)}]});
     record(&env, &ledger, sid, &map).unwrap();
     let view = call(&server, "GET", &path, Value::Null, 200);
+    assert_eq!(view["title"], "Boundary terms");
     let seq = view["investigation"]["map_seq"].as_u64().unwrap();
     assert!(view["investigation"]["branches"]
         .as_array()

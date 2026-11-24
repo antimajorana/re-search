@@ -24,11 +24,29 @@ pub fn register_core_tools(
     registry.register(builtin::ledger_note_def(), builtin::ledger_note_handler());
     match research {
         Some(env) => {
+            registry.register(builtin::session_title_def(), Arc::new(|ctx: &CallCtx<'_>, input: &Value| {
+                let ledger = ctx.ledger.lock().map_err(|_| "ledger lock poisoned")?;
+                record_cli_title(&ledger, ctx.session, input)
+            }));
             research_tools::register_research_tools(registry, env);
             research_tools::research_policy()
         }
         None => builtin::default_policy(),
     }
+}
+
+fn record_cli_title(ledger: &ledger::Ledger, session: &str, input: &Value) -> Result<Value, String> {
+    let events = ledger.read_session(session).map_err(|e| e.to_string())?;
+    let turn = events.iter().rev().find(|e| matches!(e.kind.as_str(), "session.start" | "session.resume"));
+    if !turn.is_some_and(|e| e.payload["allow_model_title"] == true)
+        || events.iter().any(|e| e.kind == builtin::SESSION_TITLE_EVENT) {
+        return Ok(serde_json::json!({"recorded":false,"reason":"The session title is already fixed."}));
+    }
+    let title = builtin::normalize_session_title(input)?;
+    let head = &events.last().ok_or("Start the session first.")?.event_hash;
+    let receipt = ledger.append_at_head(session, builtin::SESSION_TITLE_EVENT, tools::EVENT_SCHEMA_VERSION,
+        &serde_json::json!({"title":title}), head).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({"recorded":true,"seq":receipt.seq,"title":title}))
 }
 
 /// Tool definitions and policy version `core.exe` will serve.
@@ -72,6 +90,21 @@ pub fn core_tool_ids_for(core_env: &std::collections::BTreeMap<String, String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_can_title_an_eligible_session_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = ledger::Ledger::open(dir.path()).unwrap();
+        let args = serde_json::json!({"title":"  Boundary   conditions "});
+        let id = "s-title";
+        ledger.append(id, "session.start", 1, &serde_json::json!({})).unwrap();
+        assert_eq!(record_cli_title(&ledger, id, &args).unwrap()["recorded"], false);
+        ledger.append(id, "session.resume", 1, &serde_json::json!({"allow_model_title":true})).unwrap();
+        assert!(record_cli_title(&ledger, id, &serde_json::json!({"title":"  "})).is_err());
+        assert_eq!(record_cli_title(&ledger, id, &args).unwrap()["title"], "Boundary conditions");
+        assert_eq!(record_cli_title(&ledger, id, &args).unwrap()["recorded"], false);
+        assert_eq!(ledger.read_verified_session(id).unwrap().1.iter().filter(|e| e.kind == builtin::SESSION_TITLE_EVENT).count(), 1);
+    }
 
     #[test]
     fn builtin_set_matches_the_v0_definitions() {

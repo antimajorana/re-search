@@ -17,3 +17,6 @@ tools = { path = "../tools" }
 research-tools = { path = "../research-tools" }
 worker = { path = "../worker" }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
