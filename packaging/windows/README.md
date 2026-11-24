@@ -26,6 +26,15 @@ python/
 
 Stage `WebView2Loader.dll` from the matching WebView2 SDK dependency for a GNU build and pass `-DRE_SEARCH_WEBVIEW2_LOADER`. MSVC builds link the loader statically. For a bundled Python build, stage the full `runtime/` tree, including package notices, and pass `-DRE_SEARCH_BUNDLED_PYTHON`.
 
+Build the runtime from the repository root with the Python standard library. The build helper verifies the pinned Python Software Foundation Windows x64 NuGet archive and all three PyPI wheels by SHA-256. Keep the cache to reproduce the runtime offline in a new output directory.
+
+```sh
+python packaging/windows/stage_runtime.py --cache-dir /path/to/cache --output /absolute/path/to/stage/runtime
+python packaging/windows/stage_runtime.py --offline --cache-dir /path/to/cache --output /another/stage/runtime
+```
+
+On Windows the helper runs the worker's symbolic identity check and a NumPy eigenvalue computation with the packaged interpreter. The release smoke test also exercises the installed runtime through AppContainer. The runtime includes the upstream licenses, the Math library distribution metadata, and `THIRD-PARTY.txt`. Retain those files when distributing the installer.
+
 ```sh
 makensis -WX -DRE_SEARCH_VERSION=0.1.0 \
   -DRE_SEARCH_STAGE=/absolute/path/to/stage \
