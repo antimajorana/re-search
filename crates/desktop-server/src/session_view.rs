@@ -320,7 +320,8 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                     }));
                 }
             }
-            "proof.verification" => {
+            // Manual step reviews belong to their targeted node, which can be from an older turn.
+            "proof.verification" if ev.payload["on_demand"] != true => {
                 let recorded = ev.payload["verdict"].as_str().unwrap_or_default();
                 let verdict = research_tools::effective_verification_verdict(&ev.payload).unwrap_or_default();
                 let summary = ev.payload["summary"].as_str().unwrap_or_default();

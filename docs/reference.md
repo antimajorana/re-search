@@ -84,11 +84,27 @@ re-search verify "$source_session" --data-dir ./data
 
 ## Exports and verification
 
-Verified, Deep, and Interactive turns on in-core providers review the delivered answer and its Proof DAG together. The ledger records one full-solution verdict per review round. An individual step has a separate verdict only when checked through the Rust library's `verify_step` API. Linked Lean and computation results apply to the claims and inputs they checked.
+Use **Folders…** in the session list to group sessions. Folder filters work with search and archived sessions. Moving a session between folders preserves its project and history.
+
+Use **Projects → Back up project** for a restorable archive. The archive includes the project's sessions, folder assignments, evidence, saved papers, manuscript recovery copies, experiments, and private validation values. Restore it into a different installation or data directory with **Restore backup**. Existing projects and sessions retain their identities. External workspace folders must be backed up separately and reattached. The archive limit is 60 MiB compressed and 256 MiB expanded.
+
+Verified, Deep, and Interactive turns on in-core providers review the delivered answer and its Proof DAG together. The ledger records one full-solution verdict per review round. To request a separate verdict, use **Review this claim** on a passage in the answer or review a selected step in the proof graph. This action calls the configured in-core verifier. Tracing an answer, viewing historical evidence, and inspecting downstream dependencies run locally. Linked Lean and computation results apply to the claims and inputs they checked.
 
 Use **Canvas → LaTeX** to export a report as `.tex`, `.html` or **Reproducible ZIP**. **Explain** exports its own thread as Markdown or HTML. A session ZIP includes `report.tex`, `references.bib`, `report.html`, `ledger.json`, available sources and recorded computation artifacts, with provenance in `replay_manifest.json` and instructions in `REPRODUCE.md`.
 
 Run `python3 run_all_checks.py --verify-only` in the extracted bundle to check archived file hashes. With no flag, the script replays recorded successful computations with your Python privileges. Review the code before executing it and use the dependency versions recorded in the bundle. `re-search verify` checks the stored ledger and artifacts. The proof view shows model review and linked Lean results as separate evidence.
+
+## Reading papers with Investigation
+
+Choose **New investigation**, add a searchable PDF, text or LaTeX file, and optionally enter a reading question. The first reading gives a short **What, Why and How** summary with passages you can open, followed by the paper’s main results. A physical page range lets you select the article within a PDF containing several works. The original PDF opens locally, including scanned pages. Generating the overview and developing a result require readable source text and a connected model.
+
+Open the result you care about to see its evidence. Keep the suggested reading question or enter your own, then choose **Develop this result**. The model traces the assumptions, derivations, methods or observations supporting that result for your question. Other results stay available for later. Reopen a saved branch immediately, develop a prerequisite in turn, or explore another question about the same result.
+
+Open **Conventions** beside the summary to look up a symbol, unit, normalization, sign, coordinate choice, or statistical reporting rule. Each entry gives the meaning, where it applies and the authors’ words. A convention inferred from usage includes the model’s rationale. Local changes can have separate entries for the same symbol. The catalog records the coverage of the review. If reading stops partway through, **Continue conventions review** adds to the saved entries and keeps the branches you have explored.
+
+An arrow points from a prerequisite, cited result or piece of evidence to the claim it supports. The map distinguishes explicit dependencies from inferred ones and records a reason and a passage for each edge. Open a claim to inspect the saved text, its file hash, and the original PDF page when available. The coverage indicator reports how much of the paper the model says it mapped. A checked source anchor verifies the excerpt against saved bytes.
+
+Corrections retain the original interpretation and are attached to a specific map revision. Checks, rechecks and further implications run on request and retain their own results. Starting linked Research carries the selected claim, its assumptions, related source passages and reader corrections into a fresh conversation. The return link opens the original Investigation. Sessions and their evidence are included in project backups.
 
 ## Development checks
 

@@ -447,6 +447,132 @@ fn per_agent_models_explain_export_and_narrator_lifecycle() {
 }
 
 #[test]
+fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
+    let (entered_tx, entered) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    let mock = ScriptedMock::start(Box::new(move |_, req| {
+        let input = req.to_string();
+        if input.contains("<selected_claim>x is positive [e-2].</selected_claim>") {
+            entered_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv_timeout(Duration::from_secs(8)).unwrap();
+        }
+        let text = if input.contains("<selected_claim>no verdict</selected_claim>") {
+            "I cannot provide the requested result."
+        } else {
+            r#"{"verdict":"accepted","summary":"Follows under the stated assumption.","counterexample":null,"issues":[]}"#
+        };
+        openai_text("gpt-4.1-mini", text)
+    }));
+    let temp = TempDir::new().unwrap();
+    let server = start_desktop_server(test_cfg(temp.path(), None, None, None)).unwrap();
+    let auth = [("X-ReSearch-Token", server.info.token.as_str())];
+    let call = |method: &str, path: &str, data: Value| {
+        let (code, _, bytes) = raw_http(server.addr.port(), method, path, &auth, &serde_json::to_vec(&data).unwrap());
+        (code, serde_json::from_slice::<Value>(&bytes).unwrap())
+    };
+    let (_, session) = call("POST", "/api/sessions", json!({"title":"Two turns"}));
+    let (status, agents) = call("GET", "/api/subagents", Value::Null);
+    assert_eq!(status, 200);
+    let step_role = agents["builtin"].as_array().unwrap().iter().find(|a| a["id"] == "step-verifier").unwrap();
+    assert_eq!(step_role["role_key"], "step_verifier");
+    let sid = session["id"].as_str().unwrap();
+    let route = format!("/api/sessions/{sid}/claim-review");
+    let ledger = Ledger::open(temp.path()).unwrap();
+    let rec = |kind: &str, data: Value| ledger.append_with_hash(sid, kind, 1, &data).unwrap().seq;
+    rec("session.start", json!({"prompt":"FIRST_PROBLEM","pinned_conventions":"x>0"}));
+    rec("proof.entry", json!({"entry_id":"e-1","entry_type":"assumption","summary":"x>0","depends_on":[]}));
+    rec("tool.request", json!({"call_id":"probe","tool":"sympy_eval","args":{"inline":"{\"code\":\"factorial(3)\"}"}}));
+    rec("tool.result", json!({"call_id":"probe","ok":true,"result":{"inline":"{\"value\":\"RECORDED_EXACT_VALUE\"}"}}));
+    rec("proof.entry", json!({"entry_id":"e-2","entry_type":"symbolic_computation","summary":"Calculation",
+        "tool_call_ref":"probe","depends_on":["e-1"]}));
+    rec("proof.entry", json!({"entry_id":"e-3","entry_type":"derivation","summary":"UNRELATED_ENTRY","depends_on":[]}));
+    rec("model.response", json!({"stop_reason":"end_turn"}));
+    let seq = rec("model.text", json!({"text":"The result:"}));
+    let repeated = format!("FIRST_OCCURRENCE x is positive [e-2]. {} SECOND_OCCURRENCE x is positive [e-2]. no verdict", "λ".repeat(1600));
+    rec("model.text", json!({"text":repeated}));
+    rec("session.end", json!({"outcome":"completed"}));
+    rec("session.resume", json!({"prompt":"LATER_UNRELATED_PROBLEM","pinned_conventions":"x<0"}));
+    rec("model.text", json!({"text":"x is negative."}));
+    rec("session.end", json!({"outcome":"completed"}));
+    assert_eq!(call("POST", &route, json!({"claim":"x is negative.","answer_seq":seq})).0,400);
+    assert_eq!(call("POST", &route, json!({"claim":"x is positive.","answer_seq":seq,"entry_id":"e-1"})).0,400);
+    assert_eq!(call("POST", &route, json!({"entry_id":"e-missing"})).0,404);
+    assert_eq!(call("POST", &route, json!({"claim":"x is positive [e-2].","answer_seq":seq,"occurrence":2})).0,400);
+    assert!(mock.captured().is_empty());
+    assert_eq!(call("PUT", "/api/settings/providers", json!({
+        "keys":{"openai":"sk-claim-test"},"base_urls":{"openai":mock.base_url},
+        "agent_models":{"step_verifier":{"provider":"openai","model":"gpt-4.1-mini"}}
+    })).0,200);
+    let (code, claim) = std::thread::scope(|scope| {
+        let pending = scope.spawn(|| call("POST", &route, json!({"claim":"x is positive [e-2].","answer_seq":seq,"cited_steps":["e-2"],"occurrence":1})));
+        entered.recv_timeout(Duration::from_secs(8)).unwrap();
+        assert_eq!(call("POST", &route, json!({"entry_id":"e-1"})).0,409);
+        assert_eq!(call("POST", &format!("/api/sessions/{sid}/messages"), json!({"prompt":"Busy!"})).0,409);
+        release.send(()).unwrap();
+        pending.join().unwrap()
+    });
+    assert_eq!(code, 200, "{claim}");
+    assert_eq!(claim["scope"], "claim");
+    assert_eq!(claim["verdict"], "accepted");
+    let request = mock.captured()[0].1.to_string();
+    assert!(request.contains("RECORDED_EXACT_VALUE") && request.contains("factorial(3)"));
+    assert!(request.contains("SECOND_OCCURRENCE") && !request.contains("FIRST_OCCURRENCE"));
+    assert!(!request.contains("UNRELATED_ENTRY"));
+    assert_eq!(claim["cited_steps"], json!(["e-2"]));
+    rec("proof.verification", json!({"kind":"step","target_entry_id":"e-2","verdict":"rejected"}));
+    let (code, retry) = call("POST", &route, json!({"entry_id":"e-2"}));
+    assert_eq!(code, 200, "{retry}");
+    let retry_request = mock.captured().last().unwrap().1.to_string();
+    assert!(retry_request.contains("RECORDED_EXACT_VALUE") && retry_request.contains("factorial(3)"));
+    assert!(!retry_request.contains("UNRELATED_ENTRY"));
+    let (code, step) = call("POST", &route, json!({"entry_id":"e-1"}));
+    assert_eq!(code, 200, "{step}");
+    assert_eq!(step["scope"], "step");
+    assert_eq!(step["verdict"], "accepted");
+    for (_, request) in mock.captured() {
+        let message = request.to_string();
+        assert!(message.contains("FIRST_PROBLEM"));
+        assert!(!message.contains("LATER_UNRELATED_PROBLEM"));
+    }
+    assert_eq!(call("POST", &route, json!({"claim":"no verdict","answer_seq":seq})).0,400);
+    let reopened = call("GET", &format!("/api/sessions/{sid}"), Value::Null).1;
+    assert!(reopened["messages"].as_array().unwrap().iter().all(|m| m["verified_status"] != "verified"));
+    let events = reopened["events"].as_array().unwrap();
+    let selections = events.iter().filter(|e| e["kind"] == "claim.review").collect::<Vec<_>>();
+    assert_eq!(selections.len(), 1);
+    assert_eq!(selections[0]["payload"]["answer_seq"], seq);
+    assert_eq!(selections[0]["payload"]["claim"], "x is positive [e-2].");
+    assert_eq!(selections[0]["payload"]["occurrence"], 1);
+    assert_eq!(selections[0]["payload"]["answer_sha256"], ledger::sha256_hex(format!("The result:\n{repeated}").as_bytes()));
+    rec("session.resume", json!({"prompt":"Is the latest answer justified?"}));
+    rec("proof.entry", json!({"entry_id":"e-4","entry_type":"final_answer","summary":"Bound","depends_on":[]}));
+    rec("model.text", json!({"text":"The final bound."}));
+    rec("proof.verification", json!({"kind":"full","target_entry_id":"e-4","verdict":"rejected","summary":"Full review found a gap.",
+        "answer_sha256":ledger::sha256_hex(b"The final bound.")}));
+    rec("session.end", json!({"outcome":"completed_unverified"}));
+    let (code, scoped) = call("POST", &route, json!({"entry_id":"e-4"}));
+    assert_eq!(code, 200, "{scoped}");
+    assert_eq!(scoped["verdict"], "accepted");
+    let reopened = call("GET", &format!("/api/sessions/{sid}"), Value::Null).1;
+    assert_eq!(reopened["messages"].as_array().unwrap().last().unwrap()["verified_status"], "unverified");
+    // The rejected e-2 check, its retry, and the accepted e-1 and e-4 checks are all recorded.
+    assert_eq!(reopened["stats"]["step_checks"], 4);
+    for format in ["html","tex"] {
+        let (code, _, bytes) = raw_http(server.addr.port(), "GET", &format!("/api/sessions/{sid}/export?format={format}"), &auth, b"");
+        assert_eq!(code, 200);
+        let report = String::from_utf8(bytes).unwrap();
+        assert!(report.contains("Selected claim from answer event") && report.contains("Proof step e-1"));
+        assert!(report.contains("occurrence 2"));
+        assert!(report.contains("Full-solution review targeting e-4") && report.contains("Full review found a gap."));
+        assert!(report.contains("Proof step e-4"));
+        assert!(report.contains("Follows under the stated assumption."));
+    }
+    assert!(ledger.verify_session(sid).is_ok());
+    server.shutdown();
+}
+
+#[test]
 fn prestart_upload_does_not_brick_turn1_and_turn2_verifier_sees_new_question() {
     clear_provider_env();
     let mock = ScriptedMock::start(Box::new(|_path, body| {

@@ -19,6 +19,34 @@ fn generate_session_id() -> Result<String, String> {
     Ok(format!("s-{hex}"))
 }
 
+/// Start a fresh Research history with the selected paper evidence and an immutable return link.
+pub fn research_from_paper(data_dir: &Path, parent: &str, context: &Value) -> Result<String, String> {
+    validate_session_id(parent).map_err(|e| e.to_string())?;
+    let ledger = Ledger::open_existing(data_dir).map_err(|e| e.to_string())?;
+    let (_, events) = ledger.read_verified_session(parent).map_err(|e| e.to_string())?;
+    let map = events.iter().find(|e| e.kind == "investigation.map"
+        && Some(e.seq) == context["map_seq"].as_u64()
+        && Some(e.event_hash.as_str()) == context["map_hash"].as_str()).ok_or("Paper map revision missing.")?;
+    let mut source_ids = std::collections::BTreeSet::new();
+    source_ids.insert(map.payload["source_id"].as_str().ok_or("Paper map has no primary source.")?);
+    for anchor in context["sources"].as_array().into_iter().flatten() {
+        source_ids.insert(anchor["source_id"].as_str().ok_or("Source identifier missing from evidence.")?);
+    }
+    let through = context["evidence_through_seq"].as_u64().unwrap_or(map.seq);
+    let sources: Vec<_> = events.iter().filter(|e| e.kind == "source.ingested" && e.seq <= through
+        && e.payload["source_id"].as_str().is_some_and(|id| source_ids.contains(id))).cloned().collect();
+    if source_ids.iter().any(|id| !sources.iter().any(|e| e.payload["source_id"].as_str() == Some(*id))) {
+        return Err("A source required by this claim is missing from the Investigation.".into());
+    }
+    let child = generate_session_id()?;
+    let mut files = copy_session_sources(data_dir, parent, &child, &sources)?;
+    let mut batch: Vec<_> = sources.iter().map(|ev| (ev.kind.as_str(), ev.schema_version, &ev.payload)).collect();
+    batch.push(("investigation.handoff", EVENT_SCHEMA_VERSION, context));
+    ledger.append_new_session(&child, &batch).map_err(|e| e.to_string())?;
+    if let Some(files) = &mut files { files.committed = true; }
+    Ok(child)
+}
+
 pub fn fork_session(data_dir: &Path, opts: &ForkOptions) -> Result<ForkReceipt, String> {
     validate_session_id(&opts.parent_session).map_err(|e| e.to_string())?;
     if let Some(mod_a) = &opts.modified_assumption {

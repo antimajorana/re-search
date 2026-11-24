@@ -1,7 +1,10 @@
 // Main entry controller: wires left rail (Active/Archived + Delete), Connect panel, model picker,
 // live pipeline bar, center stream, SSE live updates, resizable Canvas tabs, and postMessage bridge.
 import * as api from '/assets/api.js';
+import { initInvestigation, showInvestigationSession, refreshInvestigation } from '/assets/investigation.js';
+import { fileNewSession, initFolders, openFolderDialog, sessionFolderName, sessionsInFolder } from '/assets/session_folders.js';
 import { renderMathTextInto } from '/assets/math.js';
+import { attachAnswerTrace } from '/assets/claim_trace.js';
 import {
   appendAssistantMessage, appendUserMessage, appendWarningLine, confirmOptimisticUserMessage,
   finalizeLiveAssistant, finalizeLiveOnError, finalizeLiveThinking, handleRoundReset,
@@ -10,7 +13,7 @@ import {
   resolveApprovalCard, setStreamStatus,
 } from '/assets/stream.js';
 import {
-  discardComposerDraft, initComposer, reuseComposerPrompt, setComposerBusy, setComposerLoading, setComposerPrompt,
+  discardComposerDraft, getComposerOptions, initComposer, reuseComposerPrompt, setComposerBusy, setComposerLoading, setComposerPrompt,
   setComposerRoute, setComposerSession, setComposerVisible, submitComposerPrompt,
 } from '/assets/composer.js';
 import { applySession, getModelChoice, initModelPicker, loadModels, noModelReason, rememberForSession } from '/assets/model_picker.js';
@@ -107,6 +110,10 @@ async function boot() {
     onPromptPick: (prompt) => setComposerPrompt(prompt, true),
     onNotify: showToast,
     onInspectStep: inspectStepInCanvas,
+    attachClaimTrace: (row, text, meta, id) => attachAnswerTrace(row, text, meta.seq, id, {
+      inspectStep: inspectStepInCanvas,
+      openSource: (reader) => openSessionSource(id, reader.source_id, reader.path, reader),
+    }),
     onRecoveryAction: (action, ctx) => {
       const prompt = buildRecoveryPrompt(action, ctx);
       if (action === 'explain') { activateCanvasTab('tab-sidetalk'); askInExplain(prompt); }
@@ -114,6 +121,7 @@ async function boot() {
     },
     onOpenConnect: openConnect,
     onOpenProjects: () => openProjects(state.activeProjectId),
+    onOpenInvestigation: () => document.getElementById('new-investigation-btn').click(),
     getSetupInfo: getWorkbenchSnapshot,
   });
 
@@ -130,7 +138,25 @@ async function boot() {
     onNeedModel: openConnect,
   });
 
-  initLatexCanvas({ onNotify: showToast });
+  initLatexCanvas({ onNotify: showToast, ensureSession: ensureActiveSession, onPendingSave: recoverSaveApproval });
+  initInvestigation({
+    create: () => createAndSelectSession({ mode: 'investigation' }),
+    open: async (id) => {
+      const navigation = navigationRevision;
+      await refreshSessionList();
+      if (navigation === navigationRevision) await selectSession(id, { focus: true });
+    },
+    useQuestion: question => setComposerPrompt(question, true),
+    requestOptions: () => {
+      const choice = getModelChoice();
+      if (choice) return getComposerOptions(choice);
+      openConnect('providers');
+      throw new Error(noModelReason() || 'Connect a model to run the investigation.');
+    },
+    send: handleSendPrompt,
+    openSource: (id, anchor) => openSessionSource(id, anchor.source_id, anchor.path, anchor),
+    onNotify: showToast,
+  });
   initDagCanvas({
     onDagCount: (n) => { state.tabCounts.dag = n; updateCanvasTabCounts(state.tabCounts); },
     onForkCreated: async (newId, open) => {
@@ -207,6 +233,7 @@ async function boot() {
     },
   });
   const navigation = navigationRevision;
+  initFolders(renderSessionList, showToast);
   const background = Promise.all([checkHealth(), loadModels(false), loadSubagents()]);
   await refreshSessionList();
 
@@ -376,13 +403,15 @@ function syncProjectMembership(projectId) {
 
 function renderSessionList() {
   renderSessionRailList(el.sessionList, {
-    sessions: state.sessions,
+    sessions: sessionsInFolder(state.sessions),
     activeSessionId: state.activeSessionId,
     query: state.sessionQuery,
     filterMode: state.railFilterMode,
     onSelect: (id) => selectSession(id, { focus: true }),
     onArchive: handleArchiveSession,
     onDelete: handleDeleteSession,
+    onFile: openFolderDialog,
+    folderName: sessionFolderName,
   });
 }
 
@@ -398,6 +427,7 @@ function resetToBlankState() {
   setComposerLoading(false);
   closeSse();
   state.activeSessionId = null;
+  showInvestigationSession(null, null);
   setComposerSession(null);
   syncProjectMembership(null);
   resetLiveTurnState();
@@ -464,6 +494,8 @@ async function createAndSelectSession(opts = {}, { focus = true, adoptDraft = fa
   const navigation = ++navigationRevision;
   try {
     const created = await api.createSession(opts);
+    try { await fileNewSession(created.id); }
+    catch (error) { showToast(`Session created. Could not file it. ${error.message}`); }
     await refreshSessionList();
     if (navigation === navigationRevision) await selectSession(created.id, { focus, adoptDraft });
     return created.id;
@@ -506,6 +538,7 @@ async function selectSession(id, { focus = false, adoptDraft = false } = {}) {
   closeProjects();
   setComposerLoading(true);
   if (changed) {
+    showInvestigationSession(id, null);
     closeSessionPopovers();
     resetLiveTurnState();
     const selected = state.sessions.find((s) => s.id === id);
@@ -534,6 +567,7 @@ async function selectSession(id, { focus = false, adoptDraft = false } = {}) {
   try {
     const sess = await api.getSession(id);
     if (selection !== sessionSelection) return;
+    showInvestigationSession(id, sess);
     setComposerLoading(false);
     syncProjectMembership(sess.project_id);
     if (titleRevision === sessionTitleRevision) renderMathTextInto(el.sessionTitle, sess.title || id);
@@ -574,6 +608,24 @@ async function selectSession(id, { focus = false, adoptDraft = false } = {}) {
   }
 }
 
+function showPendingApproval(d) {
+  setComposerBusy(true);
+  setStreamStatus('Awaiting Approval', 'warn');
+  const card = renderApprovalCard(d);
+  if (card && d.caller === 'user:canvas') {
+    if (window.innerWidth <= 1120) setDrawerOpen('canvas', false);
+    card.querySelector('button')?.focus({ preventScroll: true });
+    card.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function recoverSaveApproval(id, approvals) {
+  if (id !== state.activeSessionId) return;
+  for (const item of approvals) {
+    if (item.caller === 'user:canvas' && !document.querySelector(`.approval-card[data-call-id="${CSS.escape(item.call_id)}"]`)) showPendingApproval(item);
+  }
+}
+
 function connectSessionSse(id) {
   closeSse();
   const selection = sessionSelection;
@@ -590,11 +642,12 @@ function connectSessionSse(id) {
       try {
         const sess = await api.getSession(id);
         if (!isAct() || interrupted || revision !== turnRevision) return;
+        showInvestigationSession(id, sess);
         if (titleRevision === sessionTitleRevision) renderMathTextInto(el.sessionTitle, sess.title || id);
-        if (sess.running) {
+        if (sess.running || sess.pending_approvals?.length || sess.pending_checkpoints?.length) {
           const approvals = sess.pending_approvals || [];
           const checkpoints = sess.pending_checkpoints || [];
-          approvals.forEach(renderApprovalCard);
+          approvals.forEach(showPendingApproval);
           const messageStream = document.getElementById('message-stream');
           checkpoints.forEach((cp) => renderCheckpointCard(messageStream, id, cp, checkpointOpts(id)));
           setComposerBusy(true);
@@ -637,14 +690,7 @@ function connectSessionSse(id) {
     tool_trace: (d) => { if (!isAct()) return; updatePipelineFromEvent('tool_trace', d); handleToolTrace(d); },
     approval_requested: (d) => {
       if (!isAct()) return;
-      setComposerBusy(true);
-      setStreamStatus('Awaiting Approval', 'warn');
-      const card = renderApprovalCard(d);
-      if (card && d.caller === 'user:canvas') {
-        if (window.innerWidth <= 1120) setDrawerOpen('canvas', false);
-        card.querySelector('button')?.focus({ preventScroll: true });
-        card.scrollIntoView({ block: 'nearest' });
-      }
+      showPendingApproval(d);
     },
     approval_resolved: async (d) => {
       if (!isAct() || !d || d.auto_approved) return;
@@ -665,6 +711,17 @@ function connectSessionSse(id) {
       setComposerBusy(true);
       setStreamStatus('Awaiting Input', 'warn');
       renderCheckpointCard(document.getElementById('message-stream'), id, d, checkpointOpts(id));
+    },
+    claim_review_started: () => {
+      if (!isAct()) return;
+      setComposerBusy(true);
+      setStreamStatus('Reviewing claim…', 'accent');
+    },
+    claim_review_finished: (d) => {
+      if (!isAct()) return;
+      const waiting = d?.pending_approvals ? 'Awaiting Approval' : d?.pending_checkpoints ? 'Awaiting Input' : '';
+      setComposerBusy(Boolean(waiting));
+      setStreamStatus(waiting || 'Ready', waiting ? 'warn' : 'ok');
     },
     checkpoint_resolved: (d) => {
       if (!isAct() || !d) return;
@@ -690,6 +747,7 @@ function connectSessionSse(id) {
         latestPrompt = d.data?.prompt || '';
       }
       if (d?.kind === 'literature.fetched' || d?.kind === 'source.ingested') loadSessionSources(id);
+      if (d?.kind?.startsWith('investigation.') || d?.kind === 'source.ingested') refreshInvestigation(id);
       updatePipelineFromEvent('session_event', d);
       if (d && d.kind === 'vendor.builtin_tool') appendWarningLine(formatBuiltinToolWarning(d.data || {}));
     },
@@ -703,6 +761,7 @@ function connectSessionSse(id) {
         const sess = await api.getSession(id);
         if (!isAct()) return;
         const msgs = Array.isArray(sess?.messages) ? sess.messages : [];
+        showInvestigationSession(id, sess);
         const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
         renderSessionGrantsPill(el.grantsPill, sess.session_grants || []);
         if (d && d.text) {
@@ -743,6 +802,7 @@ function connectSessionSse(id) {
       latestPrompt = '';
       refreshSessionList();
       refreshSessionRoute(id);
+      refreshInvestigation(id);
     },
   });
   state.eventSource = source;

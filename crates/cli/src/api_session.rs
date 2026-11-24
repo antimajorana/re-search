@@ -175,6 +175,7 @@ pub fn run(opts: &ApiRunOpts) -> Result<i32, String> {
     let info = transport.info();
 
     let session = format!("s-{}", random_hex(8));
+    let _activity = research_tools::session_activity::start_turn(&opts.data_dir, &session).map_err(|e| e.to_string())?;
     let dir = opts.data_dir.join("sessions").join(&session);
     let (scratch, pycache) = ensure_session_dirs(&dir)?;
 
@@ -272,6 +273,7 @@ pub fn resume(opts: &ApiResumeOpts) -> Result<i32, String> {
     let transport = build_transport(provider, &api_base, &model)?;
     let info = transport.info();
 
+    let _activity = research_tools::session_activity::start_turn(&opts.data_dir, &opts.session).map_err(|e| e.to_string())?;
     let dir = opts.data_dir.join("sessions").join(&opts.session);
     let (scratch, pycache) = ensure_session_dirs(&dir)?;
 
@@ -346,6 +348,7 @@ pub fn run_with_research(opts: &ApiRunOpts, res: &ResearchOpts) -> Result<i32, S
     let info = transport.info();
 
     let session = format!("s-{}", random_hex(8));
+    let _activity = research_tools::session_activity::start_turn(&opts.data_dir, &session).map_err(|e| e.to_string())?;
     let dir = opts.data_dir.join("sessions").join(&session);
     let (scratch, pycache) = ensure_session_dirs(&dir)?;
     let _session_guard = acquire_session_lock(&dir, &session)?;
@@ -446,6 +449,7 @@ pub fn resume_with_research(opts: &ApiResumeOpts, res: &ResearchOpts) -> Result<
         Err(e) => return Err(e.to_string()),
     };
 
+    let _activity = research_tools::session_activity::start_turn(&opts.data_dir, &opts.session).map_err(|e| e.to_string())?;
     let dir = opts.data_dir.join("sessions").join(&opts.session);
     let (scratch, pycache) = ensure_session_dirs(&dir)?;
     let _session_guard = acquire_session_lock(&dir, &opts.session)?;

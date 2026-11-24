@@ -29,6 +29,7 @@ let choice = null; // { provider, model }
 let sessionId = null;
 let sessionRouteNote = '';
 let loading = null;
+let loadRevision = 0;
 let connectBtn = null;
 let newModelKeys = new Set();
 let pollTimer = null;
@@ -173,10 +174,12 @@ function detectNewlyDiscoveredModels(fetchedGroups) {
 // Load (or reload) the list; `refresh` asks the server to bypass its cache.
 export function loadModels(refresh = false) {
   if (loading && !refresh) return loading;
+  const revision = ++loadRevision;
   loading = (async () => {
     const first = loadedAt === 0;
     try {
       const data = await api.getModels(refresh);
+      if (revision !== loadRevision) return;
       groups = Array.isArray(data && data.providers) ? data.providers : [];
       if (data && Number.isFinite(data.cache_ttl_s) && data.cache_ttl_s > 0) ttlMs = data.cache_ttl_s * 1000;
       loadedAt = Date.now();
@@ -187,10 +190,11 @@ export function loadModels(refresh = false) {
         notify(`${g.label}: could not fetch the model list (${g.error}); showing ${shown}.`);
       }
     } catch (err) {
-      notify(`Could not load models: ${err.message}`);
+      if (revision === loadRevision) notify(`Could not load models: ${err.message}`);
     } finally {
-      loading = null;
+      if (revision === loadRevision) loading = null;
     }
+    if (revision !== loadRevision) return;
     pickChoice(null);
     render();
   })();

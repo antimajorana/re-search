@@ -113,11 +113,12 @@ pub fn builtin_agents_json() -> Vec<Value> {
         }),
         json!({
             "id": "step-verifier",
+            "role_key": "step_verifier",
             "name": "Step Verifier",
-            "role": "Single-Step Audit Agent",
-            "when": "Available through the Rust library for individual Proof DAG reviews.",
+            "role": "Individual Claim Reviewer",
+            "when": "Runs when you request a review from an answer or the Proof DAG.",
             "category": "research",
-            "summary": "Issues a separate verdict for one proof entry using its dependencies and a TeX audit. The desktop app runs the Full Solution Verifier."
+            "summary": "Checks the selected claim or proof step using its recorded evidence and a TeX audit."
         }),
         json!({
             "id": "full-verifier",

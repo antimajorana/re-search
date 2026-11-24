@@ -198,9 +198,29 @@ fn dispatch_api(
     let method = req.method.as_str();
 
     match (method, segs.as_slice()) {
+        ("GET", ["api", "sessions", sid, "sources", source, "original-pdf"]) => {
+            let path = req.query.get("path").map(String::as_str);
+            let line = req.query.get("line").and_then(|s| s.parse::<usize>().ok());
+            match crate::original_pdf::read(state, sid, source, path, line) {
+                Ok(pdf) => {
+                    let page = pdf.page.map(|p| p.to_string()).unwrap_or_default();
+                    write_bytes(&mut stream, 200, "application/pdf", &pdf.bytes, &[
+                        ("Cache-Control", "no-store"), ("X-Content-Type-Options", "nosniff"),
+                        ("Content-Security-Policy", "sandbox"), ("X-ReSearch-Pdf-Page", &page),
+                    ]);
+                }
+                Err(e) => write_api_res(&mut stream, Err(e)),
+            }
+        }
         ("GET", ["api", "projects"]) => write_api_res(&mut stream, crate::projects::handle_list(state)),
         ("POST", ["api", "projects"]) => {
             write_api_res(&mut stream, crate::projects::handle_create(state, &req.body));
+        }
+        ("POST", ["api", "projects", "restore"]) => {
+            write_api_res(&mut stream, crate::projects::backup::restore(state, &req.body));
+        }
+        ("POST", ["api", "projects", id, "backup"]) => {
+            write_api_res(&mut stream, crate::projects::backup::prepare_download(state, id));
         }
         ("GET", ["api", "projects", id]) => write_api_res(&mut stream, crate::projects::handle_get(state, id)),
         ("PUT", ["api", "projects", id]) => {
@@ -235,6 +255,20 @@ fn dispatch_api(
         ("POST", ["api", "projects", id, "validation-plans", plan, "evaluate"]) => {
             write_api_res(&mut stream, crate::validation_plans::handle_evaluate(state, id, plan, &req.body));
         }
+        ("GET", ["api", "projects", id, "export"]) if req.query.get("format").is_some_and(|v| v == "backup") => {
+            let result = if state.auth.has_valid_header_token(req.header("x-research-token"), req.header("authorization")) {
+                crate::projects::backup::export(state, id)
+            } else {
+                crate::projects::backup::take_download(state, id, req.query.get("ticket").map(String::as_str).unwrap_or_default())
+            };
+            match result {
+                Ok(bytes) => write_bytes(&mut stream, 200, "application/zip", &bytes, &[
+                    ("Content-Disposition", &format!("attachment; filename=\"{id}.research-backup.zip\"")),
+                    ("Cache-Control", "no-store"),
+                ]),
+                Err((status, message)) => write_json(&mut stream, status, json!({ "error": message }), &[]),
+            }
+        }
         ("GET", ["api", "projects", id, "export"]) => {
             match crate::projects::export_bibtex(state, id, req.query.get("format").map(String::as_str)) {
                 Ok(bytes) => write_bytes(
@@ -266,6 +300,9 @@ fn dispatch_api(
             write_api_res(&mut stream, crate::experiments::handle_branch_diff(state, id, experiment, session));
         }
         ("GET", ["api", "sessions"]) => write_api_res(&mut stream, handle_list_sessions(state)),
+        ("GET" | "POST", ["api", "session-folders"]) => {
+            write_api_res(&mut stream, crate::session_folders::handle(state, (method == "POST").then_some(req.body.as_slice())));
+        }
         ("POST", ["api", "sessions"]) => {
             write_api_res(&mut stream, handle_create_session(state, &req.body));
         }
@@ -293,6 +330,9 @@ fn dispatch_api(
         }
         ("POST", ["api", "sessions", id, "messages"]) => {
             write_api_res(&mut stream, handle_post_message(state, id, &req.body));
+        }
+        ("GET", ["api", "sessions", id, "approvals"]) => {
+            write_api_res(&mut stream, crate::routes_session::handle_pending_approvals(state, id));
         }
         ("POST", ["api", "sessions", id, "approvals", call_id]) => {
             write_api_res(&mut stream, handle_post_approval(state, id, call_id, &req.body));
@@ -334,6 +374,10 @@ fn dispatch_api(
         ("POST", ["api", "sessions", id, "latex", "patch"]) => {
             write_api_res(&mut stream, handle_latex_patch(state, id, &req.body));
         }
+        ("GET" | "PUT", ["api", "sessions", id, "manuscript-drafts"]) => {
+            let update = (method == "PUT").then_some(req.body.as_slice());
+            write_api_res(&mut stream, crate::manuscript_drafts::handle(state, id, update));
+        }
         ("POST", ["api", "sessions", id, "tex-audit"]) => {
             write_api_res(&mut stream, handle_tex_audit(state, id, &req.body));
         }
@@ -364,6 +408,12 @@ fn dispatch_api(
         }
         ("POST", ["api", "sessions", id, "verify"]) => {
             write_api_res(&mut stream, handle_verify(state, id));
+        }
+        ("POST", ["api", "sessions", id, "claim-review"]) => {
+            write_api_res(&mut stream, crate::claim_review::handle_review(state, id, &req.body));
+        }
+        ("POST", ["api", "sessions", id, "investigation", operation]) => {
+            write_api_res(&mut stream, crate::investigation::handle(state, id, operation, &req.body));
         }
         ("POST", ["api", "sessions", id, "fork"]) => {
             write_api_res(&mut stream, handle_fork(state, id, &req.body));

@@ -16,15 +16,23 @@ let currentWorkspace = null;
 let displayedFile = null;
 let fileHash;
 const drafts = new Map();
+const recovered = new Map();
+const revisions = new Map();
+const recoveryTargets = new Map();
+const writes = new Map();
+let detachedDraft = false;
+let recoveryLoad = null;
 let workspaceRequest = 0;
 let fileRequest = 0;
 let originalContent = '';
 let editorBaseline = '';
 let previewTimer = null;
 let notifyFn = () => {};
+let onPendingSave;
 
 export function initLatexCanvas(opts = {}) {
   notifyFn = opts.onNotify || (() => {});
+  onPendingSave = opts.onPendingSave;
   fileSelectEl = document.getElementById('latex-file-select');
   editorEl = document.getElementById('latex-editor');
   previewEl = document.getElementById('latex-preview');
@@ -34,9 +42,22 @@ export function initLatexCanvas(opts = {}) {
   auditBtn = document.getElementById('tex-audit-btn');
   auditResultsEl = document.getElementById('tex-audit-results');
   fileNoteEl = document.getElementById('latex-file-note');
+  const start = document.getElementById('latex-start-manuscript');
+  start?.addEventListener('click', async () => {
+    start.disabled = true;
+    try {
+      if (await opts.ensureSession()) editorEl?.focus();
+    } finally {
+      start.disabled = false;
+    }
+  });
+  document.getElementById('latex-restore-draft')?.addEventListener('click', restoreSelectedDraft);
+  document.getElementById('latex-bind-draft')?.addEventListener('submit', bindDetachedDraft);
+  document.getElementById('latex-discard-draft')?.addEventListener('click', discardSelectedDraft);
 
   if (editorEl) {
     editorEl.addEventListener('input', () => {
+      rememberDraft(true);
       updateLineCount();
       clearTimeout(previewTimer);
       previewTimer = setTimeout(() => {
@@ -67,6 +88,7 @@ export function initLatexCanvas(opts = {}) {
       const data = await api.getWorkspace(currentSessionId, path);
       if (request !== fileRequest) return;
       drafts.delete(displayedFile);
+      queueRecovery(displayedFile, null);
       if (!fileSelectEl.value) {
         const option = document.createElement('option');
         option.value = option.textContent = path;
@@ -92,8 +114,7 @@ export function initLatexCanvas(opts = {}) {
     }
   }
 
-  updateLineCount();
-  renderLatexDocumentPreview(previewEl, '');
+  showFile('', false);
 }
 
 function updateLineCount() {
@@ -103,10 +124,235 @@ function updateLineCount() {
   lineCountEl.textContent = `${lines} line${lines === 1 ? '' : 's'}`;
 }
 
-function rememberDraft() {
-  if (!displayedFile || !editorEl || editorEl.disabled) return;
+function rememberDraft(persist = false) {
+  if (!displayedFile || !editorEl || editorEl.disabled || editorEl.readOnly) return;
   if (editorEl.value === editorBaseline) drafts.delete(displayedFile);
   else drafts.set(displayedFile, { text: editorEl.value, originalContent, editorBaseline, fileHash });
+  if (persist) queueRecovery(displayedFile, drafts.get(displayedFile) ?? null);
+}
+
+function recoveryStatus(key, message) {
+  const status = document.getElementById('latex-recovery-status');
+  if (key === displayedFile && status && status.textContent !== message) status.textContent = message;
+}
+
+// At most one write per document is in flight. Keystrokes during that write
+// replace the pending snapshot. A late completion cannot erase a newer edit.
+function queueRecovery(key, draft) {
+  if (!key || !api.putManuscriptDraft) return Promise.resolve(true);
+  const snapshot = draft ? { text: draft.text, originalContent: draft.originalContent, fileHash: draft.fileHash ?? null } : null;
+  let queue = writes.get(key);
+  if (queue) { queue.next = snapshot; return queue.promise; }
+  if (!snapshot && !revisions.has(recoveryTargets.get(key) || key)) return Promise.resolve(true);
+  queue = { next: snapshot };
+  writes.set(key, queue);
+  const [session, workspace, path] = JSON.parse(key);
+  queue.promise = (async () => {
+    let failures = 0;
+    try {
+      while (queue.next !== undefined) {
+        const next = queue.next;
+        queue.next = undefined;
+        recoveryStatus(key, 'Saving recovery copy…');
+        const address = recoveryTargets.get(key) || key;
+        const copy = JSON.parse(address)[3] || null;
+        let result;
+        try {
+          result = await api.putManuscriptDraft(session, { workspace, path, copy,
+            revision: revisions.get(address) ?? null, draft: next, keep_both: Boolean(next) });
+        } catch (err) {
+          if ((err.status && err.status < 500) || failures >= 3) throw err;
+          if (queue.next === undefined) queue.next = next;
+          recoveryStatus(key, 'Retrying recovery copy…');
+          await new Promise(resolve => setTimeout(resolve, 250 * 2 ** failures++));
+          continue;
+        }
+        failures = 0;
+        const stored = result.copy ? JSON.stringify([session, workspace, path, result.copy]) : key;
+        if (result.revision) {
+          recoveryTargets.set(key, stored);
+          revisions.set(stored, result.revision);
+          if (result.copy !== copy && result.copy) notifyFn('Another window edited this manuscript. Both recovery copies were kept.');
+        } else {
+          revisions.delete(stored);
+          recoveryTargets.delete(key);
+        }
+      }
+      recoveryStatus(key, revisions.has(recoveryTargets.get(key) || key) ? 'Recovery copy saved' : '');
+      return true;
+    } catch (err) {
+      recoveryStatus(key, 'Recovery copy unavailable');
+      notifyFn(`Could not save the recovery copy. ${err.message}`);
+      return false;
+    } finally {
+      writes.delete(key);
+    }
+  })();
+  return queue.promise;
+}
+
+function renderRecoveryOptions() {
+  const select = document.getElementById('latex-recovery-list');
+  const panel = document.getElementById('latex-recovery');
+  if (!select || !panel) return;
+  const previous = select.value;
+  select.replaceChildren();
+  for (const key of recovered.keys()) {
+    const [session, workspace, path, copy] = JSON.parse(key);
+    if (session !== currentSessionId) continue;
+    const option = document.createElement('option');
+    option.value = key;
+    option.textContent = `${path || 'Scratch manuscript'}${workspace && workspace !== currentWorkspace ? ' — ' + workspace : ''}`;
+    if (copy) option.textContent += ` (alternate copy, ${new Date(recovered.get(key).updated).toLocaleTimeString()})`;
+    select.appendChild(option);
+  }
+  panel.hidden = select.options.length === 0;
+  if ([...select.options].some(o => o.value === displayedFile)) select.value = displayedFile;
+  else if ([...select.options].some(o => o.value === previous)) select.value = previous;
+}
+
+function receiveRecovery(sessionId, data) {
+  for (const [key] of recovered) {
+    if (JSON.parse(key)[0] === sessionId) recovered.delete(key);
+  }
+  for (const rec of data.drafts || []) {
+    const documentKey = JSON.stringify([sessionId, rec.workspace, rec.path]);
+    const key = rec.copy ? JSON.stringify([sessionId, rec.workspace, rec.path, rec.copy]) : documentKey;
+    if ((writes.has(documentKey) || drafts.has(documentKey)) && (recoveryTargets.get(documentKey) || documentKey) === key) continue;
+    revisions.set(key, rec.revision);
+    recovered.set(key, { ...rec.draft, updated: rec.updated_ms, editorBaseline: rec.draft.originalContent.replace(/\r\n?/g, '\n') });
+  }
+  renderRecoveryOptions();
+}
+
+async function restoreSelectedDraft() {
+  const key = document.getElementById('latex-recovery-list')?.value;
+  const draft = recovered.get(key);
+  if (!draft) return;
+  rememberDraft();
+  const [session, workspace, path] = JSON.parse(key);
+  const documentKey = JSON.stringify([session, workspace, path]);
+  if (writes.has(documentKey)) await writes.get(documentKey).promise;
+  if (currentSessionId !== session || !recovered.has(key)) return;
+  if (drafts.has(documentKey)) {
+    const previous = recoveryTargets.get(documentKey) || documentKey;
+    recovered.set(previous, { ...drafts.get(documentKey), updated: Date.now() });
+  }
+  const detached = workspace !== currentWorkspace;
+  recovered.delete(key);
+  drafts.set(documentKey, draft);
+  recoveryTargets.set(documentKey, key);
+  fileRequest++;
+  if (!detached) {
+    if (![...fileSelectEl.options].some(o => o.value === path)) {
+      const opt = document.createElement('option');
+      opt.value = path;
+      opt.textContent = path || 'Scratch manuscript';
+      fileSelectEl.appendChild(opt);
+    }
+    fileSelectEl.value = path;
+  }
+  showFile(draft.text, true);
+  displayedFile = documentKey;
+  ({ originalContent, editorBaseline, fileHash } = draft);
+  detachedDraft = detached;
+  if (detached) {
+    fileSelectEl.selectedIndex = -1;
+    saveBtn.disabled = true;
+    showBindingOptions(path);
+  } else if (saveBtn) {
+    saveBtn.disabled = !currentWorkspace;
+  }
+  recoveryStatus(documentKey, 'Recovery copy restored');
+  renderRecoveryOptions();
+  editorEl.focus();
+}
+
+function showBindingOptions(path) {
+  const form = document.getElementById('latex-bind-draft');
+  const input = document.getElementById('latex-bind-path');
+  form.hidden = !currentWorkspace;
+  input.value = path || 'draft.tex';
+  fileNoteEl.hidden = false;
+  fileNoteEl.textContent = currentWorkspace
+    ? 'Choose a destination for this recovered manuscript. Save applies it to disk.'
+    : 'Attach a folder under Research options → Workspace to choose a destination for this recovered manuscript.';
+}
+
+async function bindDetachedDraft(event) {
+  event.preventDefault();
+  if (!detachedDraft || !currentWorkspace || !displayedFile) return;
+  const input = document.getElementById('latex-bind-path');
+  const path = input.value.trim().replaceAll('\\', '/');
+  if (!/\.(tex|bib|md|txt)$/i.test(path) || /^[A-Za-z]:/.test(path) ||
+      path.split('/').some(part => !part || part === '.' || part === '..')) {
+    fileNoteEl.textContent = 'Enter a relative .tex, .bib, .md or .txt path inside the attached folder.';
+    return;
+  }
+  const former = displayedFile;
+  const session = currentSessionId;
+  const workspace = currentWorkspace;
+  const request = fileRequest;
+  const target = JSON.stringify([session, workspace, path]);
+  const active = () => request === fileRequest && workspace === currentWorkspace && former === displayedFile;
+  const busyButton = event.currentTarget.querySelector('button');
+  if (busyButton.disabled) return;
+  busyButton.disabled = true;
+  editorEl.readOnly = true;
+  try {
+    if (writes.has(former) && !await writes.get(former).promise) return;
+    if (target !== former && (drafts.has(target) ||
+        [...recovered.keys()].some(k => JSON.stringify(JSON.parse(k).slice(0, 3)) === target))) {
+      throw new Error('Another recovery copy uses that name. Choose a different destination.');
+    }
+    const listing = await api.getWorkspace(session);
+    if (!active()) return;
+    if (listing.workspace_root !== workspace) throw new Error('The attached workspace changed. Choose the destination again.');
+    const listed = (listing.files || []).some(item => (typeof item === 'string' ? item : item.path) === path);
+    let base = '', hash = null;
+    if (listed) {
+      const file = await api.getWorkspace(session, path);
+      if (!active()) return;
+      if (file.truncated || !fileHash || file.file_sha256 !== fileHash) {
+        throw new Error('That file differs from the saved baseline. Choose a new filename to keep both versions.');
+      }
+      base = file.content;
+      hash = file.file_sha256;
+    }
+    const draft = { text: editorEl.value, originalContent: base, editorBaseline: base.replace(/\r\n?/g, '\n'), fileHash: hash };
+    if (!await queueRecovery(target, draft)) return;
+    drafts.set(target, draft);
+    if (!active()) return;
+    if (target !== former) drafts.delete(former);
+    fileRequest++;
+    if (![...fileSelectEl.options].some(o => o.value === path)) fileSelectEl.add(new Option(path, path));
+    fileSelectEl.value = path;
+    openDraft(path, base, false, hash);
+    recoveryStatus(target, 'Recovery copy saved');
+    editorEl.focus();
+    if (target !== former) await queueRecovery(former, null);
+  } catch (err) {
+    if (active()) fileNoteEl.textContent = err.message;
+  } finally {
+    busyButton.disabled = false;
+    if (active()) editorEl.readOnly = false;
+  }
+}
+
+async function discardSelectedDraft() {
+  const key = document.getElementById('latex-recovery-list')?.value;
+  if (!recovered.has(key) || !window.confirm('Discard this recovery copy?')) return;
+  const [session, workspace, path, copy] = JSON.parse(key);
+  try {
+    await api.putManuscriptDraft(session, { workspace, path, copy, revision: revisions.get(key), draft: null });
+  } catch (err) {
+    notifyFn(`Could not discard the recovery copy. ${err.message}`);
+    return;
+  }
+  revisions.delete(key);
+  recovered.delete(key);
+  renderRecoveryOptions();
+  if (displayedFile === JSON.stringify([session, workspace, path])) await refreshWorkspaceFiles(currentSessionId);
 }
 
 function openDraft(path, text, truncated, hash) {
@@ -118,9 +364,19 @@ function openDraft(path, text, truncated, hash) {
   if (draft) {
     ({ originalContent, editorBaseline, fileHash } = draft);
   }
+  if (!draft && [...recovered.keys()].some(address => JSON.stringify(JSON.parse(address).slice(0, 3)) === key)) {
+    editorEl.readOnly = true;
+    if (saveBtn) saveBtn.disabled = true;
+    recoveryStatus(key, 'Choose Restore or Discard');
+  }
+  renderRecoveryOptions();
 }
 
 function showFile(text, ready, truncated = false) {
+  const binding = document.getElementById('latex-bind-draft');
+  if (binding) binding.hidden = true;
+  recoveryStatus(displayedFile, '');
+  detachedDraft = false;
   displayedFile = null;
   if (reloadBtn) reloadBtn.hidden = true;
   originalContent = text;
@@ -139,7 +395,7 @@ function showFile(text, ready, truncated = false) {
     fileNoteEl.hidden = !ready || (!truncated && Boolean(currentWorkspace));
     fileNoteEl.textContent = truncated
       ? 'This preview is truncated. Open the full file in your workspace to edit or audit it.'
-      : 'This scratch draft is kept while the app is open. Attach a folder under Research options → Workspace to save a manuscript.';
+      : 'Edits are kept locally for recovery. Attach a folder under Research options → Workspace to save a manuscript.';
   }
   if (auditResultsEl) auditResultsEl.hidden = true;
   updateLineCount();
@@ -148,20 +404,36 @@ function showFile(text, ready, truncated = false) {
 
 export async function refreshWorkspaceFiles(sessionId) {
   const request = ++workspaceRequest;
+  const start = document.getElementById('latex-start-manuscript');
+  if (start) start.hidden = Boolean(sessionId);
   if (sessionId !== currentSessionId) {
     rememberDraft();
     currentSessionId = sessionId;
+    recoveryLoad = sessionId && api.getManuscriptDrafts ? api.getManuscriptDrafts(sessionId) : null;
     currentWorkspace = null;
     fileRequest += 1;
     if (fileSelectEl) fileSelectEl.replaceChildren();
     showFile('', false);
+    renderRecoveryOptions();
   }
   if (!sessionId || !fileSelectEl) return;
   try {
+    if (recoveryLoad) {
+      try {
+        const data = await recoveryLoad;
+        if (request !== workspaceRequest) return;
+        receiveRecovery(sessionId, data);
+      } catch (err) {
+        if (request !== workspaceRequest) return;
+        notifyFn(`Could not load recovery copies. ${err.message}`);
+      }
+      recoveryLoad = null;
+    }
     const data = await api.getWorkspace(sessionId);
     if (request !== workspaceRequest) return;
     const workspace = data?.workspace_root ?? null;
     const sameWorkspace = workspace === currentWorkspace;
+    if (detachedDraft && sameWorkspace) return;
     if (!sameWorkspace) rememberDraft();
     const scratchKey = JSON.stringify([sessionId, null, '']);
     currentWorkspace = workspace;
@@ -176,10 +448,20 @@ export async function refreshWorkspaceFiles(sessionId) {
 
     const prev = sameWorkspace ? fileSelectEl.value : '';
     const preserveDraft = sameWorkspace && editorEl && !editorEl.disabled && editorEl.value !== editorBaseline;
-    const newDraft = workspace && !sameWorkspace && !texFiles.includes('draft.tex') && drafts.get(scratchKey);
+    if (detachedDraft) {
+      fileSelectEl.replaceChildren(...texFiles.map(p => new Option(p, p)));
+      fileSelectEl.selectedIndex = -1;
+      showBindingOptions(JSON.parse(displayedFile)[2]);
+      renderRecoveryOptions();
+      return;
+    }
+    const attachedKey = JSON.stringify([sessionId, workspace, '']);
+    const newDraft = workspace && !sameWorkspace && !texFiles.includes('draft.tex')
+      && !recovered.has(attachedKey) && !drafts.has(attachedKey) && drafts.get(scratchKey);
     if (newDraft) {
-      drafts.set(JSON.stringify([sessionId, workspace, '']), newDraft);
+      drafts.set(attachedKey, newDraft);
       drafts.delete(scratchKey);
+      queueRecovery(attachedKey, newDraft).then(saved => { if (saved) queueRecovery(scratchKey, null); });
     }
     const chosen = newDraft ? '' : preserveDraft || texFiles.includes(prev) ? prev : texFiles[0] || '';
     const options = [...texFiles];
@@ -213,6 +495,11 @@ async function loadLatexFile(sessionId, relPath) {
     const content = (data && (data.content || data.text)) || '';
     openDraft(relPath, content, data?.truncated === true, data?.file_sha256);
   } catch (err) {
+    const key = JSON.stringify([sessionId, currentWorkspace, relPath]);
+    if (request === fileRequest && drafts.has(key)) {
+      openDraft(relPath, '', false, null);
+      return;
+    }
     if (request === fileRequest) notifyFn(`Could not load ${relPath}: ${err.message}`);
   }
 }
@@ -222,7 +509,7 @@ async function handleSavePatch() {
     notifyFn('Select or create a session first.');
     return;
   }
-  if (saveBtn?.disabled) return;
+  if (saveBtn?.disabled || detachedDraft) return;
   const sessionId = currentSessionId;
   const request = fileRequest;
   const path = fileSelectEl && fileSelectEl.value ? fileSelectEl.value : 'draft.tex';
@@ -232,11 +519,24 @@ async function handleSavePatch() {
   const payload = originalContent
     ? { path, search: originalContent, replace: replacement, content: replacement }
     : { path, content: replacement };
-  if (fileHash !== undefined) payload.expected_sha256 = fileHash;
+  if (fileHash !== undefined) {
+    payload.expected_sha256 = fileHash;
+    if (currentWorkspace) payload.expected_workspace_root = currentWorkspace;
+  }
   const key = displayedFile;
-
+  let checking = Boolean(onPendingSave);
+  let approvalTimer;
+  const refreshApproval = async () => {
+    if (!checking || currentSessionId !== sessionId) return;
+    try {
+      const { pending } = await api.getPendingApprovals(sessionId);
+      if (checking && currentSessionId === sessionId) onPendingSave(sessionId, pending);
+    } catch { /* A pending save may outlive a reconnect. */ }
+    if (checking) approvalTimer = setTimeout(refreshApproval, 1500);
+  };
   try {
     if (saveBtn) saveBtn.disabled = true;
+    if (checking) approvalTimer = setTimeout(refreshApproval, 500);
     const result = await api.patchLatex(sessionId, payload);
     const savedHash = result?.output?.sha256_after;
     const pending = drafts.get(key);
@@ -246,14 +546,18 @@ async function handleSavePatch() {
       originalContent = replacement;
       editorBaseline = nextText;
       fileHash = savedHash;
+      rememberDraft();
       notifyFn(`Saved patch to ${path}`);
     }
+    queueRecovery(key, drafts.get(key) ?? null);
   } catch (err) {
     if (request === fileRequest) {
       if (reloadBtn && /changed on disk/.test(err.message)) reloadBtn.hidden = false;
       notifyFn(`Save failed: ${err.message}`);
     }
   } finally {
+    checking = false;
+    clearTimeout(approvalTimer);
     if (request === fileRequest && saveBtn) saveBtn.disabled = false;
   }
 }

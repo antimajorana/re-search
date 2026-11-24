@@ -219,6 +219,17 @@ pub fn run_tex_audit(
     ledger: Option<&Ledger>,
     opts: &AuditOptions,
 ) -> Result<AuditReport, String> {
+    run_tex_audit_with_definitions(env, session, ledger, opts, None)
+}
+
+/// Index labels and bibliography keys from the containing document without auditing its other claims.
+pub fn run_tex_audit_with_definitions(
+    env: &ResearchEnv,
+    session: &str,
+    ledger: Option<&Ledger>,
+    opts: &AuditOptions,
+    containing_document: Option<&str>,
+) -> Result<AuditReport, String> {
     let sandbox = env.sandbox();
     let mut files = Vec::new();
     if let Some(ws) = &env.workspace_root {
@@ -319,10 +330,10 @@ pub fn run_tex_audit(
             }
         }
     }
-    for (index, (_, cand_tex)) in opts.candidate_texts.iter().enumerate() {
-        if candidate_in_target == Some(index) {
-            continue;
-        }
+    let definitions = opts.candidate_texts.iter().enumerate()
+        .filter(|(index, _)| Some(*index) != candidate_in_target)
+        .map(|(_, (_, text))| text.as_str());
+    for cand_tex in definitions.chain(containing_document) {
         let stripped = strip_latex_comments(cand_tex);
         for (lbl, _) in extract_tex_labels(&stripped) {
             known_labels.insert(lbl);

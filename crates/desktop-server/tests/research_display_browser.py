@@ -46,6 +46,13 @@ def fulfill(route):
             route.fulfill(status=404)
     elif path == "/api/sessions/s-test/dag":
         route.fulfill(json={"entries": [entry]})
+    elif path == "/api/sessions/s-test/evidence":
+        route.fulfill(json={"entries": [{"entry_id": "e-1", "support": [
+            {"kind": "computation", "status": "completed", "via_entry_id": "e-1", "value": "5/2"}
+        ]}]})
+    elif path == "/api/sessions/s-test/claim-review":
+        assert route.request.post_data_json == {"answer_seq": 12, "claim": "An unlinked statement.", "occurrence": 0, "cited_steps": []}
+        route.fulfill(json={"scope": "claim", "verdict": "rejected", "summary": "The selected claim lacks a stated hypothesis."})
     elif path == "/api/sessions/s-test":
         route.fulfill(json={"sources": [], "events": [
             {"kind": "literature.fetched", "payload": {
@@ -72,7 +79,67 @@ def fulfill(route):
         route.fulfill(status=404)
 
 
+def check_dense_proof_graph(browser):
+    """Navigate a real 30-step graph, including its multi-line math and directed edges."""
+    entries = [{"entry_id":f"e-{i}", "seq":i, "entry_type":"derivation" if i > 6 else "assumption",
+                "summary":rf"At order ${i}$, the approximation to $\frac{{1}}{{1-x}} = \sum_{{n=0}}^{{{i}}} x^n$ converges for $|x|<1$. Its residual is bounded independently.",
+                "status":"accepted", "depends_on":[f"e-{i-6}"] if i > 6 else []} for i in range(1, 31)]
+    # Reverse wire order to prove keyboard order is determined by dependencies and ledger sequence.
+    fixture = html.replace('<div id="dag-viewport"', '''
+        <div id="dag-views"><button id="dag-view-graph">Graph</button><button id="dag-view-list">Steps in order</button></div>
+        <p id="dag-direction">Arrows point from a prerequisite to the step it supports.</p>
+        <ol id="dag-reading-list" class="dag-reading-list"></ol>
+        <div id="dag-map"><button id="dag-zoom-fit">Fit</button><button id="dag-zoom-reset">100%</button>
+        <div id="dag-viewport" tabindex="0"''').replace('<div id="dag-node-detail">', '</div><div id="dag-node-detail">')
+    for width in (1040, 390):
+        page = browser.new_page(viewport={"width":width,"height":850})
+        try:
+            def serve(route):
+                path = urlsplit(route.request.url).path
+                if path == "/": route.fulfill(body=fixture,content_type="text/html")
+                elif path == "/api/sessions/s-test/dag": route.fulfill(json={"entries":list(reversed(entries))})
+                else: fulfill(route)
+            page.route("**/*", serve)
+            page.goto("http://127.0.0.1/")
+            page.evaluate("""async () => { const d = await import('/assets/canvas_dag.js');
+                d.initDagCanvas(); await d.refreshDag('s-test'); }""")
+            ordered = page.locator('#dag-reading-list button')
+            expect(ordered).to_have_count(30)
+            expect(ordered.first).to_have_attribute("data-entry-id","e-1")
+            ordered.first.focus()
+            page.keyboard.press("End")
+            expect(ordered.last).to_be_focused()
+            expect(ordered.last).to_be_in_viewport()
+            ordered.last.press("Enter")
+            expect(page.locator("#dag-node-detail")).to_be_focused()
+            page.get_by_role("button",name="Graph",exact=True).click()
+            node = page.locator('.dag-node[data-entry-id="e-30"]')
+            expect(node).to_have_attribute("aria-pressed","true")
+            expect(node.locator('.dag-node-summary .katex').first).to_be_visible()
+            assert "residual" not in node.locator('.dag-node-summary').inner_text()
+            assert node.locator('.dag-node-summary').evaluate("e=>e.offsetHeight >= 42 && e.scrollWidth<=e.clientWidth+1")
+            edge = page.locator('.dag-edge[data-prerequisite="e-24"][data-consequence="e-30"]')
+            expect(edge).to_have_attribute("marker-end","url(#dag-arrow)")
+            page.locator("#dag-zoom-fit").click()
+            assert int(page.locator("#dag-zoom-reset").inner_text().strip("%")) < 85
+            page.locator("#dag-zoom-reset").click()
+            expect(node).to_be_in_viewport()
+            view = page.locator("#dag-viewport")
+            view.focus()
+            stage = page.locator(".dag-stage")
+            previous = stage.get_attribute("transform")
+            page.keyboard.press("ArrowRight")
+            expect(stage).not_to_have_attribute("transform",previous)
+            node.focus()
+            page.keyboard.press("Home")
+            expect(page.locator('.dag-node[data-entry-id="e-1"]')).to_be_focused()
+            expect(page.locator('.dag-node[data-entry-id="e-1"]')).to_be_in_viewport()
+        finally:
+            page.close()
+
+
 def check_research_display(browser):
+    check_dense_proof_graph(browser)
     for width in (1440, 390):
         page = browser.new_page(viewport={"width": width, "height": 900})
         errors = []
@@ -148,6 +215,27 @@ def check_research_display(browser):
             await new Promise(requestAnimationFrame);
         }""")
         assert pane.evaluate("(el) => el.scrollHeight - el.clientHeight - el.scrollTop") < 2
+        page.evaluate(r"""async () => {
+            const { attachAnswerTrace } = await import('/assets/claim_trace.js');
+            stream.initStream({ attachClaimTrace: (row, answer, meta, sid) => attachAnswerTrace(row, answer, meta.seq, sid, {
+                inspectStep: (id) => { window.inspectedClaimStep = id; }, openSource: () => {},
+            }) });
+            stream.renderSessionStream('s-test', { messages: [{ role:'assistant', seq:12,
+                text:'The ratio is finite [e-1]. An unlinked statement. See DOI:10.1111/2501.00001.' }] });
+        }""")
+        page.get_by_role("button", name="Trace a claim").click()
+        page.get_by_role("button", name="The ratio is finite [e-1].", exact=True).click()
+        selected = page.get_by_role("region", name="Evidence for selected claim")
+        expect(selected).to_contain_text("5/2")
+        selected.get_by_role("button", name="Open proof step e-1").click()
+        assert page.evaluate("window.inspectedClaimStep") == "e-1"
+        page.get_by_role("button", name="An unlinked statement.", exact=True).click()
+        expect(selected).to_contain_text("No proof step")
+        selected.get_by_role("button", name="Review this claim").click()
+        expect(selected).to_contain_text("lacks a stated hypothesis")
+        page.get_by_role("button", name="See DOI:10.1111/2501.00001.").click()
+        expect(selected.get_by_role("link")).to_have_attribute("href", "https://doi.org/10.1111/2501.00001")
+        page.get_by_role("button", name="Close claim tracing").click()
         assert not errors, errors
         print(f"{width}px: math, restored paper references, scrollback during streaming, and follow at the bottom passed")
         page.close()

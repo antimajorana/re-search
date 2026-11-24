@@ -81,13 +81,26 @@
   cursor: pointer;
 }
 .dag-node-summary {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11.5px;
-  line-height: 1.6;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font: 14px/1.55 var(--font-sans, system-ui);
   color: var(--ink-primary);
 }
+.dag-node-summary .katex, .dag-list-sentence .katex { white-space: normal; }
+.dag-measure { position: fixed; top: 0; left: -100000px; visibility: hidden; pointer-events: none; }
+.dag-views { display: flex; gap: .35rem; margin-bottom: .4rem; }
+.dag-views[hidden], .dag-reading-list[hidden], #dag-map[hidden] { display: none; }
+.dag-views [aria-pressed="true"], .dag-reading-list [aria-pressed="true"] { border-color: var(--accent); }
+.dag-direction { font-size: .8rem; color: var(--ink-secondary); margin: .4rem 0; }
+.dag-reading-list { max-height: min(55dvh, 37rem); overflow: auto; padding: 2px 3px 2px 2.1rem; margin: 0; }
+.dag-reading-list li { padding: .18rem 0; color: var(--ink-secondary); }
+.dag-reading-list button {
+  display: grid; gap: .12rem; width: 100%; text-align: start; color: var(--ink-primary);
+  background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  padding: .5rem .7rem; cursor: pointer;
+}
+.dag-step-label { text-transform: capitalize; color: var(--ink-secondary); font: 600 12px/1.4 var(--font-sans,system-ui); }
+.dag-list-sentence { display: block; min-width: 0; font: 14px/1.55 var(--font-sans,system-ui); overflow-x: auto; overflow-wrap: anywhere; }
 .dag-node rect {
   stroke-width: 1.5px;
   transition: stroke-width var(--transition-fast), filter var(--transition-fast);

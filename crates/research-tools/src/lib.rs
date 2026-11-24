@@ -6,6 +6,7 @@ pub mod formal_library;
 pub mod fs_tools;
 pub mod http_client;
 pub mod ingest;
+pub mod investigation;
 pub mod latex_compile;
 pub mod latex_repair;
 pub mod lean_check;
@@ -16,6 +17,7 @@ pub mod policy_preset;
 pub mod proof_dag;
 pub mod sandbox;
 pub mod sanity;
+pub mod session_activity;
 pub mod tex_audit;
 mod tex_audit_sources;
 pub mod tex_bundle;
@@ -228,6 +230,10 @@ pub fn all_research_tool_defs() -> Vec<ToolDef> {
         literature::literature_search_def(),
         formal_library::search_formal_library_def(),
         paper_passages::def(),
+        investigation::def(),
+        investigation::summary_def(),
+        investigation::branch_def(),
+        investigation::conventions_def(),
         proof_dag::ledger_append_def(),
         proof_dag::ledger_supersede_def(),
         proof_dag::ledger_query_def(),
@@ -245,7 +251,8 @@ pub fn register_research_tools(registry: &mut Registry, env: Arc<ResearchEnv>) {
     arxiv::register(registry, env.clone());
     literature::register(registry, env.clone());
     formal_library::register_formal_library(registry, env.clone());
-    paper_passages::register(registry, env);
+    paper_passages::register(registry, env.clone());
+    investigation::register(registry, env);
     proof_dag::register(registry);
     sanity::register(registry);
 }

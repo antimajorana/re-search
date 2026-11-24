@@ -78,6 +78,14 @@ pub(crate) fn model_session_title(events: &[ledger::Event]) -> Option<&str> {
 
 pub(crate) fn session_title(meta: Option<&SessionMeta>, events: &[ledger::Event], id: &str) -> String {
     if meta.is_some_and(SessionMeta::allows_model_title) {
+        if crate::investigation::is_investigation(events) {
+            if let Some(title) = events.iter().find_map(|event| {
+                matches!(event.kind.as_str(), "investigation.summary" | "investigation.map")
+                    .then(|| event.payload["title"].as_str()).flatten().filter(|s| !s.trim().is_empty())
+            }) {
+                return clip_title(title, 80);
+            }
+        }
         if let Some(title) = model_session_title(events) {
             return title.to_string();
         }
@@ -115,6 +123,7 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
 
     let mut sessions = Vec::new();
     for id in ids {
+        if state.session_restore_pending(&id).map_err(internal)? { continue; }
         let meta = state.load_meta(&id);
         if meta.as_ref().is_some_and(|m| m.deleted) {
             continue;
@@ -123,10 +132,7 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
         let events = ledger.read_session(&id).unwrap_or_default();
         let parent_session = session_fork_info(meta.as_ref(), &events).map(|fork| fork.parent_session);
         let title = session_title(meta.as_ref(), &events, &id);
-        let workspace_root = meta
-            .as_ref()
-            .and_then(|m| m.workspace_root.clone())
-            .or_else(|| state.cfg.workspace_root.as_ref().map(|p| p.display().to_string()));
+        let workspace_root = state.workspace_for(meta.as_ref());
         let created_ms = meta
             .as_ref()
             .map(|m| m.created_ms)
@@ -139,6 +145,7 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
         let stats = summarize_session_events(&events);
         sessions.push(json!({
             "id": id,
+            "mode": if crate::investigation::is_investigation(&events) { "investigation" } else { "research" },
             "title": title,
             "route": route,
             "confinement": is_agy.then_some(cli_route::antigravity::CONFINEMENT),
@@ -164,6 +171,11 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
 
 pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResult {
     let val = parse_json_body(body)?;
+    let mode = val.get("mode").map(|v| v.as_str().unwrap_or("")).unwrap_or("research");
+    if !matches!(mode, "research" | "investigation") { return Err(bad("Choose Research or Investigation.")); }
+    if mode == "investigation" && val.get("prompt").and_then(Value::as_str).is_some_and(|p| !p.trim().is_empty()) {
+        return Err(bad("Create the Investigation and upload its primary paper before starting a turn."));
+    }
     let id = match val.get("id").and_then(Value::as_str) {
         Some(raw) if !raw.trim().is_empty() => {
             let trimmed = raw.trim();
@@ -218,6 +230,7 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
         title: title.clone(),
         allow_model_title: Some(explicit_title.is_none()),
         workspace_root: workspace_root.clone(),
+        workspace_detached: false,
         pinned_conventions: val
             .get("pinned_conventions")
             .and_then(Value::as_str)
@@ -248,6 +261,10 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
         deleted: false,
     };
     save_new_session(state, &meta, project_id)?;
+    if mode == "investigation" {
+        state.open_ledger().map_err(internal)?.append_new_session(&id, &[("investigation.started", 1, &json!({}))])
+            .map_err(|e| internal(e.to_string()))?;
+    }
 
     if let Some(prompt) = val
         .get("prompt")
@@ -265,10 +282,19 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
             "title": title,
             "workspace_root": workspace_root,
             "created_ms": meta.created_ms,
+            "mode": mode,
             "route": meta.route,
             "project_id": project_id,
         }),
     ))
+}
+
+pub fn handle_pending_approvals(state: &DesktopState, session_id: &str) -> ApiResult {
+    validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
+    if !state.session_exists(session_id).map_err(internal)? {
+        return Err(not_found("Session not found."));
+    }
+    Ok((200, json!({ "pending": state.pending_for_session(session_id) })))
 }
 
 pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
@@ -286,10 +312,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
     let linked_sources = crate::evidence::linked_session_sources(state, &ledger, &events);
     let stats = summarize_session_events(&events);
     let title = session_title(meta.as_ref(), &events, session_id);
-    let workspace_root = meta
-        .as_ref()
-        .and_then(|m| m.workspace_root.clone())
-        .or_else(|| state.cfg.workspace_root.as_ref().map(|p| p.display().to_string()));
+    let workspace_root = state.workspace_for(meta.as_ref());
     let pending = state.pending_for_session(session_id);
     let (route, provenance) = crate::cli_turn::session_route(meta.as_ref(), &events);
     let is_agy = route.as_str() == Some(crate::state::ANTIGRAVITY_ROUTE);
@@ -329,6 +352,8 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
             "fork_info": fork_info,
             "project_id": project.map(|p| p.id),
             "events": events_json,
+            "mode": if crate::investigation::is_investigation(&events) { "investigation" } else { "research" },
+            "investigation": crate::investigation::view(&events, is_turn_running(state, session_id)),
             "messages": messages,
             "traces": traces,
             "sources": sources,
@@ -443,6 +468,7 @@ pub fn handle_fork(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRe
         title: format!("Fork of {}", session_title(parent_meta.as_ref(), &events, session_id)),
         allow_model_title: Some(false),
         workspace_root: parent_meta.as_ref().and_then(|m| m.workspace_root.clone()),
+        workspace_detached: parent_meta.as_ref().is_some_and(|m| m.workspace_detached),
         pinned_conventions: parent_meta.as_ref().and_then(|m| m.pinned_conventions.clone()),
         verification_mode: parent_meta.as_ref().is_some_and(|m| m.verification_mode),
         calculation_mode: parent_meta.as_ref().is_some_and(|m| m.calculation_mode),
@@ -460,7 +486,7 @@ pub fn handle_fork(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRe
         archived: false,
         deleted: false,
     };
-    let _ = state.save_meta(&child_meta);
+    state.save_meta(&child_meta).map_err(internal)?;
     let mut response = serde_json::to_value(&receipt).map_err(|e| internal(e.to_string()))?;
     if let Some(project) = parent_project {
         match attach_session(state, &project.id, &receipt.new_session) {

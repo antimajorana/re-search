@@ -170,8 +170,31 @@ struct PreparedIngestion {
     assembled_rel: Option<String>,
     skipped_binary: Vec<String>,
     page_count: Option<usize>,
+    page_lines: Vec<(usize, usize, usize)>,
     warning: Option<String>,
     excerpt: String,
+}
+
+/// The arXiv identifier printed with a subject class on the PDF cover can differ from its filename.
+fn arxiv_cover_stamp(prepared: &PreparedIngestion) -> Option<String> {
+    let (_, first, last) = prepared.page_lines.iter().find(|(page, _, _)| *page == 1)?;
+    let file = prepared.materialized.get(prepared.primary_rel.as_ref()?)?;
+    let cover = file.lines().skip(first.saturating_sub(1)).take(last.saturating_sub(*first) + 1)
+        .collect::<Vec<_>>().join(" ");
+    cover_identifier(&cover)
+}
+
+fn cover_identifier(cover: &str) -> Option<String> {
+    // PDF text extraction can join the vertical arXiv stamp to the preceding word.
+    static STAMP: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let pattern = STAMP.get_or_init(|| regex::Regex::new(r"(?i)arxiv\s*:\s*([0-9]{4}\.[0-9]{4,5}v[0-9]+)\s*\[[a-z][a-z0-9.\-]+\]").unwrap());
+    pattern.captures(cover).and_then(|m| m.get(1)).map(|m|m.as_str().to_ascii_lowercase())
+}
+
+#[test]
+fn identifies_a_version_stamp_joined_to_the_article_text() {
+    assert_eq!(cover_identifier("andarXiv:2510.25994v2  [cond-mat.str-el]  15 Apr 2026").as_deref(), Some("2510.25994v2"));
+    assert_eq!(cover_identifier("See arXiv:2510.25994v1 for related work."), None);
 }
 
 /// Validates and extracts `req.raw_bytes`, materializes clean UTF-8 files under
@@ -215,6 +238,7 @@ pub fn ingest_bytes(
     }
 
     let primary_path = prepared.primary_rel.as_ref().map(|p| format!("{source_id}/{p}"));
+    let arxiv_id = arxiv_cover_stamp(&prepared);
     let assembled_path = prepared.assembled_rel.map(|p| format!("{source_id}/{p}"));
     let title = req
         .title
@@ -244,6 +268,8 @@ pub fn ingest_bytes(
                     "files": written_files,
                     "files_sha256": files_sha256,
                     "page_count": prepared.page_count,
+                    "pdf_page_lines": prepared.page_lines,
+                    "arxiv_cover_id": arxiv_id,
                 }),
             )
             .map_err(|e| format!("source.ingested append failed: {e}"))?;
@@ -361,6 +387,7 @@ fn prepare_ingestion(
                 assembled_rel: section_filter.filter(|_| ext == "tex").map(|_| "__filtered__.tex".into()),
                 skipped_binary: Vec::new(),
                 page_count: None,
+                page_lines: Vec::new(),
                 warning: None,
                 excerpt: take_chars(&display_text, MAX_EXCERPT_CHARS),
             })
@@ -411,6 +438,7 @@ fn prepare_ingestion(
                         assembled_rel,
                         skipped_binary: Vec::new(),
                         page_count: None,
+                        page_lines: Vec::new(),
                         warning: None,
                         excerpt: take_chars(&display, MAX_EXCERPT_CHARS),
                     })
@@ -438,6 +466,7 @@ fn prepare_pdf_ingestion(file_name: &str, pdf_bytes: &[u8]) -> Result<PreparedIn
         assembled_rel: None,
         skipped_binary: Vec::new(),
         page_count: Some(extracted.page_count),
+        page_lines: extracted.page_lines,
         warning: extracted.warning,
         excerpt: take_chars(&extracted.text, MAX_EXCERPT_CHARS),
     })
@@ -518,6 +547,7 @@ fn prepare_archive_files(
         assembled_rel,
         skipped_binary,
         page_count: None,
+        page_lines: Vec::new(),
         warning: None,
         excerpt: take_chars(&excerpt_src, MAX_EXCERPT_CHARS),
     })

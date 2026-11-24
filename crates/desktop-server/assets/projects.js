@@ -60,6 +60,9 @@ export function initProjects(opts) {
   byId('edit-form').addEventListener('submit', saveProject);
   byId('new-session').addEventListener('click', createProjectSession);
   byId('link-session-form').addEventListener('submit', linkSession);
+  byId('restore-btn')?.addEventListener('click', () => byId('restore-file').click());
+  byId('backup-btn')?.addEventListener('click', downloadBackup);
+  byId('restore-file')?.addEventListener('change', restoreBackup);
   byId('promote-cancel').addEventListener('click', () => { promotion = null; renderPromotion(); });
   byId('promote-form').addEventListener('submit', savePromotion);
   byId('promote-source').addEventListener('change', updatePromotionEvidenceInputs);
@@ -173,6 +176,7 @@ function displayProject(project) {
     byId('open-question-text').value = draft?.question || '';
   }
   currentProject = project;
+  byId('backup-btn').hidden = !project;
   if (project) rememberProject(project.id);
   renderPicker();
   byId('notebook').hidden = !project || Boolean(edit) || loading;
@@ -187,6 +191,52 @@ function displayProject(project) {
   renderNotes(project, true);
   refreshProjectSessions();
   renderPromotion();
+}
+
+async function downloadBackup() {
+  const project = currentProject;
+  if (!project) return;
+  const button = byId('backup-btn');
+  button.disabled = true;
+  try {
+    showStatus('Preparing project backup…');
+    const { ticket } = await api.prepareProjectBackup(project.id);
+    const link = document.createElement('a');
+    link.href = `/api/projects/${encodeURIComponent(project.id)}/export?format=backup&ticket=${encodeURIComponent(ticket)}`;
+    link.download = `${project.id}.research-backup.zip`;
+    link.click();
+    showStatus('Project backup download started.');
+  } catch (err) {
+    showStatus(err.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function restoreBackup(event) {
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file) return;
+  const button = byId('restore-btn');
+  button.disabled = true;
+  try {
+    if (file.size > 60 * 1024 * 1024) throw new Error('Project backups can be up to 60 MiB.');
+    showStatus('Checking the backup and restoring its project…');
+    const response = await fetch('/api/projects/restore', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'X-ReSearch-Token': api.getCsrfToken(), 'Content-Type': 'application/zip' },
+      body: file,
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not restore the project.');
+    await callbacks.onSessionsChanged?.();
+    await openProjects(result.id);
+    showStatus(`Restored ${result.title} (${result.sessions} sessions). Reattach any manuscript folder under Research options.`);
+  } catch (err) {
+    showStatus(err.message, true);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function selectSection(section) {

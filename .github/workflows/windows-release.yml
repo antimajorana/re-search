@@ -65,7 +65,26 @@ jobs:
       - name: Build release binaries
         run: |
           cargo fetch --locked --target $env:WINDOWS_TARGET
-          cargo build --locked --release --target $env:WINDOWS_TARGET -p desktop-app -p cli -p mcp-server
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo build --locked --release --target $env:WINDOWS_TARGET -p cli -p mcp-server
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $linkMap = Join-Path $env:RUNNER_TEMP 're-search-app.map'
+          cargo rustc --locked --release --target $env:WINDOWS_TARGET -p desktop-app --bin re-search-app -- -C "link-arg=/MAP:$linkMap"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if (!(Select-String -LiteralPath $linkMap -Pattern 'webview2_com_sys.*loader.*CreateCoreWebView2EnvironmentWithOptions' -Quiet)) {
+            throw 'The final native link did not identify the source-built environment creation function.'
+          }
+          if (Select-String -LiteralPath $linkMap -Pattern 'WebView2LoaderStatic|WebView2Loader\.dll' -Quiet) {
+            throw 'The Windows link map refers to the Microsoft SDK loader.'
+          }
+
+      - name: Retain native loader link evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-loader-map
+          path: ${{ runner.temp }}/re-search-app.map
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Stage the installer payload
         run: |

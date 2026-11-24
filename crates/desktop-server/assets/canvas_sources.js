@@ -459,7 +459,7 @@ function renderUsedSources(records, sessionId) {
     usedSourcesListEl.textContent = 'Citations and proof-linked sources will appear here.';
     return;
   }
-  for (const { paper, source, readers, steps, cited } of records) {
+  for (const { paper, source, readers, steps, cited, paperClaims, inSummary, inConventions } of records) {
     const card = document.createElement('article');
     card.className = 'paper-card';
     const links = linksForPaper(paper);
@@ -473,6 +473,9 @@ function renderUsedSources(records, sessionId) {
       ${!links.length && paper.url && paper.url !== paper.title ? `<div class="mono">${escapeHtml(paper.url)}</div>` : ''}
       <div class="used-source-actions" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;">
         ${cited ? '<span class="badge">Cited in answer</span>' : ''}
+        ${inSummary ? '<span class="badge">Used in paper summary</span>' : ''}
+        ${inConventions ? '<span class="badge">Used in paper conventions</span>' : ''}
+        ${paperClaims?.size ? '<span class="badge">Paper map · ' + paperClaims.size + (paperClaims.size === 1 ? ' claim' : ' claims') + '</span>' : ''}
         ${renderSourceLinkChips(links)}
       </div>
     `;
@@ -761,14 +764,15 @@ async function loadSourceReaderFile(path) {
   body.scrollTop = 0;
   status.textContent = 'Loading source…';
   try {
-    const data = await api.readSourceFile(sessionId, path);
+    const data = await api.readSourceFile(sessionId, path, anchor);
     if (revision !== sessionRevision || request !== readerRequest) return false;
     if (anchor?.file_sha256 && data?.file_sha256 !== anchor.file_sha256) {
       status.textContent = 'This file does not match the SHA-256 in the evidence record.';
       return false;
     }
     const text = data?.content ?? data?.text ?? '';
-    const range = anchor && citedLineRange(text, anchor.start_line, anchor.end_line, data?.truncated);
+    const offset = (data?.first_line || 1) - 1;
+    const range = anchor && citedLineRange(text, anchor.start_line - offset, (anchor.end_line ?? anchor.start_line) - offset, data?.truncated);
     readerState.fullText = text;
     readerState.citedRange = range;
     if (anchor?.start_line && !range) {
@@ -776,7 +780,7 @@ async function loadSourceReaderFile(path) {
     } else {
       const line = range && (anchor.start_line === anchor.end_line ? `Line ${anchor.start_line}`
         : `Lines ${anchor.start_line}–${anchor.end_line}`);
-      status.textContent = [line, data?.truncated && 'Partial file preview'].filter(Boolean).join(' · ');
+      status.textContent = [line, (data?.partial || data?.truncated) && 'Partial file preview'].filter(Boolean).join(' · ');
     }
     renderReaderContent();
     return true;

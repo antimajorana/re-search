@@ -1,8 +1,8 @@
 // Tab 2: Proof Graph & Ledger Canvas — zoomable/pannable SVG DAG, SHA-256 chain verify, fork, diff, and narration.
 import * as api from '/assets/api.js';
-import { escapeHtml, renderMathTextInto } from '/assets/math.js';
+import { escapeHtml, firstMathSentence, renderMathTextInto } from '/assets/math.js';
 import { getModelChoice } from '/assets/model_picker.js';
-import { renderDagNodeDetail } from '/assets/canvas_dag_detail.js';
+import { renderAssumptionImpact, renderDagNodeDetail } from '/assets/canvas_dag_detail.js';
 import { openSessionSource } from '/assets/canvas_sources.js';
 
 function sideModelPayload() {
@@ -11,9 +11,7 @@ function sideModelPayload() {
 }
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const NODE_W = 176;
-const NODE_H = 58;
-const MIN_SCALE = 0.28;
+const MIN_SCALE = 0.02;
 const MAX_SCALE = 3.0;
 
 let svgEl = null;
@@ -37,6 +35,10 @@ let nodeCoords = new Map();
 let callbacks = {};
 let viewState = { scale: 1, tx: 16, ty: 16, contentW: 420, contentH: 240, hasAutoFit: false, userAdjusted: false };
 let suppressNextNodeClick = false;
+let readingOrder = [];
+let chosenView = null;
+let lastWidth = 0;
+let resizeFrame;
 
 export function initDagCanvas(opts = {}) {
   callbacks = opts;
@@ -63,15 +65,29 @@ export function initDagCanvas(opts = {}) {
 
   document.getElementById('dag-zoom-in')?.addEventListener('click', () => zoomAroundCenter(1.25));
   document.getElementById('dag-zoom-out')?.addEventListener('click', () => zoomAroundCenter(0.8));
-  document.getElementById('dag-zoom-fit')?.addEventListener('click', () => { viewState.userAdjusted = false; fitDagToView(); });
+  document.getElementById('dag-zoom-fit')?.addEventListener('click', () => { viewState.userAdjusted = true; fitDagToView(); });
   zoomResetBtn?.addEventListener('click', resetZoomOneToOne);
 
   wirePanAndWheel();
+  for (const mode of ['graph', 'list']) {
+    document.getElementById('dag-view-' + mode)?.addEventListener('click', () => {
+      chosenView = mode;
+      if (currentDag) renderDagSvg(currentDag);
+    });
+  }
+  const controls = document.getElementById('dag-views');
+  if (controls && typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(() => {
+      if (!currentDag || !controls.clientWidth || controls.clientWidth === lastWidth) return;
+      cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(() => currentDag && renderDagSvg(currentDag));
+    }).observe(controls);
+  }
 }
 
 export function onDagTabShown() {
   if (!viewState.userAdjusted && currentDag && Array.isArray(currentDag.entries) && currentDag.entries.length > 0) {
-    fitDagToView();
+    renderDagSvg(currentDag);
   }
 }
 
@@ -108,12 +124,10 @@ export function fitDagToView() {
 }
 
 function resetZoomOneToOne() {
-  const { vw, vh } = viewportSize();
   viewState.userAdjusted = true;
   viewState.scale = 1;
-  viewState.tx = (vw - viewState.contentW) / 2;
-  viewState.ty = Math.max(16, (vh - viewState.contentH) / 2);
-  applyViewTransform();
+  if (readingOrder.length) centerOnNode(selectedEntry?.entry_id || readingOrder[0].entry_id);
+  else applyViewTransform();
 }
 
 function zoomAtPoint(factor, cx, cy) {
@@ -137,8 +151,8 @@ function centerOnNode(entryId) {
   const pos = nodeCoords.get(entryId);
   if (!pos) return;
   const { vw, vh } = viewportSize();
-  const cx = pos.x + NODE_W / 2;
-  const cy = pos.y + NODE_H / 2;
+  const cx = pos.x + pos.w / 2;
+  const cy = pos.y + pos.h / 2;
   viewState.tx = vw / 2 - cx * viewState.scale;
   viewState.ty = vh / 2 - cy * viewState.scale;
   viewState.userAdjusted = true;
@@ -149,6 +163,7 @@ function wirePanAndWheel() {
   if (!viewportEl) return;
   viewportEl.addEventListener('wheel', (ev) => {
     if (!stageEl || !currentDag || !(currentDag.entries || []).length) return;
+    if (!ev.ctrlKey && !ev.metaKey) return;
     ev.preventDefault();
     const rect = viewportEl.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
@@ -156,6 +171,15 @@ function wirePanAndWheel() {
     const factor = ev.deltaY < 0 ? 1.14 : 0.88;
     zoomAtPoint(factor, mx, my);
   }, { passive: false });
+  viewportEl.addEventListener('keydown', (ev) => {
+    if (ev.target !== viewportEl) return;
+    const move = { ArrowLeft: [80, 0], ArrowRight: [-80, 0], ArrowUp: [0, 80], ArrowDown: [0, -80] }[ev.key];
+    if (!move) return;
+    ev.preventDefault();
+    viewState.userAdjusted = true;
+    viewState.tx += move[0]; viewState.ty += move[1];
+    applyViewTransform();
+  });
 
   let drag = null;
   viewportEl.addEventListener('pointerdown', (ev) => {
@@ -175,6 +199,7 @@ function wirePanAndWheel() {
     const dy = ev.clientY - drag.startY;
     if (!drag.moved && Math.hypot(dx, dy) > 4) {
       drag.moved = true;
+      viewportEl.setPointerCapture?.(ev.pointerId);
       viewportEl.classList.add('is-panning');
     }
     if (drag.moved) {
@@ -188,6 +213,7 @@ function wirePanAndWheel() {
     if (!drag || ev.pointerId !== drag.id) return;
     if (drag.moved) {
       suppressNextNodeClick = true;
+      if (viewportEl.hasPointerCapture?.(ev.pointerId)) viewportEl.releasePointerCapture(ev.pointerId);
       setTimeout(() => { suppressNextNodeClick = false; }, 0);
     }
     viewportEl.classList.remove('is-panning');
@@ -205,6 +231,9 @@ function openForkBarForSeq(seqOverride) {
   }
   const atSeq = Number(seqOverride ?? selectedEntry?.seq ?? latestSeq()) || undefined;
   forkPoint = { atSeq };
+  const entries = currentDag?.entries || [];
+  renderAssumptionImpact(document.getElementById('fork-assumption-impact'), entries,
+    entries.find(entry => entry.seq === atSeq), id => selectNodeById(id));
   forkBarEl.hidden = false;
   if (forkSeqEl) forkSeqEl.textContent = String(atSeq ?? 'latest');
 }
@@ -229,6 +258,7 @@ export async function refreshDag(sessionId) {
     selectedEntry = null;
     viewState.hasAutoFit = false;
     viewState.userAdjusted = false;
+    chosenView = null;
     closeForkBar();
     if (forkInputEl) forkInputEl.value = '';
     if (verifyBadgeEl) verifyBadgeEl.hidden = true;
@@ -270,6 +300,13 @@ function renderEmptySvg(msg) {
   if (!svgEl) return;
   stageEl = null;
   nodeCoords = new Map();
+  readingOrder = [];
+  for (const id of ['dag-views','dag-reading-list','dag-direction']) {
+    const element = document.getElementById(id);
+    if (element) element.hidden = true;
+  }
+  const map = document.getElementById('dag-map');
+  if (map) map.hidden = false;
   svgEl.setAttribute('viewBox', '0 0 420 220');
   svgEl.innerHTML = `<text x="210" y="112" text-anchor="middle" fill="var(--ink-muted)" font-size="13">${escapeHtml(msg)}</text>`;
 }
@@ -287,175 +324,219 @@ function statusPalette(status) {
   }
 }
 
+function dependencyLayers(entries) {
+  const byId = new Map(entries.map(entry => [entry.entry_id, entry]));
+  const children = new Map();
+  const pending = new Map();
+  const depth = new Map();
+  const queue = [];
+  for (const entry of entries) {
+    const parents = new Set((entry.depends_on || []).filter(id => byId.has(id)));
+    pending.set(entry.entry_id, parents.size);
+    if (!parents.size) queue.push(entry.entry_id);
+    for (const parent of parents) {
+      if (!children.has(parent)) children.set(parent, []);
+      children.get(parent).push(entry.entry_id);
+    }
+  }
+  const layers = [];
+  for (let n = 0; n < queue.length; n++) {
+    const id = queue[n];
+    const level = depth.get(id) || 0;
+    (layers[level] ||= []).push(byId.get(id));
+    for (const child of children.get(id) || []) {
+      depth.set(child, Math.max(depth.get(child) || 0, level + 1));
+      pending.set(child, pending.get(child) - 1);
+      if (!pending.get(child)) queue.push(child);
+    }
+  }
+  const unresolved = entries.filter(entry => pending.get(entry.entry_id));
+  if (unresolved.length) layers.push(unresolved);
+  for (const layer of layers) layer.sort((a, b) => a.seq - b.seq);
+  return layers;
+}
+
+function stepSentence(entry) {
+  return firstMathSentence(entry.summary || entry.details) || 'No summary recorded.';
+}
+
+function stepLabel(entry) {
+  return (entry.entry_type || 'Step').replaceAll('_', ' ') + ' · ' + (entry.status || 'pending');
+}
+
+function showReadingOrder(entries, visible) {
+  const list = document.getElementById('dag-reading-list');
+  if (!list) return;
+  const previous = list.contains(document.activeElement) && document.activeElement.dataset.entryId;
+  list.hidden = !visible;
+  list.replaceChildren();
+  if (!visible) return;
+  for (const entry of entries) {
+    const item = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.entryId = entry.entry_id;
+    button.setAttribute('aria-controls', 'dag-node-detail');
+    button.setAttribute('aria-pressed', String(entry.entry_id === selectedEntry?.entry_id));
+    const type = document.createElement('span');
+    type.className = 'dag-step-label';
+    type.textContent = stepLabel(entry);
+    const sentence = document.createElement('span');
+    sentence.className = 'dag-list-sentence';
+    renderMathTextInto(sentence, stepSentence(entry), { inlineOnly: true });
+    button.append(type, sentence);
+    item.appendChild(button);
+    button.addEventListener('click', () => { selectNode(entry); detailEl?.focus(); });
+    button.addEventListener('keydown', key => moveBetweenSteps(key, entry.entry_id, list));
+    list.appendChild(item);
+    if (previous === entry.entry_id) button.focus({ preventScroll: true });
+  }
+}
+
+function moveBetweenSteps(event, id, container) {
+  const index = readingOrder.findIndex(entry => entry.entry_id === id);
+  const destination = { ArrowDown: index + 1, ArrowRight: index + 1,
+    ArrowUp: index - 1, ArrowLeft: index - 1, Home: 0, End: readingOrder.length - 1 }[event.key];
+  if (destination === undefined) return false;
+  event.preventDefault();
+  const target = readingOrder[Math.min(readingOrder.length - 1, Math.max(0, destination))];
+  const node = Array.from(container.querySelectorAll('[data-entry-id]')).find(el => el.getAttribute('data-entry-id') === target.entry_id);
+  node?.focus();
+  return true;
+}
+
+function placeCards(layers, width) {
+  const cardWidth = Math.max(204, Math.min(330, width - 56));
+  const measure = document.createElement('div');
+  measure.className = 'dag-measure';
+  measure.style.width = (cardWidth - 28) + 'px';
+  const sizes = new Map();
+  for (const entry of readingOrder) {
+    const content = document.createElement('div');
+    content.className = 'dag-node-summary';
+    renderMathTextInto(content, stepSentence(entry), { inlineOnly: true });
+    measure.appendChild(content);
+    sizes.set(entry.entry_id, { content });
+  }
+  document.body?.appendChild(measure);
+  for (const item of sizes.values()) {
+    // Unbreakable math atoms may require a wider node. Never shrink its glyphs to fit.
+    item.w = Math.max(cardWidth, (item.content.scrollWidth || 0) + 28);
+    item.h = Math.max(65, (item.content.offsetHeight || 32) + 42);
+  }
+  measure.remove?.();
+  const gap = 32;
+  const rowWidth = row => row.reduce((n, entry) => n + sizes.get(entry.entry_id).w, (row.length-1)*gap);
+  const total = layers.reduce((n, layer) => Math.max(n, rowWidth(layer)), 0);
+  let y = 16;
+  for (const row of layers) {
+    let x = (total - rowWidth(row)) / 2 + 16;
+    let tallest = 0;
+    for (const entry of row) {
+      const card = sizes.get(entry.entry_id);
+      Object.assign(card, { x, y });
+      tallest = Math.max(tallest, card.h);
+      x += card.w + gap;
+    }
+    y += tallest + 56;
+  }
+  viewState.contentW = total + 32;
+  viewState.contentH = y - 40;
+  return sizes;
+}
+
 function renderDagSvg(dag, isNewSession = false) {
-  const entries = Array.isArray(dag && dag.entries) ? dag.entries : [];
-  if (entries.length === 0) {
-    renderEmptySvg('Proof steps recorded by ledger_append appear here.');
-    return;
-  }
-
-  const byId = new Map(entries.map((e) => [e.entry_id, e]));
-  const depthMap = new Map();
-  const calcDepth = (id, seen = new Set()) => {
-    if (depthMap.has(id)) return depthMap.get(id);
-    if (seen.has(id)) return 0;
-    seen.add(id);
-    const node = byId.get(id);
-    const deps = (node && Array.isArray(node.depends_on) ? node.depends_on : []).filter((d) => byId.has(d));
-    const d = deps.length === 0 ? 0 : 1 + Math.max(...deps.map((p) => calcDepth(p, seen)));
-    depthMap.set(id, d);
-    return d;
-  };
-  for (const e of entries) calcDepth(e.entry_id);
-
-  const layers = new Map();
-  for (const e of entries) {
-    const layer = depthMap.get(e.entry_id) || 0;
-    if (!layers.has(layer)) layers.set(layer, []);
-    layers.get(layer).push(e);
-  }
-
-  const gapX = 28;
-  const gapY = 46;
-  const maxCols = Math.max(1, ...Array.from(layers.values()).map((arr) => arr.length));
-  const width = Math.max(380, maxCols * (NODE_W + gapX));
-  const height = Math.max(200, layers.size * (NODE_H + gapY));
-  viewState.contentW = width;
-  viewState.contentH = height;
+  const entries = dag.entries || [];
+  if (!entries.length) { renderEmptySvg('Proof steps will appear here as they are recorded.'); return; }
+  const layers = dependencyLayers(entries);
+  readingOrder = layers.flat();
+  const controls = document.getElementById('dag-views');
+  if (controls) controls.hidden = false;
+  lastWidth = controls?.clientWidth || viewportSize().vw;
+  const listView = !!controls && (chosenView ? chosenView === 'list' : (lastWidth < 470 || entries.length >= 25));
+  const map = document.getElementById('dag-map');
+  const note = document.getElementById('dag-direction');
+  if (map) map.hidden = listView;
+  if (note) note.hidden = listView;
+  document.getElementById('dag-view-graph')?.setAttribute('aria-pressed', String(!listView));
+  document.getElementById('dag-view-list')?.setAttribute('aria-pressed', String(listView));
+  showReadingOrder(readingOrder, listView);
+  if (listView) { stageEl = null; svgEl.replaceChildren(); return; }
 
   const focused = document.activeElement;
-  const focusedEntryId = focused && stageEl?.contains(focused) ? focused.getAttribute('data-entry-id') : null;
+  const focusId = focused && stageEl?.contains(focused) ? focused.getAttribute('data-entry-id') : null;
+  nodeCoords = placeCards(layers, lastWidth);
   svgEl.removeAttribute('viewBox');
   svgEl.innerHTML = '';
-
-  const defs = document.createElementNS(SVG_NS, 'defs');
-  defs.innerHTML = `
-    <marker id="dag-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 1 L 10 5 L 0 9 z" fill="var(--border-strong)"/>
-    </marker>
-  `;
-  svgEl.appendChild(defs);
-
-  stageEl = document.createElementNS(SVG_NS, 'g');
-  stageEl.setAttribute('class', 'dag-stage');
-  svgEl.appendChild(stageEl);
-
-  nodeCoords = new Map();
-  const sortedLayers = Array.from(layers.keys()).sort((a, b) => a - b);
-  for (const lvl of sortedLayers) {
-    const row = layers.get(lvl);
-    const rowW = row.length * NODE_W + (row.length - 1) * gapX;
-    const startX = (width - rowW) / 2;
-    const y = 16 + lvl * (NODE_H + gapY);
-    row.forEach((entry, idx) => {
-      nodeCoords.set(entry.entry_id, { x: startX + idx * (NODE_W + gapX), y });
-    });
+  const svgNode = (name, attrs) => {
+    const element = document.createElementNS(SVG_NS, name);
+    for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, String(value));
+    return element;
+  };
+  const defs = svgNode('defs', {});
+  defs.innerHTML = '<marker id="dag-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ink-muted)"/></marker>';
+  stageEl = svgNode('g', { class: 'dag-stage' });
+  svgEl.append(defs, stageEl);
+  for (const entry of readingOrder) {
+    const to = nodeCoords.get(entry.entry_id);
+    for (const prerequisite of entry.depends_on || []) {
+      const from = nodeCoords.get(prerequisite);
+      if (!from) continue;
+      const x1 = from.x + from.w / 2, x2 = to.x + to.w / 2;
+      const y1 = from.y + from.h, y2 = to.y - 3, mid = (y1+y2)/2;
+      const edge = svgNode('path', { d: 'M '+x1+' '+y1+' C '+x1+' '+mid+', '+x2+' '+mid+', '+x2+' '+y2,
+        class: 'dag-edge', 'data-prerequisite': prerequisite, 'data-consequence': entry.entry_id,
+        fill: 'none', stroke: 'var(--ink-muted)', 'stroke-width': 1.6, 'marker-end': 'url(#dag-arrow)' });
+      stageEl.appendChild(edge);
+    }
   }
-
-  const edges = Array.isArray(dag.edges) ? dag.edges : [];
-  const edgePairs = edges.length > 0
-    ? edges
-    : entries.flatMap((e) => (e.depends_on || []).map((dep) => [dep, e.entry_id]));
-
-  for (const pair of edgePairs) {
-    const fromId = Array.isArray(pair) ? pair[0] : pair.from;
-    const toId = Array.isArray(pair) ? pair[1] : pair.to;
-    const a = nodeCoords.get(fromId);
-    const b = nodeCoords.get(toId);
-    if (!a || !b) continue;
-    const path = document.createElementNS(SVG_NS, 'path');
-    const x1 = a.x + NODE_W / 2;
-    const y1 = a.y + NODE_H;
-    const x2 = b.x + NODE_W / 2;
-    const y2 = b.y;
-    const midY = (y1 + y2) / 2;
-    path.setAttribute('d', `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`);
-    path.setAttribute('fill', 'none');
-    path.setAttribute('stroke', 'var(--border-strong)');
-    path.setAttribute('stroke-width', '1.6');
-    path.setAttribute('marker-end', 'url(#dag-arrow)');
-    stageEl.appendChild(path);
-  }
-
-  let nodeToRefocus;
-  for (const entry of entries) {
-    const pos = nodeCoords.get(entry.entry_id);
-    if (!pos) continue;
+  let refocus;
+  for (const entry of readingOrder) {
+    const card = nodeCoords.get(entry.entry_id);
     const pal = statusPalette(entry.status);
-    const g = document.createElementNS(SVG_NS, 'g');
     const selected = selectedEntry?.entry_id === entry.entry_id;
-    g.setAttribute('class', selected ? 'dag-node is-selected' : 'dag-node');
-    g.setAttribute('data-entry-id', entry.entry_id);
-    g.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
-    g.setAttribute('role', 'button');
-    g.setAttribute('tabindex', '0');
-    g.setAttribute('aria-label', `${entry.entry_id} · ${entry.entry_type || 'step'} · ${entry.status || 'pending'}${entry.summary ? ` · ${entry.summary}` : ''}`);
-    g.setAttribute('aria-controls', 'dag-node-detail');
-    g.setAttribute('aria-pressed', String(selected));
-
-    const rect = document.createElementNS(SVG_NS, 'rect');
-    rect.setAttribute('width', String(NODE_W));
-    rect.setAttribute('height', String(NODE_H));
-    rect.setAttribute('rx', '10');
-    rect.setAttribute('fill', pal.fill);
-    rect.setAttribute('stroke', pal.stroke);
-
-    const t1 = document.createElementNS(SVG_NS, 'text');
-    t1.setAttribute('x', '10');
-    t1.setAttribute('y', '20');
-    t1.setAttribute('font-size', '11');
-    t1.setAttribute('font-weight', '600');
-    t1.setAttribute('fill', pal.ink);
-    t1.textContent = `${entry.entry_id} · ${entry.entry_type || 'step'}`;
-
-    const summaryBox = document.createElementNS(SVG_NS, 'foreignObject');
-    summaryBox.setAttribute('x', '10');
-    summaryBox.setAttribute('y', '25');
-    summaryBox.setAttribute('width', String(NODE_W - 20));
-    summaryBox.setAttribute('height', '27');
-    const summary = document.createElement('div');
-    summary.className = 'dag-node-summary';
-    renderMathTextInto(summary, entry.summary, { inlineOnly: true });
-    summaryBox.appendChild(summary);
-
-    g.appendChild(rect);
-    g.appendChild(t1);
-    g.appendChild(summaryBox);
-    g.addEventListener('click', () => {
-      if (suppressNextNodeClick) return;
-      selectNode(entry);
-    });
-    g.addEventListener('keydown', (ev) => {
+    const node = svgNode('g', { class: selected ? 'dag-node is-selected' : 'dag-node',
+      'data-entry-id': entry.entry_id, transform: 'translate('+card.x+', '+card.y+')', role: 'button',
+      tabindex: 0, 'aria-label': entry.entry_id+' · '+stepLabel(entry)+' · '+(entry.summary || ''),
+      'aria-controls': 'dag-node-detail', 'aria-pressed': selected });
+    const rect = svgNode('rect', { width: card.w, height: card.h, rx: 10, fill: pal.fill, stroke: pal.stroke });
+    const label = svgNode('text', { x: 14, y: 21, 'font-size': 12, 'font-weight': 600, fill: pal.ink });
+    label.textContent = stepLabel(entry);
+    const box = svgNode('foreignObject', { x: 14, y: 29, width: card.w-28, height: card.h-33 });
+    box.appendChild(card.content);
+    node.append(rect, label, box);
+    node.addEventListener('click', () => { if (!suppressNextNodeClick) selectNode(entry); });
+    node.addEventListener('keydown', ev => {
+      if (moveBetweenSteps(ev, entry.entry_id, stageEl)) return;
       if (ev.key !== 'Enter' && ev.key !== ' ') return;
       ev.preventDefault();
-      if (!ev.repeat) {
-        selectNode(entry);
-        detailEl?.focus();
-      }
+      if (!ev.repeat) { selectNode(entry); detailEl?.focus(); }
     });
-    g.addEventListener('focus', () => {
-      if (!viewportEl || !g.matches(':focus-visible')) return;
-      const view = viewportEl.getBoundingClientRect();
-      const node = g.getBoundingClientRect();
-      if (node.left < view.left || node.right > view.right || node.top < view.top || node.bottom > view.bottom) {
-        centerOnNode(entry.entry_id);
-      }
+    node.addEventListener('focus', () => {
+      if (viewportEl && node.matches(':focus-visible')) centerOnNode(entry.entry_id);
     });
-    stageEl.appendChild(g);
-    if (entry.entry_id === focusedEntryId) nodeToRefocus = g;
+    stageEl.appendChild(node);
+    if (entry.entry_id === focusId) refocus = node;
   }
-
   if (isNewSession || !viewState.hasAutoFit || !viewState.userAdjusted) {
-    fitDagToView();
-  } else {
-    applyViewTransform();
-  }
-  nodeToRefocus?.focus({ preventScroll: true });
+    const { vw, vh } = viewportSize();
+    const fit = Math.min((vw-24)/viewState.contentW, (vh-24)/viewState.contentH);
+    if (fit >= .88) fitDagToView();
+    else {
+      viewState.scale = 1;
+      const first = nodeCoords.get(selectedEntry?.entry_id || readingOrder[0].entry_id);
+      viewState.tx = (vw-first.w)/2-first.x;
+      viewState.ty = 14-first.y;
+      viewState.hasAutoFit = true;
+      applyViewTransform();
+    }
+  } else applyViewTransform();
+  refocus?.focus({ preventScroll: true });
 }
 
 function updateSelectedHighlight() {
-  if (!stageEl) return;
-  for (const node of stageEl.querySelectorAll('.dag-node')) {
+  const list = document.getElementById('dag-reading-list');
+  for (const node of [...(stageEl?.querySelectorAll('.dag-node') || []), ...(list?.querySelectorAll('button') || [])]) {
     const selected = selectedEntry?.entry_id === node.getAttribute('data-entry-id');
     node.classList.toggle('is-selected', selected);
     node.setAttribute('aria-pressed', String(selected));
@@ -467,7 +548,10 @@ export function selectNodeById(entryId, centerView = true) {
   const found = currentDag.entries.find((e) => e.entry_id === entryId);
   if (found) {
     selectNode(found);
-    if (centerView) centerOnNode(found.entry_id);
+    if (centerView) {
+      if (stageEl) centerOnNode(found.entry_id);
+      else document.querySelector('#dag-reading-list [aria-pressed="true"]')?.scrollIntoView({ block: 'nearest' });
+    }
     return true;
   }
   return false;
@@ -478,6 +562,10 @@ function renderDetailForEntry(entry) {
   const sid = currentSessionId;
   renderDagNodeDetail(detailEl, entry, entries, {
     loadEvidence: sid && ((id) => api.getProofEvidence(sid, id)),
+    onReviewStep: sid && (async (entryId) => {
+      await api.reviewClaim(sid, { entry_id: entryId });
+      if (sid === currentSessionId) await refreshDag(sid);
+    }),
     onNotify: callbacks.onNotify,
     onSelectNode: (id) => {
       if (selectNodeById(id)) detailEl?.focus();

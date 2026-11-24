@@ -64,6 +64,7 @@ pub fn run(opts: &RunOpts) -> Result<i32, String> {
     let token = random_hex(32);
     let io = |e: std::io::Error| e.to_string();
 
+    let _activity = research_tools::session_activity::start_turn(&opts.data_dir, &session).map_err(|e| e.to_string())?;
     let dir = opts.data_dir.join("sessions").join(&session);
     let (work, scratch, pycache) = (dir.join("work"), dir.join("scratch"), dir.join("pycache"));
     std::fs::create_dir_all(&work).map_err(io)?;

@@ -373,6 +373,7 @@ pub(crate) fn run_cli_turn(
     let cli_exe = vendor.locate(explicit_exe, &env_lookup)?;
     let core_exe = resolve_core_exe(&state.cfg)?;
     let meta = state.load_meta(session_id);
+    let allow_model_title = meta.as_ref().is_some_and(SessionMeta::allows_model_title);
     let ui = state.load_ui_settings();
     let model = pick_model(req, meta.as_ref(), &ui, kind)?;
     let conventions = req["pinned_conventions"].as_str()
@@ -381,7 +382,7 @@ pub(crate) fn run_cli_turn(
     let (reasoning_effort, subagent) =
         crate::subagents::resolve_turn_options(state, session_id, req, meta);
     let research = Arc::new(state.research_env_for_session(session_id)?);
-    let project_context = crate::project_context::brief(state, session_id)?;
+    let project_context = crate::investigation::turn_context(crate::project_context::brief(state, session_id)?, req);
 
     let ledger = state.open_ledger()?;
     let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
@@ -395,6 +396,11 @@ pub(crate) fn run_cli_turn(
         Some(sa) => crate::subagents::apply_subagent_to_turn_prompt(sa, message),
         None => message.to_string(),
     };
+    let needs_title = allow_model_title && crate::routes_session::model_session_title(&existing).is_none()
+        && !crate::investigation::is_investigation(&existing);
+    if needs_title {
+        eff_msg = format!("Once you can state the main research question, use set_session_title once with a concise title in the user's language.\n\n{eff_msg}");
+    }
     if let Some(text) = conventions.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
         eff_msg = format!("Pinned research conventions\n{text}\n\n{eff_msg}");
     }
@@ -451,6 +457,7 @@ pub(crate) fn run_cli_turn(
         "prompt": message,
         "provider": kind.provider_id(),
         "surface": "desktop",
+        "allow_model_title": needs_title,
         "history_replayed": replay.replayed,
         "history_chars": replay.history_chars,
         "history_turns": replay.turns_included,

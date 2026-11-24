@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/webview2-com-sys"]
 members = [
     "crates/policy",
     "crates/ledger",
@@ -17,10 +18,13 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 license = "GPL-3.0-only"
 publish = false
+
+[patch.crates-io]
+webview2-com-sys = { path = "vendor/webview2-com-sys" }
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

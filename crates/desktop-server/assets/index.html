@@ -14,10 +14,12 @@
   <link rel="stylesheet" href="/assets/workbench.css">
   <link rel="stylesheet" href="/assets/modals.css">
   <link rel="stylesheet" href="/assets/dag.css">
+  <link rel="stylesheet" href="/assets/pdf_preview.css">
   <link rel="stylesheet" href="/assets/projects.css">
   <link rel="stylesheet" href="/assets/project_validation.css">
   <link rel="stylesheet" href="/assets/project_library.css">
   <link rel="stylesheet" href="/assets/experiments.css">
+  <link rel="stylesheet" href="/assets/investigation.css">
 </head>
 <body>
   <div id="app-shell" data-rail-open="true" data-canvas-open="false">
@@ -36,9 +38,14 @@
           <span aria-hidden="true">+</span>
           <span>New research</span>
         </button>
+        <button id="new-investigation-btn" type="button" class="pill-btn wide" title="Read a paper and trace its argument">New investigation</button>
       </div>
       <div class="rail-search-wrap">
         <input id="session-search" class="text-input" type="search" placeholder="Filter sessions (Ctrl+K)..." aria-label="Filter sessions">
+      </div>
+      <div class="rail-folders">
+        <select id="session-folder-filter" class="compact-select" aria-label="Filter sessions by folder"><option value="*">All folders</option></select>
+        <button id="manage-session-folders" type="button" class="pill-btn sm">Folders…</button>
       </div>
       <div class="rail-filter-bar">
         <div class="segmented-group wide-seg" role="group" aria-label="Chat filter">
@@ -93,6 +100,9 @@
             <div class="project-actions">
               <select id="project-select" class="compact-select" aria-label="Select project"></select>
               <button id="project-create-btn" type="button" class="pill-btn sm primary">New project</button>
+              <button id="project-backup-btn" type="button" class="pill-btn sm" title="Download sessions, sources, manuscript drafts, experiments and private validation values. Back up attached workspace folders separately." hidden>Back up project</button>
+              <button id="project-restore-btn" type="button" class="pill-btn sm">Restore backup</button>
+              <input id="project-restore-file" type="file" accept=".zip" hidden>
             </div>
           </header>
           <p id="project-page-status" class="project-status" role="status" hidden></p>
@@ -211,6 +221,42 @@
         </div>
       </div>
 
+      <div id="investigation-nav" class="investigation-nav" hidden>
+        <div class="segmented-group" role="group" aria-label="Investigation view">
+          <button id="show-paper-map" type="button" class="seg-btn" aria-controls="investigation-panel" aria-pressed="true">Paper map</button>
+          <button id="show-investigation-chat" type="button" class="seg-btn" aria-controls="message-stream" aria-pressed="false">Conversation</button>
+        </div>
+      </div>
+      <div id="investigation-origin" class="investigation-origin" hidden></div>
+      <section id="investigation-panel" aria-label="Paper investigation" hidden>
+        <div class="investigation-inner">
+          <form id="investigation-setup" class="investigation-setup">
+            <h2>Investigate a paper</h2>
+            <p>Trace the authors’ main results back to their assumptions, methods and evidence.</p>
+            <label for="investigation-file">Primary paper</label>
+            <input id="investigation-file" type="file" accept=".tex,.pdf,.md,.txt,.zip,.tgz,.gz" aria-describedby="investigation-formats">
+            <small id="investigation-formats">PDF, TeX, Markdown, plain text or a TeX archive. Up to 10 MiB.</small>
+            <div id="investigation-existing-wrap" hidden>
+              <label for="investigation-existing">Or choose a paper already in this session</label>
+              <select id="investigation-existing" class="compact-select"></select>
+            </div>
+            <fieldset id="investigation-pages" hidden>
+              <legend>Paper pages <span>(optional)</span></legend>
+              <small>Leave both blank for the whole PDF. Use the page numbers in the PDF viewer.</small>
+              <div><label>First page <input id="investigation-page-start" type="number" min="1" step="1" class="text-input"></label>
+              <label>Last page <input id="investigation-page-end" type="number" min="1" step="1" class="text-input"></label></div>
+            </fieldset>
+            <label for="investigation-question">Reading question <span>(optional)</span></label>
+            <textarea id="investigation-question" class="text-input" rows="2" placeholder="Which assumptions does the main result need?"></textarea>
+            <button type="submit" class="pill-btn primary">Find main results</button>
+          </form>
+          <button id="investigation-original" type="button" class="pill-btn sm" hidden>Open original PDF</button>
+          <div id="investigation-status" role="status" hidden></div>
+          <section id="investigation-summary" aria-labelledby="investigation-summary-title" hidden></section>
+          <details id="investigation-conventions" hidden><summary>Conventions</summary></details>
+          <div id="investigation-map"></div>
+        </div>
+      </section>
       <section id="message-stream" aria-live="polite" aria-label="Research conversation stream"></section>
 
       <div class="composer-dock">
@@ -352,9 +398,21 @@
             </div>
           </div>
           <p id="latex-file-note" class="latex-file-note" role="status" hidden>This preview is truncated. Open the full file in your workspace to edit or audit it.</p>
+          <button id="latex-start-manuscript" type="button" class="pill-btn">Start a manuscript</button>
+          <form id="latex-bind-draft" class="panel-toolbar" hidden>
+            <label for="latex-bind-path">Destination in this workspace</label>
+            <input id="latex-bind-path" class="text-input" type="text" required>
+            <button type="submit" class="pill-btn sm">Use in this workspace</button>
+          </form>
+          <div id="latex-recovery" class="panel-toolbar" hidden>
+            <label for="latex-recovery-list">Recover unsaved edits</label>
+            <select id="latex-recovery-list" class="compact-select"></select>
+            <button id="latex-restore-draft" type="button" class="pill-btn sm primary">Restore draft</button>
+            <button id="latex-discard-draft" type="button" class="pill-btn sm">Discard draft</button>
+          </div>
           <div class="latex-split">
             <div class="tex-pane tex-pane-editor">
-              <div class="pane-caption"><span>Manuscript Editor</span><span id="latex-line-count">0 lines</span></div>
+              <div class="pane-caption"><span>Manuscript Editor</span><span id="latex-recovery-status"></span><span id="latex-line-count">0 lines</span></div>
               <textarea id="latex-editor" aria-label="Manuscript editor" spellcheck="false" placeholder="Select a workspace .tex/.bib file or write LaTeX here..."></textarea>
             </div>
             <div class="tex-pane tex-pane-preview">
@@ -368,13 +426,14 @@
         <!-- Tab 2: Proof Graph & Ledger Canvas -->
         <section id="panel-dag" class="canvas-panel" role="tabpanel" aria-labelledby="tab-dag">
           <div class="panel-toolbar">
-            <button id="dag-verify-btn" type="button" class="pill-btn sm primary" title="Verify SHA-256 event hash chain and content-addressed blobs">Verify Chain</button>
+            <button id="dag-verify-btn" type="button" class="pill-btn sm" title="Check the fingerprints of the saved events and files">Check record integrity</button>
             <button id="dag-fork-btn" type="button" class="pill-btn sm" title="Branch this session at a proof step with a modified assumption">Fork Branch</button>
             <button id="dag-narrate-btn" type="button" class="pill-btn sm" title="Synthesize a clean prose derivation sheet from accepted DAG steps">Narrate Proof</button>
             <span id="dag-verify-badge" class="badge" hidden></span>
           </div>
           <div class="dag-layout">
             <div id="dag-fork-bar" class="dag-detail-card" hidden>
+              <div id="fork-assumption-impact" class="assumption-impact" hidden></div>
               <div class="form-row">
                 <label for="fork-assumption-input">Counterfactual assumption (forking at seq <span id="fork-seq-label">latest</span>)</label>
                 <input id="fork-assumption-input" class="text-input" type="text" placeholder="Optional modified assumption (e.g. set \mu \neq 0 or open boundary conditions)...">
@@ -384,14 +443,20 @@
                 <button id="fork-confirm-btn" type="button" class="pill-btn sm primary">Create fork</button>
               </div>
             </div>
-            <div class="dag-viewport-wrap">
+            <div id="dag-views" class="dag-views" role="group" aria-label="Proof view" hidden>
+              <button id="dag-view-graph" class="pill-btn sm" type="button" aria-pressed="true" aria-controls="dag-map">Graph</button>
+              <button id="dag-view-list" class="pill-btn sm" type="button" aria-pressed="false" aria-controls="dag-reading-list">Steps in order</button>
+            </div>
+            <p id="dag-direction" class="dag-direction" hidden>Arrows point from a prerequisite to the step it supports.</p>
+            <ol id="dag-reading-list" class="dag-reading-list" aria-label="Proof steps in dependency order" hidden></ol>
+            <div class="dag-viewport-wrap" id="dag-map">
               <div class="dag-zoom-controls" role="toolbar" aria-label="Proof DAG zoom controls">
                 <button id="dag-zoom-out" type="button" class="dag-zoom-btn" title="Zoom out (−)" aria-label="Zoom out">−</button>
                 <button id="dag-zoom-reset" type="button" class="dag-zoom-btn dag-zoom-reset" title="Reset zoom to 100%" aria-label="Reset zoom to 100%">100%</button>
                 <button id="dag-zoom-in" type="button" class="dag-zoom-btn" title="Zoom in (+)" aria-label="Zoom in">+</button>
                 <button id="dag-zoom-fit" type="button" class="dag-zoom-btn" title="Fit graph to view" aria-label="Fit graph to view">Fit</button>
               </div>
-              <div id="dag-viewport" class="dag-canvas-box dag-viewport">
+              <div id="dag-viewport" class="dag-canvas-box dag-viewport" tabindex="0" aria-label="Proof graph. Use the arrow keys to pan.">
                 <svg id="proof-dag-svg" viewBox="0 0 420 260" aria-label="Proof dependency graph"></svg>
               </div>
             </div>
@@ -645,6 +710,53 @@
           <button id="workspace-confirm-btn" type="submit" class="pill-btn primary">Attach</button>
         </div>
       </form>
+    </div>
+  </dialog>
+
+  <dialog id="session-folder-dialog" class="workbench-dialog" aria-labelledby="folder-dialog-heading">
+    <div class="modal-card">
+      <div class="modal-header"><h2 id="folder-dialog-heading">Session folders</h2>
+        <form method="dialog"><button class="icon-btn" aria-label="Close session folders">✕</button></form>
+      </div>
+      <form id="edit-session-folder" class="form-grid">
+        <label class="form-row">Folder to edit<select id="session-folder-choice" class="compact-select"></select></label>
+        <label class="form-row">Folder name<input id="session-folder-name" class="text-input" maxlength="80" required></label>
+        <div><button id="save-session-folder" type="submit" class="pill-btn primary">Create folder</button>
+          <button id="remove-session-folder" type="button" class="pill-btn" hidden>Remove folder</button></div>
+      </form>
+      <form id="file-session-form" class="form-grid" hidden>
+        <label class="form-row">Destination folder<select id="file-session-destination" class="compact-select"></select></label>
+        <button type="submit" class="pill-btn primary">Move session</button>
+      </form>
+      <p id="folder-dialog-status" role="status"></p>
+    </div>
+  </dialog>
+
+  <dialog id="worked-example" class="workbench-dialog" aria-labelledby="example-heading">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="example-heading">Check a two-site equilibrium</h2>
+        <form method="dialog"><button class="icon-btn" aria-label="Close worked example">✕</button></form>
+      </div>
+      <p>Two sites are coupled by identical unit springs between fixed walls. A unit force acts on site 1. Their displacements satisfy \(2x-y=1\) and \(-x+2y=0\).</p>
+      <p>A proposed solution is \(x=2/3,\ y=-1/3\). Does it balance the forces?</p>
+      <fieldset class="example-actions">
+        <legend>Predict the outcome</legend>
+        <button type="button" class="pill-btn" data-prediction="yes">Both equations hold</button>
+        <button type="button" class="pill-btn" data-prediction="no">The proposal fails</button>
+      </fieldset>
+      <p id="example-feedback" role="status"></p>
+      <button type="button" id="example-check" class="pill-btn primary">Run the calculation</button>
+      <section id="example-result" hidden>
+        <h3 tabindex="-1">Substitution check</h3>
+        <p id="example-values"></p>
+        <p>The second equation gives \(y=x/2\). Substituting into the first gives \(3x/2=1\), hence \(x=2/3,\ y=1/3\).</p>
+        <details><summary>Inspect the calculation</summary>
+          <p>Keep both displacements in thirds. For numerators \(a,b\), the net force has numerators \(2a-b,-a+2b\). The target is \((3,0)\).</p>
+          <pre><code id="example-calculation"></code></pre>
+        </details>
+        <button type="button" class="pill-btn" id="example-again">Try again</button>
+      </section>
     </div>
   </dialog>
 

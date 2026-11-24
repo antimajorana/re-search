@@ -150,9 +150,6 @@ Section "reSearch"
   File "${RE_SEARCH_STAGE}\re-search.exe"
   File "${RE_SEARCH_STAGE}\core.exe"
   File "${RE_SEARCH_STAGE}\LICENSE"
-!ifdef RE_SEARCH_WEBVIEW2_LOADER
-  File "${RE_SEARCH_STAGE}\WebView2Loader.dll"
-!endif
   SetOutPath "$Stage\python"
   File "${RE_SEARCH_STAGE}\python\worker.py"
   File "${RE_SEARCH_STAGE}\python\solver_calc.py"

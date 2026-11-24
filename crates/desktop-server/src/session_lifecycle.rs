@@ -103,6 +103,11 @@ pub fn is_turn_running(state: &DesktopState, session_id: &str) -> bool {
             .unwrap_or(false)
 }
 
+pub(crate) fn reserve_turn(state: &DesktopState, session: &str) -> Result<fs::File, (u16, String)> {
+    research_tools::session_activity::start_turn(&state.cfg.data_dir, session)
+        .map_err(|e| if e.kind() == std::io::ErrorKind::WouldBlock { (409, e.to_string()) } else { internal(e.to_string()) })
+}
+
 fn stop_and_wait_briefly(state: &DesktopState, session_id: &str) {
     let _ = crate::turn_control::handle_stop_turn(state, session_id);
     let deadline = Instant::now() + Duration::from_millis(500);
@@ -165,6 +170,7 @@ pub fn handle_delete_session(state: &DesktopState, session_id: &str) -> ApiResul
         .map_err(|e| internal(e.to_string()))?
         .is_empty();
 
+    let _draft_guard = crate::manuscript_drafts::lock_writes(state)?;
     let sdir = state.session_dir(session_id).map_err(internal)?;
     if sdir.exists() {
         for sub in ["scratch", "pycache", "sources"] {
@@ -173,9 +179,8 @@ pub fn handle_delete_session(state: &DesktopState, session_id: &str) -> ApiResul
                 let _ = fs::remove_dir_all(&p);
             }
         }
-        let sidetalk = sdir.join("sidetalk.jsonl");
-        if sidetalk.exists() {
-            let _ = fs::remove_file(&sidetalk);
+        for name in ["sidetalk.jsonl", "manuscript-drafts.json"] {
+            let _ = fs::remove_file(sdir.join(name));
         }
     }
 
@@ -197,6 +202,7 @@ pub fn handle_delete_session(state: &DesktopState, session_id: &str) -> ApiResul
         };
         state.save_meta(&tombstone).map_err(internal)?;
     }
+    crate::session_folders::forget_session(state, session_id)?;
 
     Ok((
         200,

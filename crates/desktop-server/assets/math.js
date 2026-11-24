@@ -211,6 +211,16 @@ export function renderMathTextInto(el, rawText, opts) {
   else el.textContent = text;
 }
 
+// Segment placeholders rather than the TeX so a sentence never cuts a formula in two.
+const sentenceBreaks = new Intl.Segmenter(undefined, { granularity: 'sentence' });
+export function firstMathSentence(text) {
+  const tokens = [];
+  const marked = extractMath(String(text || '').replace(/\u0000/g, ''), tokens);
+  const sentences = sentenceBreaks.segment(marked);
+  const first = sentences[Symbol.iterator]().next().value?.segment.trim() || '';
+  return first.replace(/\u0000M(\d+)\u0000/g, (_, index) => '\\(' + tokens[index].tex + '\\)');
+}
+
 export function displayMathSource(rawLatex) {
   let tex = String(rawLatex ?? '').trim();
   if (!tex || /^(\$\$|\\\[|\\begin\{)/.test(tex)) return tex;

@@ -154,6 +154,7 @@ pub fn handle_put_session_workspace(
         created_ms: crate::state::now_ms(),
         ..Default::default()
     });
+    meta.workspace_detached = next_ws.is_none();
     meta.workspace_root = next_ws;
     state.save_meta(&meta).map_err(internal)?;
     handle_get_session(state, session_id)

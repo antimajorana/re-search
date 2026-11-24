@@ -2,12 +2,14 @@
 //! embedded Gemini-inspired research UI.
 
 pub mod agent_models;
+mod investigation;
 pub mod antigravity;
 pub mod approver;
 pub mod assets;
 pub mod auth;
 pub mod chatgpt;
 mod cli_relay;
+mod claim_review;
 pub mod cli_turn;
 pub mod connections;
 mod explain_export;
@@ -17,12 +19,15 @@ mod project_context;
 pub mod hitl;
 pub mod http_srv;
 pub mod launcher;
+mod manuscript_drafts;
 pub mod model_catalog;
+mod original_pdf;
 mod projects;
 pub mod routes_session;
 pub mod routes_subagents;
 pub mod routes_tools;
 pub mod session_lifecycle;
+mod session_folders;
 mod session_summary;
 mod session_view;
 pub mod sse;

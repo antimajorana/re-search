@@ -1,5 +1,8 @@
 //! Local research projects and their user-maintained records.
 
+#[path = "project_backup.rs"]
+pub(crate) mod backup;
+
 use crate::routes_session::{bad, conflict, internal, not_found, parse_json_body, ApiResult};
 use crate::state::{DesktopState, SessionMeta};
 use ledger::Event;
@@ -263,6 +266,9 @@ pub(crate) fn save_new_session(
     // Serialize creation with other creators and with project attach. In particular a
     // competing request for the same ID must never roll back a session it did not create.
     let mut store = ProjectStore::open(state)?;
+    if state.session_restore_pending(&meta.id).map_err(internal)? {
+        return Err(conflict("Finish the interrupted project restore before reusing this session."));
+    }
     if state.session_exists(&meta.id).map_err(internal)? {
         return Err(conflict(format!("session `{}` already exists", meta.id)));
     }
@@ -358,20 +364,24 @@ fn check_backlinks(
     } else {
         Vec::new()
     };
+    check_event_links(&session_events, entry_id, source_id)
+}
+
+fn check_event_links(session_events: &[Event], entry_id: Option<&str>, source_id: Option<&str>) -> Result<()> {
     let has = |events: &[Event], kind: &str, field: &str, id: &str| {
         events
             .iter()
             .any(|event| event.kind == kind && event.payload[field].as_str() == Some(id))
     };
     if let Some(entry) = entry_id {
-        if !has(&session_events, "proof.entry", "entry_id", entry) {
+        if !has(session_events, "proof.entry", "entry_id", entry) {
             return Err(bad(format!(
                 "proof entry `{entry}` was not found in the linked session"
             )));
         }
     }
     if let Some(source) = source_id {
-        if !has(&session_events, "source.ingested", "source_id", source) {
+        if !has(session_events, "source.ingested", "source_id", source) {
             return Err(bad(format!(
                 "source `{source}` was not found in the linked session"
             )));

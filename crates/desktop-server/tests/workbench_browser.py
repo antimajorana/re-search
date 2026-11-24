@@ -11,6 +11,11 @@ from zipfile import ZipFile
 
 from playwright.sync_api import expect, sync_playwright
 from research_display_browser import check_research_display
+from project_backup_browser import check_project_backup
+from pdf_preview_browser import check_pdf_preview
+from recovery_example_browser import check_recovery_example
+from investigation_browser import check_investigation
+from session_folders_browser import check_session_folders
 
 
 def check_workbench(browser, binary, width, height):
@@ -29,6 +34,12 @@ def check_workbench(browser, binary, width, height):
         context = browser.new_context(viewport={"width": width, "height": height})
         errors = []
         page = context.new_page()
+        if width == 1024:
+            # Reproduce a save request arriving during a gap in the live event stream.
+            page.add_init_script("""const listen = EventSource.prototype.addEventListener;
+                EventSource.prototype.addEventListener = function(name, ...args) {
+                    if (name !== 'approval_requested') return listen.call(this, name, ...args);
+                };""")
         page.on("pageerror", lambda error: errors.append(str(error)))
         try:
             page.goto(json.loads(server.stdout.readline())["url"])
@@ -101,7 +112,7 @@ def check_workbench(browser, binary, width, height):
             page.evaluate("async () => (await import('/assets/api.js')).updateProviderSettings({auto_approve_tools:false})")
             page.locator("#latex-save-btn").click()
             decision = page.locator(".approval-card").get_by_role("button", name=re.compile(r"^Approve (Once|& Run)$"))
-            expect(decision).to_be_in_viewport()
+            expect(decision).to_be_in_viewport(timeout=20000)
             decision.click()
             expect(page.locator("#stream-status-pill")).to_have_text("Ready")
             if canvas_toggle.get_attribute("aria-expanded") != "true":
@@ -121,6 +132,8 @@ def check_workbench(browser, binary, width, height):
             expect(page.locator("#project-title")).to_have_text("Boundary terms")
             page.get_by_role("tab", name="Findings").click()
             expect(page.locator("#project-finding-list")).to_contain_text("Periodic boundary terms cancel.")
+            if width == 1440:
+                check_project_backup(browser, binary, root, page)
             assert not errors, errors
             print(f"{width}×{height}: draft, research options, project, ingestion, evidence, ZIP, and reload passed")
         finally:
@@ -130,19 +143,42 @@ def check_workbench(browser, binary, width, height):
 
 
 def main():
+    import sys
+    import traceback
+
     cli = argparse.ArgumentParser(description=__doc__)
     executable = "re-search.exe" if os.name == "nt" else "re-search"
     cli.add_argument("--binary", type=Path, default=Path("target/debug") / executable)
     cli.add_argument("--chromium", help="Use a system Chromium executable")
     args = cli.parse_args()
+    binary = args.binary.resolve()
+    journeys = [
+        ("workbench 1440x900", lambda b: check_workbench(b, binary, 1440, 900)),
+        ("workbench 1024x768", lambda b: check_workbench(b, binary, 1024, 768)),
+        ("workbench 390x844", lambda b: check_workbench(b, binary, 390, 844)),
+        ("research display", check_research_display),
+        ("pdf preview", lambda b: check_pdf_preview(b, binary)),
+        ("recovery example", lambda b: check_recovery_example(b, binary)),
+        ("investigation", lambda b: check_investigation(b, binary)),
+        ("session folders", lambda b: check_session_folders(b, binary)),
+    ]
+    failures = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(executable_path=args.chromium)
         try:
-            for width, height in [(1440, 900), (1024, 768), (390, 844)]:
-                check_workbench(browser, args.binary.resolve(), width, height)
-            check_research_display(browser)
+            for index, (name, run) in enumerate(journeys, 1):
+                try:
+                    run(browser)
+                    print(f"[{index}/{len(journeys)}] PASS {name}", flush=True)
+                except Exception:
+                    failures.append((name, traceback.format_exc()))
+                    print(f"[{index}/{len(journeys)}] FAIL {name}", flush=True)
         finally:
             browser.close()
+    if failures:
+        for name, tb in failures:
+            print(f"\n=== FAIL: {name} ===\n{tb}", file=sys.stderr, end="", flush=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

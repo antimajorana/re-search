@@ -28,9 +28,10 @@ use worker::WorkerConfig;
 pub(crate) fn spawn_turn_thread(
     state: Arc<DesktopState>,
     session_id: String,
-    req_json: Value,
+    mut req_json: Value,
     prompt: String,
 ) -> Result<(), (u16, String)> {
+    let activity = crate::session_lifecycle::reserve_turn(&state, &session_id)?;
     {
         let mut active = state
             .active_turns
@@ -77,11 +78,17 @@ pub(crate) fn spawn_turn_thread(
         }
     };
 
+    if let Err(error) = crate::investigation::prepare(&state, &session_id, &mut req_json, &prompt) {
+        if let Ok(mut active) = state.active_turns.lock() { active.remove(&session_id); }
+        return Err(error);
+    }
+
     let thread_state = Arc::clone(&state);
     let thread_session = session_id.clone();
     std::thread::Builder::new()
         .name(format!("turn-{session_id}"))
         .spawn(move || {
+            let _activity = activity;
             let outcome = match (&registered_cli, &registered_api) {
                 (Some((reg, kind)), _) => {
                     crate::cli_turn::run_cli_turn(&thread_state, &thread_session, &req_json, &prompt, &reg.stop, *kind)
@@ -91,6 +98,7 @@ pub(crate) fn spawn_turn_thread(
                 }
                 (None, None) => Err("missing turn registration".into()),
             };
+            let outcome = crate::investigation::finish(&thread_state, &thread_session, &req_json, outcome);
             drop(registered_cli);
             drop(registered_api);
             if let Ok(mut active) = thread_state.active_turns.lock() {
@@ -179,7 +187,7 @@ fn run_session_turn(
         .unwrap_or(DEFAULT_MAX_TOKENS);
 
     let env = Arc::new(state.research_env_for_session(session_id)?);
-    let project_context = crate::project_context::brief(state, session_id)?;
+    let project_context = crate::investigation::turn_context(crate::project_context::brief(state, session_id)?, req);
     let transport = state.build_transport(provider, &model)?;
     let v_built = crate::agent_models::resolve_optional_role_transport(
         state,

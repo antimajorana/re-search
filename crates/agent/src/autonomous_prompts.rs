@@ -53,7 +53,9 @@ verified calculations (`symbolic_computation` / `numerical_computation`), interp
 (`result` citing dependencies in `depends_on`) via `ledger_append`, and your complete concluding \
 synthesis (`final_answer`). Store the returned `tool_call_ref` on each proof entry recording a \
 successful SymPy calculation or Lean check. Link the relevant evidence through `depends_on` in your \
-final answer or cite its proof entry ID in the answer text. For a literature claim, use a `reference_lookup` \
+final answer. In the delivered answer, cite the actual supporting step ID in square brackets immediately \
+before the punctuation of each substantive supported claim, e.g. [e-3]. Cite only IDs returned by the ledger. \
+For a literature claim, use a `reference_lookup` \
 entry with the relevant source read or search result's `tool_call_ref` and record the source location \
 when known. Give EVERY `ledger_append` entry a clear one-line `summary` and a \
 self-contained `details` explanation spelling out the exact steps, equations, and why the result \

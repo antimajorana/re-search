@@ -52,6 +52,46 @@ pub(crate) struct SessionExportData {
     pub events: Vec<Event>,
 }
 
+/// Scope and verdict travel together so a passage review cannot read as an endorsement of a whole answer.
+pub(crate) fn recorded_reviews(events: &[Event]) -> impl Iterator<Item = (String, Vec<String>)> + '_ {
+    events.iter().filter_map(|e| {
+        let p = &e.payload;
+        let mut lines = Vec::new();
+        let target = match e.kind.as_str() {
+            "claim.review" => {
+                lines.push(p["claim"].as_str()?.to_string());
+                let occurrence = p["occurrence"].as_u64().unwrap_or(0);
+                let label = format!("Selected claim from answer event {}", p["answer_seq"].as_u64()?);
+                if occurrence == 0 { label } else { format!("{label} (occurrence {})", occurrence.saturating_add(1)) }
+            }
+            "proof.verification" if p["kind"] == "step" && p["on_demand"] == true =>
+                format!("Proof step {}", p["target_entry_id"].as_str()?),
+            "proof.verification" if p["kind"] == "full" => {
+                let target = p["target_entry_id"].as_str()?;
+                if let Some(hash) = p["answer_sha256"].as_str() {
+                    lines.push(format!("Reviewed answer SHA-256: {hash}"));
+                    format!("Full-solution review targeting {target}")
+                } else {
+                    format!("Full proof review targeting {target}")
+                }
+            }
+            _ => return None,
+        };
+        let verdict = research_tools::effective_verification_verdict(p)?;
+        let model = p["model"].as_str().unwrap_or("verifier");
+        lines.push(p["summary"].as_str().unwrap_or_default().to_string());
+        if let Some(example) = p["counterexample"].as_str().filter(|s| !s.trim().is_empty()) {
+            lines.push(format!("Counterexample: {example}"));
+        }
+        for issue in p["issues"].as_array().into_iter().flatten() {
+            if let Some(message) = issue["message"].as_str() {
+                lines.push(format!("{}: {message}", issue["severity"].as_str().unwrap_or("Issue")));
+            }
+        }
+        Some((format!("{target} — {verdict} ({model}, review event {})", e.seq), lines))
+    })
+}
+
 #[derive(Serialize)]
 pub(crate) struct SourceRevision<'a> {
     event_seq: u64,
@@ -653,6 +693,10 @@ pub(crate) fn render_latex_document(data: &SessionExportData, bib_stem: &str) ->
         if *unverified { out.push_str("\\emph{The verifier reported unresolved issues.}\n\n"); }
         out.push_str(&escape_latex_unicode(answer, false));
         out.push_str("\n\n");
+    }
+    for (heading, lines) in recorded_reviews(&data.events) {
+        out.push_str(&format!("\\subsection*{{{}}}\n", escape_latex_unicode(&heading, false)));
+        for line in lines { out.push_str(&format!("{}\n\n", escape_latex_unicode(&line, false))); }
     }
     if !data.entries.is_empty() {
         out.push_str("\\section{Derivation Steps}\n");

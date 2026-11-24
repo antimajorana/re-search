@@ -1,7 +1,7 @@
 //! Approval-gated workspace file creation (`fs_write`), exact LaTeX/text
 //! patching (`latex_patch`), unified diff preview, and fail-closed backups.
 
-use crate::sandbox::{SandboxRoot, WorkspaceSandbox};
+use crate::sandbox::{ResolvedWritePath, SandboxRoot, WorkspaceSandbox};
 use crate::ResearchEnv;
 use policy::EffectClass;
 use serde::{Deserialize, Serialize};
@@ -14,6 +14,7 @@ use tools::{ApprovalScope, CallCtx, Registry, ToolDef, EVENT_SCHEMA_VERSION};
 
 pub const FS_WRITE: &str = "fs_write";
 pub const LATEX_PATCH: &str = "latex_patch";
+pub const EDIT_BASE_CHANGED: &str = "changed on disk. Copy your edits, then reload the file to reconcile the changes.";
 const MAX_WRITE_CHARS: u64 = 2_000_000;
 const MAX_WRITE_BYTES: usize = 4 * 1024 * 1024;
 const PREVIEW_SESSION_PLACEHOLDER: &str = "s-preview";
@@ -108,8 +109,7 @@ pub fn preview_workspace_edit(
     Ok(prepare_edit(env, tool_id, &args)?.preview)
 }
 
-fn prepare_edit(env: &ResearchEnv, tool_id: &str, args: &Value) -> Result<PreparedEdit, String> {
-    let raw_path = args.get("path").and_then(Value::as_str).ok_or("`path` must be a string")?;
+fn read_edit_base(env: &ResearchEnv, raw_path: &str) -> Result<(ResolvedWritePath, Option<Vec<u8>>), String> {
     let resolved = env
         .sandbox()
         .resolve_for_write(SandboxRoot::Workspace, PREVIEW_SESSION_PLACEHOLDER, raw_path)
@@ -124,10 +124,22 @@ fn prepare_edit(env: &ResearchEnv, tool_id: &str, args: &Value) -> Result<Prepar
         None
     };
 
+    Ok((resolved, orig_bytes))
+}
+
+/// Read the same source bytes used by the write tool, without asking for approval.
+pub fn workspace_edit_sha256(env: &ResearchEnv, path: &str) -> Result<Option<String>, String> {
+    let (_, original) = read_edit_base(env, path)?;
+    Ok(original.as_deref().map(ledger::sha256_hex))
+}
+
+fn prepare_edit(env: &ResearchEnv, tool_id: &str, args: &Value) -> Result<PreparedEdit, String> {
+    let raw_path = args.get("path").and_then(Value::as_str).ok_or("`path` must be a string")?;
+    let (resolved, orig_bytes) = read_edit_base(env, raw_path)?;
     let sha256_before = orig_bytes.as_deref().map(ledger::sha256_hex);
     if let Some(expected) = args.get("expected_sha256") {
         if expected != &serde_json::json!(sha256_before) {
-            return Err(format!("{} changed on disk. Copy your edits, then reload the file to reconcile the changes.", resolved.rel_path));
+            return Err(format!("{} {EDIT_BASE_CHANGED}", resolved.rel_path));
         }
     }
     let (old_text, new_text, replacements) = match tool_id {

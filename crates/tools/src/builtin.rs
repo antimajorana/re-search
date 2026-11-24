@@ -12,6 +12,28 @@ use std::sync::Arc;
 pub const POLICY_VERSION: &str = "v0.2";
 pub const SYMPY_EVAL: &str = "sympy_eval";
 pub const LEDGER_NOTE: &str = "ledger_note";
+pub const SET_SESSION_TITLE: &str = "set_session_title";
+pub const SESSION_TITLE_EVENT: &str = "session.title";
+const MAX_TITLE_CHARS: usize = 72;
+
+pub fn session_title_def() -> ToolDef {
+    ToolDef {
+        id: SET_SESSION_TITLE.into(),
+        description: "Give an unnamed research session a concise title based on its main question.".into(),
+        input_schema: json!({"type":"object","required":["title"],"additionalProperties":false,
+            "properties":{"title":{"type":"string","minLength":1,"maxLength":MAX_TITLE_CHARS}}}),
+        effect: EffectClass::ObserveLocal,
+        approval_scope: ApprovalScope::Once,
+    }
+}
+
+pub fn normalize_session_title(input: &Value) -> Result<String, String> {
+    let title = input["title"].as_str().unwrap_or_default().split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.is_empty() || title.chars().count() > MAX_TITLE_CHARS || title.chars().any(char::is_control) {
+        return Err(format!("Provide a title between 1 and {MAX_TITLE_CHARS} characters."));
+    }
+    Ok(title)
+}
 
 pub fn sympy_eval_def() -> ToolDef {
     ToolDef {

@@ -80,6 +80,14 @@ export function listSessions() {
   return rawJson('GET', '/api/sessions');
 }
 
+export function getSessionFolders() {
+  return rawJson('GET', '/api/session-folders');
+}
+
+export function changeSessionFolder(payload) {
+  return rawJson('POST', '/api/session-folders', payload);
+}
+
 export function listProjects() {
   return rawJson('GET', '/api/projects');
 }
@@ -90,6 +98,10 @@ export function createProject(payload) {
 
 export function getProject(id) {
   return rawJson('GET', projectPath(id));
+}
+
+export function prepareProjectBackup(id) {
+  return rawJson('POST', projectPath(id, '/backup'), {});
 }
 
 export function updateProject(id, payload) {
@@ -163,8 +175,32 @@ export function createSession(opts = {}) {
   return rawJson('POST', '/api/sessions', opts);
 }
 
+export function correctInvestigation(id, change) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/corrections`, change);
+}
+
+export function checkInvestigation(id, request) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/rechecks`, request);
+}
+
+export function developInvestigation(id, request) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/branches`, request);
+}
+
+export function findInvestigationConventions(id, request) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/conventions`, request);
+}
+
+export function openInvestigationResearch(id, request) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/research`, request);
+}
+
 export function getSession(id) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}`);
+}
+
+export function getPendingApprovals(id) {
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/approvals`);
 }
 
 export function sendMessage(id, payload) {
@@ -227,15 +263,28 @@ export function getWorkspace(id, relPath) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/workspace${qs}`);
 }
 
-export function readSourceFile(id, relPath) {
+export function readSourceFile(id, relPath, anchor) {
+  const query = new URLSearchParams({root: 'sources', path: relPath});
+  if (Number.isSafeInteger(anchor?.start_line)) {
+    query.set('start_line', anchor.start_line);
+    query.set('end_line', anchor.end_line ?? anchor.start_line);
+  }
   return rawJson(
     'GET',
-    `/api/sessions/${encodeURIComponent(id)}/workspace/file?root=sources&path=${encodeURIComponent(relPath)}`
+    `/api/sessions/${encodeURIComponent(id)}/workspace/file?${query}`
   );
 }
 
 export function patchLatex(id, payload) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/latex/patch`, payload);
+}
+
+export function getManuscriptDrafts(id) {
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/manuscript-drafts`);
+}
+
+export function putManuscriptDraft(id, payload) {
+  return rawJson('PUT', `/api/sessions/${encodeURIComponent(id)}/manuscript-drafts`, payload);
 }
 
 export function runTexAudit(id, payload = {}) {
@@ -264,6 +313,10 @@ export function getProofEvidence(id, entryId) {
 
 export function verifySession(id) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/verify`, {});
+}
+
+export function reviewClaim(id, target) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/claim-review`, target);
 }
 
 export function forkSession(id, payload) {
@@ -360,6 +413,8 @@ export function openSessionEvents(id, handlers) {
     'checkpoint_resolved',
     'steer_queued',
     'dag_updated',
+    'claim_review_started',
+    'claim_review_finished',
     'turn_complete',
     'turn_error',
   ];

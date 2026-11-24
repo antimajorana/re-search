@@ -7,6 +7,7 @@ use crate::turn_runner::build_desktop_router;
 use agent::{ask_sidetalk, narrate_session, read_sidetalk_thread};
 use export::{export_session_bytes, ExportFormat};
 use research_tools::fs_tools::{handle_fs_list, handle_fs_read};
+use research_tools::write_tools::{workspace_edit_sha256, EDIT_BASE_CHANGED};
 use research_tools::{
     ingest_bytes, read_proof_dag, run_arxiv_search, run_literature_search, run_tex_audit,
     validate_session_id, ArxivSearchRequest, AuditOptions, IngestRequest, LiteratureRequest,
@@ -155,7 +156,39 @@ pub fn handle_workspace_file(
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| bad("missing `path` query parameter"))?;
+    if root == "sources" && query.contains_key("start_line") {
+        let first = query.get("start_line").and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0)
+            .ok_or_else(|| bad("Invalid source line number."))?;
+        let last = query.get("end_line").map(|v|v.parse::<usize>()).transpose().map_err(|_| bad("Invalid end line."))?.unwrap_or(first);
+        if last < first || last - first > 512 { return Err(bad("Select a passage of up to 513 lines.")); }
+        return source_line_window(&env,session_id,path,first,last);
+    }
     handle_workspace_file_inner(&env, session_id, root, path)
+}
+
+fn source_line_window(env: &research_tools::ResearchEnv, session: &str, path: &str, first: usize, last: usize) -> ApiResult {
+    use research_tools::fs_tools::MAX_FS_READ_FILE_BYTES;
+    use std::io::Read;
+    let file = env.sandbox().resolve_existing(SandboxRoot::Sources,session,path,false).map_err(|e|bad(e.to_string()))?;
+    if !file.metadata.is_file() { return Err(bad("Choose a saved source file.")); }
+    let mut bytes = Vec::new();
+    std::fs::File::open(file.canonical_target).and_then(|f| f.take(MAX_FS_READ_FILE_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(|e|bad(e.to_string()))?;
+    if bytes.len() as u64 > MAX_FS_READ_FILE_BYTES { return Err(bad("Source exceeds the text reader limit.")); }
+    let text = std::str::from_utf8(&bytes).map_err(|_|bad("The source has no readable text."))?;
+    let start = first.saturating_sub(8).max(1);
+    let end = last.saturating_add(8);
+    let mut content = String::new();
+    let mut reached = 0;
+    for (idx,line) in text.split_inclusive('\n').enumerate().skip(start - 1) {
+        reached = idx + 1;
+        if reached > end { break; }
+        if content.len().saturating_add(line.len()) > 1024 * 1024 { return Err(bad("The selected passage is too large to display.")); }
+        content.push_str(line);
+    }
+    if reached < last { return Err(bad("The cited lines are outside this source.")); }
+    Ok((200,json!({"path":path,"content":content,"file_sha256":ledger::sha256_hex(&bytes),
+        "first_line":start,"truncated":reached>end,"partial":start>1 || reached>end})))
 }
 
 fn handle_workspace_file_inner(
@@ -223,6 +256,12 @@ pub fn handle_latex_patch(state: &Arc<DesktopState>, session_id: &str, body: &[u
         .ok_or_else(|| bad("`path` is required"))?;
 
     let env = Arc::new(state.research_env_for_session(session_id).map_err(bad)?);
+    if let Some(expected) = val.get("expected_workspace_root") {
+        let current = env.workspace_root.as_ref().map(|p| p.display().to_string());
+        if expected.as_str().is_none() || expected.as_str() != current.as_deref() {
+            return Err((409, "The attached workspace changed. Reopen the manuscript before saving.".into()));
+        }
+    }
     let has_search_replace = val
         .get("search")
         .and_then(Value::as_str)
@@ -248,7 +287,16 @@ pub fn handle_latex_patch(state: &Arc<DesktopState>, session_id: &str, body: &[u
         (FS_WRITE, json!({ "path": path, "content": content }))
     };
     if let Some(expected) = val.get("expected_sha256") {
-        args["expected_sha256"] = expected.clone();
+        let expected = match expected {
+            Value::Null => None,
+            Value::String(s) if s.len() == 64 && s.bytes().all(|c| c.is_ascii_hexdigit()) => Some(s.to_ascii_lowercase()),
+            _ => return Err(bad("`expected_sha256` must be a 64-digit SHA-256 hex digest or null")),
+        };
+        let current = workspace_edit_sha256(&env, path).map_err(bad)?;
+        if expected != current {
+            return Err((409, format!("{path} {EDIT_BASE_CHANGED}")));
+        }
+        args["expected_sha256"] = json!(expected);
     }
 
     let (router, _, _) = build_desktop_router(Arc::clone(state), env, session_id).map_err(internal)?;
@@ -257,6 +305,7 @@ pub fn handle_latex_patch(state: &Arc<DesktopState>, session_id: &str, body: &[u
             Ok((200, json!({ "ok": true, "tool": tool_id, "output": output })))
         }
         Ok(tools::CallOutcome::Denied(reason)) => Err((403, reason)),
+        Ok(tools::CallOutcome::Error(reason)) if reason.ends_with(EDIT_BASE_CHANGED) => Err((409, reason)),
         Ok(tools::CallOutcome::Error(reason)) => Err(bad(reason)),
         Err(reason) => Err(internal(reason)),
     }
@@ -491,6 +540,7 @@ pub fn handle_post_sidetalk(state: &DesktopState, session_id: &str, body: &[u8])
     if !state.session_exists(session_id).map_err(internal)? {
         return Err(not_found(format!("session `{session_id}` not found")));
     }
+    let _activity = crate::session_lifecycle::reserve_turn(state, session_id)?;
     let val = parse_json_body(body)?;
     let question = val
         .get("question")

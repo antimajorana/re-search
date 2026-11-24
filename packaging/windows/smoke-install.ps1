@@ -181,6 +181,10 @@ try {
             Start-Sleep -Milliseconds 500
         }
         if ($serverReady) {
+            $modules = @((Get-Process -Id $app.Id -ErrorAction Stop).Modules | ForEach-Object ModuleName)
+            if ($modules -contains 'WebView2Loader.dll' -or $modules -notcontains 'EmbeddedBrowserWebView.dll') {
+                throw 'The native app did not connect directly to the installed WebView2 runtime.'
+            }
             try {
                 $nativeUiVerified = Test-InstalledWorkbenchControls $app.Id
             } catch {

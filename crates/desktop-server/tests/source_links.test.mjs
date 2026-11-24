@@ -26,6 +26,15 @@ test('Stage 16 Sources title & deduplicated Origin links + Proof DAG controls & 
   const fetched = (id) => [{ kind: 'literature.fetched', payload: { provider: 'arxiv', papers: [{ id }] } }];
   assert.equal(sl.sessionPaperReferences(fetched('2301.12345v1'), [src])[0].savedSource, src);
   assert.equal(sl.sessionPaperReferences(fetched('2301.12345v2'), [src])[0].savedSource, undefined);
+  const correctedVersion = { ...src, arxiv_cover_id: '2301.12345v2', url: 'https://arxiv.org/pdf/2301.12345v1' };
+  assert.equal(sl.sessionPaperReferences(fetched('2301.12345v2'), [correctedVersion])[0].savedSource, correctedVersion);
+  assert.equal(sl.sessionPaperReferences(fetched('2301.12345v1'), [correctedVersion])[0].savedSource, undefined);
+  assert.deepEqual(sl.linksForIngestedSource(correctedVersion).map(link => link.url), [
+    'https://arxiv.org/abs/2301.12345v2', 'https://arxiv.org/pdf/2301.12345v2',
+  ]);
+  const summarySources = sl.sessionSourcesUsed({sources: [src, { source_id:'unused' }], events: [],
+    investigation:{summary:{what:{anchors:[{source_id:src.source_id}]},why:{unstated:true},how:{unstated:true}}}});
+  assert.deepEqual(summarySources.map(row => [row.source.source_id,row.inSummary]), [[src.source_id,true]]);
   const originInfo = sl.resolveOriginInfo(src);
   assert.equal(originInfo.url, 'https://arxiv.org/abs/2301.12345v1');
   const extra = sl.linksForIngestedSource(src).filter((lk) => lk.url !== originInfo.url);

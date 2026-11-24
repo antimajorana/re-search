@@ -30,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "agent"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "chatgpt-auth",
  "ledger",
@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "chatgpt-auth"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "chatgpt-auth",
  "getrandom 0.2.17",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "agent",
  "cli-route",
@@ -335,12 +335,13 @@ dependencies = [
 
 [[package]]
 name = "cli-route"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ledger",
  "policy",
  "research-tools",
  "serde_json",
+ "tempfile",
  "tools",
  "worker",
 ]
@@ -539,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-app"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "desktop-server",
  "research-tools",
@@ -554,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "desktop-server"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "agent",
  "chatgpt-auth",
@@ -573,6 +574,7 @@ dependencies = [
  "ureq",
  "windows",
  "worker",
+ "zip",
 ]
 
 [[package]]
@@ -750,7 +752,7 @@ dependencies = [
 
 [[package]]
 name = "export"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "getrandom 0.2.17",
  "ledger",
@@ -1410,9 +1412,10 @@ dependencies = [
 
 [[package]]
 name = "ledger"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
 ]
@@ -1504,7 +1507,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-server"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cli-route",
  "ledger",
@@ -2013,7 +2016,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "policy"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
 ]
@@ -2218,7 +2221,7 @@ checksum = "d902046e6a28a1e4c3cab97258a0ce11e994903f01c2d97a9447a0b3df85f4f6"
 
 [[package]]
 name = "research-tools"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "flate2",
  "ledger",
@@ -2954,7 +2957,7 @@ dependencies = [
 
 [[package]]
 name = "tools"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "getrandom 0.2.17",
  "ledger",
@@ -3271,10 +3274,7 @@ dependencies = [
 [[package]]
 name = "webview2-com-sys"
 version = "0.39.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3a07132775117d6065853d9d1178157b8c90e228de47129d6bce2c7edebedfb"
 dependencies = [
- "thiserror 2.0.21",
  "windows",
  "windows-core",
 ]
@@ -3621,7 +3621,7 @@ dependencies = [
 
 [[package]]
 name = "worker"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde_json",
  "sha2 0.10.9",
