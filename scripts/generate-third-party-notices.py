@@ -151,7 +151,9 @@ def main():
     source_url = args.source_url
     if not source_url:
         server = os.getenv("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
-        repository = os.getenv("GITHUB_REPOSITORY", "antimajorana/reSearch")
+        repository = os.getenv("GITHUB_REPOSITORY")
+        if not repository:
+            parser.error("supply --source-url for a build outside GitHub Actions")
         revision = capture("git", "rev-parse", "HEAD").strip()
         source_url = f"{server}/{repository}/archive/{revision}.tar.gz"
 
