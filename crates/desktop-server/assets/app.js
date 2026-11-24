@@ -632,26 +632,32 @@ function connectSessionSse(id) {
       setStreamStatus(source.readyState === EventSource.CLOSED ? 'Disconnected' : 'Reconnecting...', 'warn');
     },
     text_delta: (d) => { if (!isAct()) return; setComposerBusy(true); setStreamStatus('Streaming...', 'accent'); updatePipelineFromEvent('solver_stream', d); handleTextDelta(d); },
-    thinking_delta: (d) => { if (!isAct()) return; setComposerBusy(true); updatePipelineFromEvent('thinking_delta', d); handleThinkingDelta(d); },
+    thinking_delta: (d) => { if (!isAct()) return; setComposerBusy(true); handleThinkingDelta(d); },
     round_reset: (d) => { if (!isAct()) return; setStreamStatus('Revising...', 'accent'); updatePipelineFromEvent('round_reset', d); handleRoundReset(); },
     tool_trace: (d) => { if (!isAct()) return; updatePipelineFromEvent('tool_trace', d); handleToolTrace(d); },
     approval_requested: (d) => {
       if (!isAct()) return;
       setComposerBusy(true);
       setStreamStatus('Awaiting Approval', 'warn');
-      renderApprovalCard(d);
+      const card = renderApprovalCard(d);
+      if (card && d.caller === 'user:canvas') {
+        if (window.innerWidth <= 1120) setDrawerOpen('canvas', false);
+        card.querySelector('button')?.focus({ preventScroll: true });
+        card.scrollIntoView({ block: 'nearest' });
+      }
     },
     approval_resolved: async (d) => {
-      if (!isAct()) return;
-      setStreamStatus('Running...', 'accent');
-      if (d) {
-        resolveApprovalCard(d.call_id, d.approved, Boolean(d.approve_for_session));
-        if (d.approve_for_session && isAct()) {
-          try {
-            const s = await api.getSession(id);
-            if (isAct()) renderSessionGrantsPill(el.grantsPill, s.session_grants || []);
-          } catch { /* ignore */ }
-        }
+      if (!isAct() || !d || d.auto_approved) return;
+      resolveApprovalCard(d.call_id, d.approved, Boolean(d.approve_for_session));
+      const waiting = d.pending_approvals ? 'Awaiting Approval' : d.pending_checkpoints ? 'Awaiting Input' : '';
+      const running = d.running !== false;
+      setComposerBusy(Boolean(waiting) || running);
+      setStreamStatus(waiting || (running ? 'Running...' : 'Ready'), waiting ? 'warn' : running ? 'accent' : 'ok');
+      if (d.approve_for_session) {
+        try {
+          const s = await api.getSession(id);
+          if (isAct()) renderSessionGrantsPill(el.grantsPill, s.session_grants || []);
+        } catch { /* ignore */ }
       }
     },
     checkpoint_requested: (d) => {

@@ -237,7 +237,7 @@ function renderPassage(passage, sessionId) {
 
 export function setProjectLibraryTarget(projectId) {
   projectLibraryTarget = projectId;
-  for (const list of [litResultsEl, sourcesListEl]) {
+  for (const list of [litResultsEl, sessionLiteratureListEl, sourcesListEl]) {
     for (const button of list?.querySelectorAll('.save-project-source') || []) {
       button.hidden = !projectLibraryTarget;
     }
@@ -324,9 +324,10 @@ function renderLiteratureHits(items, sessionId, payload, container = litResultsE
     const authors = Array.isArray(item.authors) ? item.authors.join(', ') : '';
     const meta = [item.id || item.arxiv_id, item.doi ? `DOI ${item.doi}` : '', item.year].filter(Boolean).join(' · ');
     const bibtex = item.bibtex || '';
-    const sections = item.source && Array.isArray(item.source.sections) ? item.source.sections : [];
-    const ingestedId = !withdrawn && item.source?.source_id;
-    const readable = ingestedId && item.source.source_available && sourceFiles(item.source).length > 0;
+    const saved = item.savedSource || item.source;
+    const sections = Array.isArray(saved?.sections) ? saved.sections : [];
+    const ingestedId = !withdrawn && saved?.source_id;
+    const readable = ingestedId && saved.source_available !== false && sourceFiles(saved).length > 0;
     const activeSrc = typeof item.source === 'string' ? item.source : payload.source;
     const links = linksForPaper({ ...item, source: activeSrc });
     const titleHtml = links[0]
@@ -380,7 +381,7 @@ export async function loadSessionSources(sessionId) {
     const sess = await api.getSession(sessionId);
     if (revision !== sessionRevision || request !== sourcesRequest) return;
     const sources = Array.isArray(sess && sess.sources) ? sess.sources : [];
-    const papers = sessionPaperReferences(sess?.events);
+    const papers = sessionPaperReferences(sess?.events, sources);
     const used = sessionSourcesUsed(sess);
     renderUsedSources(used, sessionId);
     if (sessionLiteratureEl) {

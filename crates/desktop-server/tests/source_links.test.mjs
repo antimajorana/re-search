@@ -23,6 +23,9 @@ test('Stage 16 Sources title & deduplicated Origin links + Proof DAG controls & 
     primary_path: 'arxiv_2301_12345v1-abcd1234/main.tex',
   };
   assert.equal(sl.resolveSourceTitle(src), 'Two-Dimensional Lieb-Schultz-Mattis Obstructions');
+  const fetched = (id) => [{ kind: 'literature.fetched', payload: { provider: 'arxiv', papers: [{ id }] } }];
+  assert.equal(sl.sessionPaperReferences(fetched('2301.12345v1'), [src])[0].savedSource, src);
+  assert.equal(sl.sessionPaperReferences(fetched('2301.12345v2'), [src])[0].savedSource, undefined);
   const originInfo = sl.resolveOriginInfo(src);
   assert.equal(originInfo.url, 'https://arxiv.org/abs/2301.12345v1');
   const extra = sl.linksForIngestedSource(src).filter((lk) => lk.url !== originInfo.url);

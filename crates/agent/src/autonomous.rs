@@ -442,7 +442,9 @@ fn drive_autonomous_rounds(
             "\n[Verifier round {round}/{max_rounds} ({v_model}): auditing active Proof DAG & LaTeX...]\n"
         ));
 
-        audit.emit("campaign.phase", json!({ "phase": CampaignPhase::Verify.as_str() }))?;
+        audit.emit("campaign.phase", json!({
+            "phase": CampaignPhase::Verify.as_str(), "round": round, "max_rounds": max_rounds,
+        }))?;
         let report = match verify_delivered_answer(
             v_transport,
             audit.ledger,

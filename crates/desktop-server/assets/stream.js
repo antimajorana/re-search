@@ -499,7 +499,7 @@ export function renderApprovalCard(req) {
   if (!inner || !req) return;
   const callId = String(req.call_id || '');
   const existing = callId ? inner.querySelector(`.approval-card[data-call-id="${CSS.escape(callId)}"]`) : null;
-  if (existing) return;
+  if (existing) return existing;
 
   const toolId = String(req.tool_id || req.tool || 'tool');
   const digest = String(req.digest || '');
@@ -589,6 +589,7 @@ export function renderApprovalCard(req) {
 
   inner.appendChild(card);
   scrollToBottom();
+  return card;
 }
 
 export function resolveApprovalCard(callId, approved, approveForSession = false) {

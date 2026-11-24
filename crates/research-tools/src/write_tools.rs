@@ -47,7 +47,8 @@ pub fn fs_write_def() -> ToolDef {
             "type": "object",
             "properties": {
                 "path": { "type": "string", "maxLength": 512, "description": "Workspace-relative file path." },
-                "content": { "type": "string", "maxLength": MAX_WRITE_CHARS, "description": "Complete UTF-8 file content." }
+                "content": { "type": "string", "maxLength": MAX_WRITE_CHARS, "description": "Complete UTF-8 file content." },
+                "expected_sha256": { "type": ["string", "null"], "description": "Optional original file SHA-256. Use null to require a new file." }
             },
             "required": ["path", "content"],
             "additionalProperties": false
@@ -70,7 +71,8 @@ pub fn latex_patch_def() -> ToolDef {
                 "path": { "type": "string", "maxLength": 512, "description": "Workspace-relative file path." },
                 "search": { "type": "string", "maxLength": 200000, "description": "Exact existing text block to match." },
                 "replace": { "type": "string", "maxLength": 200000, "description": "Replacement text block." },
-                "replace_all": { "type": "boolean", "description": "Replace every occurrence when `search` matches multiple times." }
+                "replace_all": { "type": "boolean", "description": "Replace every occurrence when `search` matches multiple times." },
+                "expected_sha256": { "type": "string", "description": "Optional original file SHA-256." }
             },
             "required": ["path", "search", "replace"],
             "additionalProperties": false

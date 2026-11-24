@@ -375,6 +375,9 @@ pub(crate) fn run_cli_turn(
     let meta = state.load_meta(session_id);
     let ui = state.load_ui_settings();
     let model = pick_model(req, meta.as_ref(), &ui, kind)?;
+    let conventions = req["pinned_conventions"].as_str()
+        .or_else(|| meta.as_ref().and_then(|session| session.pinned_conventions.as_deref()))
+        .or(ui.pinned_conventions.as_deref()).map(str::to_owned);
     let (reasoning_effort, subagent) =
         crate::subagents::resolve_turn_options(state, session_id, req, meta);
     let research = Arc::new(state.research_env_for_session(session_id)?);
@@ -392,6 +395,9 @@ pub(crate) fn run_cli_turn(
         Some(sa) => crate::subagents::apply_subagent_to_turn_prompt(sa, message),
         None => message.to_string(),
     };
+    if let Some(text) = conventions.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+        eff_msg = format!("Pinned research conventions\n{text}\n\n{eff_msg}");
+    }
     eff_msg = format!(
         "Use `search_paper_passages` to locate exact passages in ingested papers and \
          `search_formal_library` to discover Lean declarations in the attached workspace. \

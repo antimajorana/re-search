@@ -282,10 +282,11 @@ export function setComposerRoute(route) {
 
 // Provider and model come from the single model dropdown (model_picker.js).
 export function getComposerOptions(choice) {
-  const verifyOn = Boolean(verifierChip && verifierChip.getAttribute('aria-pressed') === 'true');
-  const stratOn = Boolean(strategistChip && strategistChip.getAttribute('aria-pressed') === 'true');
-  const interactiveOn = document.querySelector('[data-rigor-preset="interactive"]')?.getAttribute('aria-pressed') === 'true';
-  const pauseExploreOn = document.getElementById('pause-explore-chip')?.getAttribute('aria-pressed') === 'true';
+  const inCore = !CLI_ROUTES.has(choice.provider);
+  const verifyOn = inCore && verifierChip?.getAttribute('aria-pressed') === 'true';
+  const stratOn = inCore && strategistChip?.getAttribute('aria-pressed') === 'true';
+  const interactiveOn = inCore && document.querySelector('[data-rigor-preset="interactive"]')?.getAttribute('aria-pressed') === 'true';
+  const pauseExploreOn = inCore && document.getElementById('pause-explore-chip')?.getAttribute('aria-pressed') === 'true';
   const effort = getReasoningEffort();
   const subagent = getActiveSubagent();
   return {

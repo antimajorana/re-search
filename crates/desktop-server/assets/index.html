@@ -74,7 +74,7 @@
             <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2.5"/></svg>
             <span>Stop</span>
           </button>
-          <span id="stream-status-pill" class="badge">Ready</span>
+          <span id="stream-status-pill" class="badge" role="status">Ready</span>
           <button id="topbar-archive-btn" type="button" class="icon-btn" title="Archive this chat" aria-label="Archive this chat" hidden>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="4" width="20" height="5" rx="1"/><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9"/><line x1="10" y1="13" x2="14" y2="13"/></svg>
           </button>
@@ -206,7 +206,7 @@
           </span>
         </div>
         <div class="pipeline-meta">
-          <span id="pipeline-timer" hidden>00:00</span>
+          <span id="pipeline-timer" aria-hidden="true" hidden>00:00</span>
           <span id="pipeline-round-badge" class="badge" hidden></span>
         </div>
       </div>
@@ -226,8 +226,8 @@
           <textarea aria-label="Pinned mathematical and physics conventions" id="quick-conventions-input" class="text-input" rows="3" maxlength="2000" placeholder="e.g. metric (-,+,+,+), natural units \hbar = c = 1, periodic boundary conditions..."></textarea>
           <div id="conventions-presets" class="conventions-presets"></div>
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;border-top:1px solid var(--border-subtle);padding-top:10px;">
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-              <span style="font-size:12px;color:var(--ink-muted);">Active agents:</span>
+            <div id="review-agent-options" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              <span style="font-size:12px;color:var(--ink-muted);">Review settings</span>
               <button id="verifier-chip" type="button" class="chip-toggle" aria-pressed="true" title="Run stateless Verifier + Calculation guardrail before accepting final answer">Verifier</button>
               <button id="strategist-chip" type="button" class="chip-toggle" aria-pressed="false" title="Consult Research Strategist to plan repairs if Verifier rejects a round">Strategist</button>
               <button id="pause-explore-chip" type="button" class="chip-toggle" aria-pressed="false" title="Pause after Ultramath parallel exploration to choose a branch">Pause on Explore</button>
@@ -263,7 +263,8 @@
               <details id="research-options">
                 <summary class="chip-toggle">Research options</summary>
                 <div class="research-options-panel">
-                  <fieldset><legend>Review mode</legend>
+                  <p id="cli-review-note" hidden>This CLI runs its own research loop. Choose an API model or ChatGPT in a new session for independent answer review.</p>
+                  <fieldset id="review-mode-options"><legend>Review mode</legend>
                     <div id="mode-preset-group" class="segmented-group" role="group" aria-label="Verification rigor mode">
                       <button type="button" class="seg-btn" data-rigor-preset="direct" aria-pressed="false" title="Direct mode: single-pass Orchestrator + tools without post-turn Verifier gate">Direct</button>
                       <button type="button" class="seg-btn is-active" data-rigor-preset="verified" aria-pressed="true" title="Verified mode: Orchestrator + Calculation Guard + Independent Stateless Verifier (up to 3 rounds)">✓ Verified</button>
@@ -288,7 +289,7 @@
                 <option value="">Loading models...</option>
               </select>
               <button id="composer-connect" type="button" class="pill-btn sm" title="Connect a model provider" hidden>Connect model</button>
-              <button id="composer-stop" type="button" class="stop-pill-btn" title="Stop active turn immediately (Esc)" aria-label="Stop active turn" hidden>
+              <button id="composer-stop" type="button" class="stop-pill-btn" title="Stop active turn (Esc)" aria-label="Stop active turn" hidden>
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                   <rect x="4" y="4" width="16" height="16" rx="2.5"/>
                 </svg>

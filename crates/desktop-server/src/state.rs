@@ -119,6 +119,7 @@ pub struct AntigravityAck {
 #[derive(Debug, Clone, Serialize)]
 pub struct PendingApprovalView {
     pub call_id: String,
+    pub caller: String,
     pub session: String,
     pub tool_id: String,
     pub effect: String,

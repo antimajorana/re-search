@@ -9,6 +9,7 @@ import tempfile
 from zipfile import ZipFile
 
 from playwright.sync_api import expect, sync_playwright
+from research_display_browser import check_research_display
 
 
 def check_workbench(browser, binary, width, height):
@@ -96,6 +97,16 @@ def check_workbench(browser, binary, width, height):
             expect(manuscript).to_have_value("Notes")
             files.select_option("field.tex")
             expect(manuscript).to_have_value(r"\section{Revised boundary conditions}")
+            page.evaluate("async () => (await import('/assets/api.js')).updateProviderSettings({auto_approve_tools:false})")
+            page.locator("#latex-save-btn").click()
+            decision = page.locator(".approval-card").get_by_role("button", name="Approve & Run")
+            expect(decision).to_be_in_viewport()
+            decision.click()
+            expect(page.locator("#stream-status-pill")).to_have_text("Ready")
+            if canvas_toggle.get_attribute("aria-expanded") != "true":
+                canvas_toggle.click()
+            expect(page.locator("#latex-save-btn")).to_be_enabled()
+            assert (workspace / "field.tex").read_text(encoding="utf-8") == r"\section{Revised boundary conditions}"
             with page.expect_download() as exported:
                 page.get_by_role("button", name="Reproducible ZIP").click()
             with ZipFile(exported.value.path()) as bundle:
@@ -128,6 +139,7 @@ def main():
         try:
             for width, height in [(1440, 900), (1024, 768), (390, 844)]:
                 check_workbench(browser, args.binary.resolve(), width, height)
+            check_research_display(browser)
         finally:
             browser.close()
 

@@ -39,7 +39,7 @@ let routeLock = null;
 // the ChatGPT plan is a subscription on the in-core "api" route), else derived as before.
 function routeOf(g) {
   if (g && typeof g.route === 'string' && g.route) return g.route;
-  return g && g.id === CLI_ROUTE_ID ? CLI_ROUTE_ID : 'api';
+  return g?.id === CLI_ROUTE_ID || g?.id === AGY_ROUTE_ID ? g.id : 'api';
 }
 
 // Whether a provider group may be used in the active session.
@@ -320,8 +320,16 @@ function render() {
 }
 
 function updateNote() {
-  if (!noteEl) return;
   const current = findModel(choice);
+  const route = current ? routeOf(current.group) : routeLock;
+  const cli = route === CLI_ROUTE_ID || route === AGY_ROUTE_ID;
+  for (const id of ['review-mode-options', 'review-agent-options']) {
+    const controls = document.getElementById(id);
+    if (controls) controls.hidden = cli;
+  }
+  const reviewNote = document.getElementById('cli-review-note');
+  if (reviewNote) reviewNote.hidden = !cli;
+  if (!noteEl) return;
   const note = (current && current.group.session_note) || sessionRouteNote;
   noteEl.textContent = note ? String(note) : '';
   noteEl.hidden = !note;

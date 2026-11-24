@@ -93,10 +93,18 @@ export function linksForPaper(item) {
   return links;
 }
 
-export function sessionPaperReferences(events) {
+export function sessionPaperReferences(events, sources = []) {
   const papers = [];
   const seen = new Set();
   if (!Array.isArray(events)) return papers;
+  const saved = new Map();
+  for (const source of sources) {
+    const origin = source.origin || '';
+    if (/^(?:https:\/\/(?:export\.)?arxiv\.org\/|arxiv:)/i.test(origin)) {
+      const id = extractArxivId(origin);
+      if (id) saved.set(id.toLowerCase(), source);
+    }
+  }
   for (const event of events.slice().reverse()) {
     if (event?.kind !== 'literature.fetched') continue;
     const { provider, hits, papers: arxivPapers } = event.payload || {};
@@ -115,7 +123,11 @@ export function sessionPaperReferences(events) {
       if (!keys.length) keys.push(`${provider}:${title.toLowerCase()}`);
       const duplicate = keys.some(key => seen.has(key));
       for (const key of keys) seen.add(key);
-      if (!duplicate) papers.push({ ...item, source: provider, title });
+      if (!duplicate) {
+        const id = versionedArxivId(item.arxiv_id, provider === 'arxiv' ? item.id : null, item.base_id);
+        const savedSource = item.source?.source_id ? item.source : saved.get(id?.toLowerCase());
+        papers.push({ ...item, source: provider, title, savedSource });
+      }
     }
   }
   return papers;

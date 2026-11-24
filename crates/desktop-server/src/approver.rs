@@ -169,6 +169,7 @@ impl Approver for UiApprover {
         let edit_preview = self.compute_preview(request);
         let view = PendingApprovalView {
             call_id: call_id.clone(),
+            caller: request.caller.clone(),
             session: request.session.clone(),
             tool_id: request.tool_id.clone(),
             effect: request.effect.as_str().to_string(),
@@ -272,6 +273,9 @@ impl Approver for UiApprover {
                 "digest": &request.digest,
                 "approved": outcome.reply.approved,
                 "approve_for_session": outcome.approve_for_session,
+                "running": crate::session_lifecycle::is_turn_running(&self.state, &request.session),
+                "pending_approvals": self.state.pending_for_session(&request.session).len(),
+                "pending_checkpoints": self.state.hitl.list_pending(&request.session).len(),
                 "reason": &outcome.reply.by,
             }),
         );

@@ -594,6 +594,9 @@ test('Stage 11 Workbench UI: pipeline stepper, rigor presets, conventions popove
       kind: 'proof.verification', payload: { kind: 'step', verdict: 'accepted' },
     });
     assert.equal(stages.get(verifierStage), undefined);
+    workbenchMod.updatePipelineFromEvent('session_event', { kind: 'campaign.phase', data: { phase: 'VERIFY', round: 2, max_rounds: 4 } });
+    assert.equal(stages.get(verifierStage), 'active');
+    assert.equal(pipelineElements.get('pipeline-round-badge').textContent, 'Review 2/4');
     workbenchMod.updatePipelineFromEvent('dag_updated', {
       kind: 'proof.verification', payload: { kind: 'full', verdict: 'accepted' }, verified_status: 'verified',
     });
