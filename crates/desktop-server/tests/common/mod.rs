@@ -84,10 +84,19 @@ pub fn raw_http(
     headers: &[(&str, &str)],
     body: &[u8],
 ) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    raw_http_with_read_timeout(port, method, path, headers, body, Duration::from_secs(10))
+}
+
+pub fn raw_http_with_read_timeout(
+    port: u16,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+    read_timeout: Duration,
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
+    stream.set_read_timeout(Some(read_timeout)).unwrap();
     let mut req = format!("{method} {path} HTTP/1.1\r\nConnection: close\r\n");
     let mut has_host = false;
     for &(k, v) in headers {

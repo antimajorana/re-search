@@ -45,7 +45,7 @@ pub use literature::{
 };
 pub use policy_preset::{research_policy, RESEARCH_POLICY_VERSION};
 pub use proof_dag::{
-    ledger_append_def, ledger_query_def, ledger_supersede_def, read_proof_dag, ProofDag,
+    effective_verification_verdict, ledger_append_def, ledger_query_def, ledger_supersede_def, read_proof_dag, ProofDag,
     ProofEntry, ProofStatus, LEDGER_APPEND, LEDGER_QUERY, LEDGER_SUPERSEDE,
 };
 pub use sandbox::{

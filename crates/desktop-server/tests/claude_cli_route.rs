@@ -68,14 +68,16 @@ fn cli_turn_streams_sse_and_ledger_events_and_cleans_up() {
     assert_eq!(start.payload["history_replayed"], false);
     assert_eq!(start.payload["policy_version"], research_tools::RESEARCH_POLICY_VERSION);
     let blob = ledger.get_blob(start.payload["raw_blob"].as_str().unwrap()).unwrap();
-    assert_eq!(String::from_utf8(blob).unwrap(), prompt);
     assert_eq!(events.last().unwrap().kind, "session.end");
     assert_eq!(events.last().unwrap().payload["init_verified"], true);
 
     // (f) The prompt is not in argv; it arrived on stdin. Flags as pinned.
     let argv = h.fake.argv().expect("fake CLI ran");
     assert!(!argv.iter().any(|a| a.contains("SECRET-PROMPT-MARKER")), "{argv:?}");
-    assert_eq!(h.fake.stdin().as_deref(), Some(prompt));
+    let stdin = h.fake.stdin().expect("fake CLI received a prompt");
+    assert!(stdin.contains("`search_paper_passages`") && stdin.contains("`search_formal_library`"), "{stdin}");
+    assert!(stdin.ends_with(&format!("\n\n{prompt}")), "{stdin}");
+    assert_eq!(blob, stdin.as_bytes());
     let pos = argv.iter().position(|a| a == "--permission-prompts").unwrap();
     assert_eq!(argv[pos + 1], "none");
     assert!(argv.iter().any(|a| a == "--no-session-persistence"));
@@ -217,7 +219,10 @@ fn later_turns_replay_bounded_history_on_stdin() {
     let marker = stdin.split("<transcript-").nth(1).and_then(|r| r.split('>').next()).unwrap_or_else(|| panic!("{stdin}"));
     assert!(stdin.contains(&format!("</transcript-{marker}>")), "{stdin}");
     assert!(stdin.contains("first question FQ-1") && stdin.contains("First reply FR-1."), "{stdin}");
-    assert!(stdin.ends_with(&format!("[New message from the user ({marker})]\nsecond question SQ-2")), "{stdin}");
+    let new_message_tag = format!("[New message from the user ({marker})]\n");
+    let (history, current) = stdin.split_once(&new_message_tag).unwrap_or_else(|| panic!("{stdin}"));
+    assert!(current.contains("`search_paper_passages`") && current.contains("`search_formal_library`"), "{current}");
+    assert!(current.ends_with("\n\nsecond question SQ-2"), "{current}");
     assert!(!h.fake.argv().unwrap().iter().any(|a| a.contains("SQ-2") || a.contains("FQ-1")));
 
     let ledger = Ledger::open(&h.data).unwrap();
@@ -227,7 +232,7 @@ fn later_turns_replay_bounded_history_on_stdin() {
     assert_eq!(resume.payload["history_replayed"], true);
     assert_eq!(resume.payload["prompt"], "second question SQ-2");
     let chars = resume.payload["history_chars"].as_u64().unwrap() as usize;
-    assert_eq!(chars, stdin.chars().count() - "second question SQ-2".len());
+    assert_eq!(chars, history.chars().count() + new_message_tag.chars().count());
     assert_eq!(resume.payload["history_turns"], 1);
     assert_eq!(resume.payload["history_turns_dropped"], 0);
     h.srv.shutdown();

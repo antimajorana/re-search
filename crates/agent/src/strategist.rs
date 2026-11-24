@@ -183,10 +183,11 @@ pub fn mandatory_strategist_required(ledger: &Ledger, session: &str) -> Result<b
     for ev in &events {
         match ev.kind.as_str() {
             "proof.verification" => {
-                if ev.payload.get("verdict").and_then(Value::as_str) == Some("rejected") {
+                let verdict = research_tools::effective_verification_verdict(&ev.payload);
+                if verdict == Some("rejected") {
                     locked = true;
                     bypasses = 0;
-                } else if ev.payload.get("verdict").and_then(Value::as_str) == Some("accepted") {
+                } else if verdict == Some("accepted") {
                     locked = false;
                     bypasses = 0;
                 }

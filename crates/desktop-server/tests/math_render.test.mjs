@@ -491,8 +491,12 @@ test('Stage 11 Workbench UI: pipeline stepper, rigor presets, conventions popove
   const prevDoc = globalThis.document;
   try {
     const stages = new Map();
+    const pipelineElements = new Map([
+      ['pipeline-bar', { hidden: true }],
+      ['pipeline-round-badge', { textContent: '' }],
+    ]);
     globalThis.document = {
-      getElementById: () => null,
+      getElementById: (id) => pipelineElements.get(id) || null,
       querySelector: (selector) => ({ setAttribute: (_name, value) => stages.set(selector, value) }),
       createElement: (tag) => ({
         tagName: tag.toUpperCase(),
@@ -561,6 +565,17 @@ test('Stage 11 Workbench UI: pipeline stepper, rigor presets, conventions popove
     assert.equal(stages.get(verifierStage), 'done');
     workbenchMod.updatePipelineFromEvent('dag_updated', { kind: 'proof.entry', verification_invalidated: true });
     assert.equal(stages.get(verifierStage), 'idle');
+    const strategistStage = '#pipeline-bar [data-stage="strategist"]';
+    const stats = { verified_status: 'verified', verification_rounds: 2, proof_entries: 10 };
+    workbenchMod.applySessionTelemetry(stats, true);
+    assert.equal(stages.get(strategistStage), 'idle');
+    assert.match(pipelineElements.get('pipeline-round-badge').textContent, /Full solution accepted.*2 full reviews.*0 separate step checks/);
+    workbenchMod.updatePipelineFromEvent('round_reset', { round: 1 });
+    assert.equal(stages.get(strategistStage), 'idle');
+    workbenchMod.updatePipelineFromEvent('session_event', { kind: 'strategist.consult' });
+    assert.equal(stages.get(strategistStage), 'done');
+    workbenchMod.applySessionTelemetry({ ...stats, strategist_consultations: 1, step_checks: 1 }, true);
+    assert.match(pipelineElements.get('pipeline-round-badge').textContent, /1 separate step check\b/);
 
     // Stage 12 literature card links + XSS neutralization
     const litCard = traceMod.buildStructuredTraceCard({

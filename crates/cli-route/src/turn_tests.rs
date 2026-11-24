@@ -220,6 +220,7 @@ fn a_tool_config_write_failure_after_the_start_event_records_session_abort() {
 struct StubProc {
     code: Option<i32>,
     killed: bool,
+    stop_on_wait: Option<StopHandle>,
 }
 
 impl TurnProcess for StubProc {
@@ -227,6 +228,9 @@ impl TurnProcess for StubProc {
         self.killed = true;
     }
     fn wait(&mut self) -> Result<Option<i32>, String> {
+        if let Some(stop) = &self.stop_on_wait {
+            stop.stop();
+        }
         self.killed = true;
         Ok(self.code)
     }
@@ -245,7 +249,7 @@ fn cli_exit_zero_without_init_records_session_abort() {
     let version = VersionInfo { raw: "1.0".into(), detected: "1.0".into(), tested: "1.0".into() };
     let mut reader = Cursor::new(Vec::<u8>::new());
     let stop = StopHandle::new();
-    let mut proc = StubProc { code: Some(0), killed: false };
+    let mut proc = StubProc { code: Some(0), killed: false, stop_on_wait: None };
     let report =
         drive_turn_stream(&vendor, &rec, &mut sink, &version, &[], false, &stop, &mut reader, &mut proc).unwrap();
 
@@ -258,6 +262,16 @@ fn cli_exit_zero_without_init_records_session_abort() {
     let prior = crate::history::prior_turns(&events);
     assert_eq!(prior.len(), 1);
     assert!(prior[0].aborted);
+
+    rec.emit_into(&mut sink, "session.resume", json!({ "prompt": "try again" }), None).unwrap();
+    let mut reader = Cursor::new(b"{\"event\":\"init\"}\n");
+    let mut proc = StubProc { code: Some(0), killed: false, stop_on_wait: Some(stop.clone()) };
+    let report =
+        drive_turn_stream(&vendor, &rec, &mut sink, &version, &[], false, &stop, &mut reader, &mut proc).unwrap();
+    assert_eq!(report.end, TurnEnd::Stopped);
+    let stopped = rec.ledger.read_session("s-noinit").unwrap().pop().unwrap();
+    assert_eq!(stopped.kind, "session.abort");
+    assert_eq!(stopped.payload["stopped"], true);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -274,7 +288,7 @@ fn model_activity_before_init_mentions_init_handshake() {
     let version = VersionInfo { raw: "1.0".into(), detected: "1.0".into(), tested: "1.0".into() };
     let mut reader = Cursor::new(b"{\"event\":\"result\"}\n".to_vec());
     let stop = StopHandle::new();
-    let mut proc = StubProc { code: Some(0), killed: false };
+    let mut proc = StubProc { code: Some(0), killed: false, stop_on_wait: None };
     let report =
         drive_turn_stream(&vendor, &rec, &mut sink, &version, &[], false, &stop, &mut reader, &mut proc).unwrap();
     assert!(proc.killed);

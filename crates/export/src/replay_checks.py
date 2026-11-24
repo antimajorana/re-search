@@ -38,6 +38,8 @@ def compare_result(step, actual):
 
 
 def replay_worker(steps):
+    # Embedded Windows Python can omit the script directory from sys.path.
+    sys.path.insert(0, str(ROOT))
     from _re_search_runtime import worker
 
     namespace = worker.make_namespace()

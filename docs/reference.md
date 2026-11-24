@@ -84,6 +84,8 @@ re-search verify "$source_session" --data-dir ./data
 
 ## Exports and verification
 
+Verified, Deep, and Interactive turns on in-core providers review the delivered answer and its Proof DAG together. The ledger records one full-solution verdict per review round. An individual step has a separate verdict only when checked through the Rust library's `verify_step` API. Linked Lean and computation results apply to the claims and inputs they checked.
+
 Use **Canvas → LaTeX** to export a report as `.tex`, `.html` or **Reproducible ZIP**. **Explain** exports its own thread as Markdown or HTML. A session ZIP includes `report.tex`, `references.bib`, `report.html`, `ledger.json`, available sources and recorded computation artifacts, with provenance in `replay_manifest.json` and instructions in `REPRODUCE.md`.
 
 Run `python3 run_all_checks.py --verify-only` in the extracted bundle to check archived file hashes. With no flag, the script replays recorded successful computations with your Python privileges. Review the code before executing it and use the dependency versions recorded in the bundle. `re-search verify` checks the stored ledger and artifacts. The proof view shows model review and linked Lean results as separate evidence.

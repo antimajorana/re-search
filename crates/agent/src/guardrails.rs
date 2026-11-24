@@ -2,14 +2,15 @@
 //! computation-interpretation check, and full-verification completion gate.
 
 use crate::runner::{
-    run_turn_loop, tool_defs_json, Audit, EventSink, LoopParams, SessionOutcome, EVENT_VERSION,
+    run_turn_leg, tool_defs_json, Audit, EventSink, LoopParams, SessionOutcome,
 };
 use crate::transport::{ContentBlock, Message, Role, Transport};
 use ledger::{Event, Ledger};
-use research_tools::{read_proof_dag, ProofEntry, ProofStatus};
+use research_tools::{read_proof_dag, ProofDag, ProofEntry, ProofStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 use tools::Router;
 
 pub const MAX_PINNED_CONVENTIONS_CHARS: usize = 2_000;
@@ -256,7 +257,7 @@ pub(crate) fn materialize_proof_entries(events: &[Event]) -> Vec<ProofEntry> {
                 let Some(target) = ev.payload.get("target_entry_id").and_then(Value::as_str) else {
                     continue;
                 };
-                let verdict = ev.payload.get("verdict").and_then(Value::as_str);
+                let verdict = research_tools::effective_verification_verdict(&ev.payload);
                 if let Some(entry) = entries.get_mut(target) {
                     if entry.status != ProofStatus::Superseded {
                         entry.status = match verdict {
@@ -278,6 +279,10 @@ pub(crate) fn materialize_proof_entries(events: &[Event]) -> Vec<ProofEntry> {
 /// is cited in the `depends_on` of an active `result` (or `final_answer`) entry,
 /// and every successful `sympy_eval` in the current user turn has a recorded interpretation.
 pub fn check_computation_interpretation(ledger: &Ledger, session: &str) -> Result<(), String> {
+    load_dag_with_computation_check(ledger, session).map(drop)
+}
+
+fn load_dag_with_computation_check(ledger: &Ledger, session: &str) -> Result<ProofDag, String> {
     let events = ledger
         .read_session(session)
         .map_err(|e| format!("failed to read session `{session}`: {e}"))?;
@@ -285,14 +290,9 @@ pub fn check_computation_interpretation(ledger: &Ledger, session: &str) -> Resul
         .find(|event| matches!(event.kind.as_str(), "session.start" | "session.resume"))
         .map_or(0, |event| event.seq);
     let dag = read_proof_dag(ledger, session)?;
-    let entries = if !dag.entries.is_empty() {
-        dag.entries
-    } else {
-        materialize_proof_entries(&events)
-    };
 
     let mut cited_by_result: BTreeSet<String> = BTreeSet::new();
-    for entry in &entries {
+    for entry in &dag.entries {
         if !matches!(entry.status, ProofStatus::Superseded | ProofStatus::Rejected)
             && matches!(entry.entry_type.as_str(), "result" | "final_answer")
         {
@@ -302,7 +302,7 @@ pub fn check_computation_interpretation(ledger: &Ledger, session: &str) -> Resul
         }
     }
 
-    let uninterpreted: Vec<String> = entries
+    let uninterpreted: Vec<String> = dag.entries
         .iter()
         .filter(|e| {
             e.status != ProofStatus::Superseded
@@ -321,14 +321,14 @@ pub fn check_computation_interpretation(ledger: &Ledger, session: &str) -> Resul
         ));
     }
 
-    let uncited: Vec<_> = dag.unverified_computations.into_iter().filter(|&seq| seq > turn_start).collect();
+    let uncited: Vec<_> = dag.unverified_computations.iter().copied().filter(|&seq| seq > turn_start).collect();
     if !uncited.is_empty() {
         return Err(format!(
             "successful `sympy_eval` results at ledger sequences {uncited:?} need an interpreting `result` entry. \
              Record the returned `tool_call_ref` on the result or its computation dependency"
         ));
     }
-    Ok(())
+    Ok(dag)
 }
 
 #[cfg(test)]
@@ -350,6 +350,8 @@ mod computation_tests {
         }}));
         assert!(check_computation_interpretation(&ledger, session).is_ok());
 
+        append("proof.entry", json!({"entry_id": "e-early", "entry_type": "result",
+            "summary": "Result asserted before evaluation", "tool_call_ref": "actual"}));
         append("tool.request", json!({"call_id": "actual", "tool": "sympy_eval"}));
         let blob = ledger.put_blob(br#"{"value":"4","stdout":""}"#).unwrap();
         let result_seq = append("tool.result", json!({"call_id": "actual", "ok": true, "result": {"blob": blob}}));
@@ -371,9 +373,7 @@ mod computation_tests {
 
 /// Checks whether a final answer may be accepted under `verification_mode`.
 /// When `verification_mode` is `true`, requires both computation interpretation
-/// and an accepted full-solution verification (`kind == "full"`, `verdict == "accepted"`)
-/// that occurred after the latest `proof.entry` / `proof.supersede` /
-/// `proof.verification_attempt` mutation.
+/// and an accepted full-solution verification of the current proof.
 pub fn check_final_answer_gate(
     ledger: &Ledger,
     session: &str,
@@ -382,50 +382,11 @@ pub fn check_final_answer_gate(
     if !verification_mode {
         return Ok(());
     }
-    check_computation_interpretation(ledger, session)?;
-
-    let events = ledger
-        .read_session(session)
-        .map_err(|e| format!("failed to read session `{session}`: {e}"))?;
-    let mut latest_full_accepted_seq: Option<u64> = None;
-    let mut latest_mutation_or_attempt_seq: Option<u64> = None;
-
-    for ev in &events {
-        match ev.kind.as_str() {
-            "proof.entry" | "proof.supersede" => {
-                latest_mutation_or_attempt_seq = Some(ev.seq);
-            }
-            "proof.verification_attempt"
-                if ev.payload.get("kind").and_then(Value::as_str) == Some("full") =>
-            {
-                latest_mutation_or_attempt_seq = Some(ev.seq);
-            }
-            "proof.verification"
-                if ev.payload.get("kind").and_then(Value::as_str) == Some("full") =>
-            {
-                if ev.payload.get("verdict").and_then(Value::as_str) == Some("accepted") {
-                    latest_full_accepted_seq = Some(ev.seq);
-                } else {
-                    latest_full_accepted_seq = None;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let Some(acc_seq) = latest_full_accepted_seq else {
+    if !load_dag_with_computation_check(ledger, session)?.latest_full_verification_accepted {
         return Err(
-            "verification_mode requires an accepted full-solution verification before finalizing"
+            "verification_mode requires an accepted full-solution verification of the current proof before finalizing"
                 .into(),
         );
-    };
-    if let Some(mut_seq) = latest_mutation_or_attempt_seq {
-        if mut_seq > acc_seq {
-            return Err(
-                "proof graph or verification attempt occurred after the last accepted full verification; re-run full verification"
-                    .into(),
-            );
-        }
     }
     Ok(())
 }
@@ -483,7 +444,8 @@ pub fn run_research_loop(
         role: Role::User,
         content: vec![ContentBlock::Text { text: cfg.prompt.clone() }],
     }];
-    let outcome = run_turn_loop(
+    let started = Instant::now();
+    let leg = run_turn_leg(
         transport,
         router,
         &mut audit,
@@ -497,41 +459,33 @@ pub fn run_research_loop(
             initial_messages,
             mask_keep_recent: Some((guardrails.step_mask_keep, guardrails.step_mask_stride)),
             cancel: None,
-            emit_end_event: true,
+            emit_end_event: false,
             delegation: None,
             human: None,
             pause_after_explore: false,
         },
     )?;
 
-    if let SessionOutcome::Completed { turns, .. } = &outcome {
-        if guardrails.calculation_mode {
-            if let Err(calc_err) = check_computation_interpretation(ledger, session) {
-                let _ = ledger.append_with_hash(
-                    session,
-                    "guardrail.blocked",
-                    EVENT_VERSION,
-                    &json!({ "reason": calc_err }),
-                );
-                return Ok(SessionOutcome::Aborted {
-                    turns: *turns,
-                    reason: calc_err,
-                });
-            }
+    if let SessionOutcome::Completed { turns, stop_reason } = &leg.outcome {
+        let gate = if guardrails.verification_mode {
+            check_final_answer_gate(ledger, session, true)
+        } else if guardrails.calculation_mode {
+            check_computation_interpretation(ledger, session)
+        } else {
+            Ok(())
+        };
+        if let Err(reason) = gate {
+            audit.emit("guardrail.blocked", json!({ "reason": reason }))?;
+            audit.emit("session.abort", json!({ "reason": reason }))?;
+            return Ok(SessionOutcome::Aborted { turns: *turns, reason });
         }
-        if let Err(gate_err) = check_final_answer_gate(ledger, session, guardrails.verification_mode)
-        {
-            let _ = ledger.append_with_hash(
-                session,
-                "guardrail.blocked",
-                EVENT_VERSION,
-                &json!({ "reason": gate_err }),
-            );
-            return Ok(SessionOutcome::Aborted {
-                turns: *turns,
-                reason: gate_err,
-            });
-        }
+        audit.emit("session.end", json!({
+            "outcome": "completed",
+            "stop_reason": stop_reason,
+            "num_turns": turns,
+            "last_turn": leg.last_turn,
+            "duration_ms": started.elapsed().as_millis() as u64,
+        }))?;
     }
-    Ok(outcome)
+    Ok(leg.outcome)
 }
