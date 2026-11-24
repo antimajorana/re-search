@@ -254,8 +254,9 @@ def check_investigation(browser, binary):
             expect(chart.locator('[data-node="lab"]')).to_be_visible()
             search.fill("")
             page.set_viewport_size({"width": 390, "height": 844})
-            if page.locator("#app-shell").get_attribute("data-rail-open") == "true":
-                page.get_by_role("button", name="Close sessions").click()
+            # The resize listener closes the desktop rail on entry to a narrow viewport.
+            expect(page.locator("#rail-toggle")).to_have_attribute("aria-expanded", "false")
+            expect(page.locator("#left-rail")).to_have_attribute("inert", "")
             graph.get_by_role("button", name="Show all statements").click()
             assert graph.locator(".investigation-graph-viewport").evaluate("el => el.clientWidth <= window.innerWidth && el.scrollWidth > el.clientWidth")
             capture_graph_screen(page, "investigation-graph-narrow", chart)
