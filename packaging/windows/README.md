@@ -8,7 +8,11 @@ Close reSearch and its command-line processes before upgrading or uninstalling. 
 
 ## License and source
 
-The installed `LICENSE` contains GPLv3 for reSearch. `LICENSE-MIT` and `LICENSE-APACHE` preserve notices from earlier releases. `licenses/THIRD-PARTY-NOTICES.txt` identifies the exact project source archive for an official installer and the source packages for its Rust dependencies. The bundled Python distribution and numerical libraries carry their own notices under `runtime/`.
+The installed `LICENSE` contains GPLv3 for reSearch. The `licenses/legacy/` directory preserves notices from earlier releases. `licenses/THIRD-PARTY-NOTICES.txt` identifies the exact project source archive for an official installer and the source packages for its Rust dependencies. The bundled Python distribution and numerical libraries carry their own notices under `runtime/`.
+
+### Windows binary release review
+
+Version 0.1.4 was released under the earlier license terms. The Windows MSVC build statically links `WebView2LoaderStatic.lib`. Microsoft supplies that loader as a prebuilt library in its SDK. Before publishing a GPLv3 installer, resolve how to meet the corresponding-source requirements for the linked loader or use an implementation buildable from published source. The separately installed Edge WebView2 Runtime is a different component. [Microsoft’s static-linking documentation](https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/static)
 
 ## Build
 
@@ -18,8 +22,7 @@ Use NSIS 3.11 or later. Build the Rust binaries in release mode for a single Win
 re-search-app.exe
 re-search.exe
 core.exe
-LICENSE-APACHE
-LICENSE-MIT
+LICENSE
 licenses/
 python/
   worker.py

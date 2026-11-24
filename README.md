@@ -33,4 +33,4 @@ See the in-app **Settings → User Guide** for more workflows. For command-line 
 
 reSearch is licensed under the GNU General Public License, version 3 only (`GPL-3.0-only`). You may use it commercially. If you distribute a modified version, you must license it under GPLv3 and provide its recipients access to the corresponding source. [Full license](LICENSE)
 
-Earlier versions released under MIT or Apache-2.0 retain those grants. Their license texts are preserved in [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE). Bundled third-party components retain their own licenses. The Windows installer includes those notices and the source link for its build. [Windows packaging](packaging/windows/README.md)
+Earlier versions released under MIT or Apache-2.0 retain those grants. Their license texts are preserved in [the MIT notice](licenses/legacy/LICENSE-MIT) and [the Apache-2.0 notice](licenses/legacy/LICENSE-APACHE). Bundled third-party components retain their own licenses. The Windows installer includes those notices and the source link for its build. [Windows packaging](packaging/windows/README.md)

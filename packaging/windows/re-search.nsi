@@ -53,6 +53,7 @@ Var Backup
   !insertmacro ${action} "core.exe"
   !insertmacro ${action} "WebView2Loader.dll"
   !insertmacro ${action} "LICENSE"
+  ; Back up the previous root license files so upgrading or rolling back is safe.
   !insertmacro ${action} "LICENSE-APACHE"
   !insertmacro ${action} "LICENSE-MIT"
   !insertmacro ${action} "python\worker.py"
@@ -148,9 +149,7 @@ Section "reSearch"
   File "${RE_SEARCH_STAGE}\re-search-app.exe"
   File "${RE_SEARCH_STAGE}\re-search.exe"
   File "${RE_SEARCH_STAGE}\core.exe"
-  File "..\..\LICENSE"
-  File "${RE_SEARCH_STAGE}\LICENSE-APACHE"
-  File "${RE_SEARCH_STAGE}\LICENSE-MIT"
+  File "${RE_SEARCH_STAGE}\LICENSE"
 !ifdef RE_SEARCH_WEBVIEW2_LOADER
   File "${RE_SEARCH_STAGE}\WebView2Loader.dll"
 !endif

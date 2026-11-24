@@ -75,7 +75,7 @@ jobs:
           foreach ($name in 're-search-app.exe', 're-search.exe', 'core.exe') {
             Copy-Item -LiteralPath (Join-Path $release $name) -Destination $stage
           }
-          Copy-Item -Path LICENSE-MIT, LICENSE-APACHE -Destination $stage
+          Copy-Item -LiteralPath LICENSE -Destination $stage
           $worker = New-Item -ItemType Directory -Path (Join-Path $stage 'python')
           foreach ($name in 'worker.py', 'solver_calc.py', 'symbolic_validation.py', 'numerical_validation.py') {
             Copy-Item -LiteralPath (Join-Path 'python' $name) -Destination $worker.FullName
