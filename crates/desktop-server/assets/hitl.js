@@ -1,7 +1,8 @@
 // Stage 15 Interactive Human-in-the-Loop UI: ask_user checkpoints, research plan approval,
 // Ultramath parallel branch picker, and live mid-turn steer confirmation badges.
 import * as api from '/assets/api.js';
-import { escapeHtml, renderRichInto } from '/assets/math.js';
+import { escapeHtml, mathTextToHtml, renderMathTextInto, renderRichInto } from '/assets/math.js';
+import { scrollToBottom } from '/assets/stream.js';
 
 function getStreamInner(streamEl, clearHero = true) {
   if (!streamEl) return null;
@@ -17,10 +18,6 @@ function getStreamInner(streamEl, clearHero = true) {
     if (hero) hero.remove();
   }
   return inner;
-}
-
-function scrollStreamBottom(streamEl) {
-  if (streamEl) streamEl.scrollTop = streamEl.scrollHeight;
 }
 
 function findCheckpointCard(streamEl, checkpointId) {
@@ -54,7 +51,7 @@ function buildBranchGridHtml(branches) {
           <span>Branch ${num}</span>
           <span class="badge ${statusCls}">${statusTxt}</span>
         </div>
-        <div class="branch-approach">${escapeHtml(b?.approach || `Approach ${num}`)}</div>
+        <div class="branch-approach">${mathTextToHtml(b?.approach || `Approach ${num}`)}</div>
         <div class="branch-summary rich-prose"></div>
         ${toolsHtml}
       </div>
@@ -150,7 +147,7 @@ export function renderCheckpointCard(streamEl, sessionId, prompt, { onResolved, 
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'pill-btn sm';
-      btn.textContent = String(opt);
+      renderMathTextInto(btn, opt);
       btn.addEventListener('click', () => {
         const noteText = noteEl ? noteEl.value.trim() : '';
         submitReply({ selectedOption: String(opt), text: noteText, cancelled: false });
@@ -204,7 +201,7 @@ export function renderCheckpointCard(streamEl, sessionId, prompt, { onResolved, 
   });
 
   inner.appendChild(card);
-  scrollStreamBottom(streamEl);
+  scrollToBottom();
 }
 
 export function resolveCheckpointCard(streamEl, checkpointId, reply = {}) {
@@ -231,10 +228,10 @@ export function resolveCheckpointCard(streamEl, checkpointId, reply = {}) {
     if (cancelled) {
       actions.innerHTML = '<span class="badge warn">Cancelled by researcher</span>';
     } else if (chosen) {
-      const noteHtml = note ? `<span class="badge">${escapeHtml(note.slice(0, 80))}</span>` : '';
-      actions.innerHTML = `<span class="badge ok">Selected: ${escapeHtml(chosen)}</span>${noteHtml}`;
+      const noteHtml = note ? `<span class="badge">${mathTextToHtml(note)}</span>` : '';
+      actions.innerHTML = `<span class="badge ok">Selected: ${mathTextToHtml(chosen)}</span>${noteHtml}`;
     } else if (note) {
-      actions.innerHTML = `<span class="badge ok">Replied: ${escapeHtml(note.slice(0, 100))}</span>`;
+      actions.innerHTML = `<span class="badge ok">Replied: ${mathTextToHtml(note)}</span>`;
     } else {
       actions.innerHTML = '<span class="badge ok">Resolved</span>';
     }
@@ -247,7 +244,7 @@ export function appendSteerBadge(streamEl, text) {
   const row = document.createElement('div');
   row.className = 'steer-badge-row';
   row.setAttribute('role', 'status');
-  row.innerHTML = `<span class="steer-badge-pill">Steer queued -&gt; ${escapeHtml(text || '')}</span>`;
+  row.innerHTML = `<span class="steer-badge-pill">Steer queued -&gt; ${mathTextToHtml(text)}</span>`;
   inner.appendChild(row);
-  scrollStreamBottom(streamEl);
+  scrollToBottom();
 }

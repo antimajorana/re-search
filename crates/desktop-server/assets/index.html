@@ -74,7 +74,7 @@
             <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2.5"/></svg>
             <span>Stop</span>
           </button>
-          <span id="stream-status-pill" class="badge">Ready</span>
+          <span id="stream-status-pill" class="badge" role="status">Ready</span>
           <button id="topbar-archive-btn" type="button" class="icon-btn" title="Archive this chat" aria-label="Archive this chat" hidden>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="4" width="20" height="5" rx="1"/><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9"/><line x1="10" y1="13" x2="14" y2="13"/></svg>
           </button>
@@ -195,7 +195,7 @@
             <span>Proof DAG</span>
           </span>
           <span class="pipeline-arrow" aria-hidden="true">→</span>
-          <span class="pipeline-step" data-stage="verifier" data-state="idle" title="Independent stateless Verifier audits every active Proof-DAG step and LaTeX citation">
+          <span class="pipeline-step" data-stage="verifier" data-state="idle" title="Reviews the answer against the active proof and its linked checks. Separate step reviews appear in the proof graph.">
             <span class="pipeline-dot" aria-hidden="true"></span>
             <span>Verifier</span>
           </span>
@@ -206,7 +206,7 @@
           </span>
         </div>
         <div class="pipeline-meta">
-          <span id="pipeline-timer" hidden>00:00</span>
+          <span id="pipeline-timer" aria-hidden="true" hidden>00:00</span>
           <span id="pipeline-round-badge" class="badge" hidden></span>
         </div>
       </div>
@@ -226,8 +226,8 @@
           <textarea aria-label="Pinned mathematical and physics conventions" id="quick-conventions-input" class="text-input" rows="3" maxlength="2000" placeholder="e.g. metric (-,+,+,+), natural units \hbar = c = 1, periodic boundary conditions..."></textarea>
           <div id="conventions-presets" class="conventions-presets"></div>
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;border-top:1px solid var(--border-subtle);padding-top:10px;">
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-              <span style="font-size:12px;color:var(--ink-muted);">Active agents:</span>
+            <div id="review-agent-options" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              <span style="font-size:12px;color:var(--ink-muted);">Review settings</span>
               <button id="verifier-chip" type="button" class="chip-toggle" aria-pressed="true" title="Run stateless Verifier + Calculation guardrail before accepting final answer">Verifier</button>
               <button id="strategist-chip" type="button" class="chip-toggle" aria-pressed="false" title="Consult Research Strategist to plan repairs if Verifier rejects a round">Strategist</button>
               <button id="pause-explore-chip" type="button" class="chip-toggle" aria-pressed="false" title="Pause after Ultramath parallel exploration to choose a branch">Pause on Explore</button>
@@ -263,7 +263,8 @@
               <details id="research-options">
                 <summary class="chip-toggle">Research options</summary>
                 <div class="research-options-panel">
-                  <fieldset><legend>Review mode</legend>
+                  <p id="cli-review-note" hidden>This CLI runs its own research loop. Choose an API model or ChatGPT in a new session for independent answer review.</p>
+                  <fieldset id="review-mode-options"><legend>Review mode</legend>
                     <div id="mode-preset-group" class="segmented-group" role="group" aria-label="Verification rigor mode">
                       <button type="button" class="seg-btn" data-rigor-preset="direct" aria-pressed="false" title="Direct mode: single-pass Orchestrator + tools without post-turn Verifier gate">Direct</button>
                       <button type="button" class="seg-btn is-active" data-rigor-preset="verified" aria-pressed="true" title="Verified mode: Orchestrator + Calculation Guard + Independent Stateless Verifier (up to 3 rounds)">✓ Verified</button>
@@ -288,7 +289,7 @@
                 <option value="">Loading models...</option>
               </select>
               <button id="composer-connect" type="button" class="pill-btn sm" title="Connect a model provider" hidden>Connect model</button>
-              <button id="composer-stop" type="button" class="stop-pill-btn" title="Stop active turn immediately (Esc)" aria-label="Stop active turn" hidden>
+              <button id="composer-stop" type="button" class="stop-pill-btn" title="Stop active turn (Esc)" aria-label="Stop active turn" hidden>
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                   <rect x="4" y="4" width="16" height="16" rx="2.5"/>
                 </svg>
@@ -332,9 +333,10 @@
             <div class="toolbar-row">
               <div class="toolbar-group">
                 <select id="latex-file-select" class="compact-select" aria-label="Select TeX or Bib file" style="min-width:126px;max-width:168px">
-                  <option value="">draft.tex (scratch)</option>
+                  <option value="">Scratch draft</option>
                 </select>
-                <button id="latex-save-btn" type="button" class="pill-btn sm" title="Save manuscript edits to workspace">Save</button>
+                <button id="latex-save-btn" type="button" class="pill-btn sm" title="Save manuscript edits to workspace" disabled>Save</button>
+                <button id="latex-reload-btn" type="button" class="pill-btn sm" hidden>Reload from disk</button>
                 <button id="tex-audit-btn" type="button" class="pill-btn sm" title="Check \ref{}, \cite{}, and retracted references">TeX Audit</button>
               </div>
               <div class="toolbar-group">
@@ -379,7 +381,7 @@
               </div>
               <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end;">
                 <button id="fork-cancel-btn" type="button" class="pill-btn sm">Cancel</button>
-                <button id="fork-confirm-btn" type="button" class="pill-btn sm primary">Create Verified Fork</button>
+                <button id="fork-confirm-btn" type="button" class="pill-btn sm primary">Create fork</button>
               </div>
             </div>
             <div class="dag-viewport-wrap">
@@ -401,6 +403,8 @@
         <!-- Tab 3: Literature & Sources Canvas -->
         <section id="panel-sources" class="canvas-panel" role="tabpanel" aria-labelledby="tab-sources">
           <div class="sources-layout">
+            <h3 class="rail-section-label" style="margin:0;padding:2px 0;">Sources Used</h3>
+            <div id="used-sources-list" style="display:flex;flex-direction:column;gap:8px;"></div>
             <details class="dag-detail-card formal-library">
               <summary>Formal library</summary>
               <form id="formal-library-form" autocomplete="off">
@@ -421,7 +425,7 @@
                   <option value="crossref">Crossref</option>
                   <option value="semantic_scholar">Semantic Scholar</option>
                 </select>
-                <input id="lit-query-input" class="text-input" type="text" placeholder="Query papers, au:Author, arXiv ID, or DOI...">
+                <input id="lit-query-input" class="text-input" type="search" aria-label="Search for papers" placeholder="Title, author, or identifier" required>
                 <button id="lit-search-btn" type="submit" class="pill-btn sm primary">Search</button>
               </div>
               <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;">
@@ -433,12 +437,16 @@
                   <option value="id">arXiv ID</option>
                 </select>
                 <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
-                  <input id="lit-include-source" type="checkbox"> Ingest TeX bundle
+                  <input id="lit-include-source" type="checkbox"> Save TeX source
                 </label>
-                <input id="lit-section-filter" class="text-input" type="text" placeholder="Section filter..." style="width:128px;height:28px;">
+                <input id="lit-section-filter" class="text-input" type="text" aria-label="Filter paper sections" placeholder="Filter sections" style="width:128px;height:28px;">
               </div>
             </form>
             <div id="literature-results" style="display:flex;flex-direction:column;gap:8px;"></div>
+            <details id="session-literature" class="dag-detail-card" hidden>
+              <summary>Search History</summary>
+              <div id="session-literature-list" style="display:flex;flex-direction:column;gap:8px;margin-top:8px;"></div>
+            </details>
             <div class="dag-detail-card paper-passage-search">
               <form id="paper-passage-form" autocomplete="off">
                 <label for="paper-passage-query">Search ingested paper passages</label>
@@ -450,7 +458,7 @@
               <div id="paper-passage-status" role="status"></div>
               <div id="paper-passage-results"></div>
             </div>
-            <div class="rail-section-label" style="padding:2px 0;">Ingested Session Sources</div>
+            <h3 class="rail-section-label" style="margin:0;padding:2px 0;">Saved files</h3>
             <div id="sources-list" style="display:flex;flex-direction:column;gap:8px;"></div>
           </div>
         </section>
@@ -467,7 +475,7 @@
             </div>
             <div id="sidetalk-stream"></div>
             <form id="sidetalk-form" class="sidetalk-composer" autocomplete="off">
-              <input id="sidetalk-input" class="text-input" type="text" placeholder="Ask Explain about a step, convention, or equation...">
+              <input id="sidetalk-input" class="text-input" type="text" aria-label="Question for Explain" placeholder="Ask about a step, convention, or equation" required>
               <button id="sidetalk-send" type="submit" class="pill-btn sm primary">Ask</button>
             </form>
           </div>
@@ -502,12 +510,11 @@
       <div id="settings-panel-subagents" class="settings-tab-panel" data-settings-panel="subagents" role="tabpanel" aria-labelledby="settings-tab-subagents">
         <div class="subagent-builder-box">
           <div class="subagent-section-head">
-            <h3>Create Custom Subagent with AI Agent</h3>
-            <span class="badge">Builder Agent</span>
+            <h3>Create a specialist</h3>
           </div>
           <form id="subagent-draft-form" style="display:flex;gap:8px;flex-wrap:wrap;" autocomplete="off">
-            <input id="subagent-goal-input" class="text-input" type="text" placeholder="Describe your specialist (e.g. Lattice QFT loop integral checker using SymPy)..." style="flex:1;min-width:220px;">
-            <button id="subagent-draft-btn" type="submit" class="pill-btn sm primary">Generate with AI Agent</button>
+            <input id="subagent-goal-input" class="text-input" type="text" aria-label="Specialist's task" placeholder="What should this specialist check?" style="flex:1;min-width:220px;" required>
+            <button id="subagent-draft-btn" type="submit" class="pill-btn sm primary">Draft instructions</button>
           </form>
           <form id="subagent-save-form" class="form-grid" autocomplete="off">
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">

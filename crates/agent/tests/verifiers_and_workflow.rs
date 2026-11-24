@@ -365,6 +365,37 @@ fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_block
             },
         })).unwrap();
     }
+    ledger.append_with_hash(session, "tool.request", 1, &json!({
+        "call_id": "linked-sanity", "tool": "check_expression_sanity",
+    })).unwrap();
+    ledger.append_with_hash(session, "tool.result", 1, &json!({
+        "call_id": "linked-sanity", "ok": true,
+        "result": { "inline": json!({
+            "ok": false, "lhs": "y + 1", "rhs": "y", "domain": "real", "numeric_eval_supported": true,
+            "numeric_match": false, "samples_checked": 5, "issues": ["numeric mismatch"],
+        }).to_string() },
+    })).unwrap();
+    ledger.append_with_hash(session, "proof.entry", 1, &json!({
+        "entry_id": "e-sanity", "entry_type": "verification", "summary": "Check B",
+        "tool_call_ref": "linked-sanity", "depends_on": [],
+    })).unwrap();
+    for (call_id, code, result) in [
+        ("linked-exact", "assert A * G == eye(2)", "exact inverse residual zero"),
+        ("unrelated-exact", "unrelated script", "unrelated output"),
+    ] {
+        let args = serde_json::to_vec(&json!({ "code": code })).unwrap();
+        ledger.append_with_hash(session, "tool.request", 1, &json!({
+            "call_id": call_id, "tool": "sympy_eval", "args": {"blob": ledger.put_blob(&args).unwrap()},
+        })).unwrap();
+        ledger.append_with_hash(session, "tool.result", 1, &json!({
+            "call_id": call_id, "ok": true,
+            "result": {"inline": json!({ "value": result, "truncated": false }).to_string()},
+        })).unwrap();
+    }
+    ledger.append_with_hash(session, "proof.entry", 1, &json!({
+        "entry_id": "e-exact", "entry_type": "symbolic_computation", "summary": "Check the inverse",
+        "tool_call_ref": "linked-exact", "depends_on": [],
+    })).unwrap();
     ledger
         .append_with_hash(
             session,
@@ -396,7 +427,8 @@ fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_block
             1,
             &json!({
                 "entry_id": "e-2", "entry_type": "derivation",
-                "summary": "From A get B", "details": "B follows from A", "latex": "B = A", "depends_on": ["e-1"],
+                "summary": "From A get B", "details": "B follows from A", "latex": "B = A",
+                "depends_on": ["e-1", "e-sanity", "e-exact"],
                 "tool_call_ref": "linked-cas"
             }),
         )
@@ -428,6 +460,10 @@ fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_block
     assert!(!user_txt.contains("theorem unrelated_check"));
     assert!(user_txt.contains("<computational_checks>"));
     assert!(user_txt.contains("linked-cas") && user_txt.contains("x = -1"));
+    assert!(user_txt.contains("linked-sanity") && user_txt.contains("expression_sanity") && user_txt.contains("numeric mismatch"));
+    assert!(user_txt.contains("sympy_execution") && user_txt.contains("linked-exact"));
+    assert!(user_txt.contains("assert A * G == eye(2)") && user_txt.contains("exact inverse residual zero"));
+    assert!(!user_txt.contains("unrelated script") && !user_txt.contains("unrelated output"));
     assert!(!user_txt.contains("UNRELATED_PROBE"));
     assert!(reqs[0].system.as_deref().unwrap().contains("<pinned_conventions>"));
     assert!(!user_txt.contains("SOLVER_PRIVATE_BIAS_TOKEN"));
@@ -486,6 +522,8 @@ fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_block
     };
     assert!(!full_user_txt.contains("UNRELATED_BRANCH_TOKEN"));
     assert!(!full_user_txt.contains("mostly-plus"));
+    assert!(full_user_txt.contains("linked-exact") && full_user_txt.contains("exact inverse residual zero"));
+    assert!(!full_user_txt.contains("unrelated output"));
     assert!(full_user_txt.contains("<pinned_conventions>\nUse mostly-minus metric and q &lt; 0.\n</pinned_conventions>"));
     assert!(tr_full.captured()[0].system.as_deref().unwrap().contains("<pinned_conventions>"));
 

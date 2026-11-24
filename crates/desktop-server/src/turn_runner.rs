@@ -352,7 +352,10 @@ fn run_session_turn(
 
     let ledger = state.open_ledger()?;
     let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
-    let mut sink = SseEventSink::new(Arc::clone(&state.sse), session_id);
+    let mut sink = SseEventSink::new(Arc::clone(&state.sse), session_id).with_model_title(
+        meta.as_ref().is_some_and(crate::state::SessionMeta::allows_model_title)
+            && crate::routes_session::model_session_title(&existing).is_none(),
+    );
 
     let has_started = existing.iter().any(|e| e.kind == "session.start");
     let outcome = if !has_started {

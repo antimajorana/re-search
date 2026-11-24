@@ -71,23 +71,252 @@ export function linksForPaper(item) {
   };
 
   const rawDirect = safeSourceUrl(item.url);
-  const arxivCand = versionedArxivId(item.arxiv_id, item.base_id, item.id, rawDirect);
-  const doi = extractDoi(String(item.doi || ''));
   const srcName = String(item.source || '').toLowerCase();
+  const arxivDirect = /^https:\/\/(?:export\.)?arxiv\.org\//i.test(rawDirect || '');
+  const arxivCand = versionedArxivId(item.arxiv_id, item.base_id, !srcName || srcName === 'arxiv' ? item.id : null, arxivDirect ? rawDirect : null);
+  const doi = extractDoi(String(item.doi || ''));
 
   if (rawDirect && !dropsArxivVersion(rawDirect, arxivCand)) {
-    pushLink(/^https:\/\/(?:export\.)?arxiv\.org\//.test(rawDirect) ? 'Open on arXiv' : 'Open Paper', rawDirect, 'primary');
+    pushLink(arxivDirect ? 'Open on arXiv' : 'Open Paper', rawDirect, 'primary');
   }
   if (arxivCand) {
     pushLink('arXiv Abstract', `https://arxiv.org/abs/${arxivCand}`, 'primary');
     pushLink('PDF', `https://arxiv.org/pdf/${arxivCand}`, 'pdf');
   } else if (srcName === 'inspire' && item.id && /^\d+$/.test(String(item.id).trim())) {
     pushLink('INSPIRE Record', `https://inspirehep.net/literature/${String(item.id).trim()}`, 'primary');
+  } else if (srcName === 'semantic_scholar' && /^[a-f0-9]{40}$/i.test(item.id)) {
+    pushLink('Semantic Scholar', `https://www.semanticscholar.org/paper/${item.id}`, 'primary');
   }
   if (doi) {
     pushLink('DOI', `https://doi.org/${doi}`, 'doi');
   }
   return links;
+}
+
+export function sessionPaperReferences(events, sources = []) {
+  const papers = [];
+  const seen = new Set();
+  if (!Array.isArray(events)) return papers;
+  const saved = new Map();
+  for (const source of sources) {
+    const origin = source.origin || '';
+    if (/^(?:https:\/\/(?:export\.)?arxiv\.org\/|arxiv:)/i.test(origin)) {
+      const id = extractArxivId(origin);
+      if (id) saved.set(id.toLowerCase(), source);
+    }
+  }
+  for (const event of events.slice().reverse()) {
+    if (event?.kind !== 'literature.fetched') continue;
+    const { provider, hits, papers: arxivPapers } = event.payload || {};
+    const records = Array.isArray(arxivPapers) ? arxivPapers : Array.isArray(hits) ? hits : [];
+    for (const item of records) {
+      if (!item || typeof item !== 'object') continue;
+      const title = String(item.title || item.id || item.base_id || item.doi || '').trim();
+      if (!title) continue;
+      const doi = extractDoi(item.doi);
+      const arxiv = extractArxivId(item.arxiv_id || item.base_id || (provider === 'arxiv' ? item.id : ''));
+      const keys = [
+        doi && `doi:${doi.toLowerCase()}`,
+        arxiv && `arxiv:${arxiv.toLowerCase().replace(/v\d+$/, '')}`,
+        item.id && `${provider}:${String(item.id).toLowerCase()}`,
+      ].filter(Boolean);
+      if (!keys.length) keys.push(`${provider}:${title.toLowerCase()}`);
+      const duplicate = keys.some(key => seen.has(key));
+      for (const key of keys) seen.add(key);
+      if (!duplicate) {
+        const id = versionedArxivId(item.arxiv_id, provider === 'arxiv' ? item.id : null, item.base_id);
+        const savedSource = item.source?.source_id ? item.source : saved.get(id?.toLowerCase());
+        papers.push({ ...item, source: provider, title, savedSource });
+      }
+    }
+  }
+  return papers;
+}
+
+function paperKeys(paper) {
+  const doi = extractDoi(paper.doi);
+  const arxiv = versionedArxivId(paper.arxiv_id, paper.base_id, paper.source === 'arxiv' ? paper.id : null);
+  return [
+    doi && `doi:${doi.toLowerCase()}`,
+    arxiv && `arxiv:${arxiv.toLowerCase()}`,
+    paper.url && citationAddress(paper.url),
+    ...linksForPaper(paper).map(link => link.url.toLowerCase()),
+  ].filter(Boolean);
+}
+
+function citationAddress(raw) {
+  if (typeof raw !== 'string' || raw.length > 2048 || !/^https?:\/\//i.test(raw) || /[\s\\]/.test(raw)) return null;
+  try {
+    const url = new URL(raw);
+    return url.hostname && !url.username && !url.password ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function citationToken(raw) {
+  const token = raw.replace(/[.,;:]+$/, '');
+  let depth = 0;
+  for (let i = 0; i < token.length; i++) {
+    if (token[i] === '(') depth++;
+    if (token[i] === ')') {
+      if (!depth) return token.slice(0, i);
+      depth--;
+    }
+  }
+  return token;
+}
+
+function explicitPaperCitations(text) {
+  const papers = [];
+  for (const [match] of text.matchAll(/\b10\.\d{4,9}\/[^\s,"'<>{}\[\]]+/gi)) {
+    const doi = extractDoi(citationToken(match));
+    if (doi) papers.push({ doi, title: `DOI ${doi}` });
+  }
+  for (const [, arxiv_id] of text.matchAll(/(?:\barxiv\s*:\s*|\barxiv\.org\/(?:abs|pdf|e-print)\/)(\d{4}\.\d{4,5}(?:v\d+)?|[a-z-]+(?:\.[a-z-]+)?\/\d{7}(?:v\d+)?)/gi)) {
+    papers.push({ arxiv_id, source: 'arxiv', title: `arXiv:${arxiv_id}` });
+  }
+  for (const [, label, address] of text.matchAll(/(?:\[([^\]\n]+)\]\()?((?:https?):\/\/[^\s"'<>{}\[\]]+)/gi)) {
+    const url = citationAddress(citationToken(address));
+    if (!url) continue;
+    const parsed = new URL(url);
+    const canonicalArxiv = /^(?:export\.)?arxiv\.org$/.test(parsed.hostname)
+      && /^\/(?:abs|pdf|e-print)\//.test(parsed.pathname) && extractArxivId(parsed.pathname);
+    if (canonicalArxiv || /\b10\.\d{4,9}\/[^\s/]+/i.test(url)) continue;
+    papers.push({ url, title: label?.trim() || url });
+  }
+  return papers;
+}
+
+function finalAnswerTexts(events) {
+  const answers = [];
+  let blocks = [];
+  let hasResponse = false;
+  let cliResult = '';
+  for (const { kind, payload } of events) {
+    if (kind === 'session.start' || kind === 'session.resume') {
+      blocks = [];
+      hasResponse = false;
+      cliResult = '';
+    } else if (kind === 'model.response') {
+      blocks = [];
+      hasResponse = true;
+    } else if (kind === 'model.text' && typeof payload?.text === 'string') {
+      if (hasResponse) blocks.push(payload.text);
+      else blocks = [payload.text];
+    } else if (kind === 'autonomous.feedback') {
+      blocks = [];
+      hasResponse = false;
+    } else if (kind === 'cli.result') {
+      cliResult = typeof payload?.result === 'string' ? payload.result : '';
+    } else if (kind === 'session.end') {
+      const answer = blocks.join('\n') || cliResult;
+      if (answer && payload?.outcome !== 'refusal') answers.push(answer);
+      blocks = [];
+      cliResult = '';
+    } else if (kind === 'session.abort') {
+      blocks = [];
+      cliResult = '';
+    }
+  }
+  return answers;
+}
+
+function activeSourceSteps(events) {
+  const nodes = new Map();
+  const superseded = new Set();
+  const rejected = new Set();
+  for (const { kind, payload, effective_verdict } of events) {
+    if (kind === 'proof.entry' && payload.entry_id) nodes.set(payload.entry_id, payload);
+    if (kind === 'proof.supersede') superseded.add(payload.entry_id);
+    if (kind === 'proof.verification') {
+      if ((effective_verdict ?? payload.verdict) === 'rejected') rejected.add(payload.target_entry_id);
+      else rejected.delete(payload.target_entry_id);
+    }
+  }
+  const active = new Map([...nodes].filter(([id]) => !superseded.has(id) && !rejected.has(id)));
+  const pending = [...active.values()].filter(node => node.entry_type === 'final_answer').map(node => node.entry_id);
+  if (!pending.length) return active;
+  const used = new Map();
+  while (pending.length) {
+    const id = pending.pop();
+    const entry = active.get(id);
+    if (!entry || used.has(id)) continue;
+    used.set(id, entry);
+    if (Array.isArray(entry.depends_on)) pending.push(...entry.depends_on);
+  }
+  return used;
+}
+
+export function sessionSourcesUsed(session) {
+  const events = session?.events || [];
+  const sourceSteps = activeSourceSteps(events);
+  const byKey = new Map();
+  const bySourceId = new Map();
+  const known = new Set();
+  const addPaper = (paper, sourceId) => {
+    const keys = paperKeys(paper);
+    const titleKey = paper.title && `title:${paper.title.toLowerCase()}`;
+    const titleMatch = !keys.length && titleKey && byKey.get(titleKey);
+    const existing = keys.map(key => byKey.get(key)).find(Boolean)
+      || (titleMatch && (!sourceId || !titleMatch.source || titleMatch.source.source_id === sourceId) && titleMatch);
+    const record = existing || { paper, cited: false, steps: new Set(), readers: new Map() };
+    for (const key of keys) {
+      byKey.set(key, record);
+      if (key.startsWith('arxiv:')) {
+        const base = key.replace(/v\d+$/, '');
+        if (!byKey.has(base)) byKey.set(base, record);
+      }
+    }
+    if (titleKey) byKey.set(titleKey, record);
+    known.add(record);
+    return record;
+  };
+
+  for (const paper of sessionPaperReferences(events)) addPaper(paper);
+  for (const source of session?.sources || []) {
+    const links = linksForIngestedSource(source);
+    const paper = { title: resolveSourceTitle(source), url: links[0]?.url, doi: extractDoi(source.origin),
+      arxiv_id: extractArxivId(links.find(link => /arxiv\.org\/(?:abs|pdf)\//i.test(link.url))?.url),
+    };
+    const record = addPaper(paper, source.source_id);
+    record.source = source;
+    if (source.source_id) bySourceId.set(source.source_id, record);
+  }
+
+  for (const { entry_id, paper, source_id, reader } of session?.linked_sources || []) {
+    if (!sourceSteps.has(entry_id)) continue;
+    const record = paper ? addPaper(paper) : bySourceId.get(reader?.source_id || source_id);
+    if (!record) continue;
+    record.steps.add(entry_id);
+    if (reader) {
+      const key = JSON.stringify([reader.source_id, reader.path, reader.start_line, reader.end_line, reader.file_sha256]);
+      record.readers.set(key, reader);
+    }
+  }
+
+  const useText = (text, entry) => {
+    const normalized = text.toLowerCase().replace(/\s+/g, ' ');
+    const urls = new Set([...text.matchAll(/https?:\/\/[^\s"'<>{}\[\]]+/gi)]
+      .map(([url]) => safeSourceUrl(citationToken(url))?.toLowerCase()).filter(Boolean));
+    const mark = (record) => {
+      if (entry) record.steps.add(entry);
+      else record.cited = true;
+    };
+    for (const record of known) {
+      const title = record.paper.title?.toLowerCase().replace(/\s+/g, ' ').trim();
+      const titleMentioned = title && title.length >= 12 && title.includes(' ') && normalized.includes(title);
+      const links = linksForPaper(record.paper);
+      if (titleMentioned || links.some(({ url }) => urls.has(url.toLowerCase()))) mark(record);
+    }
+    for (const paper of explicitPaperCitations(text)) mark(addPaper(paper));
+  };
+  for (const answer of finalAnswerTexts(events)) useText(answer);
+
+  for (const payload of sourceSteps.values()) {
+    useText([payload.summary, payload.details, payload.latex].filter(Boolean).join('\n'), payload.entry_id);
+  }
+  return [...known].filter(record => record.cited || record.steps.size);
 }
 
 export function linksForIngestedSource(src) {

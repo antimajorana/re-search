@@ -80,6 +80,14 @@
 .dag-node {
   cursor: pointer;
 }
+.dag-node-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ink-primary);
+}
 .dag-node rect {
   stroke-width: 1.5px;
   transition: stroke-width var(--transition-fast), filter var(--transition-fast);

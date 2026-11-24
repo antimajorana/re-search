@@ -7,11 +7,15 @@ let editorEl = null;
 let previewEl = null;
 let lineCountEl = null;
 let saveBtn = null;
+let reloadBtn = null;
 let auditBtn = null;
 let auditResultsEl = null;
 let fileNoteEl = null;
 let currentSessionId = null;
 let currentWorkspace = null;
+let displayedFile = null;
+let fileHash;
+const drafts = new Map();
 let workspaceRequest = 0;
 let fileRequest = 0;
 let originalContent = '';
@@ -26,6 +30,7 @@ export function initLatexCanvas(opts = {}) {
   previewEl = document.getElementById('latex-preview');
   lineCountEl = document.getElementById('latex-line-count');
   saveBtn = document.getElementById('latex-save-btn');
+  reloadBtn = document.getElementById('latex-reload-btn');
   auditBtn = document.getElementById('tex-audit-btn');
   auditResultsEl = document.getElementById('tex-audit-results');
   fileNoteEl = document.getElementById('latex-file-note');
@@ -43,16 +48,36 @@ export function initLatexCanvas(opts = {}) {
   if (fileSelectEl) {
     fileSelectEl.addEventListener('change', () => {
       if (!currentSessionId) return;
+      rememberDraft();
       if (fileSelectEl.value) {
         loadLatexFile(currentSessionId, fileSelectEl.value);
       } else {
         fileRequest += 1;
-        showFile('', true);
+        openDraft('', '', false, null);
       }
     });
   }
 
   if (saveBtn) saveBtn.addEventListener('click', handleSavePatch);
+  reloadBtn?.addEventListener('click', async () => {
+    if (!window.confirm('Discard your edits and reload this file from disk?')) return;
+    const request = fileRequest;
+    const path = fileSelectEl.value || 'draft.tex';
+    try {
+      const data = await api.getWorkspace(currentSessionId, path);
+      if (request !== fileRequest) return;
+      drafts.delete(displayedFile);
+      if (!fileSelectEl.value) {
+        const option = document.createElement('option');
+        option.value = option.textContent = path;
+        fileSelectEl.appendChild(option);
+        fileSelectEl.value = path;
+      }
+      openDraft(path, data.content, data.truncated === true, data.file_sha256);
+    } catch (err) {
+      if (request === fileRequest) notifyFn(`Could not reload the file. ${err.message}`);
+    }
+  });
   if (auditBtn) auditBtn.addEventListener('click', handleTexAudit);
 
   const exportButtons = [
@@ -78,20 +103,44 @@ function updateLineCount() {
   lineCountEl.textContent = `${lines} line${lines === 1 ? '' : 's'}`;
 }
 
+function rememberDraft() {
+  if (!displayedFile || !editorEl || editorEl.disabled) return;
+  if (editorEl.value === editorBaseline) drafts.delete(displayedFile);
+  else drafts.set(displayedFile, { text: editorEl.value, originalContent, editorBaseline, fileHash });
+}
+
+function openDraft(path, text, truncated, hash) {
+  const key = JSON.stringify([currentSessionId, currentWorkspace, path]);
+  const draft = drafts.get(key);
+  showFile(draft ? draft.text : text, true, truncated && !draft);
+  displayedFile = key;
+  fileHash = hash;
+  if (draft) {
+    ({ originalContent, editorBaseline, fileHash } = draft);
+  }
+}
+
 function showFile(text, ready, truncated = false) {
+  displayedFile = null;
+  if (reloadBtn) reloadBtn.hidden = true;
   originalContent = text;
   clearTimeout(previewTimer);
   if (editorEl) {
     editorEl.value = text;
     editorEl.disabled = !ready;
     editorEl.readOnly = truncated;
-    if (truncated) editorEl.setAttribute('aria-describedby', 'latex-file-note');
+    if (truncated || (ready && !currentWorkspace)) editorEl.setAttribute('aria-describedby', 'latex-file-note');
     else editorEl.removeAttribute('aria-describedby');
     editorBaseline = editorEl.value;
   }
-  if (saveBtn) saveBtn.disabled = !ready || truncated;
+  if (saveBtn) saveBtn.disabled = !ready || truncated || !currentWorkspace;
   if (auditBtn) auditBtn.disabled = !ready || truncated;
-  if (fileNoteEl) fileNoteEl.hidden = !truncated;
+  if (fileNoteEl) {
+    fileNoteEl.hidden = !ready || (!truncated && Boolean(currentWorkspace));
+    fileNoteEl.textContent = truncated
+      ? 'This preview is truncated. Open the full file in your workspace to edit or audit it.'
+      : 'This scratch draft is kept while the app is open. Attach a folder under Research options → Workspace to save a manuscript.';
+  }
   if (auditResultsEl) auditResultsEl.hidden = true;
   updateLineCount();
   renderLatexDocumentPreview(previewEl, text);
@@ -100,6 +149,7 @@ function showFile(text, ready, truncated = false) {
 export async function refreshWorkspaceFiles(sessionId) {
   const request = ++workspaceRequest;
   if (sessionId !== currentSessionId) {
+    rememberDraft();
     currentSessionId = sessionId;
     currentWorkspace = null;
     fileRequest += 1;
@@ -112,6 +162,8 @@ export async function refreshWorkspaceFiles(sessionId) {
     if (request !== workspaceRequest) return;
     const workspace = data?.workspace_root ?? null;
     const sameWorkspace = workspace === currentWorkspace;
+    if (!sameWorkspace) rememberDraft();
+    const scratchKey = JSON.stringify([sessionId, null, '']);
     currentWorkspace = workspace;
     const entries = Array.isArray(data && data.files)
       ? data.files
@@ -124,14 +176,19 @@ export async function refreshWorkspaceFiles(sessionId) {
 
     const prev = sameWorkspace ? fileSelectEl.value : '';
     const preserveDraft = sameWorkspace && editorEl && !editorEl.disabled && editorEl.value !== editorBaseline;
-    const chosen = preserveDraft || texFiles.includes(prev) ? prev : texFiles[0] || '';
+    const newDraft = workspace && !sameWorkspace && !texFiles.includes('draft.tex') && drafts.get(scratchKey);
+    if (newDraft) {
+      drafts.set(JSON.stringify([sessionId, workspace, '']), newDraft);
+      drafts.delete(scratchKey);
+    }
+    const chosen = newDraft ? '' : preserveDraft || texFiles.includes(prev) ? prev : texFiles[0] || '';
     const options = [...texFiles];
     if (!options.includes(chosen)) options.unshift(chosen);
     fileSelectEl.innerHTML = '';
     for (const p of options) {
       const opt = document.createElement('option');
       opt.value = p;
-      opt.textContent = p || 'draft.tex (scratch)';
+      opt.textContent = p || (workspace ? 'draft.tex (new)' : 'Scratch draft');
       fileSelectEl.appendChild(opt);
     }
     fileSelectEl.value = chosen;
@@ -140,10 +197,10 @@ export async function refreshWorkspaceFiles(sessionId) {
       await loadLatexFile(sessionId, chosen);
     } else {
       fileRequest += 1;
-      showFile('', true);
+      openDraft('', '', false, null);
     }
-  } catch {
-    // Session may not have an attached workspace yet
+  } catch (err) {
+    if (request === workspaceRequest) notifyFn(`Could not load manuscript files. ${err.message}`);
   }
 }
 
@@ -154,7 +211,7 @@ async function loadLatexFile(sessionId, relPath) {
     const data = await api.getWorkspace(sessionId, relPath);
     if (request !== fileRequest) return;
     const content = (data && (data.content || data.text)) || '';
-    showFile(content, true, data?.truncated === true);
+    openDraft(relPath, content, data?.truncated === true, data?.file_sha256);
   } catch (err) {
     if (request === fileRequest) notifyFn(`Could not load ${relPath}: ${err.message}`);
   }
@@ -170,20 +227,32 @@ async function handleSavePatch() {
   const request = fileRequest;
   const path = fileSelectEl && fileSelectEl.value ? fileSelectEl.value : 'draft.tex';
   const nextText = editorEl ? editorEl.value : '';
+  const replacement = originalContent.includes('\r\n') && !originalContent.replaceAll('\r\n', '').includes('\n')
+    ? nextText.replaceAll('\n', '\r\n') : nextText;
   const payload = originalContent
-    ? { path, search: originalContent, replace: nextText, content: nextText }
-    : { path, content: nextText };
+    ? { path, search: originalContent, replace: replacement, content: replacement }
+    : { path, content: replacement };
+  if (fileHash !== undefined) payload.expected_sha256 = fileHash;
+  const key = displayedFile;
 
   try {
     if (saveBtn) saveBtn.disabled = true;
-    await api.patchLatex(sessionId, payload);
+    const result = await api.patchLatex(sessionId, payload);
+    const savedHash = result?.output?.sha256_after;
+    const pending = drafts.get(key);
+    if (pending?.text === nextText) drafts.delete(key);
+    else if (pending) Object.assign(pending, { originalContent: replacement, editorBaseline: nextText, fileHash: savedHash });
     if (request === fileRequest) {
-      originalContent = nextText;
+      originalContent = replacement;
       editorBaseline = nextText;
+      fileHash = savedHash;
       notifyFn(`Saved patch to ${path}`);
     }
   } catch (err) {
-    if (request === fileRequest) notifyFn(`Save failed: ${err.message}`);
+    if (request === fileRequest) {
+      if (reloadBtn && /changed on disk/.test(err.message)) reloadBtn.hidden = false;
+      notifyFn(`Save failed: ${err.message}`);
+    }
   } finally {
     if (request === fileRequest && saveBtn) saveBtn.disabled = false;
   }

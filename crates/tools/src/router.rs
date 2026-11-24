@@ -402,6 +402,7 @@ impl Router {
                     tool_id,
                     "sympy_eval" | "lean_check" | "doc_ingest" | "fs_read" | "arxiv_search"
                         | "literature_search" | "search_paper_passages" | "search_formal_library"
+                        | "check_expression_sanity"
                 ) {
                     if let Some(result) = value.as_object_mut() {
                         result.insert("tool_call_ref".into(), json!(call_id));

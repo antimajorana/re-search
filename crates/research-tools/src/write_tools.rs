@@ -47,7 +47,8 @@ pub fn fs_write_def() -> ToolDef {
             "type": "object",
             "properties": {
                 "path": { "type": "string", "maxLength": 512, "description": "Workspace-relative file path." },
-                "content": { "type": "string", "maxLength": MAX_WRITE_CHARS, "description": "Complete UTF-8 file content." }
+                "content": { "type": "string", "maxLength": MAX_WRITE_CHARS, "description": "Complete UTF-8 file content." },
+                "expected_sha256": { "type": ["string", "null"], "description": "Optional original file SHA-256. Use null to require a new file." }
             },
             "required": ["path", "content"],
             "additionalProperties": false
@@ -70,7 +71,8 @@ pub fn latex_patch_def() -> ToolDef {
                 "path": { "type": "string", "maxLength": 512, "description": "Workspace-relative file path." },
                 "search": { "type": "string", "maxLength": 200000, "description": "Exact existing text block to match." },
                 "replace": { "type": "string", "maxLength": 200000, "description": "Replacement text block." },
-                "replace_all": { "type": "boolean", "description": "Replace every occurrence when `search` matches multiple times." }
+                "replace_all": { "type": "boolean", "description": "Replace every occurrence when `search` matches multiple times." },
+                "expected_sha256": { "type": "string", "description": "Optional original file SHA-256." }
             },
             "required": ["path", "search", "replace"],
             "additionalProperties": false
@@ -122,6 +124,12 @@ fn prepare_edit(env: &ResearchEnv, tool_id: &str, args: &Value) -> Result<Prepar
         None
     };
 
+    let sha256_before = orig_bytes.as_deref().map(ledger::sha256_hex);
+    if let Some(expected) = args.get("expected_sha256") {
+        if expected != &serde_json::json!(sha256_before) {
+            return Err(format!("{} changed on disk. Copy your edits, then reload the file to reconcile the changes.", resolved.rel_path));
+        }
+    }
     let (old_text, new_text, replacements) = match tool_id {
         FS_WRITE => {
             let content = args.get("content").and_then(Value::as_str).ok_or("`content` must be a string")?;
@@ -164,7 +172,6 @@ fn prepare_edit(env: &ResearchEnv, tool_id: &str, args: &Value) -> Result<Prepar
         other => return Err(format!("tool `{other}` does not support workspace edit preview")),
     };
 
-    let sha256_before = orig_bytes.as_deref().map(ledger::sha256_hex);
     let new_bytes = new_text.as_bytes().to_vec();
     let sha256_after = ledger::sha256_hex(&new_bytes);
     let unified_diff = build_unified_diff(&resolved.rel_path, sha256_before.is_some(), &old_text, &new_text);

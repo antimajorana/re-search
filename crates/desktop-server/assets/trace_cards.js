@@ -1,7 +1,6 @@
 // Structured scientific activity cards for tool calls (SymPy, Proof Ledger, Literature, Workspace)
-// and Independent Verifier verdict banners. Every untrusted field is passed through escapeHtml()
-// or DOM textContent — never raw HTML.
-import { escapeHtml, highlightPython, renderRichInto } from '/assets/math.js';
+// and Independent Verifier verdict banners.
+import { displayMathSource, escapeHtml, highlightPython, mathTextToHtml, renderRichInto } from '/assets/math.js';
 import { linksForPaper, renderSourceLinkChips } from '/assets/source_links.js';
 
 let seqCounter = 0;
@@ -33,15 +32,15 @@ function formatSympyCard(argsObj, outObj, rawOut) {
 
   let resHtml = '';
   if (outObj && typeof outObj === 'object') {
-    const val = outObj.result !== undefined && outObj.result !== null ? String(outObj.result) : '';
+    const val = String(outObj.value ?? outObj.result ?? '');
     const stdout = outObj.stdout ? String(outObj.stdout).trim() : '';
     const stderr = outObj.stderr ? String(outObj.stderr).trim() : '';
     const errMsg = outObj.error ? String(outObj.error).trim() : '';
     if (val) {
-      resHtml += `<div class="sc-result-row"><span class="sc-k">Result</span><code class="sc-v">${escapeHtml(val.slice(0, 900))}</code></div>`;
+      resHtml += `<div class="sc-result-row"><span class="sc-k">Result</span><span class="sc-v">${mathTextToHtml(val)}</span></div>`;
     }
     if (stdout && stdout !== val) {
-      resHtml += `<pre class="trace-io">${escapeHtml(stdout.slice(0, 900))}</pre>`;
+      resHtml += `<pre class="trace-io">${mathTextToHtml(stdout)}</pre>`;
     }
     if (errMsg || stderr) {
       resHtml += `<pre class="trace-io sc-err-io">${escapeHtml((errMsg || stderr).slice(0, 600))}</pre>`;
@@ -52,8 +51,31 @@ function formatSympyCard(argsObj, outObj, rawOut) {
   return {
     title: 'SymPy / Python Sandbox',
     tag: 'AppContainer',
-    bodyHtml: `${codeHtml}${resHtml}`,
+    bodyHtml: `${codeHtml}${resHtml}${outObj?.latex ? '<div class="sc-latex rich-prose"></div>' : ''}`,
     latexPreview: outObj && typeof outObj.latex === 'string' ? outObj.latex : '',
+  };
+}
+
+function formatExpressionSanityCard(args, result) {
+  const value = result || args || {};
+  const samples = Number.isInteger(result?.samples_checked) ? result.samples_checked : 0;
+  const sampleLabel = samples ? ` · ${samples} sampled point${samples === 1 ? '' : 's'}` : '';
+  const status = result?.numeric_match === false ? 'mismatch'
+    : result?.ok === false ? 'failed'
+    : result?.numeric_match === true ? 'matched samples'
+    : result?.ok === true ? 'delimiters balanced' : '';
+  const tone = result?.ok === false ? 'err' : 'warn';
+  const operands = [['Left side', value.lhs], ['Right side', value.rhs]]
+    .filter(([, text]) => text)
+    .map(([label, text]) => `<div class="sc-meta-line"><strong>${label}</strong> ${mathTextToHtml(text)}</div>`)
+    .join('');
+  const issues = Array.isArray(result?.issues)
+    ? result.issues.map((issue) => `<div class="sc-meta-line">${mathTextToHtml(issue)}</div>`).join('') : '';
+  return {
+    title: 'Expression Sanity Check',
+    status: status ? `${status}${sampleLabel}` : '',
+    tone,
+    bodyHtml: operands + issues,
   };
 }
 
@@ -73,7 +95,7 @@ function formatLedgerCard(toolName, argsObj, outObj) {
     ? `<div class="sc-meta-line">Depends on: ${deps.map((d) => `<code>${escapeHtml(String(d))}</code>`).join(' ')}</div>`
     : '';
   const summaryHtml = summary
-    ? `<div class="sc-summary-line">${escapeHtml(summary)}</div>`
+    ? `<div class="sc-summary-line">${mathTextToHtml(summary)}</div>`
     : '';
   const rawLatex = String((argsObj && argsObj.latex) || '').trim();
   return {
@@ -81,9 +103,7 @@ function formatLedgerCard(toolName, argsObj, outObj) {
     tag: entryId || 'DAG',
     stepId: entryId,
     bodyHtml: `${summaryHtml}${rawLatex ? '<div class="sc-latex rich-prose"></div>' : ''}${depsHtml}`,
-    latexPreview: rawLatex
-      ? (/^(\$\$|\\\[|\\begin\{)/.test(rawLatex) ? rawLatex : `$$\n${rawLatex}\n$$`)
-      : '',
+    latexPreview: rawLatex,
   };
 }
 
@@ -104,8 +124,8 @@ function formatLiteratureCard(toolName, argsObj, outObj, rawOut) {
       const links = linksForPaper({ ...it, source: src });
       const primary = links[0];
       const titleHtml = primary
-        ? `<a class="paper-title-link" href="${escapeHtml(primary.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(String(title).slice(0, 120))} ↗</a>`
-        : escapeHtml(String(title).slice(0, 120));
+        ? `<a class="paper-title-link" href="${escapeHtml(primary.url)}" target="_blank" rel="noopener noreferrer">${mathTextToHtml(title)} ↗</a>`
+        : mathTextToHtml(title);
       const extraChips = links.length > 1 ? `<div class="sc-hit-links">${renderSourceLinkChips(links.slice(0, 3))}</div>` : '';
       return `<li>${id ? `<code>${escapeHtml(String(id))}</code> ` : ''}${titleHtml}${extraChips}</li>`;
     }).join('');
@@ -208,7 +228,7 @@ function formatDelegationCard(toolName, argsObj, outObj, rawOut) {
 
   const taskText = String((argsObj && (argsObj.task || argsObj.problem || argsObj.statement || argsObj.path)) || '').trim();
   const taskHtml = taskText
-    ? `<div class="sc-meta-line">${escapeHtml(taskText.slice(0, 260))}${taskText.length > 260 ? '…' : ''}</div>`
+    ? `<div class="sc-meta-line">${mathTextToHtml(taskText)}</div>`
     : '';
 
   const proofEntries = outObj && Array.isArray(outObj.proof_entries) ? outObj.proof_entries : [];
@@ -228,13 +248,13 @@ function formatDelegationCard(toolName, argsObj, outObj, rawOut) {
       const stat = bo.status !== undefined ? String(bo.status) : (typeof bo.ok === 'boolean' ? (bo.ok ? 'ok' : 'error') : '');
       const bModel = bo.model ? ` · ${String(bo.model)}` : '';
       const bSum = String(bo.summary || bo.result || bo.error || '').trim();
-      return `<li><strong>${escapeHtml(label)}</strong>${stat || bModel ? ` <code>${escapeHtml(`${stat}${bModel}`.trim())}</code>` : ''}${bSum ? `: ${escapeHtml(bSum.slice(0, 220))}${bSum.length > 220 ? '…' : ''}` : ''}</li>`;
+      return `<li><strong>${mathTextToHtml(label)}</strong>${stat || bModel ? ` <code>${escapeHtml(`${stat}${bModel}`.trim())}</code>` : ''}${bSum ? ` · ${mathTextToHtml(bSum)}` : ''}</li>`;
     }).join('');
     bodyDetail += `<ul class="sc-hit-list">${items}</ul>`;
   }
   if (outObj && outObj.summary) {
     const sum = String(outObj.summary).trim();
-    bodyDetail += `<div class="sc-summary-line">${escapeHtml(sum.slice(0, 500))}${sum.length > 500 ? '…' : ''}</div>`;
+    bodyDetail += `<div class="sc-summary-line">${mathTextToHtml(sum)}</div>`;
   }
   if (toolName === 'lean_check' && outObj && Array.isArray(outObj.diagnostics) && outObj.diagnostics.length > 0) {
     const diags = outObj.diagnostics.slice(0, 4).map((d) => {
@@ -273,6 +293,8 @@ export function buildStructuredTraceCard(tr, opts = {}) {
   let spec = null;
   if (toolName === 'sympy_eval') {
     spec = formatSympyCard(argsObj, outObj, rawOutStr);
+  } else if (toolName === 'check_expression_sanity' && (outObj || status === 'running')) {
+    spec = formatExpressionSanityCard(argsObj, outObj);
   } else if (toolName === 'ledger_append' || toolName === 'ledger_supersede') {
     spec = formatLedgerCard(toolName, argsObj, outObj);
   } else if (toolName === 'arxiv_search' || toolName === 'literature_search' || toolName === 'ingest_source') {
@@ -315,7 +337,7 @@ export function buildStructuredTraceCard(tr, opts = {}) {
         <strong>${escapeHtml(spec.title)}</strong>
         ${stepBtnHtml}
       </div>
-      <span class="badge ${tone}">${escapeHtml(status)}</span>
+      <span class="badge ${spec.status ? spec.tone : tone}">${escapeHtml(spec.status || status)}</span>
     </div>
     ${spec.bodyHtml || ''}
   `;
@@ -323,7 +345,7 @@ export function buildStructuredTraceCard(tr, opts = {}) {
   if (spec.latexPreview) {
     const texTarget = box.querySelector('.sc-latex');
     if (texTarget) {
-      renderRichInto(texTarget, spec.latexPreview);
+      renderRichInto(texTarget, displayMathSource(spec.latexPreview));
     }
   }
 
@@ -461,16 +483,16 @@ export function buildHonestyNoticeCard(honesty) {
   card.className = 'trace-item structured-trace verdict-card is-unverified honesty-notice';
   const count = honesty.findings.length;
   const summaryHtml = honesty.summary
-    ? `<div class="sc-summary-line">${escapeHtml(String(honesty.summary))}</div>`
+    ? `<div class="sc-summary-line">${mathTextToHtml(honesty.summary)}</div>`
     : '';
   const itemsHtml = honesty.findings.map((f) => {
     const fo = f && typeof f === 'object' ? f : { reason: String(f || '') };
     const sev = String(fo.severity || 'warn');
     const sevTone = /^(error|blocker|critical|high)$/i.test(sev) ? 'err' : 'warn';
     const claim = fo.claim ? `<code>${escapeHtml(String(fo.claim))}</code> ` : '';
-    const reason = fo.reason ? escapeHtml(String(fo.reason)) : '';
+    const reason = fo.reason ? mathTextToHtml(fo.reason) : '';
     const suggestion = fo.suggestion
-      ? `<div class="sc-meta-line">Suggestion: ${escapeHtml(String(fo.suggestion))}</div>`
+      ? `<div class="sc-meta-line">Suggestion ${mathTextToHtml(fo.suggestion)}</div>`
       : '';
     return `<li><span class="badge ${sevTone}">${escapeHtml(sev)}</span> ${claim}${reason}${suggestion}</li>`;
   }).join('');

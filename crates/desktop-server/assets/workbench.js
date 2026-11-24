@@ -65,7 +65,7 @@ export function startLivePipeline(opts = {}) {
   setStageState('ledger', 'idle');
   setStageState('verifier', opts.verification_mode === false ? 'skipped' : 'idle');
   setStageState('strategist', opts.use_strategist ? 'idle' : 'skipped');
-  updatePipelineMeta(`Round 1/${maxRounds}`, '00:00');
+  updatePipelineMeta('Working', '00:00');
 
   if (timerHandle) clearInterval(timerHandle);
   timerHandle = setInterval(() => {
@@ -113,19 +113,12 @@ export function updatePipelineFromEvent(kind, payload = {}) {
       setStageState('ledger', 'done');
       setStageState('verifier', payload.verified_status === 'verified' ? 'done' : 'warn');
     }
-  } else if (kind === 'thinking_delta') {
-    const txt = String(payload.delta || payload.text || '');
-    const m = txt.match(/\[Verifier round (\d+)\/(\d+)/i);
-    if (m) {
-      activeRound = Number(m[1]) || activeRound;
-      maxRounds = Number(m[2]) || maxRounds;
-      setStageState('solver', 'done');
-      setStageState('ledger', 'done');
-      setStageState('verifier', 'active');
-      updatePipelineMeta(`Round ${activeRound}/${maxRounds}`, null);
-    } else if (/Strategist/i.test(txt)) {
-      setStageState('strategist', 'active');
-    }
+  } else if (kind === 'session_event' && payload.kind === 'campaign.phase' && payload.data?.phase === 'VERIFY') {
+    activeRound = Number(payload.data.round) || activeRound;
+    maxRounds = Number(payload.data.max_rounds) || maxRounds;
+    setStageState('solver', 'done');
+    setStageState('verifier', 'active');
+    updatePipelineMeta(`Review ${activeRound}/${maxRounds}`, null);
   } else if (kind === 'round_reset') {
     const nextRound = (Number(payload.round) || activeRound) + 1;
     activeRound = nextRound;
@@ -197,8 +190,8 @@ export function applySessionTelemetry(stats, hasMessages = false) {
   if (rounds > 0) metaParts.push(`${rounds} full review${rounds === 1 ? '' : 's'}`);
   if (rounds > 0 || stepChecks > 0) metaParts.push(`${stepChecks} separate step check${stepChecks === 1 ? '' : 's'}`);
   if (allTok > 0) {
-    const tokFmt = allTok >= 1000 ? `${(allTok / 1000).toFixed(1)}k tok` : `${allTok} tok`;
-    metaParts.push(workerTok > 0 ? `${tokFmt} (+${workerTok >= 1000 ? `${(workerTok / 1000).toFixed(1)}k` : workerTok} w)` : tokFmt);
+    const tokFmt = allTok >= 1000 ? `${(allTok / 1000).toFixed(1)}k tokens` : `${allTok} tokens`;
+    metaParts.push(tokFmt);
   }
   updatePipelineMeta(metaParts.join(' · ') || 'Session ready', null);
 }

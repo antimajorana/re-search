@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{drain_http_request, launch_cookie, raw_http, test_cfg};
+use common::{drain_http_request, launch_cookie, raw_http, test_cfg, MockHttp, MockReply};
 use desktop_server::start_desktop_server;
 use ledger::Ledger;
 use research_tools::LiteratureEndpoints;
@@ -15,6 +15,103 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+
+#[test]
+fn automatic_session_title_is_streamed_persisted_and_applied_once() {
+    let title = "Supraconductivité et symétrie";
+    let response = |id, reason, content| MockReply {
+        status: 200,
+        content_type: "application/json",
+        body: serde_json::to_vec(&json!({
+            "id": id, "type": "message", "role": "assistant", "model": "claude-haiku-4-5",
+            "stop_reason": reason, "content": content,
+            "usage": { "input_tokens": 5, "output_tokens": 5 }
+        })).unwrap(),
+    };
+    let answer = json!([{ "type": "text", "text": "Analysis complete." }]);
+    let mock = MockHttp::start(vec![
+        response("m1", "tool_use", json!([
+            { "type": "tool_use", "id": "title_1", "name": "set_session_title", "input": { "title": format!("  {title}  ") } },
+            { "type": "tool_use", "id": "title_2", "name": "set_session_title", "input": { "title": "Replace it" } }
+        ])),
+        response("m2", "end_turn", answer.clone()),
+        response("m3", "end_turn", answer),
+    ]);
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path();
+    std::fs::write(data_dir.join("providers.json"), br#"{"providers":{"anthropic":{"api_key":"sk-ant-title-test"}}}"#).unwrap();
+    let srv = start_desktop_server(test_cfg(data_dir, None, Some(mock.base_url.clone()), None)).unwrap();
+    let port = srv.addr.port();
+    let hdr = [("X-ReSearch-Token", srv.info.token.as_str())];
+    let cookie = launch_cookie(port, &srv.info.token);
+    let ledger = Ledger::open(data_dir).unwrap();
+
+    for (body, expected_title, expected_requests) in [
+        (json!({}), title, 2),
+        (json!({ "title": "Research Session" }), "Research Session", 1),
+    ] {
+        let (status, _, raw) = raw_http(port, "POST", "/api/sessions", &hdr, &serde_json::to_vec(&body).unwrap());
+        assert_eq!(status, 200);
+        let created: Value = serde_json::from_slice(&raw).unwrap();
+        let sid = created["id"].as_str().unwrap();
+        let url = format!("/api/sessions/{sid}");
+        let automatic = expected_requests == 2;
+        let mut sse = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        sse.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        write!(sse, "GET {url}/events HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {cookie}\r\n\r\n").unwrap();
+        let mut stream = BufReader::new(sse);
+        let mut headers = String::new();
+        while !headers.ends_with(": connected\n") {
+            assert_ne!(stream.read_line(&mut headers).unwrap(), 0, "SSE closed during handshake: {headers}");
+        }
+        let message = br#"{"prompt":"Expliquez la symetrie","provider":"anthropic","model":"claude-haiku-4-5","verification_mode":false,"calculation_mode":false}"#;
+        assert_eq!(raw_http(port, "POST", &format!("{url}/messages"), &hdr, message).0, 202);
+        let mut streamed_titles = Vec::new();
+        let mut streamed_kinds = Vec::new();
+        let mut wire_event = String::new();
+        for line in stream.lines() {
+            let line = line.unwrap();
+            if let Some(name) = line.strip_prefix("event: ") {
+                wire_event = name.to_string();
+            }
+            let Some(data) = line.strip_prefix("data: ") else { continue };
+            let event: Value = serde_json::from_str(data).unwrap();
+            streamed_kinds.push((wire_event.clone(), event["seq"].clone(), event["kind"].clone()));
+            if event["kind"] == agent::runner::SESSION_TITLE_EVENT {
+                streamed_titles.push(event["data"]["title"].as_str().unwrap().to_string());
+            }
+            if matches!(wire_event.as_str(), "turn_complete" | "turn_error") || event["kind"] == "session.end" {
+                break;
+            }
+        }
+        let events = ledger.read_session(sid).unwrap();
+        let event_kinds = events.iter().map(|event| event.kind.as_str()).collect::<Vec<_>>();
+        assert_eq!(streamed_titles, if automatic { vec![title] } else { vec![] }, "recorded events: {event_kinds:?}; streamed events: {streamed_kinds:?}");
+        assert!(events.iter().any(|event| event.kind == "session.end"));
+        let requests = events.iter().filter(|event| event.kind == "model.request").collect::<Vec<_>>();
+        assert_eq!(requests.len(), expected_requests);
+        for request in requests {
+            let wire = ledger.get_blob(request.payload["raw_blob"].as_str().unwrap()).unwrap();
+            let wire: Value = serde_json::from_slice(&wire).unwrap();
+            let tools = wire["tools"].as_array().unwrap();
+            assert_eq!(tools.iter().any(|tool| tool["name"] == "set_session_title"), automatic);
+        }
+        let recorded_titles = events.iter().filter(|event| event.kind == agent::runner::SESSION_TITLE_EVENT).count();
+        assert_eq!(recorded_titles, usize::from(automatic));
+
+        let (status, _, raw) = raw_http(port, "GET", &url, &hdr, b"");
+        assert_eq!(status, 200);
+        assert_eq!(serde_json::from_slice::<Value>(&raw).unwrap()["title"], expected_title);
+        let (status, _, raw) = raw_http(port, "GET", "/api/sessions", &hdr, b"");
+        assert_eq!(status, 200);
+        let list: Value = serde_json::from_slice(&raw).unwrap();
+        assert!(list["sessions"].as_array().unwrap().iter().any(|session| {
+            session["id"] == sid && session["title"] == expected_title
+        }));
+    }
+    mock.finish();
+    srv.shutdown();
+}
 
 #[test]
 fn put_session_workspace_attaches_in_place_and_workspace_pick_is_guarded_in_test() {

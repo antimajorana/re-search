@@ -257,6 +257,9 @@ fn evidence_route_links_checks_and_citations_to_the_selected_claim() {
     assert_eq!(reader["file_sha256"], source_blob);
     assert_eq!(reader["start_line"], 2);
     assert_eq!(reader["end_line"], 2);
+    let (status, session_view) = call("GET", &format!("/api/sessions/{sid}"), Value::Null);
+    assert_eq!(status, 200);
+    assert_eq!(session_view["linked_sources"], json!([{ "entry_id": "e-6", "reader": reader }]));
     let read_path =
         format!("/api/sessions/{sid}/workspace/file?root=sources&path=notes-1/counting.txt");
     let (status, preview) = call("GET", &read_path, Value::Null);

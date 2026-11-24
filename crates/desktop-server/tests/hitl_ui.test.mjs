@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const crateRoot = path.resolve(__dirname, '..');
 const assetsDir = path.join(crateRoot, 'assets');
+const mathAssetUrl = JSON.stringify(pathToFileURL(path.join(assetsDir, 'math.js')).href);
 
 function mockDom(ids = []) {
   const makeEl = (tag = 'div') => {
@@ -104,7 +105,7 @@ test('Proof graph supports keyboard inspection and forks at the displayed sequen
       "'/assets/api.js'": assetStub(
         'export const { getDag, forkSession, diffSessions, verifySession } = new Proxy({}, { get: (_, method) => (...args) => globalThis.canvasTestApi[method](...args) });',
       ),
-      "'/assets/math.js'": assetStub('export const escapeHtml = String;'),
+      "'/assets/math.js'": mathAssetUrl,
       "'/assets/model_picker.js'": assetStub('export const getModelChoice = () => null;'),
       "'/assets/canvas_sources.js'": assetStub('export const openSessionSource = () => {};'),
       "'/assets/canvas_dag_detail.js'": assetStub(
@@ -158,7 +159,7 @@ test('LaTeX refresh preserves edits and makes truncated files read-only', async 
   globalThis.document = doc;
   globalThis.canvasTestApi = {
     getWorkspace: async (id, path) => {
-      if (!path) return { files: [`${id}.tex`] };
+      if (!path) return id === 'scratch' ? { files: [], workspace_root: null } : { files: [`${id}.tex`], workspace_root: '/paper' };
       if (id === 'old') return new Promise((resolve) => { finishOldFile = resolve; });
       if (id === 'truncated') return { content: 'Prefix only', truncated: true };
       return { content: 'Current proof' };
@@ -170,7 +171,7 @@ test('LaTeX refresh preserves edits and makes truncated files read-only', async 
       "'/assets/api.js'": assetStub(
         'export const getWorkspace = (...args) => globalThis.canvasTestApi.getWorkspace(...args); export const patchLatex = (...args) => globalThis.canvasTestApi.patchLatex(...args);',
       ),
-      "'/assets/math.js'": assetStub('export const escapeHtml = String; export const renderLatexDocumentPreview = () => {};'),
+      "'/assets/math.js'": mathAssetUrl,
     });
     const editor = doc.getElementById('latex-editor');
     const save = doc.getElementById('latex-save-btn');
@@ -189,6 +190,11 @@ test('LaTeX refresh preserves edits and makes truncated files read-only', async 
     editor.value = 'Revised proof';
     await latex.refreshWorkspaceFiles('current');
     assert.equal(editor.value, 'Revised proof');
+    await latex.refreshWorkspaceFiles('scratch');
+    editor.value = 'A scratch calculation';
+    assert.equal(save.disabled, true);
+    await latex.refreshWorkspaceFiles('current');
+    assert.equal(editor.value, 'Revised proof');
     await save.click();
     assert.deepEqual(saved, [['current', { path: 'current.tex', search: 'Current proof', replace: 'Revised proof', content: 'Revised proof' }]]);
     await latex.refreshWorkspaceFiles('truncated');
@@ -200,6 +206,8 @@ test('LaTeX refresh preserves edits and makes truncated files read-only', async 
     assert.equal(doc.getElementById('latex-file-note').hidden, false);
     await save.click();
     assert.equal(saved.length, 1);
+    await latex.refreshWorkspaceFiles('scratch');
+    assert.equal(editor.value, 'A scratch calculation');
     await latex.refreshWorkspaceFiles(null);
     assert.equal(editor.value, '');
     assert.equal(save.disabled, true);
@@ -218,7 +226,7 @@ test('Composer Enter waits until IME composition has completed', async () => {
   try {
     const composer = await importAsset('composer.js', {
       "'/assets/api.js'": assetStub('export {};'),
-      "'/assets/math.js'": assetStub('export const escapeHtml = String;'),
+      "'/assets/math.js'": mathAssetUrl,
       "'/assets/effort_picker.js'": assetStub('export const closeEffortWindow = () => {}; export const getReasoningEffort = () => null;'),
       "'/assets/subagents.js'": assetStub('export const getActiveSubagent = () => null;'),
     });
@@ -256,7 +264,7 @@ test('Keyboard wraps across tabs and collapsed drawers become inert', async () =
     const { wireTabKeys } = await importAsset('connect.js', { "'/assets/api.js'": apiStub });
     const { initWorkbench, setDrawerOpen } = await importAsset('workbench.js', {
       "'/assets/api.js'": apiStub,
-      "'/assets/math.js'": assetStub('export const escapeHtml = String;'),
+      "'/assets/math.js'": mathAssetUrl,
     });
     const tabs = ['one', 'two'].map((id) => doc.getElementById(id));
     let selected;
@@ -357,6 +365,7 @@ test('Stage 14/15 UI contracts: interactive rigor, session conventions, CLI stee
   const hitlMod = await importAsset('hitl.js', {
     "'/assets/api.js'": apiStubDataUrl,
     "'/assets/math.js'": mathUrl,
+    "'/assets/stream.js'": assetStub('export const scrollToBottom = () => {};'),
   });
 
   const prevDoc = globalThis.document;
@@ -546,7 +555,7 @@ async function initDraftComposer(t, { uploadFiles, onSendPrompt, onSteerTurn, en
   globalThis.composerDraftUpload = uploadFiles || (async (_id, files) => ({ ingested: files, failed: [] }));
   const composer = await importAsset('composer.js', {
     "'/assets/api.js'": assetStub(`export const uploadFilesBase64 = globalThis.composerDraftUpload; // ${t.name}`),
-    "'/assets/math.js'": assetStub('export const escapeHtml = String;'),
+    "'/assets/math.js'": mathAssetUrl,
     "'/assets/effort_picker.js'": assetStub('export const closeEffortWindow = () => {}; export const getReasoningEffort = () => null;'),
     "'/assets/subagents.js'": assetStub('export const getActiveSubagent = () => null;'),
   });
@@ -807,7 +816,7 @@ test('Escape is left to native dialogs, and accepted Stop is sent once', async (
   const { initConnect, openConnect } = await importAsset('connect.js', { "'/assets/api.js'": apiStub });
   const composer = await importAsset('composer.js', {
     "'/assets/api.js'": apiStub,
-    "'/assets/math.js'": assetStub('export const escapeHtml = String;'),
+    "'/assets/math.js'": mathAssetUrl,
     "'/assets/effort_picker.js'": assetStub('export const closeEffortWindow = () => {}; export const getReasoningEffort = () => null;'),
     "'/assets/subagents.js'": assetStub('export const getActiveSubagent = () => null;'),
   });

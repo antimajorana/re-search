@@ -218,6 +218,7 @@ fn f7_arxiv_atom_xxe_withdrawn_and_eprint_ingestion() {
 </feed>"#.to_string();
     let xxe_xml = r#"<?xml version="1.0"?><!DOCTYPE feed [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]><feed xmlns="http://www.w3.org/2005/Atom"><title>&xxe;</title></feed>"#;
     let queue = Arc::new(Mutex::new(VecDeque::from([
+        MockResp::ok("application/atom+xml", atom_xml.as_bytes().to_vec()),
         MockResp::ok("application/atom+xml", atom_xml.into_bytes()),
         MockResp::ok("application/atom+xml", xxe_xml.as_bytes().to_vec()),
     ])));
@@ -272,6 +273,16 @@ fn f7_arxiv_atom_xxe_withdrawn_and_eprint_ingestion() {
     assert!(matches!(read_res, CallOutcome::Ok(v) if v["content"].as_str().unwrap().contains("Chern-Simons shift")));
 
     let ldg = Ledger::open(&data_dir).unwrap();
+    let direct = run_arxiv_search(
+        &env,
+        &ldg,
+        session,
+        &ArxivSearchRequest { query: "Chern-Simons".into(), field: None, max_results: None, include_source: Some(false), section_filter: None },
+    )
+    .unwrap();
+    let fetch = ldg.read_session(session).unwrap().into_iter().rev()
+        .find(|event| event.kind == "literature.fetched").unwrap();
+    assert_eq!(fetch.payload["papers"][0]["title"], direct[0].title);
     assert!(run_arxiv_search(
         &env,
         &ldg,

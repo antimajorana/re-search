@@ -1,5 +1,5 @@
 import * as api from '/assets/api.js';
-import { escapeHtml, renderRichInto } from '/assets/math.js';
+import { escapeHtml, mathTextToHtml, renderRichInto } from '/assets/math.js';
 import { reconcileEdits, showSavedValues } from '/assets/project_edits.js';
 import {
   extractArxivId, extractDoi, linksForPaper, renderSourceLinkChips, safeSourceUrl,
@@ -165,10 +165,10 @@ function renderPaper(source) {
   card.dataset.sourceId = source.id;
   card.tabIndex = -1;
   card.innerHTML = `
-    <h3>${escapeHtml(source.title)}</h3>
+    <h3>${mathTextToHtml(source.title)}</h3>
     ${source.url && !safeSourceUrl(source.url) ? `<p class="project-library-locator">${escapeHtml(source.url)}</p>` : ''}
-    ${source.location ? `<p class="project-library-locator">${escapeHtml(source.location)}</p>` : ''}
-    ${source.quote ? `<blockquote>${escapeHtml(source.quote)}</blockquote>` : ''}
+    ${source.location ? `<p class="project-library-locator">${mathTextToHtml(source.location)}</p>` : ''}
+    ${source.quote ? `<blockquote>${mathTextToHtml(source.quote)}</blockquote>` : ''}
     ${source.notes ? '<div class="project-library-notes rich-prose"></div>' : ''}
     <div class="project-library-actions">
       ${renderSourceLinkChips(paperLinks(source))}

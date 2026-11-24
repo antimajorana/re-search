@@ -1,6 +1,6 @@
 // Left rail session list: Active vs Archived filter, search query filter,
 // verification/step/running badges, and inline Archive/Unarchive + Delete actions.
-import { escapeHtml } from '/assets/math.js';
+import { escapeHtml, mathTextToHtml } from '/assets/math.js';
 
 function basenameOf(p) {
   if (!p) return '';
@@ -106,7 +106,7 @@ export function renderSessionRailList(containerEl, opts = {}) {
 
     btn.innerHTML = `
       <div class="session-title-row">
-        <span class="session-item-title">${escapeHtml(s.title || s.id)}</span>
+        <span class="session-item-title">${mathTextToHtml(s.title || s.id)}</span>
         <span class="session-badges">${badges.join('')}</span>
       </div>
       <div class="session-item-meta"><span>${escapeHtml(metaParts.join(' · '))}</span></div>

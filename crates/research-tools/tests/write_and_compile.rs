@@ -70,6 +70,10 @@ fn f5_allow_rule_clamped_to_ask_once_and_preview_zero_side_effects() {
     assert!(prev_new.unified_diff.contains("--- /dev/null"));
     assert!(prev_new.unified_diff.contains("+++ b/sections/intro.tex"));
     assert!(!ws.join("sections").exists(), "preview must not create parent dirs");
+    fs::write(ws.join("draft.tex"), "written elsewhere").unwrap();
+    let stale = json!({"path": "draft.tex", "content": "my draft", "expected_sha256": null});
+    assert!(preview_workspace_edit(&env, FS_WRITE, &stale.to_string()).unwrap_err().contains("changed on disk"));
+    assert_eq!(fs::read_to_string(ws.join("draft.tex")).unwrap(), "written elsewhere");
 
     // 2. Custom policy attempting `Decision::Allow` for EVERYTHING must still clamp
     // WriteWorkspace and ExecuteCode to `Decision::Ask` and ask on EVERY call (`Once`).

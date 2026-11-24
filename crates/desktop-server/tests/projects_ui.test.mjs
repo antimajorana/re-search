@@ -103,7 +103,7 @@ test('Project overview saves notes and links proof steps to papers', async (t) =
   for (const [name, stub] of Object.entries({
     'api.js': exports.map((name) => `export const ${name} = globalThis.projectTest.${name};`).join('\n'),
     'connect.js': 'export const wireTabKeys = () => {};',
-    'math.js': 'export const renderRichInto = (node, text) => { node.textContent = text; };',
+    'math.js': 'export const renderRichInto = (node, text) => { node.textContent = text; }; export const renderMathTextInto = renderRichInto;',
     'project_library.js': 'export const focusProjectSource = globalThis.projectTest.focusProjectSource; export const initProjectLibrary = () => {}; export const renderProjectLibrary = () => {};',
     'project_validation.js': 'export const initProjectValidation = () => {}; export const loadProjectValidation = () => {}; export const setValidationProject = () => {};',
     'experiments.js': 'export const initProjectExperiments = () => {}; export const loadProjectExperiments = () => {}; export const refreshExperimentSessions = () => {}; export const setExperimentProject = () => {};',

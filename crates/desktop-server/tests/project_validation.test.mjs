@@ -88,7 +88,7 @@ test('Validation freezes private controls, evaluates an exact recorded result, a
   const path = new URL('../assets/project_validation.js', import.meta.url);
   const code = (await readFile(path, 'utf8'))
     .replace("'/assets/api.js'", moduleUrl(api))
-    .replace("'/assets/math.js'", moduleUrl('export const renderRichInto = (el, text) => { el.textContent = text; };'));
+    .replace("'/assets/math.js'", moduleUrl('export const renderRichInto = (el, text) => { el.textContent = text; }; export const renderMathTextInto = renderRichInto;'));
   const page = await import(JSON.parse(moduleUrl(code)));
   page.initProjectValidation({
     getSessions: () => [{ id: 's-lab', title: 'Spectral check' }],

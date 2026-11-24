@@ -23,6 +23,9 @@ test('Stage 16 Sources title & deduplicated Origin links + Proof DAG controls & 
     primary_path: 'arxiv_2301_12345v1-abcd1234/main.tex',
   };
   assert.equal(sl.resolveSourceTitle(src), 'Two-Dimensional Lieb-Schultz-Mattis Obstructions');
+  const fetched = (id) => [{ kind: 'literature.fetched', payload: { provider: 'arxiv', papers: [{ id }] } }];
+  assert.equal(sl.sessionPaperReferences(fetched('2301.12345v1'), [src])[0].savedSource, src);
+  assert.equal(sl.sessionPaperReferences(fetched('2301.12345v2'), [src])[0].savedSource, undefined);
   const originInfo = sl.resolveOriginInfo(src);
   assert.equal(originInfo.url, 'https://arxiv.org/abs/2301.12345v1');
   const extra = sl.linksForIngestedSource(src).filter((lk) => lk.url !== originInfo.url);
@@ -35,6 +38,26 @@ test('Stage 16 Sources title & deduplicated Origin links + Proof DAG controls & 
   assert.deepEqual(versions.map((link) => link.url), [
     'https://arxiv.org/abs/hep-th/9901001v2', 'https://arxiv.org/pdf/hep-th/9901001v2',
   ]);
+  const scholarId = 'a'.repeat(40);
+  const papers = sl.sessionPaperReferences([
+    { kind: 'literature.fetched', payload: { provider: 'crossref', hits: [
+      { id: '10.1111/2501.00001', doi: '10.1111/2501.00001', title: 'Duplicate DOI' },
+      { id: '10.2222/2501.00002', doi: '10.2222/2501.00002', url: 'https://doi.org/10.2222/2501.00002', title: 'DOI only' },
+    ] } },
+    { kind: 'literature.fetched', payload: { provider: 'arxiv', papers: [
+      { id: '2501.00001v2', base_id: '2501.00001', doi: '10.1111/2501.00001', title: 'Linked paper' },
+      { id: 'hep-th/9901001v2', base_id: 'hep-th/9901001' },
+    ] } },
+    { kind: 'literature.fetched', payload: { provider: 'semantic_scholar', hits: [
+      { id: scholarId, title: 'Semantic Scholar reference' },
+    ] } },
+  ]);
+  assert.deepEqual(papers.map(paper => paper.title), [
+    'Semantic Scholar reference', 'Linked paper', 'hep-th/9901001v2', 'DOI only',
+  ]);
+  assert.equal(sl.linksForPaper(papers[0])[0].url, `https://www.semanticscholar.org/paper/${scholarId}`);
+  assert.equal(sl.linksForPaper(papers[2])[0].url, 'https://arxiv.org/abs/hep-th/9901001v2');
+  assert.deepEqual(sl.linksForPaper(papers[3]).map(link => link.url), ['https://doi.org/10.2222/2501.00002']);
 
   // Legacy/untitled source must fall back to clean filename, never raw URL.
   const untitled = {
@@ -54,6 +77,66 @@ test('Stage 16 Sources title & deduplicated Origin links + Proof DAG controls & 
     assert.ok(assetsRs.includes(asset), `Missing ${asset} in assets.rs`);
   }
   assert.equal(/\.(?:dag-eq-box|dag-explanation-box|verdict-recovery-body|rich-prose)\s+(?:span|div|\*)\b/.test(dagCss), false);
+});
+
+test('Sources Used keeps final-answer citations and active proof evidence scoped to each paper', async () => {
+  const mathUrl = JSON.stringify(pathToFileURL(path.join(assetsDir, 'math.js')).href);
+  const code = fs.readFileSync(path.join(assetsDir, 'source_links.js'), 'utf8').replace("'/assets/math.js'", mathUrl);
+  const { linksForPaper, sessionSourcesUsed } = await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`);
+  const event = (kind, payload = {}) => ({ kind, payload });
+  const reader = { source_id: 'notes-1', path: 'notes-1/counting.txt', start_line: 2 };
+  const session = {
+    events: [
+      event('session.start', { prompt: 'Compare DOI:10.1000/user-input' }),
+      event('literature.fetched', { provider: 'crossref', hits: [
+        { title: 'Linked boundary result', doi: '10.1000/result' },
+        { title: 'Background experiment', doi: '10.1000/unused' },
+      ] }),
+      event('literature.fetched', { provider: 'arxiv', papers: [
+        { id: '2402.12345v3', base_id: '2402.12345', title: 'Latest version report' },
+      ] }),
+      event('proof.entry', { entry_id: 'e-source', summary: 'See DOI 10.1000/result.' }),
+      event('proof.entry', { entry_id: 'e-file', summary: 'Check the proof against the notes.' }),
+      event('proof.entry', { entry_id: 'e-spare', summary: 'Possibly use DOI 10.1000/unused.' }),
+      event('proof.entry', { entry_id: 'e-final', entry_type: 'final_answer', depends_on: ['e-source', 'e-file'] }),
+      event('model.response', { stop_reason: 'tool_use' }),
+      event('model.text', { text: 'Consider DOI:10.1000/draft.' }),
+      event('model.response', { stop_reason: 'end_turn' }),
+      event('model.text', { text: 'See [the result](https://doi.org/10.1000/result) and arXiv:2402.12345v2.' }),
+      event('session.end', { outcome: 'completed' }),
+    ],
+    sources: [{ source_id: 'notes-1', title: 'Counting proof notes', primary_path: reader.path }],
+    linked_sources: [{ entry_id: 'e-file', reader }],
+  };
+  const used = sessionSourcesUsed(session);
+  assert.deepEqual(used.map(record => record.paper.title), [
+    'Linked boundary result', 'Counting proof notes', 'arXiv:2402.12345v2',
+  ]);
+  assert.equal(used[0].cited, true);
+  assert.deepEqual([...used[0].steps], ['e-source']);
+  assert.deepEqual([...used[1].readers.values()], [reader]);
+  const secondReader = { ...reader, start_line: 8 };
+  session.linked_sources.push({ entry_id: 'e-file', reader: secondReader });
+  session.sources.push({ source_id: 'notes-2', title: 'Counting proof notes', primary_path: 'notes-2/counting.txt' });
+  assert.deepEqual([...sessionSourcesUsed(session)[1].readers.values()], [reader, secondReader]);
+  assert.equal(sessionSourcesUsed(session)[1].source.source_id, 'notes-1');
+  assert.equal(linksForPaper(used[2].paper)[0].url, 'https://arxiv.org/abs/2402.12345v2');
+  const doi = '10.1016/S0003-4916(02)00001-2';
+  const bracketed = sessionSourcesUsed({ events: [
+    event('model.text', { text: `See [derivation](https://doi.org/${doi}).` }),
+    event('session.end', { outcome: 'completed' }),
+  ] });
+  assert.deepEqual(bracketed.map(record => record.paper.doi), [doi]);
+  assert.equal(linksForPaper(bracketed[0].paper)[0].url, `https://doi.org/${doi}`);
+  const citedPage = 'https://science.nasa.gov/mission/Euclid';
+  const direct = sessionSourcesUsed({ events: [
+    event('model.text', { text: `See [Euclid mission](${citedPage}), ${citedPage} and https://inspirehep.net/literature/123.` }),
+    event('session.end', { outcome: 'completed' }),
+  ] });
+  assert.deepEqual(direct.map(({ paper }) => paper.title), ['Euclid mission', 'https://inspirehep.net/literature/123']);
+  assert.equal(direct[0].paper.url, citedPage);
+  assert.deepEqual(linksForPaper(direct[0].paper), []);
+  assert.equal(linksForPaper(direct[1].paper)[0].url, direct[1].paper.url);
 });
 
 test('Project library normalizes citations and finds excerpts across session sources', async () => {

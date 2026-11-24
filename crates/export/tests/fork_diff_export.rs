@@ -410,6 +410,12 @@ fn export_tex_html_and_reproducible_zip_and_replay_checks() {
     record_execution("restart", "worker-one", 2, 3);
     request("new-worker", restart_code);
     record_execution("new-worker", "worker-two", 1, 1);
+    append("session.resume", json!({"prompt": "Check the value"}));
+    append("model.response", json!({}));
+    append("model.text", json!({"text": "Only a provisional draft"}));
+    append("model.response", json!({}));
+    append("model.text", json!({"text": "The delivered value is four."}));
+    append("session.end", json!({"outcome": "completed_unverified"}));
     drop(ledger);
 
     assert_eq!(ExportFormat::parse("tex").unwrap(), ExportFormat::Tex);
@@ -421,6 +427,9 @@ fn export_tex_html_and_reproducible_zip_and_replay_checks() {
     let tex_out = tmp.path.join("out").join("manuscript.tex");
     let tex_bytes = export_session_to_path(&tmp.path, session, ExportFormat::Tex, &tex_out).unwrap();
     let tex_str = String::from_utf8(tex_bytes).unwrap();
+    assert!(tex_str.contains("The delivered value is four."));
+    assert!(tex_str.contains("unresolved issues"));
+    assert!(!tex_str.contains("Only a provisional draft"));
     assert!(tex_str.contains(r"\documentclass[11pt]{article}"));
     assert!(tex_str.contains("amsmath") && tex_str.contains("amsthm") && tex_str.contains("hyperref"));
     assert!(tex_str.contains(r"\alpha") && tex_str.contains(r"\hbar") && tex_str.contains(r"\otimes"));
@@ -434,6 +443,7 @@ fn export_tex_html_and_reproducible_zip_and_replay_checks() {
     let (html_name, html_bytes) = export_session_bytes(&tmp.path, session, ExportFormat::Html).unwrap();
     assert!(html_name.ends_with(".html"));
     let html_str = String::from_utf8(html_bytes).unwrap();
+    assert!(html_str.contains("The delivered value is four.") && html_str.contains("unresolved issues"));
     assert!(html_str.contains("<!DOCTYPE html>") && html_str.contains(session));
     assert!(!html_str.contains("https://cdn") && !html_str.contains("http://cdn"));
     let head_hash = Ledger::open_existing(&tmp.path).unwrap().verify_session(session).unwrap().head_hash;

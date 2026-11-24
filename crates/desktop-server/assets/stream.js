@@ -1,7 +1,7 @@
 // Center conversational stream: interactive quickstart + starter cards, Markdown+KaTeX turns,
 // structured scientific tool traces, Independent Verifier verdict cards, and live approval cards.
 import * as api from '/assets/api.js';
-import { escapeHtml, highlightPython, highlightUnifiedDiff, renderMathInContainer, renderRichInto } from '/assets/math.js';
+import { escapeHtml, highlightPython, highlightUnifiedDiff, mathTextToHtml, renderMathInContainer, renderMathTextInto, renderRichInto } from '/assets/math.js';
 import { buildHonestyNoticeCard, buildStructuredTraceCard, buildVerificationVerdictCard } from '/assets/trace_cards.js';
 
 const STARTER_PROMPTS = [
@@ -40,9 +40,14 @@ let onOpenProjects = null;
 let getSetupInfo = null;
 let liveStreamText = '';
 let liveRenderPending = false;
+let followStreamEnd = true;
+const liveThinking = new WeakMap();
 
 export function initStream(opts = {}) {
   streamEl = document.getElementById('message-stream');
+  streamEl?.addEventListener('scroll', () => {
+    followStreamEnd = streamEl.scrollHeight - streamEl.clientHeight - streamEl.scrollTop <= 24;
+  }, { passive: true });
   statusPillEl = document.getElementById('stream-status-pill');
   onPromptPick = opts.onPromptPick || null;
   onNotify = opts.onNotify || null;
@@ -71,11 +76,13 @@ function getInnerContainer() {
   return inner;
 }
 
-function scrollToBottom() {
-  if (streamEl) streamEl.scrollTop = streamEl.scrollHeight;
+export function scrollToBottom() {
+  if (streamEl && followStreamEnd) streamEl.scrollTop = streamEl.scrollHeight;
 }
 
 export function renderSessionStream(sessionId, sessionPayload) {
+  const scrollTop = streamEl?.scrollTop ?? 0;
+  if (sessionId !== currentSessionId) followStreamEnd = true;
   currentSessionId = sessionId;
   liveStreamText = '';
   liveRenderPending = false;
@@ -104,7 +111,8 @@ export function renderSessionStream(sessionId, sessionPayload) {
   }
 
   for (const req of pending) renderApprovalCard(req);
-  scrollToBottom();
+  if (followStreamEnd) scrollToBottom();
+  else streamEl.scrollTop = scrollTop;
 }
 
 export function refreshEmptyHeroIfVisible() {
@@ -206,7 +214,7 @@ export function appendWarningLine(text, action = null) {
   row.setAttribute('role', 'status');
   const line = document.createElement('div');
   line.className = 'msg-warning';
-  line.textContent = String(text);
+  renderMathTextInto(line, text);
   row.appendChild(line);
   if (action) {
     const button = document.createElement('button');
@@ -288,7 +296,7 @@ function buildThinkingAccordion(thinkingText, toolTraces) {
       <span class="badge">Activity</span>
     </summary>
     <div class="thinking-body">
-      <div class="thinking-notes">${escapeHtml(thinkingText || '')}</div>
+      <div class="thinking-notes">${mathTextToHtml(thinkingText)}</div>
       <div class="trace-list" style="display:flex;flex-direction:column;gap:8px;"></div>
     </div>
   `;
@@ -300,12 +308,32 @@ function buildThinkingAccordion(thinkingText, toolTraces) {
 }
 
 export function handleThinkingDelta(data) {
+  const delta = (data && (data.delta || data.text || '')) || '';
+  if (!delta) return;
   const acc = ensureLiveThinkingAccordion();
-  if (!acc) return;
-  const notes = acc.querySelector('.thinking-notes');
-  if (notes) {
-    notes.textContent += (data && (data.delta || data.text || '')) || '';
+  const notes = acc?.querySelector('.thinking-notes');
+  if (!notes) return;
+  let pending = liveThinking.get(notes);
+  if (!pending) {
+    pending = { text: notes.textContent, tail: null, timer: null };
+    liveThinking.set(notes, pending);
   }
+  pending.text += delta;
+  if (!pending.tail) pending.tail = notes.appendChild(document.createTextNode(''));
+  pending.tail.appendData(delta);
+  clearTimeout(pending.timer);
+  pending.timer = setTimeout(() => {
+    if (notes.isConnected) renderThinkingNotes(notes);
+  }, 180);
+  scrollToBottom();
+}
+
+function renderThinkingNotes(notes) {
+  const pending = liveThinking.get(notes);
+  if (!pending?.tail) return;
+  clearTimeout(pending.timer);
+  renderMathTextInto(notes, pending.text);
+  pending.tail = null;
   scrollToBottom();
 }
 
@@ -459,9 +487,11 @@ export function handleToolTrace(data) {
 export function finalizeLiveThinking() {
   if (!streamEl) return;
   for (const acc of streamEl.querySelectorAll('.thinking-accordion[data-live="true"]')) {
+    renderThinkingNotes(acc.querySelector('.thinking-notes'));
     delete acc.dataset.live;
-    acc.open = false;
+    if (followStreamEnd) acc.open = false;
   }
+  scrollToBottom();
 }
 
 export function renderApprovalCard(req) {
@@ -469,7 +499,7 @@ export function renderApprovalCard(req) {
   if (!inner || !req) return;
   const callId = String(req.call_id || '');
   const existing = callId ? inner.querySelector(`.approval-card[data-call-id="${CSS.escape(callId)}"]`) : null;
-  if (existing) return;
+  if (existing) return existing;
 
   const toolId = String(req.tool_id || req.tool || 'tool');
   const digest = String(req.digest || '');
@@ -559,6 +589,7 @@ export function renderApprovalCard(req) {
 
   inner.appendChild(card);
   scrollToBottom();
+  return card;
 }
 
 export function resolveApprovalCard(callId, approved, approveForSession = false) {

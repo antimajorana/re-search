@@ -14,8 +14,8 @@ const GUIDE_SECTIONS = [
     title: 'Research agents and recovery',
     items: [
       '<strong>Specialist Workers:</strong> Orchestrator delegates heavy work to isolated <em>Compute</em> (SymPy), <em>Literature</em> (arXiv/Crossref/INSPIRE/S2), <em>Lean Prover</em> (anti-cheat checked), and <em>Parallel Explorer</em> workers, configurable per role in <em>Agents &amp; Models</em>.',
-      'SymPy checks require a Windows host with a configured sandboxed Python worker.',
-      '<strong>Custom Subagents:</strong> Describe a specialist in <em>Agents &amp; Models</em> and click <em>Generate with AI Agent</em> to create one.',
+      'The Windows installer includes the isolated Python worker and its SymPy and NumPy libraries. Select a computation in the proof graph to inspect its recorded inputs and output.',
+      'To create a specialist, describe its task in <em>Agents &amp; Models</em>, choose <em>Draft instructions</em>, then review and save.',
       '<strong>Constructive Rejection Recovery:</strong> If verification cannot accept a draft, the Verifier verdict card summarizes what is already solid, shows recovery options, and offers one-click <code>Try Another Approach</code>, <code>Fix Flagged Issues</code>, or <code>Discuss in Explain</code>.',
     ],
   },
@@ -30,16 +30,16 @@ const GUIDE_SECTIONS = [
   {
     title: 'Proof graph and sources',
     items: [
-      '<strong>Zoomable Proof DAG:</strong> Use zoom controls, scroll wheel, or drag-to-pan on the graph; click any node to read formatted summaries, KaTeX equations, step explanations, and clickable dependency links.',
-      '<strong>Pedagogical Proof Narrator:</strong> Click <code>Narrate Proof</code> for a textbook-style walkthrough explaining intuition and explicitly filling in intermediate algebra and assumptions.',
-      '<strong>Sources &amp; Reader:</strong> Ingested papers display their title cleanly with a single Origin link, <code>PDF ↗</code> / <code>DOI ↗</code> links, and an in-app <code>Read Source</code> TeX/Markdown viewer.',
+      'Select a step in <em>Proof DAG</em> to see its assumptions, dependencies, recorded checks, and any individual verdict. The full-solution verdict applies to the answer as a whole.',
+      'Use <em>Verify Chain</em> to check the integrity of the saved record. Choose <em>Narrate Proof</em> for a walkthrough of the reasoning.',
+      'Open <em>Sources Used</em> in the Sources tab to see citations and proof links. Choose a proof step to see where a paper enters the argument, or <em>Read cited lines</em> to inspect a recorded passage. Other search results are in <em>Search History</em>.',
     ],
   },
   {
     title: 'Shortcuts and session management',
     items: [
       '<strong>Shortcuts:</strong> <kbd class="guide-kbd">Ctrl+K</kbd> filter chats · <kbd class="guide-kbd">Ctrl+B</kbd> toggle rail · <kbd class="guide-kbd">Ctrl+\\</kbd> toggle Canvas · <kbd class="guide-kbd">Esc</kbd> stop active turn.',
-      '<strong>Safe Management:</strong> <code>Stop</code> halts turns immediately; <em>Archive</em> or <em>Delete</em> never modifies your local workspace files.',
+      '<code>Stop</code> requests cancellation of the active turn. <em>Archive</em> moves a session out of the active list. You can restore it later.',
     ],
   },
 ];

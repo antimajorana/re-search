@@ -19,6 +19,7 @@ use crate::verifiers::{verify_delivered_answer, DeliveredAnswer, VerificationVer
 use ledger::Ledger;
 use research_tools::{read_proof_dag, ProofStatus, ResearchEnv};
 use serde_json::json;
+use std::borrow::Cow;
 use std::time::Instant;
 use tools::{Router, ToolDef};
 
@@ -303,6 +304,13 @@ fn drive_autonomous_rounds(
     cancel: Option<&CancelToken>,
 ) -> Result<SessionOutcome, String> {
     let overall_started = Instant::now();
+    let solver_prompt = if auto_cfg.guardrails.verification_mode {
+        Cow::Owned(format!(
+            "{system_prompt}\n\nThe app automatically starts the full verifier review after you submit +             your complete answer. Submit the answer when ready and let the app display its verification status."
+        ))
+    } else {
+        Cow::Borrowed(system_prompt)
+    };
     let max_rounds = auto_cfg.max_verification_rounds.max(1);
     let mut effective_turn_budget = max_turns_budget;
     let mut turns_used = 0u32;
@@ -330,7 +338,7 @@ fn drive_autonomous_rounds(
             audit,
             LoopParams {
                 model: solver_model,
-                system_prompt,
+                system_prompt: &solver_prompt,
                 max_turns: remaining_turns,
                 max_tokens,
                 reasoning_effort,
@@ -434,7 +442,9 @@ fn drive_autonomous_rounds(
             "\n[Verifier round {round}/{max_rounds} ({v_model}): auditing active Proof DAG & LaTeX...]\n"
         ));
 
-        audit.emit("campaign.phase", json!({ "phase": CampaignPhase::Verify.as_str() }))?;
+        audit.emit("campaign.phase", json!({
+            "phase": CampaignPhase::Verify.as_str(), "round": round, "max_rounds": max_rounds,
+        }))?;
         let report = match verify_delivered_answer(
             v_transport,
             audit.ledger,
