@@ -52,7 +52,7 @@ def fulfill(route):
         ]}]})
     elif path == "/api/sessions/s-test/claim-review":
         assert route.request.post_data_json == {"answer_seq": 12, "claim": "An unlinked statement.", "occurrence": 0, "cited_steps": []}
-        route.fulfill(json={"scope": "claim", "verdict": "needs_revision", "summary": "The selected claim lacks a stated hypothesis."})
+        route.fulfill(json={"scope": "claim", "verdict": "rejected", "summary": "The selected claim lacks a stated hypothesis."})
     elif path == "/api/sessions/s-test":
         route.fulfill(json={"sources": [], "events": [
             {"kind": "literature.fetched", "payload": {

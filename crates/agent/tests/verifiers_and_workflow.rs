@@ -316,6 +316,44 @@ fn verifiers_reject_unstructured_and_incomplete_verdicts() {
 }
 
 #[test]
+fn selected_claim_resolves_definitions_elsewhere_in_its_saved_answer() {
+    use agent::verifiers::{review_answer_claim, AnswerClaim};
+
+    let tmp = TempDir::new("claim-tex-scope");
+    let session = "s-claim-tex";
+    let ledger = Ledger::open(&tmp.path).unwrap();
+    let env = ResearchEnv::new(&tmp.path);
+    ledger.append_with_hash(session, "session.start", 1, &json!({"prompt": "Justify the bound."})).unwrap();
+    let valid = r"By \ref{eq:bound} and \cite{bound}, the estimate holds.";
+    let broken = r"See \ref{never} and \cite{lost}.";
+    let answer = [
+        valid, broken, r"\begin{equation}\label{eq:bound}x=1\end{equation}",
+        r"\begin{thebibliography}{1}\bibitem{bound}A bound.\end{thebibliography}",
+        r"% \label{never}\bibitem{lost}",
+    ].join("\n");
+    let saved = ledger.append_with_hash(session, "model.text", 1, &json!({"text": answer})).unwrap();
+    let accepted = r#"{"verdict":"accepted","summary":"Sound.","issues":[]}"#;
+    let model = "claude-haiku-4-5";
+    let transport = CapturingTransport::new("anthropic-messages", vec![
+        CapturingTransport::text_reply(model, accepted), CapturingTransport::text_reply(model, accepted),
+    ]);
+    let cancel = agent::CancelToken::new();
+    let review = |claim: &str| {
+        let selection = AnswerClaim { answer_seq: saved.seq, answer: &answer, claim, occurrence: 0, cited_steps: &[] };
+        review_answer_claim(&transport, &ledger, &env, session, selection, model, &cancel).unwrap()
+    };
+    let report = review(valid);
+    assert!(report.tex_audit.ok, "{:?}", report.tex_audit.issues);
+    assert_eq!(report.verdict, VerificationVerdict::Accepted);
+
+    let audit = review(broken).tex_audit;
+    assert_eq!(audit.error_count, 2, "{:?}", audit.issues);
+    assert!(audit.issues.iter().all(|i| i.file == "selected_claim"));
+    assert!(audit.issues.iter().any(|i| i.kind == "undefined_ref" && i.target == "never"));
+    assert!(audit.issues.iter().any(|i| i.kind == "missing_citation_key" && i.target == "lost"));
+}
+
+#[test]
 fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_blockers() {
     let tmp = TempDir::new("verifiers");
     let session = "s-ver-1";

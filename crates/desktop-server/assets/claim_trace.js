@@ -84,6 +84,15 @@ export function claimOccurrence(answer, excerpt, offset) {
   return count;
 }
 
+export function sourcesAtAnswer(session, claim, answerSeq) {
+  const events = (session.events || []).filter(event => event.seq <= answerSeq);
+  return sessionSourcesUsed({
+    events,
+    sources: events.filter(event => event.kind === 'source.ingested').map(event => event.payload),
+    linked_sources: session.linked_sources,
+  }, claim);
+}
+
 function showReview(container, review) {
   container.replaceChildren(element('strong', 'Claim review · ' + review.verdict));
   if (review.model) container.append(element('span', ' · ' + review.model));
@@ -147,7 +156,7 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
       const [session, graph] = await snapshot;
       if (request !== selection || !row.isConnected) return;
       const events = session.events || [];
-      const papers = sessionSourcesUsed({ ...session, events: events.filter(e => e.seq <= seq) }, claim);
+      const papers = sourcesAtAnswer(session, claim, seq);
       const matches = linkedSteps(claim, graph.entries || [], seq);
       panel.replaceChildren(element('h4', 'Evidence for this claim'));
       const quote = element('blockquote');

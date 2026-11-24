@@ -11,7 +11,7 @@ use crate::runner::{validate_turn, EVENT_VERSION};
 use crate::transport::{CancelToken, ContentBlock, Message, ModelRequest, Role, StopReason, StreamObserver, Transport};
 use ledger::{Event, Ledger};
 use research_tools::{
-    format_deterministic_tex_audit_xml, read_proof_dag, run_tex_audit, AuditOptions, AuditReport,
+    format_deterministic_tex_audit_xml, read_proof_dag, tex_audit::run_tex_audit_with_definitions, AuditOptions, AuditReport,
     ProofEntry, ProofStatus, ResearchEnv,
 };
 use serde::{Deserialize, Serialize};
@@ -329,6 +329,7 @@ fn run_candidate_tex_audit(
     session: &str,
     entries: &[ProofEntry],
     delivered_answer: Option<&str>,
+    selected: Option<AnswerClaim<'_>>,
 ) -> Result<AuditReport, String> {
     let mut candidate_texts: Vec<_> = entries
         .iter()
@@ -340,11 +341,13 @@ fn run_candidate_tex_audit(
             (format!("proof_entry:{}", e.entry_id), body)
         })
         .collect();
-    if let Some(answer) = delivered_answer {
+    if let Some(claim) = selected {
+        candidate_texts.push(("selected_claim".into(), claim.claim.into()));
+    } else if let Some(answer) = delivered_answer {
         candidate_texts.push(("final_answer_text".into(), answer.into()));
     }
     let opts = AuditOptions { candidate_texts, candidate_only: true, ..AuditOptions::default() };
-    run_tex_audit(env, session, Some(ledger), &opts)
+    run_tex_audit_with_definitions(env, session, Some(ledger), &opts, selected.map(|c| c.answer))
 }
 
 #[derive(Debug, Deserialize)]
@@ -479,8 +482,7 @@ fn execute_verifier(
         .map_err(|e| format!("failed to record proof.verification_attempt: {e}"))?
         .seq;
 
-    let tex_audit = run_candidate_tex_audit(env, ledger, session, entries_slice,
-        params.claim.map(|c| c.claim).or(params.delivered_answer))?;
+    let tex_audit = run_candidate_tex_audit(env, ledger, session, entries_slice, params.delivered_answer, params.claim)?;
     let tex_audit_xml = format_deterministic_tex_audit_xml(&tex_audit);
     let linked_checks = if kind == "full" {
         let ancestors = collect_ancestor_slice(entries_slice, target_entry_id)?;
