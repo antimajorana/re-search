@@ -159,7 +159,7 @@ test('LaTeX refresh preserves edits and makes truncated files read-only', async 
   globalThis.document = doc;
   globalThis.canvasTestApi = {
     getWorkspace: async (id, path) => {
-      if (!path) return { files: [`${id}.tex`] };
+      if (!path) return id === 'scratch' ? { files: [], workspace_root: null } : { files: [`${id}.tex`], workspace_root: '/paper' };
       if (id === 'old') return new Promise((resolve) => { finishOldFile = resolve; });
       if (id === 'truncated') return { content: 'Prefix only', truncated: true };
       return { content: 'Current proof' };
@@ -190,6 +190,11 @@ test('LaTeX refresh preserves edits and makes truncated files read-only', async 
     editor.value = 'Revised proof';
     await latex.refreshWorkspaceFiles('current');
     assert.equal(editor.value, 'Revised proof');
+    await latex.refreshWorkspaceFiles('scratch');
+    editor.value = 'A scratch calculation';
+    assert.equal(save.disabled, true);
+    await latex.refreshWorkspaceFiles('current');
+    assert.equal(editor.value, 'Revised proof');
     await save.click();
     assert.deepEqual(saved, [['current', { path: 'current.tex', search: 'Current proof', replace: 'Revised proof', content: 'Revised proof' }]]);
     await latex.refreshWorkspaceFiles('truncated');
@@ -201,6 +206,8 @@ test('LaTeX refresh preserves edits and makes truncated files read-only', async 
     assert.equal(doc.getElementById('latex-file-note').hidden, false);
     await save.click();
     assert.equal(saved.length, 1);
+    await latex.refreshWorkspaceFiles('scratch');
+    assert.equal(editor.value, 'A scratch calculation');
     await latex.refreshWorkspaceFiles(null);
     assert.equal(editor.value, '');
     assert.equal(save.disabled, true);

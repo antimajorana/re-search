@@ -540,6 +540,7 @@ async function selectSession(id, { focus = false, adoptDraft = false } = {}) {
     if (el.topbarArchiveBtn) {
       el.topbarArchiveBtn.hidden = false;
       el.topbarArchiveBtn.title = sess.archived ? 'Restore chat to Active' : 'Archive this chat';
+      el.topbarArchiveBtn.setAttribute('aria-label', el.topbarArchiveBtn.title);
     }
     if (el.topbarDeleteBtn) el.topbarDeleteBtn.hidden = false;
     syncWorkspaceIndicators(sess.workspace_root || '');

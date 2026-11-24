@@ -122,6 +122,12 @@ fn prepare_edit(env: &ResearchEnv, tool_id: &str, args: &Value) -> Result<Prepar
         None
     };
 
+    let sha256_before = orig_bytes.as_deref().map(ledger::sha256_hex);
+    if let Some(expected) = args.get("expected_sha256") {
+        if expected != &serde_json::json!(sha256_before) {
+            return Err(format!("{} changed on disk. Copy your edits, then reload the file to reconcile the changes.", resolved.rel_path));
+        }
+    }
     let (old_text, new_text, replacements) = match tool_id {
         FS_WRITE => {
             let content = args.get("content").and_then(Value::as_str).ok_or("`content` must be a string")?;
@@ -164,7 +170,6 @@ fn prepare_edit(env: &ResearchEnv, tool_id: &str, args: &Value) -> Result<Prepar
         other => return Err(format!("tool `{other}` does not support workspace edit preview")),
     };
 
-    let sha256_before = orig_bytes.as_deref().map(ledger::sha256_hex);
     let new_bytes = new_text.as_bytes().to_vec();
     let sha256_after = ledger::sha256_hex(&new_bytes);
     let unified_diff = build_unified_diff(&resolved.rel_path, sha256_before.is_some(), &old_text, &new_text);

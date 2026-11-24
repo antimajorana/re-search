@@ -130,7 +130,7 @@ async function handleDraftWithAgent(ev) {
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = 'Generate with AI Agent';
+      btn.textContent = 'Draft instructions';
     }
   }
 }
@@ -290,7 +290,7 @@ function renderSubagentsPanel() {
   if (customBox) {
     customBox.innerHTML = '';
     if (customList.length === 0) {
-      customBox.innerHTML = '<div class="subagent-card" style="color:var(--ink-muted);font-size:12.5px;">No custom subagents yet. Describe a specialist above and click Generate with AI Agent, or fill the form directly.</div>';
+      customBox.innerHTML = '<div class="subagent-card" style="color:var(--ink-muted);font-size:12.5px;">Your saved specialists will appear here.</div>';
     } else {
       for (const sa of customList) {
         const selected = sa.id === activeSubagentId;

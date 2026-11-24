@@ -111,8 +111,20 @@ test('Sources Used keeps final-answer citations and active proof evidence scoped
   ]);
   assert.equal(used[0].cited, true);
   assert.deepEqual([...used[0].steps], ['e-source']);
-  assert.deepEqual(used[1].reader, reader);
+  assert.deepEqual([...used[1].readers.values()], [reader]);
+  const secondReader = { ...reader, start_line: 8 };
+  session.linked_sources.push({ entry_id: 'e-file', reader: secondReader });
+  session.sources.push({ source_id: 'notes-2', title: 'Counting proof notes', primary_path: 'notes-2/counting.txt' });
+  assert.deepEqual([...sessionSourcesUsed(session)[1].readers.values()], [reader, secondReader]);
+  assert.equal(sessionSourcesUsed(session)[1].source.source_id, 'notes-1');
   assert.equal(linksForPaper(used[2].paper)[0].url, 'https://arxiv.org/abs/2402.12345v2');
+  const doi = '10.1016/S0003-4916(02)00001-2';
+  const bracketed = sessionSourcesUsed({ events: [
+    event('model.text', { text: `See [derivation](https://doi.org/${doi}).` }),
+    event('session.end', { outcome: 'completed' }),
+  ] });
+  assert.deepEqual(bracketed.map(record => record.paper.doi), [doi]);
+  assert.equal(linksForPaper(bracketed[0].paper)[0].url, `https://doi.org/${doi}`);
 });
 
 test('Project library normalizes citations and finds excerpts across session sources', async () => {

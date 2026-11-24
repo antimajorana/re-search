@@ -393,7 +393,7 @@ export async function loadSessionSources(sessionId) {
     onCountsChange({ sources: lastSourcesCount, sidetalk: lastSidetalkCount });
     sourcesListEl.innerHTML = '';
     if (sources.length === 0) {
-      sourcesListEl.innerHTML = '<div class="source-card" style="color:var(--ink-muted)">Upload .tex/.bib/.pdf/.tar.gz files via the composer or ingest arXiv e-prints above.</div>';
+      sourcesListEl.innerHTML = '<div class="source-card" style="color:var(--ink-muted)">Choose Attach beside your message to add a file, or select Save TeX source when searching arXiv.</div>';
       return;
     }
     for (const src of sources) {
@@ -458,7 +458,7 @@ function renderUsedSources(records, sessionId) {
     usedSourcesListEl.textContent = 'Citations and proof-linked sources will appear here.';
     return;
   }
-  for (const { paper, source, reader, steps, cited } of records) {
+  for (const { paper, source, readers, steps, cited } of records) {
     const card = document.createElement('article');
     card.className = 'paper-card';
     const links = linksForPaper(paper);
@@ -483,10 +483,16 @@ function renderUsedSources(records, sessionId) {
       button.addEventListener('click', onClick);
       actions.appendChild(button);
     };
-    if (reader || (source?.source_id && sourceFiles(source).length)) {
-      addButton(reader?.start_line ? 'Read cited lines' : 'Read source', () => {
-        openSessionSource(sessionId, reader?.source_id || source.source_id, reader?.path, reader);
-      });
+    for (const reader of readers.values()) {
+      let label = reader.start_line ? 'Read cited lines' : 'Read source';
+      if (readers.size > 1) {
+        const file = reader.path?.split('/').pop() || reader.source_id;
+        label = reader.start_line ? `${file} · L${reader.start_line}–${reader.end_line ?? reader.start_line}` : file;
+      }
+      addButton(label, () => openSessionSource(sessionId, reader.source_id, reader.path, reader));
+    }
+    if (!readers.size && source?.source_id && sourceFiles(source).length) {
+      addButton('Read source', () => openSessionSource(sessionId, source.source_id));
     }
     for (const step of steps) {
       if (step) addButton(`Proof ${step}`, () => onSelectStepRef(step));

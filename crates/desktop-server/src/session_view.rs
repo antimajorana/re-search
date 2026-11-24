@@ -217,6 +217,8 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
     let mut verification = FinalAnswerVerification::default();
     let mut in_model_response = false;
     let mut response_message = None;
+    let mut cli_result = None;
+    let mut has_turn_text = false;
 
     for ev in events {
         let had_verdict = verification.status.is_some();
@@ -236,6 +238,8 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
         match ev.kind.as_str() {
             "session.start" | "session.resume" => {
                 in_model_response = false;
+                cli_result = None;
+                has_turn_text = false;
                 response_message = None;
                 pending_verifications.clear();
                 if let Some(prompt) = ev.payload.get("prompt").and_then(Value::as_str) {
@@ -292,6 +296,7 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
             }
             "model.text" | "model.refusal" => {
                 if let Some(text) = ev.payload.get("text").and_then(Value::as_str) {
+                    has_turn_text = !text.is_empty();
                     if let Some(index) = response_message {
                         let message: &mut Value = &mut messages[index];
                         if ev.kind == "model.refusal" {
@@ -394,7 +399,18 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                     }
                 }
             }
+            "cli.result" => {
+                cli_result = ev.payload["result"].as_str().filter(|text| !text.is_empty());
+            }
             "session.end" => {
+                if let Some(text) = cli_result.take().filter(|_| !has_turn_text) {
+                    messages.push(json!({
+                        "role": "assistant", "text": text, "seq": ev.seq,
+                        "thinking": std::mem::take(&mut pending_thinking),
+                        "tool_traces": std::mem::take(&mut pending_turn_traces),
+                        "verifications": std::mem::take(&mut pending_verifications),
+                    }));
+                }
                 if let Some(last) = messages.last_mut().filter(|m| is_primary_assistant(m)) {
                     if let Some(rounds) = ev.payload.get("verification_rounds").and_then(Value::as_u64) {
                         last["verification_rounds"] = json!(rounds);
@@ -542,6 +558,21 @@ mod tests {
             prev_hash: "0".repeat(64),
             event_hash: "1".repeat(64),
         }
+    }
+
+    #[test]
+    fn completed_cli_result_without_text_survives_reopening() {
+        let events = vec![
+            ev(1, "session.start", json!({"prompt": "Compute"})),
+            ev(2, "cli.result", json!({"result": "Four"})),
+            ev(3, "session.end", json!({"cli_exit_code": 0})),
+            ev(4, "session.resume", json!({"prompt": "Continue"})),
+            ev(5, "cli.result", json!({"result": "Aborted draft"})),
+            ev(6, "session.abort", json!({"reason": "stopped"})),
+        ];
+        let (messages, _, _) = reconstruct_session_view(&events);
+        assert_eq!(messages.iter().filter(|msg| msg["role"] == "assistant")
+            .map(|msg| msg["text"].as_str().unwrap()).collect::<Vec<_>>(), ["Four"]);
     }
 
     #[test]

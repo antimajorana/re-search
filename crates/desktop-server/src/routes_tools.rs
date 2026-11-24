@@ -229,7 +229,7 @@ pub fn handle_latex_patch(state: &Arc<DesktopState>, session_id: &str, body: &[u
         .is_some_and(|s| !s.is_empty())
         && val.get("replace").and_then(Value::as_str).is_some();
 
-    let (tool_id, args) = if has_search_replace {
+    let (tool_id, mut args) = if has_search_replace {
         (
             LATEX_PATCH,
             json!({
@@ -247,6 +247,9 @@ pub fn handle_latex_patch(state: &Arc<DesktopState>, session_id: &str, body: &[u
             .ok_or_else(|| bad("`content` or (`search` + `replace`) is required"))?;
         (FS_WRITE, json!({ "path": path, "content": content }))
     };
+    if let Some(expected) = val.get("expected_sha256") {
+        args["expected_sha256"] = expected.clone();
+    }
 
     let (router, _, _) = build_desktop_router(Arc::clone(state), env, session_id).map_err(internal)?;
     match router.try_call("user:canvas", tool_id, &args) {

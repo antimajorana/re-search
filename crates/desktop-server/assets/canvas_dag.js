@@ -513,13 +513,15 @@ async function handleVerifyChain() {
       const blobs = rep.blob_refs_verified ?? rep.blobs_verified ?? 0;
       verifyBadgeEl.hidden = false;
       verifyBadgeEl.className = 'badge ok';
-      verifyBadgeEl.textContent = `Verified ${head || 'SHA-256'} (${evCount} ev, ${blobs} blobs)`;
+      verifyBadgeEl.textContent = `Record intact · ${evCount} events · ${blobs} file references`;
+      verifyBadgeEl.title = head ? `SHA-256 chain head ${head}` : '';
     }
     await refreshDag(sessionId);
   } catch (err) {
     if (revision === sessionRevision && verifyBadgeEl) {
       verifyBadgeEl.hidden = false;
       verifyBadgeEl.className = 'badge err';
+      verifyBadgeEl.title = '';
       verifyBadgeEl.textContent = `Verify failed: ${err.message}`;
     }
   } finally {

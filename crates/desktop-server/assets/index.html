@@ -195,7 +195,7 @@
             <span>Proof DAG</span>
           </span>
           <span class="pipeline-arrow" aria-hidden="true">→</span>
-          <span class="pipeline-step" data-stage="verifier" data-state="idle" title="Independent stateless Verifier audits every active Proof-DAG step and LaTeX citation">
+          <span class="pipeline-step" data-stage="verifier" data-state="idle" title="Reviews the answer against the active proof and its linked checks. Separate step reviews appear in the proof graph.">
             <span class="pipeline-dot" aria-hidden="true"></span>
             <span>Verifier</span>
           </span>
@@ -332,9 +332,10 @@
             <div class="toolbar-row">
               <div class="toolbar-group">
                 <select id="latex-file-select" class="compact-select" aria-label="Select TeX or Bib file" style="min-width:126px;max-width:168px">
-                  <option value="">draft.tex (scratch)</option>
+                  <option value="">Scratch draft</option>
                 </select>
-                <button id="latex-save-btn" type="button" class="pill-btn sm" title="Save manuscript edits to workspace">Save</button>
+                <button id="latex-save-btn" type="button" class="pill-btn sm" title="Save manuscript edits to workspace" disabled>Save</button>
+                <button id="latex-reload-btn" type="button" class="pill-btn sm" hidden>Reload from disk</button>
                 <button id="tex-audit-btn" type="button" class="pill-btn sm" title="Check \ref{}, \cite{}, and retracted references">TeX Audit</button>
               </div>
               <div class="toolbar-group">
@@ -379,7 +380,7 @@
               </div>
               <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end;">
                 <button id="fork-cancel-btn" type="button" class="pill-btn sm">Cancel</button>
-                <button id="fork-confirm-btn" type="button" class="pill-btn sm primary">Create Verified Fork</button>
+                <button id="fork-confirm-btn" type="button" class="pill-btn sm primary">Create fork</button>
               </div>
             </div>
             <div class="dag-viewport-wrap">
@@ -401,7 +402,7 @@
         <!-- Tab 3: Literature & Sources Canvas -->
         <section id="panel-sources" class="canvas-panel" role="tabpanel" aria-labelledby="tab-sources">
           <div class="sources-layout">
-            <div class="rail-section-label" style="padding:2px 0;">Sources Used</div>
+            <h3 class="rail-section-label" style="margin:0;padding:2px 0;">Sources Used</h3>
             <div id="used-sources-list" style="display:flex;flex-direction:column;gap:8px;"></div>
             <details class="dag-detail-card formal-library">
               <summary>Formal library</summary>
@@ -423,7 +424,7 @@
                   <option value="crossref">Crossref</option>
                   <option value="semantic_scholar">Semantic Scholar</option>
                 </select>
-                <input id="lit-query-input" class="text-input" type="text" placeholder="Query papers, au:Author, arXiv ID, or DOI...">
+                <input id="lit-query-input" class="text-input" type="search" aria-label="Search for papers" placeholder="Title, author, or identifier" required>
                 <button id="lit-search-btn" type="submit" class="pill-btn sm primary">Search</button>
               </div>
               <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;">
@@ -435,9 +436,9 @@
                   <option value="id">arXiv ID</option>
                 </select>
                 <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
-                  <input id="lit-include-source" type="checkbox"> Ingest TeX bundle
+                  <input id="lit-include-source" type="checkbox"> Save TeX source
                 </label>
-                <input id="lit-section-filter" class="text-input" type="text" placeholder="Section filter..." style="width:128px;height:28px;">
+                <input id="lit-section-filter" class="text-input" type="text" aria-label="Filter paper sections" placeholder="Filter sections" style="width:128px;height:28px;">
               </div>
             </form>
             <div id="literature-results" style="display:flex;flex-direction:column;gap:8px;"></div>
@@ -456,7 +457,7 @@
               <div id="paper-passage-status" role="status"></div>
               <div id="paper-passage-results"></div>
             </div>
-            <div class="rail-section-label" style="padding:2px 0;">Ingested Session Sources</div>
+            <h3 class="rail-section-label" style="margin:0;padding:2px 0;">Saved files</h3>
             <div id="sources-list" style="display:flex;flex-direction:column;gap:8px;"></div>
           </div>
         </section>
@@ -473,7 +474,7 @@
             </div>
             <div id="sidetalk-stream"></div>
             <form id="sidetalk-form" class="sidetalk-composer" autocomplete="off">
-              <input id="sidetalk-input" class="text-input" type="text" placeholder="Ask Explain about a step, convention, or equation...">
+              <input id="sidetalk-input" class="text-input" type="text" aria-label="Question for Explain" placeholder="Ask about a step, convention, or equation" required>
               <button id="sidetalk-send" type="submit" class="pill-btn sm primary">Ask</button>
             </form>
           </div>
@@ -508,12 +509,11 @@
       <div id="settings-panel-subagents" class="settings-tab-panel" data-settings-panel="subagents" role="tabpanel" aria-labelledby="settings-tab-subagents">
         <div class="subagent-builder-box">
           <div class="subagent-section-head">
-            <h3>Create Custom Subagent with AI Agent</h3>
-            <span class="badge">Builder Agent</span>
+            <h3>Create a specialist</h3>
           </div>
           <form id="subagent-draft-form" style="display:flex;gap:8px;flex-wrap:wrap;" autocomplete="off">
-            <input id="subagent-goal-input" class="text-input" type="text" placeholder="Describe your specialist (e.g. Lattice QFT loop integral checker using SymPy)..." style="flex:1;min-width:220px;">
-            <button id="subagent-draft-btn" type="submit" class="pill-btn sm primary">Generate with AI Agent</button>
+            <input id="subagent-goal-input" class="text-input" type="text" aria-label="Specialist's task" placeholder="What should this specialist check?" style="flex:1;min-width:220px;" required>
+            <button id="subagent-draft-btn" type="submit" class="pill-btn sm primary">Draft instructions</button>
           </form>
           <form id="subagent-save-form" class="form-grid" autocomplete="off">
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">

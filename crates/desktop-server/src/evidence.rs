@@ -55,13 +55,11 @@ pub(crate) fn linked_session_sources(state: &DesktopState, ledger: &Ledger, even
             Some("paper_passages") => {
                 let passages: Vec<_> = item["passages"].as_array().into_iter().flatten()
                     .filter(|passage| passage["reader"]["source_id"].is_string()).collect();
-                let source_ids: HashSet<_> = passages.iter()
-                    .filter_map(|passage| passage["reader"]["source_id"].as_str()).collect();
                 let claim = ["summary", "details", "latex"].into_iter()
                     .filter_map(|field| event.payload[field].as_str()).collect::<Vec<_>>().join("\n");
                 for passage in passages {
                     let reader = &passage["reader"];
-                    if source_ids.len() == 1
+                    if item["source_count"] == 1
                         || reader["path"].as_str().is_some_and(|path| claim.contains(path))
                         || reader["source_id"].as_str().is_some_and(|id| claim.contains(id))
                     {
@@ -794,6 +792,9 @@ impl<'a> SessionEvidence<'a> {
                 }
             }
             "search_paper_passages" => {
+                let source_ids: HashSet<_> = result["passages"].as_array().into_iter().flatten()
+                    .filter_map(|hit| hit["source_id"].as_str()).collect();
+                item["source_count"] = json!(source_ids.len());
                 let records: Vec<_> = result["passages"]
                     .as_array()
                     .into_iter()

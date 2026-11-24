@@ -42,6 +42,7 @@ pub(crate) struct SessionExportData {
     pub session: String,
     pub head_hash: String,
     pub prompt: String,
+    pub answers: Vec<(String, String, bool)>,
     pub model: String,
     pub policy_version: String,
     pub entries: Vec<ProofItem>,
@@ -115,6 +116,7 @@ pub(crate) fn load_session_export_data(data_dir: &Path, session: &str) -> Result
         .to_string();
 
     let entries = collect_proof_items(&events);
+    let answers = completed_answers(&events);
     let sympy_calls = collect_sympy_calls(&ledger, &events);
     let workspace_files = collect_workspace_files(&ledger, &events);
     let bibtex = collect_bibtex(data_dir, &ledger, session, &events)?;
@@ -123,6 +125,7 @@ pub(crate) fn load_session_export_data(data_dir: &Path, session: &str) -> Result
         session: session.to_string(),
         head_hash: report.head_hash,
         prompt,
+        answers,
         model,
         policy_version,
         entries,
@@ -131,6 +134,46 @@ pub(crate) fn load_session_export_data(data_dir: &Path, session: &str) -> Result
         bibtex,
         events,
     })
+}
+
+fn completed_answers(events: &[Event]) -> Vec<(String, String, bool)> {
+    let mut answers = Vec::new();
+    let mut prompt = "";
+    let mut blocks = Vec::new();
+    let mut result = "";
+    let mut grouped = false;
+    for event in events {
+        let payload = &event.payload;
+        match event.kind.as_str() {
+            "session.start" | "session.resume" => {
+                prompt = payload["prompt"].as_str().unwrap_or_default();
+                blocks.clear();
+                result = "";
+                grouped = false;
+            }
+            "model.response" | "autonomous.feedback" => {
+                blocks.clear();
+                grouped = event.kind == "model.response";
+            }
+            "model.text" => {
+                if !grouped { blocks.clear(); }
+                if let Some(text) = payload["text"].as_str() { blocks.push(text); }
+            }
+            "cli.result" => result = payload["result"].as_str().unwrap_or_default(),
+            "session.end" => {
+                let mut text = blocks.join("\n");
+                if text.is_empty() { text = result.to_owned(); }
+                if !text.trim().is_empty() && payload["outcome"] != "refusal" {
+                    answers.push((prompt.to_owned(), text, payload["outcome"] == "completed_unverified"));
+                }
+                blocks.clear();
+                result = "";
+            }
+            "session.abort" => { blocks.clear(); result = ""; }
+            _ => {}
+        }
+    }
+    answers
 }
 
 pub(crate) fn collect_proof_items(events: &[Event]) -> Vec<ProofItem> {
@@ -602,6 +645,15 @@ pub(crate) fn render_latex_document(data: &SessionExportData, bib_stem: &str) ->
         escape_latex_unicode(&data.prompt, false),
     ));
 
+    for (question, answer, unverified) in &data.answers {
+        out.push_str("\\section*{Recorded Answer}\n");
+        if !question.is_empty() && question != &data.prompt {
+            out.push_str(&format!("\\paragraph{{Question}} {}\n\n", escape_latex_unicode(question, false)));
+        }
+        if *unverified { out.push_str("\\emph{The verifier reported unresolved issues.}\n\n"); }
+        out.push_str(&escape_latex_unicode(answer, false));
+        out.push_str("\n\n");
+    }
     if !data.entries.is_empty() {
         out.push_str("\\section{Derivation Steps}\n");
         for e in &data.entries {
@@ -647,7 +699,7 @@ pub(crate) fn render_latex_document(data: &SessionExportData, bib_stem: &str) ->
     }
 
     if !data.sympy_calls.is_empty() {
-        out.push_str("\\section{Verified Symbolic Computations}\n");
+        out.push_str("\\section{Recorded Symbolic Computations}\n");
         for c in &data.sympy_calls {
             out.push_str(&format!(
                 "\\subsection*{{Step {} (\\texttt{{{}}})}}\n\\begin{{verbatim}}\n{}\n\\end{{verbatim}}\n",

@@ -33,6 +33,14 @@ pub(crate) fn render_html_document(data: &SessionExportData) -> String {
         html_escape(&data.prompt),
     ));
 
+    for (question, answer, unverified) in &data.answers {
+        body.push_str("<section><h2>Recorded Answer</h2>");
+        if !question.is_empty() && question != &data.prompt {
+            body.push_str(&format!("<p><strong>{}</strong></p>", html_escape(question)));
+        }
+        if *unverified { body.push_str("<p>The verifier reported unresolved issues.</p>"); }
+        body.push_str(&format!("<p style=\"white-space:pre-wrap\">{}</p></section>\n", html_escape(answer)));
+    }
     body.push_str("<section class=\"steps\"><h2>Proof Graph Steps</h2>\n");
     for e in &data.entries {
         let deps = if e.depends_on.is_empty() {

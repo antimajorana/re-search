@@ -299,7 +299,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
     let events_json: Vec<Value> = events
         .iter()
         .map(|ev| {
-            json!({
+            let mut view = json!({
                 "seq": ev.seq,
                 "ts_ms": ev.ts_ms,
                 "kind": ev.kind,
@@ -307,7 +307,11 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
                 "payload": ev.payload,
                 "prev_hash": ev.prev_hash,
                 "event_hash": ev.event_hash,
-            })
+            });
+            if ev.kind == "proof.verification" {
+                view["effective_verdict"] = json!(research_tools::effective_verification_verdict(&ev.payload));
+            }
+            view
         })
         .collect();
 

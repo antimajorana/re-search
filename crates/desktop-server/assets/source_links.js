@@ -131,10 +131,23 @@ function paperKeys(paper) {
   ].filter(Boolean);
 }
 
+function citationToken(raw) {
+  const token = raw.replace(/[.,;:]+$/, '');
+  let depth = 0;
+  for (let i = 0; i < token.length; i++) {
+    if (token[i] === '(') depth++;
+    if (token[i] === ')') {
+      if (!depth) return token.slice(0, i);
+      depth--;
+    }
+  }
+  return token;
+}
+
 function explicitPaperCitations(text) {
   const papers = [];
-  for (const [match] of text.matchAll(/\b10\.\d{4,9}\/[^\s,"'<>{}\[\])]+/gi)) {
-    const doi = extractDoi(match.replace(/[.;:]+$/, ''));
+  for (const [match] of text.matchAll(/\b10\.\d{4,9}\/[^\s,"'<>{}\[\]]+/gi)) {
+    const doi = extractDoi(citationToken(match));
     if (doi) papers.push({ doi, title: `DOI ${doi}` });
   }
   for (const [, arxiv_id] of text.matchAll(/(?:\barxiv\s*:\s*|\barxiv\.org\/(?:abs|pdf|e-print)\/)(\d{4}\.\d{4,5}(?:v\d+)?|[a-z-]+(?:\.[a-z-]+)?\/\d{7}(?:v\d+)?)/gi)) {
@@ -147,21 +160,31 @@ function finalAnswerTexts(events) {
   const answers = [];
   let blocks = [];
   let hasResponse = false;
+  let cliResult = '';
   for (const { kind, payload } of events) {
     if (kind === 'session.start' || kind === 'session.resume') {
       blocks = [];
       hasResponse = false;
+      cliResult = '';
     } else if (kind === 'model.response') {
       blocks = [];
       hasResponse = true;
     } else if (kind === 'model.text' && typeof payload?.text === 'string') {
       if (hasResponse) blocks.push(payload.text);
       else blocks = [payload.text];
-    } else if (kind === 'session.end') {
-      if (blocks.length && payload?.outcome !== 'refusal') answers.push(blocks.join('\n'));
+    } else if (kind === 'autonomous.feedback') {
       blocks = [];
+      hasResponse = false;
+    } else if (kind === 'cli.result') {
+      cliResult = typeof payload?.result === 'string' ? payload.result : '';
+    } else if (kind === 'session.end') {
+      const answer = blocks.join('\n') || cliResult;
+      if (answer && payload?.outcome !== 'refusal') answers.push(answer);
+      blocks = [];
+      cliResult = '';
     } else if (kind === 'session.abort') {
       blocks = [];
+      cliResult = '';
     }
   }
   return answers;
@@ -171,11 +194,13 @@ function activeSourceSteps(events) {
   const nodes = new Map();
   const superseded = new Set();
   const rejected = new Set();
-  for (const { kind, payload } of events) {
+  for (const { kind, payload, effective_verdict } of events) {
     if (kind === 'proof.entry' && payload.entry_id) nodes.set(payload.entry_id, payload);
     if (kind === 'proof.supersede') superseded.add(payload.entry_id);
-    if (kind === 'proof.verification' && payload.verdict === 'rejected') rejected.add(payload.target_entry_id);
-    if (kind === 'proof.verification' && payload.verdict === 'accepted') rejected.delete(payload.target_entry_id);
+    if (kind === 'proof.verification') {
+      if ((effective_verdict ?? payload.verdict) === 'rejected') rejected.add(payload.target_entry_id);
+      else rejected.delete(payload.target_entry_id);
+    }
   }
   const active = new Map([...nodes].filter(([id]) => !superseded.has(id) && !rejected.has(id)));
   const pending = [...active.values()].filter(node => node.entry_type === 'final_answer').map(node => node.entry_id);
@@ -197,12 +222,13 @@ export function sessionSourcesUsed(session) {
   const byKey = new Map();
   const bySourceId = new Map();
   const known = new Set();
-  const addPaper = (paper) => {
+  const addPaper = (paper, sourceId) => {
     const keys = paperKeys(paper);
     const titleKey = paper.title && `title:${paper.title.toLowerCase()}`;
+    const titleMatch = !keys.length && titleKey && byKey.get(titleKey);
     const existing = keys.map(key => byKey.get(key)).find(Boolean)
-      || (!keys.length && titleKey && byKey.get(titleKey));
-    const record = existing || { paper, cited: false, steps: new Set() };
+      || (titleMatch && (!sourceId || !titleMatch.source || titleMatch.source.source_id === sourceId) && titleMatch);
+    const record = existing || { paper, cited: false, steps: new Set(), readers: new Map() };
     for (const key of keys) {
       byKey.set(key, record);
       if (key.startsWith('arxiv:')) {
@@ -221,7 +247,7 @@ export function sessionSourcesUsed(session) {
     const paper = { title: resolveSourceTitle(source), url: links[0]?.url, doi: extractDoi(source.origin),
       arxiv_id: extractArxivId(links.find(link => /arxiv\.org\/(?:abs|pdf)\//i.test(link.url))?.url),
     };
-    const record = addPaper(paper);
+    const record = addPaper(paper, source.source_id);
     record.source = source;
     if (source.source_id) bySourceId.set(source.source_id, record);
   }
@@ -231,13 +257,16 @@ export function sessionSourcesUsed(session) {
     const record = paper ? addPaper(paper) : bySourceId.get(reader?.source_id || source_id);
     if (!record) continue;
     record.steps.add(entry_id);
-    if (reader && (!record.reader || reader.start_line)) record.reader = reader;
+    if (reader) {
+      const key = JSON.stringify([reader.source_id, reader.path, reader.start_line, reader.end_line, reader.file_sha256]);
+      record.readers.set(key, reader);
+    }
   }
 
   const useText = (text, entry) => {
     const normalized = text.toLowerCase().replace(/\s+/g, ' ');
-    const urls = new Set([...text.matchAll(/https?:\/\/[^\s"'<>{}\[\])]+/gi)]
-      .map(([url]) => safeSourceUrl(url.replace(/[.,;:]+$/, ''))?.toLowerCase()).filter(Boolean));
+    const urls = new Set([...text.matchAll(/https?:\/\/[^\s"'<>{}\[\]]+/gi)]
+      .map(([url]) => safeSourceUrl(citationToken(url))?.toLowerCase()).filter(Boolean));
     const mark = (record) => {
       if (entry) record.steps.add(entry);
       else record.cited = true;

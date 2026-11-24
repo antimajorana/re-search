@@ -17,6 +17,7 @@ def check_workbench(browser, binary, width, height):
         workspace = root / "manuscript"
         workspace.mkdir()
         (workspace / "field.tex").write_text(r"\section{Boundary conditions}", encoding="utf-8")
+        (workspace / "notes.tex").write_text("Notes", encoding="utf-8")
         server = subprocess.Popen(
             [str(binary), "ui", "--data-dir", str(root / "data"), "--workspace", str(workspace),
              "--port", "0", "--no-open", "true", "--print-url-json", "true",
@@ -86,7 +87,15 @@ def check_workbench(browser, binary, width, height):
             page.locator("#paper-passage-form").get_by_role("button").click()
             expect(page.locator("#paper-passage-results")).to_contain_text("cancel the surface term")
             page.get_by_role("tab", name="LaTeX").click()
-            expect(page.get_by_label("Manuscript editor")).to_have_value(r"\section{Boundary conditions}")
+            manuscript = page.get_by_label("Manuscript editor")
+            files = page.locator("#latex-file-select")
+            files.select_option("field.tex")
+            expect(manuscript).to_have_value(r"\section{Boundary conditions}")
+            manuscript.fill(r"\section{Revised boundary conditions}")
+            files.select_option("notes.tex")
+            expect(manuscript).to_have_value("Notes")
+            files.select_option("field.tex")
+            expect(manuscript).to_have_value(r"\section{Revised boundary conditions}")
             with page.expect_download() as exported:
                 page.get_by_role("button", name="Reproducible ZIP").click()
             with ZipFile(exported.value.path()) as bundle:

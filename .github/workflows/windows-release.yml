@@ -235,6 +235,7 @@ jobs:
             if [[ "$(jq -r .isDraft <<< "$release")" == false ]]; then
               gh release download "$RELEASE_TAG" --pattern "$INSTALLER_NAME" --pattern "$manifest" --dir "$uploaded"
               verify_payload "$uploaded"
+              cmp "$source_dir/$manifest" "$uploaded/$manifest"
               echo "The published installer and its manifest already match."
               exit 0
             fi
