@@ -1,282 +1,32 @@
 # reSearch
 
-> **Core philosophy:** *Models propose; deterministic computations, independent verifiers, and tamper-evident ledgers decide.*
+reSearch is an AI research workbench for mathematics and theoretical physics. Ask an agent to derive an equation, check a numerical result, or trace a claim to a paper. Each session keeps the argument alongside its assumptions, sources, and recorded calculations so you can inspect how the agent reached its answer.
 
-**reSearch** is a small, tamper-evident Rust research core and loopback desktop workbench built for mathematics and theoretical physics. Instead of trusting a single chat thread to write proofs, run uncontained scripts on your machine, and grade its own homework, reSearch separates **generating ideas** from **executing code**, **auditing manuscripts**, and **certifying steps**.
+**[Download reSearch for Windows 11 (x64)](https://github.com/antimajorana/re-search/releases/latest/download/reSearch-Setup-Windows-x64.exe)** · [Release notes and SHA-256 checksum](https://github.com/antimajorana/re-search/releases/latest)
 
-Every Python/SymPy calculation runs inside a **zero-capability Windows 11 AppContainer sandbox** (`sympy_eval`), while local `.tex`/`.bib` workspace inspection, arXiv/literature ingestion, deterministic TeX/citation auditing, Lean 4 type-checking, hash-chained Proof DAGs, counterfactual branching, interactive human checkpoints, and the offline KaTeX UI are supervised by the Rust core.
+## Get started
 
-**Security boundary first:** Read [THREAT-MODEL.md](THREAT-MODEL.md) for what the AppContainer isolates, how CSRF and workspace approvals work, and what remains outside the boundary.
+1. Run the installer and open **reSearch** from the Start menu. Setup includes Python, SymPy, NumPy, and mpmath. The desktop window uses Microsoft Edge WebView2. The installer is unsigned.
+2. Choose **Connect model** to run an AI session. For example, connect Gemini with an API key or select a local model served by Ollama. You can also open **Projects** and organize papers and notes before connecting a model.
 
----
+## Your first calculation
 
-## Contents
+How quickly does the sum of the first $N$ inverse squares approach $\pi^2/6$? The exact limit gives you an independent way to check the agent’s answer.
 
-1. [Why reSearch Exists (In Plain English)](#1-why-research-exists-in-plain-english)
-2. [Quick Start (3 Minutes)](#2-quick-start-3-minutes)
-3. [Mental Model: Follow One Derivation Through All 5 Layers](#3-mental-model-follow-one-derivation-through-all-5-layers)
-4. [Working Interactively: Modes, Live Steering & Explain](#4-working-interactively-modes-live-steering--explain)
-5. [Meet the Agents (Built-in Roles & Custom Subagents)](#5-meet-the-agents-built-in-roles--custom-subagents)
-6. [Tool & Computation Approvals](#6-tool--computation-approvals)
-7. [Connecting Providers, Billing Safety & Confinement](#7-connecting-providers-billing-safety--confinement)
-8. [Desktop Launch, Configuration & Headless Flags](#8-desktop-launch-configuration--headless-flags)
-9. [CLI Reference (`run`, `fork`, `diff`, `export`, `verify`)](#9-cli-reference-run-fork-diff-export-verify)
-10. [Codebase Map (13 Crates) & Running Tests](#10-codebase-map-13-crates--running-tests)
-11. [Licence](#11-licence)
+1. Choose **Test numerical convergence** on the welcome screen. It puts an editable example in the composer. Ask the agent to use cutoffs of 32, 64, and 128 and report the absolute error at each cutoff. Press **Send**.
+2. Open **Canvas → Proof DAG** and select the numerical check. Check the reported errors against 0.03077, 0.01550, and 0.00778. Each doubling roughly halves the error. You can see why by comparing the omitted tail with the integral of $1/x^2$ from $N$ to infinity, which gives the upper bound $1/N$.
+3. Open **Canvas → LaTeX → Reproducible ZIP** to share the calculation. The archive includes the report, bibliography, recorded computation, and replay instructions.
 
----
+The **Verified** review mode asks a verifier to examine the reasoning in a fresh context. **Verify Chain** checks the integrity of the session record. With Lean 4 installed, ask the Lean worker to type-check a precise statement. For a proof using Physlib, attach a Lean workspace with the library already built.
 
-## 1. Why reSearch Exists (In Plain English)
+## Bring your own research
 
-Ordinary AI coding/chat assistants fail on serious mathematical and physics derivations in four predictable ways:
-
-| Failure Mode in Standard Chats | How reSearch Solves It |
+| When you want to… | Where to start |
 | --- | --- |
-| **Context bloat:** long SymPy tracebacks, huge arXiv `.tex` sources, and failed Lean attempts pollute the main conversation. | **Context-isolated Workers:** heavy SymPy retries, paper reading, Lean proofs, and parallel explorations run in clean short-lived worker contexts and return only concise verified summaries + `e-N` Proof-DAG IDs. |
-| **Self-grading bias:** the same context that dropped a minus sign also "verifies" its own final answer. | **Independent model review:** in `Verified`, `Deep`, and `Interactive` modes a fresh Verifier receives the displayed answer, the prompt and conventions, the active Proof DAG, linked Lean evidence, and a deterministic TeX audit. The ledger binds its verdict to the answer it reviewed. |
-| **"Evidence" dressed up as "proof":** saying *"SymPy confirmed / q.e.d."* when a check failed or never ran. | **Typed Proof DAG + Honesty Linter:** symbolic/numerical checks, literature facts, and proof steps have separate node types, and `honesty.lint` cross-checks final prose against actual ledger & artifact evidence. |
-| **Silent execution / local edits:** arbitrary Python or file writes happen behind your back. | **Fail-closed Policy + AppContainer:** every tool call crosses the Rust router (`policy`), is SHA-256 hash-chained into `ledger.db`, and Python runs inside a zero-capability AppContainer (no network, no user files, no DPAPI, no env secrets). |
+| Derive a field equation | Choose **Check a derivation**. Set the metric signature and units in **Research options → Conventions** so the agent uses your notation. |
+| Check a citation against a paper | Use **Attach** to add the paper to your message, then **Send**. Open **Canvas → Sources** to search the ingested text and read the cited lines in context. |
+| Carry a result into the next session | Open **Projects** to keep findings, open questions, and a bibliography together. Use **Experiments** to compare approaches or **Validation** to record a reference value and tolerances before running a calculation. |
 
----
+See the in-app **Settings → User Guide** for more workflows. For command-line use, model providers, approvals, and development commands, see the [reference](docs/reference.md). The [threat model](THREAT-MODEL.md) describes how reSearch handles local files and isolates Python calculations on Windows.
 
-## 2. Quick Start (3 Minutes)
-
-**Install on Windows 11 (x64).** Download the installer, run it under your Windows account, then open **reSearch** from Start. The installer includes a private Python runtime with SymPy, NumPy, and mpmath. [Download the latest Windows installer](https://github.com/antimajorana/re-search/releases/latest/download/reSearch-Setup-Windows-x64.exe) · [Release notes and checksums](https://github.com/antimajorana/re-search/releases/latest)
-
-1. **Launch the desktop window:**
-   Run `re-search-app.exe` (or `re-search desktop` / Start menu shortcut **reSearch** on Windows 11, or `re-search ui` to open a single-use `http://127.0.0.1:<port>/?launch=...` tab in your default browser).
-2. **Connect at least one provider:**
-   Choose **Connect model** on the start screen, or open **Settings → Providers**, and connect Sign in with ChatGPT, Claude Code, Anthropic/OpenAI/Gemini API, local Ollama, or (if explicitly acknowledged) Google Antigravity.
-3. **Set your math conventions & rigor:**
-   Open **Research options → Conventions** to pin metric signatures, natural units, or Fourier prefactors. In **Research options** pick a review mode from **`Direct`**, **`✓ Verified`** (recommended default), **`✦ Deep`**, or **`Interactive`**.
-4. **Optionally attach a paper folder:**
-   Choose **Research options → Workspace** to use a local `.tex`/`.bib` directory. To ingest individual papers, choose **Attach**, select files, and press **Send**.
-5. **Run & inspect:**
-   Watch the live pipeline stepper (**Orchestrator → Proof DAG → Verifier → Strategist**), inspect equations in **Canvas → LaTeX / Proof DAG**, ask clarifying questions safely in **Explain**, or steer mid-turn.
-
-### Carry a derivation across sessions
-
-- Open **Projects** to record a conjecture, hypotheses, notation, or units. Keep findings, open questions, and failed approaches with the project. Start a session from the project to give the agent a brief containing recent notes and paper references.
-- Use **Projects → Sources** to find papers by title, citation, or annotation, save a page or equation reference, and export saved BibTeX. In the **Proof DAG**, open a step to see linked computations, Lean evidence, citations, and model reviews. Save the step to the project to retain its provenance.
-- In **Canvas → LaTeX**, download the **Reproducible ZIP** for recorded tool versions, available Git revisions, source hashes, computation inputs and outputs, and a replay script. See the bundle's README for the commands to compare replayed and recorded outputs.
-
-### Validate a calculation
-
-Ask the Compute Worker to check an identity, a branch choice or a limiting case. Give the domain and units or dimensions you want it to use. For a numerical result, specify the precision, grid or basis refinements, the tolerances and an independent reference when you have one. Open the linked computation in **Proof DAG** to inspect the recorded result.
-
-Both helpers are available inside `sympy_eval`. Return the report as the last Python expression to capture it for inspection and replay.
-
-```python
-x = Symbol("x")
-check_symbolic_identity(sqrt(x**2), x, domain=S.Reals, limits=[(0, "-"), (0, "+")])
-```
-
-```python
-from mpmath import mp
-check_convergence(
-    lambda n: 1 + mp.mpf(1)/n**2, [8, 16, 32, 64],
-    axis="basis", atol="0.004", rtol=0, reference=1,
-)
-```
-
-The symbolic report records the residual, available real-domain analysis, exact probes, and requested limits or dimensions. Keep an unevaluated SymPy expression when its original form contains an exclusion that simplification would erase. The numerical report gives adjacent changes and reference errors for a scalar observable or norm. Its verdict applies to the supplied levels and tolerances.
-
-### Reuse sources and compare approaches
-
-- In **Canvas → Sources**, search passages from ingested papers. Each match has an excerpt, a file and line range, and a digest from source ingestion. The agent can cite the matching tool result in the Proof DAG.
-- Attach a Lean workspace with Physlib source and search **Formal Library** in Sources. Found declarations include the source signature and location. Build the workspace and its dependencies with its pinned Lean toolchain before checking an import. The checker resolves standard prebuilt Lake libraries in the workspace and its declared local checkouts. Lean checks the submitted statement against those compiled imports. The recorded source hash and the scan for incomplete proofs and declared axioms cover the submitted file or snippet.
-- Use **Projects → Experiments** to set a shared question, metric, and budget. Fork a verified ledger prefix, track candidate approaches and failures, and compare researcher-recorded observations linked to the branch.
-- Use **Projects → Validation** to commit a scalar validation protocol before computing the candidate. The project keeps the independent reference and controls local. After a linked convergence result is recorded, the evaluator checks it against the frozen tolerances and records the decision in the session ledger.
-
----
-
-## 3. Mental Model: Follow One Derivation Through All 5 Layers
-
-reSearch draws on typed evidence and specialist workers from **OpenTorus**, parallel exploration and Lean checking from **Open Math Harness**, and stateless review and dependency tracking from **Solver Agent**. It implements these ideas in a Rust workbench with a SHA-256 ledger and a Windows AppContainer Python worker.
-
-```text
-┌────────────────────────────────────────────────────────────────────────────┐
-│ 1. Desktop Shell & Loopback Server (desktop-app + desktop-server)          │
-│    WebView2 locked to 127.0.0.1 (header CSRF + Origin) · Offline KaTeX UI  │
-│    Live Pipeline Bar · HITL Cards · Proof DAG / LaTeX / Sources / Explain  │
-└───────────────────────────────────┬────────────────────────────────────────┘
-                                    │ spawns / supervises turn
-┌───────────────────────────────────▼────────────────────────────────────────┐
-│ 2. Orchestrator, Workers & Zero-Bias Verification (agent / cli-route)      │
-│    Phases  │ INGEST -> EXPLORE -> COMPUTE -> SYNTHESIZE -> VERIFY ->       │
-│            │ REVISE -> COMPLETE                                            │
-│    Workers │ Compute · Literature · Lean Prover · Parallel Explorer (2-4x) │
-│            │ + Custom Subagents (isolated contexts; cannot finalize)       │
-│    Gates   │ lean_check (anti-cheat) · honesty.lint (evidence != proof)    │
-│            │ Stateless Step/Full Verifiers (<=3x) + Strategist (Deep mode) │
-└───────────────┬──────────────────────────────────────────┬─────────────────┘
-                │ every tool call goes through Router      │ append-only events
-┌───────────────▼──────────────────────────┐   ┌───────────▼─────────────────┐
-│ 3. Fail-Closed Policy & Approval Router  │   │ 4. SHA-256 Proof-DAG Ledger │
-│    policy (Allow / Ask / Deny clamps)    │   │    Shared DAG · Provenance  │
-│    Desktop auto-approve or per-call card │   │    delegate.* + honesty.lint│
-└───────────────┬──────────────────────────┘   └─────────────────────────────┘
-                │ sympy_eval only (EffectClass::ExecuteCode)
-┌───────────────▼────────────────────────────────────────────────────────────┐
-│ 5. Windows 11 Zero-Capability AppContainer Python Sandbox (worker)         │
-│    No network · No user files/DPAPI/env · Kill-on-close Job Object         │
-└────────────────────────────────────────────────────────────────────────────┘
-```
-
-Here is what happens step-by-step during a typical derivation:
-
-1. **Structured Campaign Phases:** The Orchestrator moves explicitly through `INGEST -> EXPLORE -> COMPUTE -> SYNTHESIZE -> VERIFY -> REVISE -> COMPLETE`.
-2. **Delegation Without Context Pollution:** Instead of doing brute-force algebra inline, the Orchestrator calls `delegate_compute` (or `delegate_literature` / `delegate_lean` / `delegate_explore` / `delegate_subagent`). Each worker starts with a clean context, retries its own errors, logs `delegate.start` / `delegate.turn` / `delegate.end` with `routing_reason` and token usage, and writes durable `e-N` nodes (`symbolic_computation`, `numerical_computation`, etc.) into SQLite `ledger.db` (plus full transcripts as content-addressed SHA-256 blobs). Workers are **barred in Rust** from calling `delegate_*` recursively or writing `final_answer`.
-3. **Router & Sandbox Enforcement:** Whenever Python runs (`sympy_eval`), the Router hashes the canonical request + policy version + worker epoch, records an approval decision, and sends the code to a single `worker` running `sympy`, `mpmath`, and `numpy` inside an AppContainer that cannot touch the network or your disk.
-4. **Honesty Check (`honesty.lint`):** After the Orchestrator produces prose, the artifact-aware Honesty Linter scans claims like *"Lean 4 verified"*, *"SymPy confirmed"*, or *"q.e.d."* against actual passing Proof-DAG entries, `lean_check` verdicts, and accepted verification events, displaying a warning banner whenever proof is overstated.
-5. **Independent Verification & Revision (`<= 3` rounds):** In `Verified`, `Deep`, and `Interactive` modes, calculation guardrails ensure computations are interpreted by a `result` entry (`depends_on: ["e-1"]`), then the stateless **Full Solution Verifier** accepts or rejects with concrete issues/counterexamples. In **Deep** mode, rejection automatically invokes the **Research Strategist** to plan repairs before revision.
-
----
-
-## 4. Working Interactively: Modes, Live Steering & Explain
-
-### Choosing Your Rigor Preset
-| Preset | Best For | What Runs |
-| --- | --- | --- |
-| **`Direct`** | Quick look-ups, brainstorms, formatting `.tex` | Orchestrator + tools (single pass; no post-turn Verifier loop). |
-| **`✓ Verified`** *(default)* | Derivations, symbolic checks, paper claims | Orchestrator + Calculation Guard + Stateless Full Verifier (up to 3 rounds). |
-| **`✦ Deep`** | Hard open problems likely to need course-correction | Everything in `Verified` + **Research Strategist** diagnosis after any rejection. |
-| **`Interactive`** | High-stakes projects where you want to steer the roadmap | Turns on **Verifier** + **Pause on Explore** and instructs the Orchestrator to propose a numbered plan via `ask_user` (`kind: "plan"`) before heavy execution. |
-
-*Tip:* You can customize active agents directly in the **Conventions** popover (`Verifier`, `Strategist`, `Pause on Explore`). All presets also pair with the compact **Reasoning Effort** selector (`Default`, `Low`, `Medium`, `High`, `Extra High`, `Max`) — when set to `Default`, reSearch omits provider reasoning parameters.
-
-### Interactive Human-in-the-Loop Controls
-- **Mid-Turn Live Steering (`POST /api/sessions/{id}/steer`):** During active in-core API or ChatGPT turns, the Send button switches to **`Steer`**. Submitting a note queues a `human.steer` ledger event, shows a `Steer queued -> ...` badge, and injects `<human_steer>...</human_steer>` at the Orchestrator's very next step (without killing in-progress work). *Note:* Live steering is refused with HTTP `409` on subscription-CLI turns (`claude-cli` / `antigravity`).
-- **High-Level Decision Checkpoints (`ask_user`):** The Orchestrator can pause to ask mathematical, convention, or plan questions — never for low-level tool permissions. Checkpoints appear inline with quick-pick option buttons and a free-text note field (`human.checkpoint_requested` / `human.decision`), and clicking **Stop** unblocks any waiting checkpoint cleanly.
-- **Ultramath Branch Picker (`Pause on Explore`):** When enabled, `delegate_explore` evaluates 2–4 competing Ansaetze concurrently in isolated branches, then pauses to display side-by-side **KaTeX-rendered branch cards** so you can adopt one branch, combine ideas, or add steering notes (`human_selection`).
-- **Isolated `Explain` Tab (`Canvas -> Explain`):** Ask clarifying questions about notation or specific `e-1` steps on a **completely isolated side-talk thread** (`sidetalk:<session>`) without mutating the Proof DAG. Export conversations as Markdown (`.md`) or standalone HTML (`.html`), or promote any insight back to the main workflow:
-  - **Pin to Conventions** appends to the session's pinned conventions (`<= 2000` chars; long answers auto-trim cleanly).
-  - **Send to Orchestrator** injects directly as a live steer if an API/ChatGPT turn is running, or loads the note into the main composer when idle.
-- **Session vs Global Conventions:** Clicking **Conventions** edits and clears conventions for the **active session** (`PUT /api/sessions/{id}/conventions`), which persist across reloads and are upserted into the Orchestrator prompt on resumed turns as well as all workers and verifiers. When no session is active (or under **Settings → Advanced**), you edit global default conventions for new sessions.
-
----
-
-## 5. Meet the Agents (Built-in Roles & Custom Subagents)
-
-Configure models per agent anytime under **Settings & Guide → Agents & Models**:
-
-| Agent | Role Key | Default Model Policy | Core Responsibility |
-| --- | --- | --- | --- |
-| **Orchestrator** | `orchestrator` | User-selected model | Leads Campaign Phases, delegates subtasks, writes `result`/`final_answer` DAG steps and LaTeX patches. |
-| **Compute Worker** | `compute_worker` | **Auto Smaller Model** | Iterative `sympy_eval` + `check_expression_sanity` inside AppContainer + computation DAG nodes. |
-| **Literature Worker** | `literature_worker` | **Auto Smaller Model** | `arxiv_search`, `literature_search`, `doc_ingest`, `fs_read` on bulky papers/TeX files. |
-| **Lean Prover Worker** | `lean_worker` | **Auto Smaller Model** | Formalizes claims in Lean 4 without `sorry`, `admit`, or custom axioms; iterates on `lean_check` diagnostics. |
-| **Parallel Explorer** | `explorer_worker` | **Auto Smaller Model** | Ultramath multi-branch runner (`delegate_explore`, 2–4 concurrent branches, read/compute-only). |
-| **Step / Full Verifier** | `step_verifier`, `full_verifier` | Follow Orchestrator | Reviews proof steps or the displayed final answer with the relevant DAG, linked Lean checks, and TeX audit. |
-| **Research Strategist** | `strategist` | Follow Orchestrator | Diagnoses rejected proof attempts in `Deep` mode to plan structural revisions. |
-| **Proof Narrator / Explain / Builder** | `narrator`, `sidetalk`, `subagent_builder` | Follow Orchestrator | `Narrate Proof` sheets, isolated **Explain** Q&A, and generating custom specialist profiles. |
-
-- **Automatic Smaller-Model Routing:** By default, worker roles pick a faster, cheaper model from connected live catalogs (`Catalog::pick_smaller_model`), recording the choice in `routing_reason`. Override any role explicitly to pin your preferred model.
-- **Custom Subagents (`<data_dir>/subagents.json`):** Describe a specialist in plain English in **Agents & Models** and click **Generate with AI Agent** to draft a role (`read_only`, `compute`, or `full_research` tool profile, optional model, effort, and rigor including `interactive`). Selectable under **Research options → Agent** or via `delegate_subagent` — still strictly bound by `v0.4-research` policy and AppContainer isolation.
-
----
-
-## 6. Tool & Computation Approvals
-
-- **Policy Clamps (`crates/policy`):** `ExecuteCode` (`sympy_eval`), `WriteWorkspace` (`fs_write`, `latex_patch`, `latex_compile`), and `NetworkRead` (`arxiv_search`, `literature_search`) are statically clamped to `Ask`.
-- **Desktop Default (`auto_approve_tools = true`):** Out of the box, the desktop app enables **Settings → Advanced → Auto-approve computations, workspace writes & literature lookups** so contained SymPy scripts, TeX patches, and arXiv lookups run smoothly while still logging every decision to `ledger.db` (`approval.answered`) before execution.
-- **Manual Review Mode:** Uncheck `auto_approve_tools` anytime to inspect live syntax-highlighted Python code and unified `.tex` diffs on inline approval cards, choosing **Decline**, **Approve Once**, or **Approve for Session** (revocable via the topbar `Session allowed: ... ×` pill).
-- **Console (`re-search run`):** Never auto-approves; every `Ask`-classed tool prompts interactively on the terminal.
-
----
-
-## 7. Connecting Providers, Billing Safety & Confinement
-
-| Provider | How to Connect | Security / Billing Highlights |
-| --- | --- | --- |
-| **ChatGPT Plan** *(Windows)* | **Continue with ChatGPT** → sign in in browser → grant plan use. | Official OpenAI preview flow; DPAPI-encrypted tokens (`%LOCALAPPDATA%\re-search\chatgpt\*.dpapi`), cross-process `.lock`, Responses API (`store: false`). Shared with your ChatGPT plan limits; **does not apply `--api-base`**. |
-| **Claude Subscription** (`claude-cli`) | Install Claude Code (`claude.exe`) and sign in via terminal. | Drives unmodified `claude.exe` on `fable`/`opus`/`sonnet`/`haiku`; tools served strictly by `core.exe`. **Billing guard:** refuses to run if `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, Bedrock/Vertex/Foundry vars, or non-`"none"` `apiKeySource` is present unless `RE_SEARCH_ALLOW_CLAUDE_ENV_AUTH=1`. |
-| **Google Antigravity** (`antigravity`) | Sign in to `agy.exe`, read the Connect warning, click **I understand the risk**. | **Vendor-sandboxed, NOT confined to reSearch tools.** Third-party CLI automation may conflict with Google consumer terms. reSearch passes `--settings` denying built-in commands/files/URLs plus `--sandbox`, shows all non-core steps as `vendor.builtin_tool` warnings, and refuses if `GEMINI_API_KEY`/`GOOGLE_GEMINI_BASE_URL`/`AGY_ADC_AUTH` is set unless `RE_SEARCH_ALLOW_AGY_ENV_AUTH=1`. *Live turns not verified (fake-`agy` test suite only; see [THREAT-MODEL.md](THREAT-MODEL.md)).* |
-| **Anthropic / OpenAI / Gemini API** | Paste API key in Providers (or set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`). | Stored locally in `providers.json`, never re-displayed or sent to browser `localStorage`; scrubbed from HTTP errors and blobs. |
-| **Ollama (Local)** | Start Ollama at `http://127.0.0.1:11434` (configurable in Advanced) → **Check again**. | Runs 100% locally via OpenAI-compatible API; zero external traffic. |
-
-**Important route rules:**
-- **Route lock:** Once a session starts its first turn, it stays on its route (API/ChatGPT vs `claude-cli` vs `antigravity`); start a new session to switch routes.
-- **Side-features on CLI routes:** **Narrate Proof** and **Explain** always require an API-route model (configured per-agent or first available API provider). On `claude-cli` and `antigravity`, later turns replay a bounded transcript (~24,000 chars) on stdin rather than native tool history.
-- **Safe Literature Links:** External links (`Open Paper ↗`, `PDF ↗`, `DOI ↗`) are strictly allowlisted (`arxiv.org`, `doi.org`, `inspirehep.net`, `semanticscholar.org`, `crossref.org`) and open in your OS handler without navigating the WebView2 window off `127.0.0.1`; archives open inside the **Read Source** modal (`Rendered` KaTeX / `Raw`).
-
----
-
-## 8. Desktop Launch, Configuration & Headless Flags
-
-Settings precedence for `re-search-app.exe` (and desktop UI launches):
-1. **CLI flags:** `--workspace DIR`, `--data-dir DIR`, `--python EXE`, `--worker-script PY`, `--port PORT`, `--core-exe EXE`, `--claude EXE`, `--agy EXE`
-2. **Environment variables:** `RE_SEARCH_PYTHON`, `RE_SEARCH_DATA`, `RE_SEARCH_WORKER_SCRIPT`, `RE_SEARCH_CLAUDE` (plus `RESEARCH_CORE_*` fallbacks), `RE_SEARCH_CORE_EXE`, `RE_SEARCH_AGY`
-3. **`re-search-app.json` next to the executable** *(used by Start-menu launches where env vars aren't set; relative paths resolve next to the binary)* — keys: `python`, `worker_script`, `data_dir`, `workspace`, `core_exe`, `claude`, `agy`
-4. **Defaults:** `%LOCALAPPDATA%\re-search`, the installed `runtime/python.exe`, sibling `python/worker.py` and `core.exe`, and `claude.exe` / `agy.exe` from `PATH` or default install folders
-
-Headless & test automation flags (`re-search ui`): `--port PORT`, `--no-open true`, `--print-url-json true`, `--api-base URL` (disables `/models` fetches so keys aren't leaked to a single mock endpoint), `--arxiv-base URL`, `--inspire-base URL`, `--crossref-base URL`. Server binds strictly to `127.0.0.1`, requires `X-ReSearch-Token` on `/api/*`, uses a scoped stream cookie for SSE/exports, and refuses `--workspace` overlapping `--data-dir`.
-
----
-
-## 9. CLI Reference (`run`, `fork`, `diff`, `export`, `verify`)
-
-Pass `--workspace DIR` (or `--enable-research-tools true`) on `--route api` / `resume` to enable the full `v0.4-research` research policy (minimal `v0.2` uses `sympy_eval` and `ledger_note` only):
-
-```bash
-re-search run --route api --provider anthropic --workspace ./paper --data-dir ./data \
-  --verification-mode true --calculation-mode true --prompt "Derive and verify Lemma 1."
-re-search resume s-<id> --workspace ./paper --data-dir ./data --prompt "Continue with Lemma 2."
-re-search fork s-<id> --at-seq 6 --assumption "Assume k > 0" --data-dir ./data
-re-search diff s-<id> s-<fork_id> --data-dir ./data
-re-search export s-<id> --format zip --out ./out/proof.zip --data-dir ./data
-re-search verify s-<id> --data-dir ./data
-```
-
-Also available: `re-search desktop`, `re-search ui`, `re-search show <session>`, `re-search sessions`, and `POST /api/sessions/{id}/stop` (universal **Stop** button across API, ChatGPT, and CLI routes).
-
-**Exit codes:** `0` = completed · `1` = tampered/missing/corrupt on `resume`/`verify` · `2` = CLI usage, config, billing-guard, drift, or lock error · `3` = aborted turn/guardrail/transport error · `4` = legacy unchained schema · `5` = model refusal.
-
----
-
-## 10. Codebase Map (13 Crates) & Running Tests
-
-| Crate | Purpose |
-| --- | --- |
-| `crates/policy` | Pure `Allow / Ask / Deny` clamps (`serde` only; zero I/O, zero `tokio`/`rmcp`/`windows-sys`). |
-| `crates/ledger` | Append-only SHA-256 hash-chained SQLite store (`user_version = 3`) + content-addressed blob directory. |
-| `crates/tools` | Tool registry, router, canonical JSON, digest/epoch-bound approvals, session grants. |
-| `crates/research-tools` | `fs_list`/`fs_read`/`fs_write`, `doc_ingest`, `latex_patch`/`latex_compile`/`tex_audit`, literature clients, `ledger_*`, `lean_check`, sanity checks. |
-| `crates/worker` | Python worker (`sympy`, `mpmath`, `numpy`) in Windows `AppContainerSandbox` / `JobObjectSandbox`. |
-| `crates/agent` | Streaming provider transports, Campaign Phases, Orchestrator–Verifier–Strategist loop, Workers (`delegate`/`explore`), `honesty.lint`, `interaction` HITL, Narrator, Explain, lossless resume. |
-| `crates/export` | Counterfactual `fork`, structural branch `diff`, `.tex`/`.html`/`.zip` `export`. |
-| `crates/desktop-server` | Loopback `127.0.0.1` HTTP + SSE server (`std::net` + `httparse`, zero `tokio`), `HitlHub`, `UiApprover`, offline KaTeX UI. |
-| `crates/desktop-app` | `re-search-app`: WebView2 (`wry` + `tao`, Windows only) locked to loopback with header CSRF token. Only crate with GUI deps. |
-| `crates/mcp-server` | `core`: stdio MCP server (**only** crate depending on `rmcp`). |
-| `crates/chatgpt-auth` | ChatGPT PKCE OAuth, RS256 JWKS verification, DPAPI token store, cross-process `VaultLock`. |
-| `crates/cli-route` | Unmodified `claude.exe` and `agy.exe` supervisors (stdin prompts, init checks, loopback approvals, bounded history replay). |
-| `crates/cli` | `re-search` CLI binary (`run`, `resume`, `ui`, `desktop`, `fork`, `diff`, `export`, `show`, `sessions`, `verify`). |
-
-```bash
-# Core Rust suite (Linux & Windows against in-test loopback mocks)
-cargo build
-cargo test -p policy -p ledger -p tools -p research-tools -p agent -p chatgpt-auth -p export -p cli-route -p desktop-server -p desktop-app -p cli
-
-# Browser UI modules and symbolic / numerical research checks
-node --test crates/desktop-server/tests/*.test.mjs
-python -m unittest discover -s python
-
-# Desktop, tablet, and phone workflows against the built loopback server.
-# Requires Python Playwright and Chromium (or pass --chromium /path/to/chromium).
-python crates/desktop-server/tests/workbench_browser.py
-```
-
-Windows 11 AppContainer sandbox probes require Python with `sympy` and `numpy`:
-
-```powershell
-$env:RE_SEARCH_PYTHON = "C:\path\to\python.exe"
-cargo test --workspace --no-fail-fast
-```
-
-Windows-only integration suites cover DPAPI `VaultLock` (`chatgpt-auth`, `desktop-server/chatgpt_route`) and Job-Object CLI route spawning (`claude_cli_*`, `antigravity_route` turn tests) using loopback mocks and scripted fake CLIs.
-
----
-
-## 11. Licence
-
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE). `rmcp` (Apache-2.0) is isolated strictly in `crates/mcp-server` and excluded from all other crates.
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
