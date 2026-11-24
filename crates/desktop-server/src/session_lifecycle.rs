@@ -165,6 +165,7 @@ pub fn handle_delete_session(state: &DesktopState, session_id: &str) -> ApiResul
         .map_err(|e| internal(e.to_string()))?
         .is_empty();
 
+    let _draft_guard = crate::manuscript_drafts::lock_writes(state)?;
     let sdir = state.session_dir(session_id).map_err(internal)?;
     if sdir.exists() {
         for sub in ["scratch", "pycache", "sources"] {

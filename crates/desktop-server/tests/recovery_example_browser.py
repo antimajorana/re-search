@@ -30,7 +30,6 @@ def open_install(browser, binary, root):
 
 
 def open_manuscript(page):
-    expect(page.locator("#active-session-title")).to_have_text("Recovery case")
     toggle = page.locator("#canvas-toggle")
     if toggle.get_attribute("aria-expanded") != "true":
         toggle.click()
@@ -63,20 +62,20 @@ def check_recovery_example(browser, binary):
             demo.get_by_role("button", name="Close worked example").click()
             assert not any("/api/sessions" in url for url in steps), steps
 
-            page.evaluate("async () => (await import('/assets/api.js')).createSession({id:'s-restart', title:'Recovery case'})")
-            page.reload()
             editor = open_manuscript(page)
+            page.get_by_role("button", name="Start a manuscript").click()
             expect(editor).to_have_value("First version")
+            session = page.evaluate("async () => (await (await import('/assets/api.js')).listSessions()).sessions[0].id")
             editor.fill("My recovered derivation")
             expect(page.locator("#latex-recovery-status")).to_have_text("Recovery copy saved")
             assert manuscript.read_text(encoding="utf-8") == "First version"
             # A second window that did not read the revision cannot wipe this draft.
-            status = page.evaluate("""async () => {
+            status = page.evaluate("""async session => {
               const api = await import('/assets/api.js');
-              const [saved] = (await api.getManuscriptDrafts('s-restart')).drafts;
-              try { await api.putManuscriptDraft('s-restart', {...saved, revision:null, draft:null}); }
+              const [saved] = (await api.getManuscriptDrafts(session)).drafts;
+              try { await api.putManuscriptDraft(session, {...saved, revision:null, draft:null}); }
               catch (e) { return e.status; }
-            }""")
+            }""", session)
             assert status == 409
 
         manuscript.write_text("An external edit", encoding="utf-8")
@@ -97,6 +96,6 @@ def check_recovery_example(browser, binary):
             expect(page.locator("#latex-recovery")).to_be_hidden()
             expect(editor).to_be_editable()
             expect(editor).to_have_value("An external edit")
-            drafts = page.evaluate("async () => (await (await import('/assets/api.js')).getManuscriptDrafts('s-restart')).drafts")
+            drafts = page.evaluate("async id => (await (await import('/assets/api.js')).getManuscriptDrafts(id)).drafts", session)
             assert drafts == []
         print("Offline computation, crash recovery, concurrent drafts, external edits and discard passed")

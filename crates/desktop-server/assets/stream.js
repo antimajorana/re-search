@@ -294,7 +294,7 @@ export function appendAssistantMessage(text, thinkingText = '', toolTraces = [],
     `;
     renderRichInto(wrap.querySelector('.msg-assistant-body'), text);
     row.appendChild(wrap);
-    if (msgMeta?.seq) attachClaimTrace?.(row, text, msgMeta, currentSessionId);
+    if (msgMeta?.seq && !msgMeta.narrator) attachClaimTrace?.(row, text, msgMeta, currentSessionId);
   }
 
   const verdictCard = buildVerificationVerdictCard(msgMeta, onInspectStep, onRecoveryAction);

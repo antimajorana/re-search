@@ -84,7 +84,7 @@ re-search verify "$source_session" --data-dir ./data
 
 ## Exports and verification
 
-Verified, Deep, and Interactive turns on in-core providers review the delivered answer and its Proof DAG together. The ledger records one full-solution verdict per review round. An individual step has a separate verdict only when checked through the Rust library's `verify_step` API. Linked Lean and computation results apply to the claims and inputs they checked.
+Verified, Deep, and Interactive turns on in-core providers review the delivered answer and its Proof DAG together. The ledger records one full-solution verdict per review round. To request a separate verdict, use **Review this claim** on a passage in the answer or review a selected step in the proof graph. This action calls the configured in-core verifier. Tracing an answer, viewing historical evidence, and inspecting downstream dependencies run locally. Linked Lean and computation results apply to the claims and inputs they checked.
 
 Use **Canvas → LaTeX** to export a report as `.tex`, `.html` or **Reproducible ZIP**. **Explain** exports its own thread as Markdown or HTML. A session ZIP includes `report.tex`, `references.bib`, `report.html`, `ledger.json`, available sources and recorded computation artifacts, with provenance in `replay_manifest.json` and instructions in `REPRODUCE.md`.
 

@@ -39,6 +39,15 @@ export function initLatexCanvas(opts = {}) {
   auditBtn = document.getElementById('tex-audit-btn');
   auditResultsEl = document.getElementById('tex-audit-results');
   fileNoteEl = document.getElementById('latex-file-note');
+  const start = document.getElementById('latex-start-manuscript');
+  start?.addEventListener('click', async () => {
+    start.disabled = true;
+    try {
+      if (await opts.ensureSession()) editorEl?.focus();
+    } finally {
+      start.disabled = false;
+    }
+  });
   document.getElementById('latex-restore-draft')?.addEventListener('click', restoreSelectedDraft);
   document.getElementById('latex-discard-draft')?.addEventListener('click', discardSelectedDraft);
 
@@ -101,8 +110,7 @@ export function initLatexCanvas(opts = {}) {
     }
   }
 
-  updateLineCount();
-  renderLatexDocumentPreview(previewEl, '');
+  showFile('', false);
 }
 
 function updateLineCount() {
@@ -282,6 +290,8 @@ function showFile(text, ready, truncated = false) {
 
 export async function refreshWorkspaceFiles(sessionId) {
   const request = ++workspaceRequest;
+  const start = document.getElementById('latex-start-manuscript');
+  if (start) start.hidden = Boolean(sessionId);
   if (sessionId !== currentSessionId) {
     rememberDraft();
     currentSessionId = sessionId;

@@ -15,6 +15,7 @@ export function splitClaims(text) {
       const suffix = text.slice(offset + s.length).match(/^(?:[ \t]*\[(?:e-\d+(?:\s*,\s*e-\d+)*)\])*[.,;:]?/);
       cuts.add(offset + s.length + suffix[0].length);
     }
+    if (/^https?:\/\//.test(s) && /[.!?]$/.test(s)) return 'X'.repeat(s.length - 1) + s.at(-1);
     return 'X'.repeat(s.length);
   });
   const boundary = /[.!?](?:[*_"’”)]*)\s+|\n[ \t]*\n+|\n(?=[ \t]*(?:[-*#>]|\d+[.)])\s)/g;
@@ -35,7 +36,7 @@ function matchText(value) {
 
 const mathPattern = /\$\$([\s\S]*?)\$\$|\\\[([\s\S]*?)\\\]|\\\(([\s\S]*?)\\\)|\$((?:\\.|[^$\n])+)\$/g;
 function mathExpressions(text) {
-  return [...text.matchAll(mathPattern)].map(m => matchText(m.slice(1).find(v => v !== undefined)));
+  return [...text.matchAll(mathPattern)].map(m => m.slice(1).find(v => v !== undefined).trim());
 }
 
 export function linkedSteps(claim, entries, answerSeq) {
@@ -48,7 +49,7 @@ export function linkedSteps(claim, entries, answerSeq) {
     if (entry.seq > answerSeq) continue;
     const id = entry.entry_id;
     const summary = matchText(entry.summary);
-    const equation = entry.latex && (mathExpressions(entry.latex)[0] || matchText(entry.latex));
+    const equation = entry.latex && (mathExpressions(entry.latex)[0] || entry.latex.trim());
     let reason;
     if (mentioned.has(id)) reason = 'Cited proof step';
     else if (entry.entry_type !== 'final_answer' && summary.length >= 12 && summary === normalized) reason = 'Matching recorded statement';
@@ -105,11 +106,23 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
   let open = false;
   let snapshot;
   let selection = 0;
+  let activeChoice;
+  let activeClaim;
+  let highlighted = '';
   const pendingReviews = new Map();
   const newReviews = new Map();
+  function selectedExcerpt() {
+    const range = window.getSelection();
+    if (!range?.rangeCount || !body.contains(range.anchorNode) || !body.contains(range.focusNode)) return '';
+    const raw = range.toString().trim();
+    return raw && answer.includes(raw) ? raw : '';
+  }
+  toggle.addEventListener('pointerdown', () => { highlighted = selectedExcerpt(); });
 
   async function trace(claim, pick) {
     const request = ++selection;
+    activeChoice = pick;
+    activeClaim = claim;
     for (const choice of body.querySelectorAll('.claim-choice')) choice.setAttribute('aria-pressed', String(choice === pick));
     panel.hidden = false;
     panel.replaceChildren(element('h4', 'Evidence for this claim'), element('p', 'Reading the session record…'));
@@ -127,7 +140,7 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
       renderRichInto(quote, claim);
       panel.append(quote);
       if (!matches.length && !papers.length) panel.append(element('p', 'No proof step, calculation or citation is linked to this wording in the saved answer.'));
-      for (const { paper, source } of papers) {
+      for (const { paper, source, readers, steps } of papers) {
         const line = element('div', '', 'claim-trace-source');
         const link = linksForPaper(paper)[0];
         line.append('Cited source · ');
@@ -141,7 +154,12 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
           line.append(paper.title || paper.url || 'Saved paper');
           if (paper.url && paper.title !== paper.url) line.append(' · ' + paper.url);
         }
-        if (source?.primary_path) line.append(button('Read saved source', () => openSource({ source_id: source.source_id, path: source.primary_path })));
+        for (const reader of readers.values()) {
+          const location = reader.start_line ? ' · line ' + reader.start_line : '';
+          line.append(button('Read recorded passage' + location, () => openSource(reader)));
+        }
+        if (!readers.size && source?.primary_path) line.append(button('Read saved source', () => openSource({ source_id: source.source_id, path: source.primary_path })));
+        for (const id of steps) line.append(button('Paper linked to ' + id, () => inspectStep(id)));
         panel.append(line);
       }
       for (const { entry, reason } of matches) {
@@ -179,7 +197,8 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
         if (pendingReviews.has(claim)) return;
         review.disabled = true;
         reviewPanel.textContent = 'Requesting an independent model review…';
-        const pending = api.reviewClaim(sessionId, { claim, answer_seq: seq });
+        const citedSteps = matches.filter(match => match.reason === 'Cited proof step').map(match => match.entry.entry_id);
+        const pending = api.reviewClaim(sessionId, { claim, answer_seq: seq, cited_steps: citedSteps });
         pendingReviews.set(claim, pending);
         try {
           const result = await pending;
@@ -193,7 +212,7 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
         } finally {
           pendingReviews.delete(claim);
           review.disabled = false;
-          if (request !== selection && pick.getAttribute('aria-pressed') === 'true' && open && pick.isConnected) trace(claim, pick);
+          if (request !== selection && activeClaim === claim && open && activeChoice?.isConnected) trace(claim, activeChoice);
         }
       });
       if (pendingReviews.has(claim)) { review.disabled = true; reviewPanel.textContent = 'Review in progress…'; }
@@ -204,6 +223,8 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
     }
   }
   function toggleTrace() {
+    const excerpt = highlighted || selectedExcerpt();
+    highlighted = '';
     open = !open;
     ++selection;
     panel.hidden = true;
@@ -214,14 +235,17 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
     if (!open) { renderRichInto(body, answer); return; }
     snapshot = undefined;
     const fragment = document.createDocumentFragment();
+    let containingChoice;
     for (const claim of splitClaims(answer)) {
       const pick = button('', () => trace(claim, pick));
       pick.className = 'claim-choice';
       pick.setAttribute('aria-pressed', 'false');
       renderMathTextInto(pick, claim);
       fragment.append(pick);
+      if (excerpt && !containingChoice && claim.includes(excerpt)) containingChoice = pick;
     }
     body.replaceChildren(fragment);
-    body.querySelector('.claim-choice')?.focus();
+    if (containingChoice) trace(excerpt, containingChoice);
+    else body.querySelector('.claim-choice')?.focus();
   }
 }

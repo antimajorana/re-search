@@ -448,8 +448,15 @@ fn per_agent_models_explain_export_and_narrator_lifecycle() {
 
 #[test]
 fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
-    let mock = ScriptedMock::start(Box::new(|_, req| {
+    let (entered_tx, entered) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    let mock = ScriptedMock::start(Box::new(move |_, req| {
         let input = req.to_string();
+        if input.contains("<selected_claim>x is positive [e-2].</selected_claim>") {
+            entered_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv_timeout(Duration::from_secs(8)).unwrap();
+        }
         let text = if input.contains("<selected_claim>no verdict</selected_claim>") {
             "I cannot provide the requested result."
         } else {
@@ -471,9 +478,14 @@ fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
     let rec = |kind: &str, data: Value| ledger.append_with_hash(sid, kind, 1, &data).unwrap().seq;
     rec("session.start", json!({"prompt":"FIRST_PROBLEM","pinned_conventions":"x>0"}));
     rec("proof.entry", json!({"entry_id":"e-1","entry_type":"assumption","summary":"x>0","depends_on":[]}));
+    rec("tool.request", json!({"call_id":"probe","tool":"sympy_eval","args":{"inline":"{\"code\":\"factorial(3)\"}"}}));
+    rec("tool.result", json!({"call_id":"probe","ok":true,"result":{"inline":"{\"value\":\"RECORDED_EXACT_VALUE\"}"}}));
+    rec("proof.entry", json!({"entry_id":"e-2","entry_type":"symbolic_computation","summary":"Calculation",
+        "tool_call_ref":"probe","depends_on":["e-1"]}));
+    rec("proof.entry", json!({"entry_id":"e-3","entry_type":"derivation","summary":"UNRELATED_ENTRY","depends_on":[]}));
     rec("model.response", json!({"stop_reason":"end_turn"}));
     let seq = rec("model.text", json!({"text":"The result:"}));
-    rec("model.text", json!({"text":"x is positive. no verdict"}));
+    rec("model.text", json!({"text":"x is positive [e-2]. no verdict"}));
     rec("session.end", json!({"outcome":"completed"}));
     rec("session.resume", json!({"prompt":"LATER_UNRELATED_PROBLEM","pinned_conventions":"x<0"}));
     rec("model.text", json!({"text":"x is negative."}));
@@ -486,10 +498,21 @@ fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
         "keys":{"openai":"sk-claim-test"},"base_urls":{"openai":mock.base_url},
         "agent_models":{"step_verifier":{"provider":"openai","model":"gpt-4.1-mini"}}
     })).0,200);
-    let (code, claim) = call("POST", &route, json!({"claim":"x is positive.","answer_seq":seq}));
+    let (code, claim) = std::thread::scope(|scope| {
+        let pending = scope.spawn(|| call("POST", &route, json!({"claim":"x is positive [e-2].","answer_seq":seq,"cited_steps":["e-2"]})));
+        entered.recv_timeout(Duration::from_secs(8)).unwrap();
+        assert_eq!(call("POST", &route, json!({"entry_id":"e-1"})).0,409);
+        assert_eq!(call("POST", &format!("/api/sessions/{sid}/messages"), json!({"prompt":"Busy!"})).0,409);
+        release.send(()).unwrap();
+        pending.join().unwrap()
+    });
     assert_eq!(code, 200, "{claim}");
     assert_eq!(claim["scope"], "claim");
     assert_eq!(claim["verdict"], "accepted");
+    let request = mock.captured()[0].1.to_string();
+    assert!(request.contains("RECORDED_EXACT_VALUE") && request.contains("factorial(3)"));
+    assert!(!request.contains("UNRELATED_ENTRY"));
+    assert_eq!(claim["cited_steps"], json!(["e-2"]));
     let (code, step) = call("POST", &route, json!({"entry_id":"e-1"}));
     assert_eq!(code, 200, "{step}");
     assert_eq!(step["scope"], "step");
@@ -506,8 +529,8 @@ fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
     let selections = events.iter().filter(|e| e["kind"] == "claim.review").collect::<Vec<_>>();
     assert_eq!(selections.len(), 1);
     assert_eq!(selections[0]["payload"]["answer_seq"], seq);
-    assert_eq!(selections[0]["payload"]["claim"], "x is positive.");
-    assert_eq!(selections[0]["payload"]["answer_sha256"], ledger::sha256_hex(b"The result:\nx is positive. no verdict"));
+    assert_eq!(selections[0]["payload"]["claim"], "x is positive [e-2].");
+    assert_eq!(selections[0]["payload"]["answer_sha256"], ledger::sha256_hex(b"The result:\nx is positive [e-2]. no verdict"));
     assert_eq!(reopened["stats"]["step_checks"], 1);
     assert!(ledger.verify_session(sid).is_ok());
     server.shutdown();

@@ -135,7 +135,7 @@ async function boot() {
     onNeedModel: openConnect,
   });
 
-  initLatexCanvas({ onNotify: showToast });
+  initLatexCanvas({ onNotify: showToast, ensureSession: ensureActiveSession });
   initDagCanvas({
     onDagCount: (n) => { state.tabCounts.dag = n; updateCanvasTabCounts(state.tabCounts); },
     onForkCreated: async (newId, open) => {
@@ -676,10 +676,11 @@ function connectSessionSse(id) {
       setComposerBusy(true);
       setStreamStatus('Reviewing claim…', 'accent');
     },
-    claim_review_finished: () => {
+    claim_review_finished: (d) => {
       if (!isAct()) return;
-      setComposerBusy(false);
-      setStreamStatus('Ready', 'ok');
+      const waiting = d?.pending_approvals ? 'Awaiting Approval' : d?.pending_checkpoints ? 'Awaiting Input' : '';
+      setComposerBusy(Boolean(waiting));
+      setStreamStatus(waiting || 'Ready', waiting ? 'warn' : 'ok');
     },
     checkpoint_resolved: (d) => {
       if (!isAct() || !d) return;

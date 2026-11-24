@@ -53,6 +53,9 @@ fn read(root: &Path, id: &str) -> Result<Vec<Record>, ErrMsg> {
             Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(io_error(e)),
             Ok(meta) if is_symlink_or_junction(&path, &meta) => return Err(bad("Invalid manuscript storage path.")),
+            Ok(meta) if (part == STORE && !meta.is_file()) || (part != STORE && !meta.is_dir()) => {
+                return Err(bad("Invalid manuscript storage path."));
+            }
             Ok(_) => {}
         }
     }
@@ -81,14 +84,13 @@ pub(crate) fn handle(state: &DesktopState, id: &str, body: Option<&[u8]>) -> Api
             return Err(bad("Invalid manuscript baseline hash."));
         }
     }
-    let lock = OpenOptions::new().create(true).truncate(false).read(true).write(true)
-        .open(root.join("manuscript-drafts.lock")).map_err(io_error)?;
-    lock.lock().map_err(io_error)?;
+    let _guard = lock_writes(state)?;
+    if !state.session_exists(id).map_err(internal)? { return Err(not_found("Session not found.")); }
     let mut records = read(&root, id)?;
     let index = records.iter().position(|r| r.workspace == update.workspace && r.path == update.path);
     let current = index.map(|i| records[i].revision.as_str());
     if current != update.revision.as_deref() {
-        return Err(conflict("Another window changed this recovery copy. Reopen the session before editing it."));
+        return Err(conflict("Another window changed this recovery copy. Copy your edits before reopening the app."));
     }
     if let Some(i) = index { records.swap_remove(i); }
     let revision = update.draft.map(|draft| {
@@ -103,4 +105,11 @@ pub(crate) fn handle(state: &DesktopState, id: &str, body: Option<&[u8]>) -> Api
     WorkspaceSandbox::atomic_write_in_root(&root, &["sessions".into(), id.into(), STORE.into()], &bytes)
         .map_err(io_error)?;
     Ok((200, json!({ "revision": revision })))
+}
+
+pub(crate) fn lock_writes(state: &DesktopState) -> Result<File, (u16, String)> {
+    let lock = OpenOptions::new().create(true).truncate(false).read(true).write(true)
+        .open(state.cfg.data_dir.join("manuscript-drafts.lock")).map_err(io_error)?;
+    lock.lock().map_err(io_error)?;
+    Ok(lock)
 }

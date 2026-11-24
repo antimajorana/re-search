@@ -11,6 +11,7 @@ from zipfile import ZipFile
 
 from playwright.sync_api import expect, sync_playwright
 from research_display_browser import check_research_display
+from project_backup_browser import check_project_backup
 from recovery_example_browser import check_recovery_example
 
 
@@ -122,6 +123,8 @@ def check_workbench(browser, binary, width, height):
             expect(page.locator("#project-title")).to_have_text("Boundary terms")
             page.get_by_role("tab", name="Findings").click()
             expect(page.locator("#project-finding-list")).to_contain_text("Periodic boundary terms cancel.")
+            if width == 1440:
+                check_project_backup(browser, binary, root, page)
             assert not errors, errors
             print(f"{width}×{height}: draft, research options, project, ingestion, evidence, ZIP, and reload passed")
         finally:

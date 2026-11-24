@@ -14,7 +14,7 @@ use std::sync::Arc;
 #[serde(untagged, deny_unknown_fields)]
 enum Target {
     Step { entry_id: String },
-    Claim { answer_seq: u64, claim: String },
+    Claim { answer_seq: u64, claim: String, #[serde(default)] cited_steps: Vec<String> },
 }
 
 struct ReviewGuard<'a> {
@@ -26,7 +26,10 @@ impl Drop for ReviewGuard<'_> {
     fn drop(&mut self) {
         if let Ok(mut active) = self.state.active_turns.lock() {
             active.remove(self.session);
-            self.state.sse.emit(self.session, "claim_review_finished", json!({}));
+            self.state.sse.emit(self.session, "claim_review_finished", json!({
+                "pending_approvals": self.state.pending_for_session(self.session).len(),
+                "pending_checkpoints": self.state.hitl.list_pending(self.session).len(),
+            }));
         }
     }
 }
@@ -48,7 +51,7 @@ pub(crate) fn handle_review(state: &Arc<DesktopState>, session: &str, body: &[u8
     let ledger = state.open_ledger().map_err(internal)?;
     let (_, events) = ledger.read_verified_session(session).map_err(|_| bad("The saved session could not be verified."))?;
     let answer = match &target {
-        Target::Claim { answer_seq, claim } => {
+        Target::Claim { answer_seq, claim, .. } => {
             let (messages, _, _) = crate::session_view::reconstruct_session_view(&events);
             let message = messages.iter().find(|m| m["role"] == "assistant" && m["seq"].as_u64() == Some(*answer_seq)
                 && m["narrator"] != true).ok_or_else(|| bad("The selected answer could not be found."))?;
@@ -74,14 +77,15 @@ pub(crate) fn handle_review(state: &Arc<DesktopState>, session: &str, body: &[u8
     state.sse.emit(session, "claim_review_started", json!({ "model": model }));
     let report = match &target {
         Target::Step { entry_id } => review_step(&*transport, &ledger, &env, session, entry_id, &model, &worker.cancel),
-        Target::Claim { claim, answer_seq } => review_answer_claim(&*transport, &ledger, &env, session,
-            AnswerClaim { claim, answer: answer.as_deref().unwrap_or_default(), answer_seq: *answer_seq }, &model, &worker.cancel),
+        Target::Claim { claim, answer_seq, cited_steps } => review_answer_claim(&*transport, &ledger, &env, session,
+            AnswerClaim { claim, answer: answer.as_deref().unwrap_or_default(), answer_seq: *answer_seq, cited_steps }, &model, &worker.cancel),
     }.map_err(bad)?;
     let mut result = serde_json::to_value(&report).map_err(|e| internal(e.to_string()))?;
     result["scope"] = json!(report.kind);
     result["model"] = json!(model);
-    if let Target::Claim { answer_seq, claim } = target {
+    if let Target::Claim { answer_seq, claim, cited_steps } = target {
         result["claim"] = Value::String(claim);
+        result["cited_steps"] = json!(cited_steps);
         result["answer_seq"] = json!(answer_seq);
         result["answer_sha256"] = json!(ledger::sha256_hex(answer.unwrap_or_default().as_bytes()));
     }

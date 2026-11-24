@@ -46,6 +46,13 @@ def fulfill(route):
             route.fulfill(status=404)
     elif path == "/api/sessions/s-test/dag":
         route.fulfill(json={"entries": [entry]})
+    elif path == "/api/sessions/s-test/evidence":
+        route.fulfill(json={"entries": [{"entry_id": "e-1", "support": [
+            {"kind": "computation", "status": "completed", "via_entry_id": "e-1", "value": "5/2"}
+        ]}]})
+    elif path == "/api/sessions/s-test/claim-review":
+        assert route.request.post_data_json == {"answer_seq": 12, "claim": "An unlinked statement.", "cited_steps": []}
+        route.fulfill(json={"scope": "claim", "verdict": "needs_revision", "summary": "The selected claim lacks a stated hypothesis."})
     elif path == "/api/sessions/s-test":
         route.fulfill(json={"sources": [], "events": [
             {"kind": "literature.fetched", "payload": {
@@ -148,6 +155,27 @@ def check_research_display(browser):
             await new Promise(requestAnimationFrame);
         }""")
         assert pane.evaluate("(el) => el.scrollHeight - el.clientHeight - el.scrollTop") < 2
+        page.evaluate(r"""async () => {
+            const { attachAnswerTrace } = await import('/assets/claim_trace.js');
+            stream.initStream({ attachClaimTrace: (row, answer, meta, sid) => attachAnswerTrace(row, answer, meta.seq, sid, {
+                inspectStep: (id) => { window.inspectedClaimStep = id; }, openSource: () => {},
+            }) });
+            stream.renderSessionStream('s-test', { messages: [{ role:'assistant', seq:12,
+                text:'The ratio is finite [e-1]. An unlinked statement. See DOI:10.1111/2501.00001.' }] });
+        }""")
+        page.get_by_role("button", name="Trace a claim").click()
+        page.get_by_role("button", name="The ratio is finite [e-1].", exact=True).click()
+        selected = page.get_by_role("region", name="Evidence for selected claim")
+        expect(selected).to_contain_text("5/2")
+        selected.get_by_role("button", name="Open proof step e-1").click()
+        assert page.evaluate("window.inspectedClaimStep") == "e-1"
+        page.get_by_role("button", name="An unlinked statement.", exact=True).click()
+        expect(selected).to_contain_text("No proof step")
+        selected.get_by_role("button", name="Review this claim").click()
+        expect(selected).to_contain_text("lacks a stated hypothesis")
+        page.get_by_role("button", name="See DOI:10.1111/2501.00001.").click()
+        expect(selected.get_by_role("link")).to_have_attribute("href", "https://doi.org/10.1111/2501.00001")
+        page.get_by_role("button", name="Close claim tracing").click()
         assert not errors, errors
         print(f"{width}px: math, restored paper references, scrollback during streaming, and follow at the bottom passed")
         page.close()

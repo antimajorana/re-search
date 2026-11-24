@@ -93,7 +93,7 @@
             <div class="project-actions">
               <select id="project-select" class="compact-select" aria-label="Select project"></select>
               <button id="project-create-btn" type="button" class="pill-btn sm primary">New project</button>
-              <a id="project-backup-link" class="pill-btn sm" download hidden>Back up project</a>
+              <a id="project-backup-link" class="pill-btn sm" title="Download sessions, sources, manuscript drafts, experiments and private validation values. Back up attached workspace folders separately." download hidden>Back up project</a>
               <button id="project-restore-btn" type="button" class="pill-btn sm">Restore backup</button>
               <input id="project-restore-file" type="file" accept=".zip" hidden>
             </div>
@@ -355,6 +355,7 @@
             </div>
           </div>
           <p id="latex-file-note" class="latex-file-note" role="status" hidden>This preview is truncated. Open the full file in your workspace to edit or audit it.</p>
+          <button id="latex-start-manuscript" type="button" class="pill-btn">Start a manuscript</button>
           <div id="latex-recovery" class="panel-toolbar" hidden>
             <label for="latex-recovery-list">Recover unsaved edits</label>
             <select id="latex-recovery-list" class="compact-select"></select>
