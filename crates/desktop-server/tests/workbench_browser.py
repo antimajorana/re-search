@@ -32,6 +32,12 @@ def check_workbench(browser, binary, width, height):
         context = browser.new_context(viewport={"width": width, "height": height})
         errors = []
         page = context.new_page()
+        if width == 1024:
+            # Reproduce a save request arriving during a gap in the live event stream.
+            page.add_init_script("""const listen = EventSource.prototype.addEventListener;
+                EventSource.prototype.addEventListener = function(name, ...args) {
+                    if (name !== 'approval_requested') return listen.call(this, name, ...args);
+                };""")
         page.on("pageerror", lambda error: errors.append(str(error)))
         try:
             page.goto(json.loads(server.stdout.readline())["url"])
@@ -104,7 +110,7 @@ def check_workbench(browser, binary, width, height):
             page.evaluate("async () => (await import('/assets/api.js')).updateProviderSettings({auto_approve_tools:false})")
             page.locator("#latex-save-btn").click()
             decision = page.locator(".approval-card").get_by_role("button", name=re.compile(r"^Approve (Once|& Run)$"))
-            expect(decision).to_be_in_viewport()
+            expect(decision).to_be_in_viewport(timeout=20000)
             decision.click()
             expect(page.locator("#stream-status-pill")).to_have_text("Ready")
             if canvas_toggle.get_attribute("aria-expanded") != "true":

@@ -317,6 +317,9 @@ fn dispatch_api(
         ("POST", ["api", "sessions", id, "messages"]) => {
             write_api_res(&mut stream, handle_post_message(state, id, &req.body));
         }
+        ("GET", ["api", "sessions", id, "approvals"]) => {
+            write_api_res(&mut stream, crate::routes_session::handle_pending_approvals(state, id));
+        }
         ("POST", ["api", "sessions", id, "approvals", call_id]) => {
             write_api_res(&mut stream, handle_post_approval(state, id, call_id, &req.body));
         }

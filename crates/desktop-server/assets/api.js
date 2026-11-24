@@ -179,6 +179,10 @@ export function getSession(id) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}`);
 }
 
+export function getPendingApprovals(id) {
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/approvals`);
+}
+
 export function sendMessage(id, payload) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/messages`, payload);
 }

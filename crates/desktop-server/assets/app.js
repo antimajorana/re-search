@@ -136,7 +136,7 @@ async function boot() {
     onNeedModel: openConnect,
   });
 
-  initLatexCanvas({ onNotify: showToast, ensureSession: ensureActiveSession });
+  initLatexCanvas({ onNotify: showToast, ensureSession: ensureActiveSession, onPendingSave: recoverSaveApproval });
   initDagCanvas({
     onDagCount: (n) => { state.tabCounts.dag = n; updateCanvasTabCounts(state.tabCounts); },
     onForkCreated: async (newId, open) => {
@@ -585,6 +585,24 @@ async function selectSession(id, { focus = false, adoptDraft = false } = {}) {
   }
 }
 
+function showPendingApproval(d) {
+  setComposerBusy(true);
+  setStreamStatus('Awaiting Approval', 'warn');
+  const card = renderApprovalCard(d);
+  if (card && d.caller === 'user:canvas') {
+    if (window.innerWidth <= 1120) setDrawerOpen('canvas', false);
+    card.querySelector('button')?.focus({ preventScroll: true });
+    card.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function recoverSaveApproval(id, approvals) {
+  if (id !== state.activeSessionId) return;
+  for (const item of approvals) {
+    if (item.caller === 'user:canvas' && !document.querySelector(`.approval-card[data-call-id="${CSS.escape(item.call_id)}"]`)) showPendingApproval(item);
+  }
+}
+
 function connectSessionSse(id) {
   closeSse();
   const selection = sessionSelection;
@@ -602,10 +620,10 @@ function connectSessionSse(id) {
         const sess = await api.getSession(id);
         if (!isAct() || interrupted || revision !== turnRevision) return;
         if (titleRevision === sessionTitleRevision) renderMathTextInto(el.sessionTitle, sess.title || id);
-        if (sess.running) {
+        if (sess.running || sess.pending_approvals?.length || sess.pending_checkpoints?.length) {
           const approvals = sess.pending_approvals || [];
           const checkpoints = sess.pending_checkpoints || [];
-          approvals.forEach(renderApprovalCard);
+          approvals.forEach(showPendingApproval);
           const messageStream = document.getElementById('message-stream');
           checkpoints.forEach((cp) => renderCheckpointCard(messageStream, id, cp, checkpointOpts(id)));
           setComposerBusy(true);
@@ -648,14 +666,7 @@ function connectSessionSse(id) {
     tool_trace: (d) => { if (!isAct()) return; updatePipelineFromEvent('tool_trace', d); handleToolTrace(d); },
     approval_requested: (d) => {
       if (!isAct()) return;
-      setComposerBusy(true);
-      setStreamStatus('Awaiting Approval', 'warn');
-      const card = renderApprovalCard(d);
-      if (card && d.caller === 'user:canvas') {
-        if (window.innerWidth <= 1120) setDrawerOpen('canvas', false);
-        card.querySelector('button')?.focus({ preventScroll: true });
-        card.scrollIntoView({ block: 'nearest' });
-      }
+      showPendingApproval(d);
     },
     approval_resolved: async (d) => {
       if (!isAct() || !d || d.auto_approved) return;

@@ -269,6 +269,14 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
     ))
 }
 
+pub fn handle_pending_approvals(state: &DesktopState, session_id: &str) -> ApiResult {
+    validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
+    if !state.session_exists(session_id).map_err(internal)? {
+        return Err(not_found("Session not found."));
+    }
+    Ok((200, json!({ "pending": state.pending_for_session(session_id) })))
+}
+
 pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
     validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
     if !state.session_exists(session_id).map_err(internal)? {

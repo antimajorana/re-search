@@ -28,9 +28,11 @@ let originalContent = '';
 let editorBaseline = '';
 let previewTimer = null;
 let notifyFn = () => {};
+let onPendingSave;
 
 export function initLatexCanvas(opts = {}) {
   notifyFn = opts.onNotify || (() => {});
+  onPendingSave = opts.onPendingSave;
   fileSelectEl = document.getElementById('latex-file-select');
   editorEl = document.getElementById('latex-editor');
   previewEl = document.getElementById('latex-preview');
@@ -441,9 +443,19 @@ async function handleSavePatch() {
     : { path, content: replacement };
   if (fileHash !== undefined) payload.expected_sha256 = fileHash;
   const key = displayedFile;
-
+  let checking = Boolean(onPendingSave);
+  let approvalTimer;
+  const refreshApproval = async () => {
+    if (!checking || currentSessionId !== sessionId) return;
+    try {
+      const { pending } = await api.getPendingApprovals(sessionId);
+      if (checking && currentSessionId === sessionId) onPendingSave(sessionId, pending);
+    } catch { /* A pending save may outlive a reconnect. */ }
+    if (checking) approvalTimer = setTimeout(refreshApproval, 1500);
+  };
   try {
     if (saveBtn) saveBtn.disabled = true;
+    if (checking) approvalTimer = setTimeout(refreshApproval, 500);
     const result = await api.patchLatex(sessionId, payload);
     const savedHash = result?.output?.sha256_after;
     const pending = drafts.get(key);
@@ -463,6 +475,8 @@ async function handleSavePatch() {
       notifyFn(`Save failed: ${err.message}`);
     }
   } finally {
+    checking = false;
+    clearTimeout(approvalTimer);
     if (request === fileRequest && saveBtn) saveBtn.disabled = false;
   }
 }
