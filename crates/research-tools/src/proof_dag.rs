@@ -354,10 +354,8 @@ pub fn read_proof_dag(ledger: &Ledger, session: &str) -> Result<ProofDag, String
     let mut index_by_id: BTreeMap<String, usize> = BTreeMap::new();
     let mut edges: Vec<(String, String)> = Vec::new();
     let mut latest_full_verification_accepted = false;
-    let mut sympy_calls: BTreeMap<String, u64> = BTreeMap::new();
+    let mut sympy_calls = BTreeSet::new();
     let mut sympy_result_seqs: Vec<(String, u64)> = Vec::new();
-    let mut cited_call_refs: BTreeSet<String> = BTreeSet::new();
-    let mut cited_result_seqs: BTreeSet<u64> = BTreeSet::new();
 
     for ev in &events {
         let p = &ev.payload;
@@ -365,13 +363,13 @@ pub fn read_proof_dag(ledger: &Ledger, session: &str) -> Result<ProofDag, String
             "tool.request" => {
                 if p.get("tool").and_then(Value::as_str) == Some("sympy_eval") {
                     if let Some(cid) = p.get("call_id").and_then(Value::as_str) {
-                        sympy_calls.insert(cid.to_string(), ev.seq);
+                        sympy_calls.insert(cid);
                     }
                 }
             }
             "tool.result" => {
                 if let Some(cid) = p.get("call_id").and_then(Value::as_str) {
-                    if sympy_calls.contains_key(cid) {
+                    if sympy_calls.remove(cid) && successful_sympy_result(ledger, p) {
                         sympy_result_seqs.push((cid.to_string(), ev.seq));
                         latest_full_verification_accepted = false;
                     }
@@ -405,12 +403,6 @@ pub fn read_proof_dag(ledger: &Ledger, session: &str) -> Result<ProofDag, String
                     .get("tool_call_ref")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                if entry_type == "result" {
-                    if let Some(tref) = &tool_call_ref {
-                        cited_call_refs.insert(tref.clone());
-                        collect_cited_seqs(tref, &mut cited_result_seqs);
-                    }
-                }
                 let idx = entries.len();
                 index_by_id.insert(entry_id.clone(), idx);
                 entries.push(ProofEntry {
@@ -466,12 +458,27 @@ pub fn read_proof_dag(ledger: &Ledger, session: &str) -> Result<ProofDag, String
         }
     }
 
+    let interpretations = entries.iter().filter(|entry| {
+        is_active_evidence(entry) && matches!(entry.entry_type.as_str(), "result" | "final_answer")
+    });
+    let mut references = BTreeSet::new();
+    for entry in interpretations {
+        references.extend(entry.tool_call_ref.as_deref());
+        for dep in &entry.depends_on {
+            if let Some(&idx) = index_by_id.get(dep) {
+                let dependency = &entries[idx];
+                if is_active_evidence(dependency)
+                    && matches!(dependency.entry_type.as_str(), "symbolic_computation" | "numerical_computation")
+                {
+                    references.extend(dependency.tool_call_ref.as_deref());
+                }
+            }
+        }
+    }
     let unverified_computations: Vec<u64> = sympy_result_seqs
         .into_iter()
         .filter_map(|(cid, seq)| {
-            let cited = cited_result_seqs.contains(&seq)
-                || cited_call_refs.contains(&cid)
-                || cited_call_refs.iter().any(|r| r.contains(&cid));
+            let cited = references.iter().any(|reference| tool_reference_matches(reference, &cid, seq));
             (!cited).then_some(seq)
         })
         .collect();
@@ -485,13 +492,31 @@ pub fn read_proof_dag(ledger: &Ledger, session: &str) -> Result<ProofDag, String
     })
 }
 
-fn collect_cited_seqs(tref: &str, out: &mut BTreeSet<u64>) {
-    if let Ok(n) = tref.trim().parse::<u64>() {
-        out.insert(n);
+fn is_active_evidence(entry: &ProofEntry) -> bool {
+    !matches!(entry.status, ProofStatus::Superseded | ProofStatus::Rejected)
+}
+
+fn successful_sympy_result(ledger: &Ledger, payload: &Value) -> bool {
+    if payload["ok"].as_bool() != Some(true) {
+        return false;
     }
-    if let Some((_, tail)) = tref.rsplit_once(':') {
-        if let Ok(n) = tail.trim().parse::<u64>() {
-            out.insert(n);
-        }
+    let result = &payload["result"];
+    let decoded = if let Some(inline) = result["inline"].as_str() {
+        serde_json::from_str::<Value>(inline).ok()
+    } else if let Some(hash) = result["blob"].as_str() {
+        ledger.get_blob(hash).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    } else {
+        Some(result.clone())
+    };
+    decoded.is_some_and(|result| result.get("value").is_some() && result["error"].is_null())
+}
+
+/// Match a durable tool call ID or ledger result sequence.
+pub fn tool_reference_matches(reference: &str, call_id: &str, seq: u64) -> bool {
+    let reference = reference.trim();
+    if let Some((id, number)) = reference.split_once("@seq:") {
+        return id == call_id && number.parse::<u64>().ok() == Some(seq);
     }
+    reference == call_id
+        || reference.strip_prefix("seq:").unwrap_or(reference).parse::<u64>().ok() == Some(seq)
 }

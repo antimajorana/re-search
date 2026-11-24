@@ -53,16 +53,21 @@ pub fn is_allowed_external_source_url(url: &str) -> bool {
     ALLOWED_EXTERNAL_HOSTS.contains(&host.as_str())
 }
 
-/// `true` only for `<base_url>/api/sessions/<id>/export[?query]`, the one download the UI
-/// starts. `<id>` must look like a re:Search session id (`[a-z0-9._-]`, not `.`/`..`).
+/// Allow session exports and project bibliography downloads from this server.
 pub fn is_allowed_export(url: &str, base_url: &str) -> bool {
     let Some(rest) = url.strip_prefix(base_url) else {
         return false;
     };
-    let Some(rest) = rest.strip_prefix("/api/sessions/") else {
+    let path = if let Some(session) = rest.strip_prefix("/api/sessions/") {
+        session.split(['?', '#']).next().unwrap_or_default()
+    } else if let Some(project) = rest
+        .strip_prefix("/api/projects/")
+        .and_then(|path| path.strip_suffix("?format=bib"))
+    {
+        project
+    } else {
         return false;
     };
-    let path = rest.split(['?', '#']).next().unwrap_or_default();
     let Some(id) = path.strip_suffix("/export") else {
         return false;
     };
@@ -159,11 +164,12 @@ mod tests {
     }
 
     #[test]
-    fn only_session_export_urls_may_download() {
+    fn only_session_exports_and_project_bibliographies_may_download() {
         for ok in [
             "http://127.0.0.1:43123/api/sessions/s-0123abcd/export",
             "http://127.0.0.1:43123/api/sessions/s-0123abcd/export?format=zip",
             "http://127.0.0.1:43123/api/sessions/s_1.fork-2/export?format=tex",
+            "http://127.0.0.1:43123/api/projects/p-0123abcd/export?format=bib",
         ] {
             assert!(is_allowed_export(ok, BASE), "{ok}");
         }
@@ -181,6 +187,11 @@ mod tests {
             "http://127.0.0.1:43123/api/sessions/S-UPPER/export",
             "http://127.0.0.1:43123/api/sessions/s-1/events",
             "http://127.0.0.1:43123/api/sessions/s-1/export/more",
+            "http://127.0.0.1:43123/api/projects/../export?format=bib",
+            "http://127.0.0.1:43123/api/projects/p-1/export",
+            "http://127.0.0.1:43123/api/projects/p-1/export?format=zip",
+            "http://127.0.0.1:43123/api/projects/p-1/sources?format=bib",
+            "http://127.0.0.1:43124/api/projects/p-1/export?format=bib",
             "http://127.0.0.1:43123/assets/app.js",
             "http://127.0.0.1:43123/",
             "https://example.com/api/sessions/s-1/export",

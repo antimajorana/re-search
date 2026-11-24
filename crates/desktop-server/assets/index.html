@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="re-search-csrf" content="">
   <title>reSearch — Scientific Research Workstation</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024'%3E%3Cdefs%3E%3CclipPath id='o'%3E%3Ccircle cx='600' cy='432' r='262'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect width='1024' height='1024' rx='227' fill='%2312142b'/%3E%3Ccircle cx='600' cy='432' r='262' fill='%23ff6b3d'/%3E%3Ccircle cx='431' cy='602' r='262' fill='%234d63ff'/%3E%3Ccircle cx='431' cy='602' r='262' fill='%23f0ecff' clip-path='url(%23o)'/%3E%3C/svg%3E">
+  <link rel="icon" type="image/png" sizes="64x64" href="/assets/re-search-icon.png">
   <link rel="stylesheet" href="/vendor/katex/katex.min.css">
   <link rel="stylesheet" href="/assets/tokens.css">
   <link rel="stylesheet" href="/assets/layout.css">
@@ -13,17 +13,22 @@
   <link rel="stylesheet" href="/assets/workbench.css">
   <link rel="stylesheet" href="/assets/modals.css">
   <link rel="stylesheet" href="/assets/dag.css">
+  <link rel="stylesheet" href="/assets/projects.css">
+  <link rel="stylesheet" href="/assets/project_validation.css">
+  <link rel="stylesheet" href="/assets/project_library.css">
+  <link rel="stylesheet" href="/assets/experiments.css">
 </head>
 <body>
-  <div id="app-shell" data-rail-open="true" data-canvas-open="true">
+  <div id="app-shell" data-rail-open="true" data-canvas-open="false">
     <!-- Left Collapsible Rail -->
     <aside id="left-rail" aria-label="Research sessions and settings">
       <div class="rail-header">
         <span class="brand-lockup">
-          <span class="brand-dot" aria-hidden="true"></span>
+          <img class="brand-mark" src="/assets/re-search-icon.png" width="24" height="24" alt="">
           <span>reSearch</span>
         </span>
         <span id="health-badge" class="badge">Local</span>
+        <button id="rail-close-btn" type="button" class="icon-btn drawer-close" aria-label="Close sessions">×</button>
       </div>
       <div class="rail-new-wrap">
         <button id="new-research-btn" type="button" class="pill-btn wide" title="Start a fresh research session">
@@ -53,13 +58,13 @@
     <main id="center-stage">
       <header class="stage-topbar">
         <div class="topbar-left">
-          <button id="rail-toggle" type="button" class="icon-btn" title="Toggle session rail (Ctrl+B)" aria-label="Toggle left rail">
+          <button id="rail-toggle" type="button" class="icon-btn" title="Show or hide sessions (Ctrl+B)" aria-label="Toggle sessions" aria-expanded="true" aria-controls="left-rail">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
             </svg>
           </button>
           <h1 id="active-session-title" class="session-heading">New research</h1>
-          <span id="active-workspace-pill" class="badge" hidden></span>
+          <button id="active-workspace-pill" type="button" class="badge" hidden></button>
         </div>
         <div class="topbar-right">
           <button id="session-grants-pill" type="button" class="badge ok" title="Click to revoke session-wide tool approvals for this chat" hidden></button>
@@ -74,9 +79,106 @@
           <button id="topbar-delete-btn" type="button" class="icon-btn danger-hover" title="Delete this chat" aria-label="Delete this chat" hidden>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
           </button>
-          <button id="canvas-toggle" type="button" class="pill-btn sm" title="Toggle Research Canvas (Ctrl+\)" aria-expanded="true" aria-controls="canvas-drawer">Canvas</button>
+          <button id="projects-open-btn" type="button" class="pill-btn sm" aria-expanded="false" aria-controls="project-overview">Projects</button>
+          <button id="canvas-toggle" type="button" class="pill-btn sm" title="Toggle Research Canvas (Ctrl+\)" aria-expanded="false" aria-controls="canvas-drawer">Canvas</button>
         </div>
       </header>
+
+      <section id="project-overview" aria-labelledby="project-page-title" hidden>
+        <div class="project-page">
+          <header class="project-page-header">
+            <h1 id="project-page-title" tabindex="-1">Projects</h1>
+            <div class="project-actions">
+              <select id="project-select" class="compact-select" aria-label="Select project"></select>
+              <button id="project-create-btn" type="button" class="pill-btn sm primary">New project</button>
+            </div>
+          </header>
+          <p id="project-page-status" class="project-status" role="status" hidden></p>
+          <form id="project-edit-form" class="project-edit-form form-grid" hidden>
+            <div class="form-row"><label for="project-title-input">Project name</label><input id="project-title-input" class="text-input" maxlength="256" required></div>
+            <div class="form-row"><label for="project-question-input">Research question or conjecture</label><textarea id="project-question-input" class="text-input" rows="4" maxlength="16000"></textarea></div>
+            <div class="form-row"><label for="project-conventions-input">Pinned conventions</label><textarea id="project-conventions-input" class="text-input" rows="3" maxlength="2000"></textarea></div>
+            <details id="project-edit-conflicts" class="project-conflicts" hidden><summary>Compare saved values</summary><dl></dl></details>
+            <div class="project-actions">
+              <button id="project-edit-cancel" type="button" class="pill-btn sm">Cancel</button>
+              <button id="project-edit-save" type="submit" class="pill-btn sm primary">Save project</button>
+            </div>
+          </form>
+          <div id="project-notebook" class="project-grid" hidden>
+            <div class="project-notebook-main">
+              <h2 id="project-title"></h2>
+              <div id="project-tabs" class="project-tabs" role="tablist" aria-label="Project sections">
+                <button id="project-tab-question" data-project-tab="question" type="button" role="tab" aria-controls="project-question-panel" aria-selected="true">Question</button>
+                <button id="project-tab-findings" data-project-tab="findings" type="button" role="tab" aria-controls="project-findings-panel" aria-selected="false" tabindex="-1">Findings</button>
+                <button id="project-tab-open-questions" data-project-tab="open-questions" type="button" role="tab" aria-controls="project-open-questions-panel" aria-selected="false" tabindex="-1">Open Questions</button>
+                <button id="project-tab-validation" data-project-tab="validation" type="button" role="tab" aria-controls="project-validation-panel" aria-selected="false" tabindex="-1">Validation</button>
+                <button id="project-tab-sources" data-project-tab="sources" type="button" role="tab" aria-controls="project-sources-panel" aria-selected="false" tabindex="-1">Sources</button>
+                <button id="project-tab-experiments" data-project-tab="experiments" type="button" role="tab" aria-controls="project-experiments-panel" aria-selected="false" tabindex="-1">Experiments</button>
+              </div>
+              <section id="project-question-panel" class="project-panel" role="tabpanel" aria-labelledby="project-tab-question" tabindex="0">
+                <div id="project-question" class="rich-prose"></div>
+                <div class="project-conventions">
+                  <h3>Pinned conventions</h3>
+                  <div id="project-conventions" class="rich-prose"></div>
+                </div>
+                <p class="project-context-note">Models receive the question, conventions, selected research notes, and citation details during project turns. Source notes and excerpts stay local.</p>
+                <button id="project-edit-btn" type="button" class="pill-btn sm">Edit question and conventions</button>
+              </section>
+              <section id="project-findings-panel" class="project-panel" role="tabpanel" aria-labelledby="project-tab-findings" hidden>
+                <form id="project-promote-form" class="project-note-form project-promotion" hidden>
+                  <label for="project-promote-text" id="project-promote-label">Proof step</label>
+                  <textarea id="project-promote-text" class="text-input" rows="3" maxlength="4000" required></textarea>
+                  <details class="project-claim-source" id="project-promote-evidence">
+                    <summary>Link a paper</summary>
+                    <div class="form-grid">
+                      <div class="form-row"><label for="project-promote-source">Paper</label><select id="project-promote-source" class="compact-select"></select></div>
+                      <div class="form-row"><label for="project-promote-location">Location</label><input id="project-promote-location" class="text-input" maxlength="256" placeholder="e.g. Theorem 2 or Eq. (5)"></div>
+                      <div class="form-row"><label for="project-promote-quote">Excerpt</label><textarea id="project-promote-quote" class="text-input" rows="2" maxlength="3000"></textarea></div>
+                    </div>
+                  </details>
+                  <div class="project-actions">
+                    <button id="project-promote-cancel" type="button" class="pill-btn sm">Cancel</button>
+                    <button id="project-promote-save" type="submit" class="pill-btn sm primary">Add finding</button>
+                  </div>
+                </form>
+                <ul id="project-finding-list" class="project-notes"></ul>
+                <form id="project-finding-form" class="project-note-form">
+                  <label for="project-finding-text">Add a finding or failed approach</label>
+                  <textarea id="project-finding-text" class="text-input" rows="3" maxlength="4000" required></textarea>
+                  <div class="project-actions project-note-actions">
+                    <select id="project-finding-kind" class="compact-select" aria-label="Finding type">
+                      <option value="finding">Finding</option><option value="failed_approach">Failed approach</option>
+                    </select>
+                    <button type="submit" class="pill-btn sm primary">Add note</button>
+                  </div>
+                </form>
+              </section>
+              <section id="project-open-questions-panel" class="project-panel" role="tabpanel" aria-labelledby="project-tab-open-questions" hidden>
+                <ul id="project-open-question-list" class="project-notes"></ul>
+                <form id="project-open-question-form" class="project-note-form">
+                  <label for="project-open-question-text">Add an open question</label>
+                  <textarea id="project-open-question-text" class="text-input" rows="3" maxlength="4000" required></textarea>
+                  <div class="project-actions"><button type="submit" class="pill-btn sm primary">Add question</button></div>
+                </form>
+              </section>
+              <section id="project-validation-panel" class="project-panel" role="tabpanel" aria-labelledby="project-tab-validation" hidden></section>
+              <section id="project-sources-panel" class="project-panel" role="tabpanel" aria-labelledby="project-tab-sources" hidden></section>
+              <section id="project-experiments-panel" class="project-panel" role="tabpanel" aria-labelledby="project-tab-experiments" hidden></section>
+            </div>
+            <aside class="project-sessions" aria-labelledby="project-sessions-title">
+              <div class="project-session-heading">
+                <h3 id="project-sessions-title">Sessions</h3>
+                <button id="project-new-session" type="button" class="pill-btn sm">New session</button>
+              </div>
+              <ul id="project-session-list"></ul>
+              <form id="project-link-session-form" class="project-link-session">
+                <select id="project-link-session-select" class="compact-select" aria-label="Session to link" required></select>
+                <button id="project-link-session-btn" type="submit" class="pill-btn sm">Link session</button>
+              </form>
+            </aside>
+          </div>
+        </div>
+      </section>
 
       <!-- Live Multi-Agent Pipeline & Session Telemetry Bar -->
       <div id="pipeline-bar" role="status" aria-label="Multi-agent verification pipeline" hidden>
@@ -119,7 +221,7 @@
           <div style="font-size:12px;color:var(--ink-secondary);margin-bottom:6px;">
             Shared with Orchestrator and Verifier on every round so signs and units stay consistent.
           </div>
-          <textarea id="quick-conventions-input" class="text-input" rows="3" maxlength="2000" placeholder="e.g. metric (-,+,+,+), natural units \hbar = c = 1, periodic boundary conditions..."></textarea>
+          <textarea aria-label="Pinned mathematical and physics conventions" id="quick-conventions-input" class="text-input" rows="3" maxlength="2000" placeholder="e.g. metric (-,+,+,+), natural units \hbar = c = 1, periodic boundary conditions..."></textarea>
           <div id="conventions-presets" class="conventions-presets"></div>
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;border-top:1px solid var(--border-subtle);padding-top:10px;">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
@@ -149,30 +251,41 @@
 
         <form id="composer-pill" autocomplete="off">
           <div id="composer-files" class="upload-chips" hidden></div>
-          <textarea id="composer-input" rows="1" placeholder="Ask a derivation, verify a theorem, or audit a paper..."></textarea>
+          <textarea id="composer-input" rows="1" aria-label="Research question or follow-up" placeholder="Write a research question…"></textarea>
           <div class="composer-bar">
             <div class="composer-left">
               <label class="upload-label" title="Attach up to 5 local .tex, .bib, .pdf, or archive files (max 10 MiB each)">
                 <input id="composer-upload-input" class="sr-only-input" type="file" multiple accept=".tex,.bib,.pdf,.md,.txt,.csv,.json,.py,.zip,.tgz,.gz">
                 <span>Attach</span>
               </label>
-              <button id="workspace-attach-btn" type="button" class="chip-toggle" title="Attach or switch local paper directory">Workspace</button>
-              <button id="conventions-btn" type="button" class="chip-toggle" aria-pressed="false" title="Pin metric signature, units, or notation conventions">Conventions</button>
-              <div id="mode-preset-group" class="segmented-group" role="group" aria-label="Verification rigor mode">
-                <button type="button" class="seg-btn" data-rigor-preset="direct" aria-pressed="false" title="Direct mode: single-pass Orchestrator + tools without post-turn Verifier gate">Direct</button>
-                <button type="button" class="seg-btn is-active" data-rigor-preset="verified" aria-pressed="true" title="Verified mode: Orchestrator + Calculation Guard + Independent Stateless Verifier (up to 3 rounds)">✓ Verified</button>
-                <button type="button" class="seg-btn" data-rigor-preset="deep" aria-pressed="false" title="Deep Research mode: Orchestrator + Independent Verifier + Research Strategist repair">✦ Deep</button>
-                <button type="button" class="seg-btn" data-rigor-preset="interactive" aria-pressed="false" title="Interactive Plan-First mode: Orchestrator proposes a plan and pauses for your approval before heavy work">Interactive</button>
-              </div>
+              <details id="research-options">
+                <summary class="chip-toggle">Research options</summary>
+                <div class="research-options-panel">
+                  <fieldset><legend>Review mode</legend>
+                    <div id="mode-preset-group" class="segmented-group" role="group" aria-label="Verification rigor mode">
+                      <button type="button" class="seg-btn" data-rigor-preset="direct" aria-pressed="false" title="Direct mode: single-pass Orchestrator + tools without post-turn Verifier gate">Direct</button>
+                      <button type="button" class="seg-btn is-active" data-rigor-preset="verified" aria-pressed="true" title="Verified mode: Orchestrator + Calculation Guard + Independent Stateless Verifier (up to 3 rounds)">✓ Verified</button>
+                      <button type="button" class="seg-btn" data-rigor-preset="deep" aria-pressed="false" title="Deep Research mode: Orchestrator + Independent Verifier + Research Strategist repair">✦ Deep</button>
+                      <button type="button" class="seg-btn" data-rigor-preset="interactive" aria-pressed="false" title="Interactive Plan-First mode: Orchestrator proposes a plan and pauses for your approval before heavy work">Interactive</button>
+                    </div>
+                  </fieldset>
+                  <fieldset><legend>Session settings</legend>
+                    <div class="option-controls">
+                      <button id="workspace-attach-btn" type="button" class="chip-toggle" title="Attach or switch local paper directory">Workspace</button>
+                      <button id="conventions-btn" type="button" class="chip-toggle" aria-pressed="false" aria-controls="conventions-popover" title="Pin metric signature, units, or notation conventions">Conventions</button>
+                      <button id="composer-subagent-btn" type="button" class="chip-toggle" aria-pressed="false" title="Choose the orchestrator or a specialist">Agent: Orchestrator</button>
+                      <button id="composer-effort-btn" type="button" class="effort-trigger-btn" title="Choose reasoning effort">Effort: Default</button>
+                    </div>
+                  </fieldset>
+                </div>
+              </details>
             </div>
             <div class="composer-right">
               <span id="composer-route-note" class="route-note" hidden></span>
-              <button id="composer-subagent-btn" type="button" class="chip-toggle" aria-pressed="false" title="Active agent (Orchestrator or custom specialist subagent)">Agent: Orchestrator</button>
               <select id="composer-model" class="compact-select model-picker" aria-label="Model for the next message" title="Model for the next message">
                 <option value="">Loading models...</option>
               </select>
-              <button id="composer-effort-btn" type="button" class="effort-trigger-btn" title="Choose reasoning effort for the selected model">Effort: Default</button>
-              <button id="composer-connect" type="button" class="pill-btn sm" title="Connect a model provider" hidden>Connect</button>
+              <button id="composer-connect" type="button" class="pill-btn sm" title="Connect a model provider" hidden>Connect model</button>
               <button id="composer-stop" type="button" class="stop-pill-btn" title="Stop active turn immediately (Esc)" aria-label="Stop active turn" hidden>
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                   <rect x="4" y="4" width="16" height="16" rx="2.5"/>
@@ -191,22 +304,23 @@
     </main>
 
     <!-- Right Resizable Research Canvas -->
-    <aside id="canvas-drawer" aria-label="Research workbench canvas">
+    <aside id="canvas-drawer" inert aria-label="Research workbench canvas">
       <div id="canvas-resizer" title="Drag to resize Canvas (double-click to reset)" aria-hidden="true"></div>
       <div class="canvas-header">
         <div class="canvas-tabs" role="tablist" aria-label="Canvas views">
           <button id="tab-latex" class="canvas-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="panel-latex">LaTeX</button>
-          <button id="tab-dag" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-dag">
+          <button id="tab-dag" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-dag" tabindex="-1">
             <span>Proof DAG</span><span id="tab-dag-count" class="tab-count" hidden>0</span>
           </button>
-          <button id="tab-sources" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-sources">
+          <button id="tab-sources" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-sources" tabindex="-1">
             <span>Sources</span><span id="tab-sources-count" class="tab-count" hidden>0</span>
           </button>
-          <button id="tab-sidetalk" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-sidetalk">
+          <button id="tab-sidetalk" class="canvas-tab" type="button" role="tab" aria-selected="false" aria-controls="panel-sidetalk" tabindex="-1">
             <span>Explain</span><span id="tab-sidetalk-count" class="tab-count" hidden>0</span>
           </button>
         </div>
         <button id="canvas-wide-btn" type="button" class="icon-btn" title="Toggle wide Canvas view" aria-label="Toggle wide Canvas view" aria-pressed="false">⇔</button>
+        <button id="canvas-close-btn" type="button" class="icon-btn drawer-close" aria-label="Close Canvas">×</button>
       </div>
 
       <div class="canvas-body">
@@ -229,14 +343,15 @@
                 </div>
                 <button id="export-tex-btn" type="button" class="pill-btn sm" title="Export session report as LaTeX (.tex)">.tex</button>
                 <button id="export-html-btn" type="button" class="pill-btn sm" title="Export interactive report (.html)">.html</button>
-                <button id="export-zip-btn" type="button" class="pill-btn sm primary" title="Export reproducible bundle (.zip)">.zip</button>
+                <button id="export-zip-btn" type="button" class="pill-btn sm primary" title="Export computational handoff with recorded inputs, outputs, and replay (.zip)">Reproducible ZIP</button>
               </div>
             </div>
           </div>
+          <p id="latex-file-note" class="latex-file-note" role="status" hidden>This preview is truncated. Open the full file in your workspace to edit or audit it.</p>
           <div class="latex-split">
             <div class="tex-pane tex-pane-editor">
               <div class="pane-caption"><span>Manuscript Editor</span><span id="latex-line-count">0 lines</span></div>
-              <textarea id="latex-editor" spellcheck="false" placeholder="Select a workspace .tex/.bib file or write LaTeX here..."></textarea>
+              <textarea id="latex-editor" aria-label="Manuscript editor" spellcheck="false" placeholder="Select a workspace .tex/.bib file or write LaTeX here..."></textarea>
             </div>
             <div class="tex-pane tex-pane-preview">
               <div class="pane-caption"><span>Live KaTeX Preview</span></div>
@@ -284,6 +399,18 @@
         <!-- Tab 3: Literature & Sources Canvas -->
         <section id="panel-sources" class="canvas-panel" role="tabpanel" aria-labelledby="tab-sources">
           <div class="sources-layout">
+            <details class="dag-detail-card formal-library">
+              <summary>Formal library</summary>
+              <form id="formal-library-form" autocomplete="off">
+                <label for="formal-library-query">Lean declaration</label>
+                <div class="formal-library-controls">
+                  <input id="formal-library-query" class="text-input" type="search" maxlength="160" placeholder="Name or keywords" required disabled>
+                  <button type="submit" class="pill-btn sm primary" disabled>Search Physlib</button>
+                </div>
+              </form>
+              <div id="formal-library-status" role="status"></div>
+              <div id="formal-library-results"></div>
+            </details>
             <form id="literature-search-form" class="dag-detail-card" autocomplete="off">
               <div style="display:flex;gap:6px;margin-bottom:8px;">
                 <select id="lit-source-select" class="compact-select" aria-label="Literature database">
@@ -310,6 +437,17 @@
               </div>
             </form>
             <div id="literature-results" style="display:flex;flex-direction:column;gap:8px;"></div>
+            <div class="dag-detail-card paper-passage-search">
+              <form id="paper-passage-form" autocomplete="off">
+                <label for="paper-passage-query">Search ingested paper passages</label>
+                <div class="paper-passage-controls">
+                  <input id="paper-passage-query" class="text-input" type="search" maxlength="512" placeholder="Claim or distinctive terms" required>
+                  <button type="submit" class="pill-btn sm primary">Find passages</button>
+                </div>
+              </form>
+              <div id="paper-passage-status" role="status"></div>
+              <div id="paper-passage-results"></div>
+            </div>
             <div class="rail-section-label" style="padding:2px 0;">Ingested Session Sources</div>
             <div id="sources-list" style="display:flex;flex-direction:column;gap:8px;"></div>
           </div>
@@ -337,20 +475,21 @@
   </div>
 
   <!-- Settings modal: Providers, Custom Subagents + Builder Agent, In-App User Guide, and Advanced -->
-  <div id="settings-dialog" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+  <dialog id="settings-dialog" class="workbench-dialog" aria-labelledby="settings-title">
     <div class="modal-card modal-wide">
       <div class="modal-header">
         <h2 id="settings-title">reSearch Settings &amp; Guide</h2>
-        <button id="settings-close-btn" type="button" class="icon-btn" aria-label="Close Settings">✕</button>
+        <button id="settings-close-btn" type="button" class="icon-btn" aria-label="Close Settings" autofocus>✕</button>
       </div>
+      <p id="settings-status" role="status"></p>
       <div class="settings-tabs" role="tablist" aria-label="Settings sections">
-        <button id="settings-tab-providers" type="button" class="settings-tab-btn is-active" data-settings-tab="providers" role="tab" aria-selected="true">Providers</button>
-        <button id="settings-tab-subagents" type="button" class="settings-tab-btn" data-settings-tab="subagents" role="tab" aria-selected="false">Agents &amp; Models</button>
-        <button id="settings-tab-guide" type="button" class="settings-tab-btn" data-settings-tab="guide" role="tab" aria-selected="false">User Guide</button>
-        <button id="settings-tab-advanced" type="button" class="settings-tab-btn" data-settings-tab="advanced" role="tab" aria-selected="false">Advanced</button>
+        <button id="settings-tab-providers" type="button" class="settings-tab-btn is-active" data-settings-tab="providers" role="tab" aria-selected="true" aria-controls="settings-panel-providers">Providers</button>
+        <button id="settings-tab-subagents" type="button" class="settings-tab-btn" data-settings-tab="subagents" role="tab" aria-selected="false" aria-controls="settings-panel-subagents" tabindex="-1">Agents &amp; Models</button>
+        <button id="settings-tab-guide" type="button" class="settings-tab-btn" data-settings-tab="guide" role="tab" aria-selected="false" aria-controls="settings-panel-guide" tabindex="-1">User Guide</button>
+        <button id="settings-tab-advanced" type="button" class="settings-tab-btn" data-settings-tab="advanced" role="tab" aria-selected="false" aria-controls="settings-panel-advanced" tabindex="-1">Advanced</button>
       </div>
 
-      <div id="settings-panel-providers" class="settings-tab-panel is-active" data-settings-panel="providers" role="tabpanel">
+      <div id="settings-panel-providers" class="settings-tab-panel is-active" data-settings-panel="providers" role="tabpanel" aria-labelledby="settings-tab-providers">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
           <p class="connect-intro" style="margin:0;">Connect a provider, then pick your model next to Send.</p>
           <button id="refresh-models-btn" type="button" class="pill-btn sm" title="Fetch latest model lists from connected providers">Refresh models</button>
@@ -358,7 +497,7 @@
         <div id="connect-list" class="connect-list" aria-live="polite"></div>
       </div>
 
-      <div id="settings-panel-subagents" class="settings-tab-panel" data-settings-panel="subagents" role="tabpanel">
+      <div id="settings-panel-subagents" class="settings-tab-panel" data-settings-panel="subagents" role="tabpanel" aria-labelledby="settings-tab-subagents">
         <div class="subagent-builder-box">
           <div class="subagent-section-head">
             <h3>Create Custom Subagent with AI Agent</h3>
@@ -432,11 +571,11 @@
         <div id="builtin-agents-list" class="builtin-grid"></div>
       </div>
 
-      <div id="settings-panel-guide" class="settings-tab-panel" data-settings-panel="guide" role="tabpanel">
+      <div id="settings-panel-guide" class="settings-tab-panel" data-settings-panel="guide" role="tabpanel" aria-labelledby="settings-tab-guide" tabindex="0">
         <div id="settings-guide-content"></div>
       </div>
 
-      <div id="settings-panel-advanced" class="settings-tab-panel" data-settings-panel="advanced" role="tabpanel">
+      <div id="settings-panel-advanced" class="settings-tab-panel" data-settings-panel="advanced" role="tabpanel" aria-labelledby="settings-tab-advanced">
         <div class="subagent-card" style="padding:12px 14px;">
           <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Tool &amp; Computation Approvals</div>
           <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;"><input id="set-auto-approve-tools" type="checkbox" checked> <span><strong>Auto-approve SymPy, workspace writes &amp; literature lookups</strong><br><span style="font-size:11.5px;color:var(--ink-muted);">Sandboxed SymPy checks and workspace edits run without pausing for approval cards.</span></span></label>
@@ -456,10 +595,10 @@
         </details>
       </div>
     </div>
-  </div>
+  </dialog>
 
   <!-- In-App Source Reader Modal -->
-  <div id="source-reader-dialog" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="source-reader-title" hidden>
+  <dialog id="source-reader-dialog" aria-labelledby="source-reader-title">
     <div class="modal-card modal-wide">
       <div class="modal-header">
         <h2 id="source-reader-title">Source Reader</h2>
@@ -467,20 +606,21 @@
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-          <select id="source-reader-file" class="compact-select" aria-label="Source file" style="max-width:260px;"></select>
+          <select id="source-reader-file" class="compact-select" aria-label="Source file"></select>
           <div class="segmented-group" role="group" aria-label="Source view mode">
-            <button id="source-reader-mode-rendered" type="button" class="seg-btn is-active">Rendered</button>
-            <button id="source-reader-mode-raw" type="button" class="seg-btn">Raw</button>
+            <button id="source-reader-mode-rendered" type="button" class="seg-btn is-active" aria-pressed="true">Rendered</button>
+            <button id="source-reader-mode-raw" type="button" class="seg-btn" aria-pressed="false">Raw</button>
           </div>
         </div>
         <div id="source-reader-ext-links" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
       </div>
-      <div id="source-reader-body"></div>
+      <p id="source-reader-status" role="status"></p>
+      <div id="source-reader-body" tabindex="0" aria-label="Source contents"></div>
     </div>
-  </div>
+  </dialog>
 
-  <!-- Non-blocking Workspace Attach Modal (fallback when native OS picker is unavailable) -->
-  <div id="workspace-dialog" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title" hidden>
+  <!-- Workspace Attach Modal (fallback when native OS picker is unavailable) -->
+  <dialog id="workspace-dialog" class="workbench-dialog" aria-labelledby="workspace-modal-title">
     <div class="modal-card" style="width:min(440px, 94vw);">
       <div class="modal-header">
         <h2 id="workspace-modal-title">Attach Workspace Directory</h2>
@@ -489,7 +629,7 @@
       <form id="workspace-form" class="form-grid" autocomplete="off">
         <div class="form-row">
           <label for="workspace-path-input">Local directory path</label>
-          <input id="workspace-path-input" class="text-input" type="text" placeholder="C:\path\to\paper-workspace">
+          <input id="workspace-path-input" class="text-input" type="text" placeholder="C:\path\to\paper-workspace" autofocus>
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;">
           <button id="workspace-cancel-btn" type="button" class="pill-btn">Cancel</button>
@@ -497,7 +637,7 @@
         </div>
       </form>
     </div>
-  </div>
+  </dialog>
 
   <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
   <script src="/vendor/katex/katex.min.js"></script>

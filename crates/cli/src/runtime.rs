@@ -130,6 +130,9 @@ fn build_router_inner(
             let (result, ran_epoch) =
                 w.evaluate_in_epoch(code, timeout, ctx.required_epoch).map_err(|e| e.to_string())?;
             ctx.record_worker_execution(ran_epoch, w.last_request_id());
+            if let Some(hello) = w.hello() {
+                ctx.record_worker_environment(hello);
+            }
             Ok(result)
         }),
     );

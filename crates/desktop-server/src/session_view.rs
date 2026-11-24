@@ -12,7 +12,6 @@ use std::sync::Arc;
 pub(crate) struct SseEventSink {
     sse: Arc<SseHub>,
     session_id: String,
-    pub(crate) final_text: String,
     streamed_thinking_in_turn: bool,
     tool_calls: HashMap<String, (String, Value)>,
     verification: FinalAnswerVerification,
@@ -23,7 +22,6 @@ impl SseEventSink {
         Self {
             sse,
             session_id: session_id.to_string(),
-            final_text: String::new(),
             streamed_thinking_in_turn: false,
             tool_calls: HashMap::new(),
             verification: FinalAnswerVerification::default(),
@@ -31,7 +29,7 @@ impl SseEventSink {
     }
 
     pub(crate) fn final_text(&self) -> &str {
-        &self.final_text
+        self.verification.answer()
     }
 }
 
@@ -72,9 +70,7 @@ impl EventSink for SseEventSink {
                     json!({ "seq": receipt.seq, "kind": kind, "data": data }),
                 );
             }
-            "model.text" => {
-                let text = data.get("text").and_then(Value::as_str).unwrap_or("");
-                self.final_text = text.to_string();
+            "model.text" | "model.refusal" => {
                 self.sse.emit(
                     &self.session_id,
                     "session_event",
@@ -139,7 +135,6 @@ impl EventSink for SseEventSink {
                 );
             }
             "autonomous.feedback" => {
-                self.final_text.clear();
                 self.sse.emit(
                     &self.session_id,
                     "round_reset",
@@ -205,6 +200,8 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
     let mut tool_calls: HashMap<String, (String, Value)> = HashMap::new();
     let mut lit_titles: HashMap<String, String> = HashMap::new();
     let mut verification = FinalAnswerVerification::default();
+    let mut in_model_response = false;
+    let mut response_message = None;
 
     for ev in events {
         let had_verdict = verification.status.is_some();
@@ -223,10 +220,20 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
         }
         match ev.kind.as_str() {
             "session.start" | "session.resume" => {
+                in_model_response = false;
+                response_message = None;
                 pending_verifications.clear();
                 if let Some(prompt) = ev.payload.get("prompt").and_then(Value::as_str) {
                     messages.push(json!({ "role": "user", "text": prompt, "seq": ev.seq }));
                 }
+            }
+            "model.request" => {
+                in_model_response = false;
+                response_message = None;
+            }
+            "model.response" => {
+                in_model_response = true;
+                response_message = None;
             }
             "model.thinking" => {
                 let chars = ev.payload.get("chars").and_then(Value::as_u64).unwrap_or(0);
@@ -270,6 +277,19 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
             }
             "model.text" | "model.refusal" => {
                 if let Some(text) = ev.payload.get("text").and_then(Value::as_str) {
+                    if let Some(index) = response_message {
+                        let message: &mut Value = &mut messages[index];
+                        if ev.kind == "model.refusal" {
+                            message["text"] = json!(text);
+                        } else {
+                            let prior = message["text"].as_str().unwrap_or_default();
+                            message["text"] = json!(format!("{prior}\n{text}"));
+                        }
+                        continue;
+                    }
+                    if in_model_response {
+                        response_message = Some(messages.len());
+                    }
                     messages.push(json!({
                         "role": "assistant",
                         "text": text,
@@ -323,6 +343,8 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                 }
             }
             "autonomous.feedback" => {
+                in_model_response = false;
+                response_message = None;
                 if messages.last().is_some_and(is_primary_assistant) {
                     if let Some(prev) = messages.pop() {
                         if let Some(old_think) = prev.get("thinking").and_then(Value::as_str) {
@@ -534,7 +556,8 @@ mod tests {
             ev(1, "session.start", json!({ "prompt": "Prove A" })),
             ev(2, "proof.entry", json!({ "entry_id": "e-1", "entry_type": "final_answer" })),
             ev(3, "model.text", json!({ "text": "Proof of A" })),
-            ev(4, "proof.verification", json!({ "kind": "full", "target_entry_id": "e-1", "verdict": "accepted" })),
+            ev(4, "proof.verification", json!({ "kind": "full", "target_entry_id": "e-1", "verdict": "accepted",
+                "answer_sha256": ledger::sha256_hex(b"Proof of A") })),
             ev(5, "proof.verification", json!({ "kind": "step", "target_entry_id": "e-1", "verdict": "rejected" })),
             ev(6, "session.end", json!({ "outcome": "completed", "verified_entry_id": "e-1" })),
         ];
@@ -553,7 +576,8 @@ mod tests {
 
         events.extend([
             ev(10, "proof.entry", json!({ "entry_id": "e-2", "entry_type": "final_answer" })),
-            ev(11, "proof.verification", json!({ "kind": "full", "target_entry_id": "e-2", "verdict": "accepted" })),
+            ev(11, "proof.verification", json!({ "kind": "full", "target_entry_id": "e-2", "verdict": "accepted",
+                "answer_sha256": ledger::sha256_hex(b"Proof of B") })),
         ]);
         assert_eq!(reconstruct_session_view(&events).0[3]["verified_entry_id"], "e-2");
         assert_eq!(summarize_session_events(&events)["verified_status"], "verified");
@@ -590,10 +614,37 @@ mod tests {
         emit("proof.entry", json!({ "entry_id": "e-1", "entry_type": "final_answer" }));
         let step = emit("proof.verification", json!({ "kind": "step", "target_entry_id": "e-1", "verdict": "accepted" }));
         assert!(step["verified_status"].is_null());
-        let full = emit("proof.verification", json!({ "kind": "full", "target_entry_id": "e-1", "verdict": "accepted" }));
+        emit("model.response", json!({}));
+        emit("model.text", json!({"text": "First block."}));
+        emit("model.text", json!({"text": "Second block."}));
+        let old_review = emit("proof.verification", json!({ "kind": "full", "target_entry_id": "e-1", "verdict": "accepted" }));
+        assert_eq!(old_review["verified_status"], "proof_reviewed");
+        let mismatch = emit("proof.verification", json!({ "kind": "full", "target_entry_id": "e-1", "verdict": "accepted",
+            "answer_sha256": ledger::sha256_hex(b"Second block.") }));
+        assert_eq!(mismatch["verified_status"], "unverified");
+        let full = emit("proof.verification", json!({ "kind": "full", "target_entry_id": "e-1", "verdict": "accepted",
+            "answer_sha256": ledger::sha256_hex(b"First block.\nSecond block.") }));
         assert_eq!(full["verified_status"], "verified");
         let replacement = emit("proof.entry", json!({ "entry_id": "e-2", "entry_type": "final_answer" }));
         assert_eq!(replacement["verification_invalidated"], true);
+        assert_eq!(sink.final_text(), "First block.\nSecond block.");
+    }
+
+    #[test]
+    fn reconstructed_verdict_is_attached_to_entire_model_response() {
+        let events = [
+            ev(1, "session.start", json!({"prompt": "Expand"})),
+            ev(2, "proof.entry", json!({"entry_id": "e-1", "entry_type": "final_answer"})),
+            ev(3, "model.response", json!({})),
+            ev(4, "model.text", json!({"text": "First block."})),
+            ev(5, "model.text", json!({"text": "Second block."})),
+            ev(6, "proof.verification", json!({"kind": "full", "target_entry_id": "e-1",
+                "verdict": "accepted", "answer_sha256": ledger::sha256_hex(b"First block.\nSecond block.")})),
+        ];
+        let (messages, _, _) = reconstruct_session_view(&events);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1]["text"], "First block.\nSecond block.");
+        assert_eq!(messages[1]["verified_status"], "verified");
     }
 
     #[test]

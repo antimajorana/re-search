@@ -105,6 +105,15 @@ fn seed_parent_session(dir: &std::path::Path, session: &str) -> u64 {
         .append_with_hash(session, "literature.fetched", 1, &json!({ "raw_blob": lit_blob }))
         .unwrap();
 
+    ledger
+        .append_with_hash(
+            session,
+            "source.ingested",
+            1,
+            &json!({ "source_id": "paper-1", "files": ["paper-1/notes.tex", "paper-1/refs.bib"] }),
+        )
+        .unwrap();
+
     let fork_anchor_seq = ledger
         .append_with_hash(
             session,
@@ -237,6 +246,66 @@ fn fork_and_branch_diff_preserve_prefix_copy_sources_exclude_sidetalk_and_reject
     assert_eq!(diff.target_final_answer.as_deref(), Some("E = ± 2 α ℏ"));
     assert!(diff.summary_diff.contains("E = ± α ℏ") && diff.summary_diff.contains("E = ± 2 α ℏ"));
     assert_eq!(ledger.verify_all().unwrap().unreferenced_blobs, 0);
+}
+
+#[test]
+fn fork_copies_only_recorded_source_paths_in_its_prefix_and_cleans_up_failed_copies() {
+    let tmp = TempDir::new("fork-source-prefix");
+    let parent = "s-source-parent";
+    let ledger = Ledger::open(&tmp.path).unwrap();
+    let sources = tmp.path.join("sessions").join(parent).join("sources");
+    let first = sources.join("paper-1");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::write(first.join("a.tex"), "visible at fork").unwrap();
+    std::fs::write(first.join("z-unrecorded.tex"), "unrecorded").unwrap();
+    std::fs::create_dir_all(sources.join("paper-2")).unwrap();
+    std::fs::write(sources.join("paper-2/later.tex"), "later upload").unwrap();
+    let anchor = ledger
+        .append(
+            parent,
+            "source.ingested",
+            1,
+            &json!({
+                "source_id": "paper-1",
+                "files": ["paper-1/a.tex"],
+                "files_sha256": { "paper-1/a.tex": ledger::sha256_hex(b"visible at fork") },
+            }),
+        )
+        .unwrap();
+    let later = ledger
+        .append(
+            parent,
+            "source.ingested",
+            1,
+            &json!({ "source_id": "paper-2", "files": ["paper-2/later.tex", "paper-2/missing.tex"] }),
+        )
+        .unwrap();
+
+    let fork = |at_seq| {
+        fork_session(
+            &tmp.path,
+            &ForkOptions { parent_session: parent.into(), at_seq, modified_assumption: None },
+        )
+    };
+    let receipt = fork(anchor).unwrap();
+    let child_sources = tmp.path.join("sessions").join(receipt.new_session).join("sources");
+    assert_eq!(std::fs::read_to_string(child_sources.join("paper-1/a.tex")).unwrap(), "visible at fork");
+    assert!(!child_sources.join("paper-1/z-unrecorded.tex").exists());
+    assert!(!child_sources.join("paper-2").exists());
+
+    let before = ledger.sessions().unwrap();
+    let session_dirs = tmp.path.join("sessions");
+    let directories_before = std::fs::read_dir(&session_dirs).unwrap().count();
+    let error = fork(later).unwrap_err();
+    assert!(error.contains("missing.tex"), "{error}");
+    assert_eq!(ledger.sessions().unwrap(), before);
+    assert_eq!(std::fs::read_dir(&session_dirs).unwrap().count(), directories_before);
+
+    std::fs::write(first.join("a.tex"), "changed since ingestion").unwrap();
+    let error = fork(anchor).unwrap_err();
+    assert!(error.contains("does not match its recorded hash"), "{error}");
+    assert_eq!(ledger.sessions().unwrap(), before);
+    assert_eq!(std::fs::read_dir(&session_dirs).unwrap().count(), directories_before);
 }
 
 #[test]

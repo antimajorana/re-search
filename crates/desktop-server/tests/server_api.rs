@@ -22,6 +22,97 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 #[test]
+fn json_upload_accepts_five_files_at_the_advertised_limit() {
+    use std::fmt::Write as _;
+
+    const FILE_BYTES: usize = 10 * 1024 * 1024;
+    let tmp = TempDir::new().unwrap();
+    let srv = start_desktop_server(test_cfg(tmp.path(), None, None, None)).unwrap();
+    let port = srv.addr.port();
+    let headers = [
+        ("X-ReSearch-Token", srv.info.token.as_str()),
+        ("Content-Type", "application/json"),
+    ];
+    let (status, _, created) = raw_http(port, "POST", "/api/sessions", &headers, b"{}");
+    assert_eq!(status, 200);
+    let created: Value = serde_json::from_slice(&created).unwrap();
+    let sid = created["id"].as_str().unwrap();
+
+    // Each YWFh decodes to three bytes and YQ== supplies the final byte.
+    let encoded = "YWFh".repeat(FILE_BYTES / 3);
+    let mut body = String::with_capacity(5 * encoded.len() + 512);
+    body.push_str(r#"{"files":["#);
+    for index in 0..5 {
+        if index > 0 {
+            body.push(',');
+        }
+        write!(body, "{{\"name\":\"notes{index}.txt\",\"content_base64\":\"").unwrap();
+        body.push_str(&encoded);
+        body.push_str("YQ==\"}");
+    }
+    body.push_str("]}");
+
+    let (status, _, result) = raw_http(
+        port,
+        "POST",
+        &format!("/api/sessions/{sid}/upload"),
+        &headers,
+        body.as_bytes(),
+    );
+    assert_eq!(status, 200);
+    let result: Value = serde_json::from_slice(&result).unwrap();
+    let ingested = result["ingested"].as_array().unwrap();
+    assert_eq!(ingested.len(), 5);
+    assert!(ingested.iter().all(|report| report["bytes"] == FILE_BYTES));
+    assert_eq!(result["failed"], json!([]));
+
+    // The upload allowance does not change the limit on other endpoints.
+    let oversized = body.len().to_string();
+    let limited_headers = [headers[0], ("Content-Length", oversized.as_str())];
+    assert_eq!(raw_http(port, "POST", "/api/sessions", &limited_headers, b"").0, 413);
+    srv.shutdown();
+}
+
+#[test]
+fn mixed_upload_reports_each_success_and_indexes_failures() {
+    let tmp = TempDir::new().unwrap();
+    let srv = start_desktop_server(test_cfg(tmp.path(), None, None, None)).unwrap();
+    let port = srv.addr.port();
+    let headers = [
+        ("X-ReSearch-Token", srv.info.token.as_str()),
+        ("Content-Type", "application/json"),
+    ];
+    let (status, _, created) = raw_http(port, "POST", "/api/sessions", &headers, b"{}");
+    assert_eq!(status, 200);
+    let created: Value = serde_json::from_slice(&created).unwrap();
+    let sid = created["id"].as_str().unwrap();
+
+    let (status, _, result) = raw_http(
+        port,
+        "POST",
+        &format!("/api/sessions/{sid}/upload"),
+        &headers,
+        br#"{"files":[{"name":"notes.txt","bytes_base64":"YQ=="},{"name":"notes.txt","bytes_base64":"AA=="},{"name":"extra.txt","bytes_base64":"Yg=="}]}"#,
+    );
+    assert_eq!(status, 400);
+    let result: Value = serde_json::from_slice(&result).unwrap();
+    assert_eq!(result["ok"], false);
+    let ingested = result["ingested"].as_array().unwrap();
+    assert_eq!(ingested.len(), 2);
+    assert_eq!(ingested[0]["origin"], "notes.txt");
+    assert_eq!(ingested[1]["origin"], "extra.txt");
+    assert_eq!(
+        result["failed"],
+        json!([{ "index": 1, "name": "notes.txt", "error": result["error"] }])
+    );
+    assert!(result["error"].as_str().unwrap().contains("NUL"));
+    let events = Ledger::open_existing(tmp.path()).unwrap().read_session(sid).unwrap();
+    let sources = events.iter().filter(|event| event.kind == "source.ingested").count();
+    assert_eq!(sources, 2);
+    srv.shutdown();
+}
+
+#[test]
 fn auth_bootstrap_assets_host_origin_and_csrf_enforced() {
     let tmp = TempDir::new().unwrap();
     let srv = start_desktop_server(test_cfg(tmp.path(), None, None, None)).unwrap();

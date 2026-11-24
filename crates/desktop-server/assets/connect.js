@@ -5,6 +5,7 @@
 import * as api from '/assets/api.js';
 
 let dialogEl = null;
+let statusEl = null;
 let listEl = null;
 let baseUrlsEl = null;
 let callbacks = {};
@@ -23,6 +24,7 @@ function make(tag, cls, text) {
 export function initConnect(opts = {}) {
   callbacks = opts;
   dialogEl = document.getElementById('settings-dialog');
+  statusEl = document.getElementById('settings-status');
   listEl = document.getElementById('connect-list');
   baseUrlsEl = document.getElementById('advanced-base-urls');
   const openBtn = document.getElementById('settings-btn');
@@ -31,9 +33,11 @@ export function initConnect(opts = {}) {
   const refreshModelsBtn = document.getElementById('refresh-models-btn');
   if (openBtn) openBtn.addEventListener('click', () => openConnect('providers'));
   if (closeBtn) closeBtn.addEventListener('click', closeConnect);
-  for (const btn of document.querySelectorAll('[data-settings-tab]')) {
+  const tabs = Array.from(document.querySelectorAll('[data-settings-tab]'));
+  for (const btn of tabs) {
     btn.addEventListener('click', () => switchSettingsTab(btn.getAttribute('data-settings-tab')));
   }
+  wireTabKeys(tabs);
   if (refreshModelsBtn) {
     refreshModelsBtn.addEventListener('click', async () => {
       refreshModelsBtn.disabled = true;
@@ -46,8 +50,15 @@ export function initConnect(opts = {}) {
     });
   }
   if (dialogEl) {
-    dialogEl.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Escape') closeConnect();
+    dialogEl.addEventListener('close', () => {
+      if (dialogEl.open) return;
+      const summary = lastFocus?.closest('#research-options')?.querySelector('summary');
+      for (const node of [lastFocus, summary, openBtn, document.getElementById('composer-input')]) {
+        if (!node) continue;
+        node.focus();
+        if (document.activeElement === node) break;
+      }
+      lastFocus = null;
     });
     dialogEl.addEventListener('click', (ev) => {
       if (ev.target === dialogEl) closeConnect();
@@ -82,6 +93,7 @@ export function switchSettingsTab(tab = 'providers') {
     const match = btn.getAttribute('data-settings-tab') === tab;
     btn.classList.toggle('is-active', match);
     btn.setAttribute('aria-selected', match ? 'true' : 'false');
+    btn.tabIndex = match ? 0 : -1;
   }
   for (const panel of document.querySelectorAll('[data-settings-panel]')) {
     panel.classList.toggle('is-active', panel.getAttribute('data-settings-panel') === tab);
@@ -89,10 +101,31 @@ export function switchSettingsTab(tab = 'providers') {
   if (typeof callbacks.onTabOpened === 'function') callbacks.onTabOpened(tab);
 }
 
+export function wireTabKeys(tabs) {
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('keydown', (ev) => {
+      let next;
+      switch (ev.key) {
+        case 'ArrowLeft': next = (index + tabs.length - 1) % tabs.length; break;
+        case 'ArrowRight': next = (index + 1) % tabs.length; break;
+        case 'Home': next = 0; break;
+        case 'End': next = tabs.length - 1; break;
+        default: return;
+      }
+      ev.preventDefault();
+      tabs[next].click();
+      tabs[next].focus();
+    });
+  });
+}
+
 export async function openConnect(tab = 'providers') {
   if (!dialogEl) return;
-  lastFocus = document.activeElement;
-  dialogEl.hidden = false;
+  if (!dialogEl.open) {
+    lastFocus = document.activeElement;
+    if (statusEl) statusEl.textContent = '';
+    dialogEl.showModal();
+  }
   switchSettingsTab(tab || activeTab || 'providers');
   const closeBtn = document.getElementById('settings-close-btn');
   if (closeBtn) closeBtn.focus();
@@ -100,9 +133,7 @@ export async function openConnect(tab = 'providers') {
 }
 
 function closeConnect() {
-  if (!dialogEl) return;
-  dialogEl.hidden = true;
-  if (lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus();
+  dialogEl?.close();
 }
 
 async function refreshConnections(refresh) {
@@ -419,5 +450,6 @@ function changed() {
 }
 
 function notify(msg) {
-  if (typeof callbacks.onNotify === 'function') callbacks.onNotify(msg);
+  if (dialogEl?.open && statusEl) statusEl.textContent = msg;
+  else if (typeof callbacks.onNotify === 'function') callbacks.onNotify(msg);
 }

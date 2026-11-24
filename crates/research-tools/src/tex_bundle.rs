@@ -283,7 +283,7 @@ fn resolve_tex_include(cur_path: &str, raw_target: &str, tex_files: &BTreeMap<St
     None
 }
 
-fn normalize_rel_segments(path: &str) -> Option<String> {
+pub(crate) fn normalize_rel_segments(path: &str) -> Option<String> {
     let mut stack = Vec::new();
     for seg in path.split('/') {
         if seg.is_empty() || seg == "." {

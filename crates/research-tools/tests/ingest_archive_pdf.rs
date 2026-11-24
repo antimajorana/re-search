@@ -27,6 +27,40 @@ impl Approver for DenyAskApprover {
     }
 }
 
+#[test]
+fn ingest_section_filters_keep_prior_materializations() {
+    let tmp = TempDir::new().unwrap();
+    let ledger = std::sync::Mutex::new(Ledger::open(tmp.path()).unwrap());
+    let env = ResearchEnv::new(tmp.path());
+    let sandbox = env.sandbox();
+    let session = "s-filter";
+    let bytes = b"\\section{Model}\nModel-only paragraph.\n\\section{Results}\nResults-only paragraph.\n";
+    let ingest = |filter| {
+        research_tools::ingest::ingest_bytes(&sandbox, &ledger, &research_tools::ingest::IngestRequest {
+            session_id: session,
+            file_name: "paper.tex",
+            origin: "test",
+            source_id_hint: None,
+            raw_bytes: bytes,
+            section_filter: Some(filter),
+            title: None,
+        }).unwrap()
+    };
+    let model = ingest("Model");
+    let results = ingest("Results");
+    assert_ne!(model.source_id, results.source_id);
+    assert_eq!(model.raw_blob, results.raw_blob);
+    assert_eq!(model.source_id, ingest("Model").source_id);
+    let source_root = tmp.path().join("sessions").join(session).join("sources");
+    let model_path = model.assembled_path.unwrap();
+    let model_text = fs::read_to_string(source_root.join(&model_path)).unwrap();
+    let results_text = fs::read_to_string(source_root.join(results.assembled_path.unwrap())).unwrap();
+    assert!(model_text.contains("Model-only") && !model_text.contains("Results-only"));
+    assert!(results_text.contains("Results-only") && !results_text.contains("Model-only"));
+    let events = ledger.lock().unwrap().read_session(session).unwrap();
+    assert_eq!(events[0].payload["files_sha256"][&model_path], ledger::sha256_hex(model_text.as_bytes()));
+}
+
 /// Builds a genuine minimal valid PDF with `num_pages` pages and optional text stream on page 1.
 fn build_minimal_pdf(num_pages: usize, first_page_text: Option<&str>) -> Vec<u8> {
     // Object IDs: 1 = Catalog, 2 = Pages, 3 = Font (Helvetica), 4 = Content stream (optional),

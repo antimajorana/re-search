@@ -276,48 +276,6 @@
   color: var(--ink-secondary);
 }
 
-/* Onboarding Quick-Setup Strip inside Empty Hero */
-.quickstart-strip {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-@media (max-width: 960px) {
-  .quickstart-strip {
-    grid-template-columns: 1fr;
-  }
-}
-
-.quickstart-card {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 11px 13px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-sm);
-}
-
-.quickstart-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--ink-primary);
-}
-
-.quickstart-desc {
-  font-size: 12px;
-  color: var(--ink-secondary);
-  line-height: 1.4;
-}
-
 /* Segmented Rigor Mode Control & Conventions Popover */
 .segmented-group {
   display: inline-flex;
@@ -355,6 +313,8 @@
 }
 
 #conventions-popover {
+  max-height: 48dvh;
+  overflow-y: auto;
   pointer-events: auto;
   max-width: 820px;
   margin: 0 auto 10px;
@@ -501,10 +461,6 @@
 }
 
 /* Resizable Canvas Handle, Tab Counts, Compact Toolbar & LaTeX View Modes */
-#canvas-drawer {
-  position: relative;
-}
-
 #canvas-resizer {
   position: absolute;
   top: 0;

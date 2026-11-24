@@ -18,6 +18,10 @@ use std::sync::{Arc, Mutex};
 
 const MAX_UPLOAD_FILES: usize = 5;
 const MAX_UPLOAD_BYTES_PER_FILE: usize = 10 * 1024 * 1024;
+// Base64 expands each file to four bytes for every three input bytes, rounded up.
+// The remaining space covers filenames and JSON or multipart framing.
+pub(crate) const MAX_UPLOAD_BODY_BYTES: usize =
+    MAX_UPLOAD_FILES * (MAX_UPLOAD_BYTES_PER_FILE.div_ceil(3) * 4) + 64 * 1024;
 
 pub fn handle_upload(
     state: &DesktopState,
@@ -59,8 +63,9 @@ pub fn handle_upload(
     let ledger = Mutex::new(state.open_ledger().map_err(internal)?);
 
     let mut ingested = Vec::new();
-    for (name, bytes) in &items {
-        let report = ingest_bytes(
+    let mut failed = Vec::new();
+    for (index, (name, bytes)) in items.iter().enumerate() {
+        let result = ingest_bytes(
             &sandbox,
             &ledger,
             &IngestRequest {
@@ -72,12 +77,22 @@ pub fn handle_upload(
                 section_filter: None,
                 title: None,
             },
-        )
-        .map_err(bad)?;
-        ingested.push(serde_json::to_value(report).map_err(|e| internal(e.to_string()))?);
+        );
+        match result {
+            Ok(report) => ingested.push(report),
+            Err(error) => failed.push(json!({ "index": index, "name": name, "error": error })),
+        }
     }
 
-    Ok((200, json!({ "ok": true, "ingested": ingested })))
+    if let Some(first) = failed.first() {
+        return Ok((400, json!({
+            "ok": false,
+            "error": first["error"],
+            "ingested": ingested,
+            "failed": failed,
+        })));
+    }
+    Ok((200, json!({ "ok": true, "ingested": ingested, "failed": [] })))
 }
 
 pub fn handle_workspace(
@@ -151,6 +166,7 @@ fn handle_workspace_file_inner(
 ) -> ApiResult {
     let mut chunks = Vec::new();
     let mut offset = 0usize;
+    let mut file_sha256 = None;
     let truncated;
     loop {
         let part = handle_fs_read(
@@ -159,6 +175,13 @@ fn handle_workspace_file_inner(
             &json!({ "root": root, "path": path, "offset": offset, "max_chars": 12000 }),
         )
         .map_err(bad)?;
+        let part_digest = part["file_sha256"]
+            .as_str()
+            .ok_or_else(|| internal("file digest unavailable"))?;
+        if file_sha256.as_deref().is_some_and(|first| first != part_digest) {
+            return Err(bad("The file changed while its preview was being read."));
+        }
+        file_sha256.get_or_insert_with(|| part_digest.to_string());
         let text = part.get("content").and_then(Value::as_str).unwrap_or("");
         chunks.push(text.to_string());
         let more = part.get("truncated").and_then(Value::as_bool).unwrap_or(false);
@@ -178,6 +201,7 @@ fn handle_workspace_file_inner(
         json!({
             "path": path,
             "root": root,
+            "file_sha256": file_sha256,
             "content": full_text,
             "text": full_text,
             "truncated": truncated,
@@ -259,6 +283,7 @@ pub fn handle_tex_audit(state: &DesktopState, session_id: &str, body: &[u8]) -> 
         session_id,
         Some(&ledger),
         &AuditOptions {
+            candidate_only: target_path.is_none() && !candidate_texts.is_empty(),
             target_path,
             candidate_texts,
             ..AuditOptions::default()
@@ -359,6 +384,31 @@ pub fn handle_literature(state: &DesktopState, session_id: &str, body: &[u8]) ->
             }),
         ))
     }
+}
+
+pub(crate) fn handle_paper_passages(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiResult {
+    validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
+    if !state.session_exists(session_id).map_err(internal)? {
+        return Err(not_found(format!("session `{session_id}` not found")));
+    }
+    let args = parse_json_body(body)?;
+    let env = state.research_env_for_session(session_id).map_err(bad)?;
+    let ledger = state.open_ledger().map_err(internal)?;
+    let result = research_tools::paper_passages::run_search(&env, &ledger, session_id, &args)
+        .map_err(bad)?;
+    Ok((200, result))
+}
+
+pub(crate) fn handle_formal_library(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiResult {
+    validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
+    if !state.session_exists(session_id).map_err(internal)? {
+        return Err(not_found(format!("session `{session_id}` not found")));
+    }
+    let args = parse_json_body(body)?;
+    let env = state.research_env_for_session(session_id).map_err(bad)?;
+    let result = research_tools::formal_library::handle_search_formal_library(&env, session_id, &args)
+        .map_err(bad)?;
+    Ok((200, result))
 }
 
 pub fn handle_dag(state: &DesktopState, session_id: &str) -> ApiResult {

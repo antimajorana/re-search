@@ -20,11 +20,14 @@ let turnStartedMs = 0;
 let activeRound = 1;
 let maxRounds = 3;
 let currentConventions = '';
+let conventionsRequest = 0;
 let connectedCount = 0;
+let sympyWorker = null;
 let callbacks = {};
 
 export function initWorkbench(opts = {}) {
   callbacks = opts;
+  wireResearchOptions();
   wireModePresets();
   wireConventionsPopover();
   wireCanvasResizerAndViews();
@@ -37,6 +40,7 @@ export function initWorkbench(opts = {}) {
 export function getWorkbenchSnapshot() {
   return {
     connectedCount,
+    sympyWorker,
     hasConventions: Boolean(currentConventions && currentConventions.trim()),
     conventions: currentConventions,
   };
@@ -185,6 +189,7 @@ export function applySessionTelemetry(stats, hasMessages = false) {
   const metaParts = [];
   if (vStatus === 'verified') metaParts.push('✓ Verified');
   else if (vStatus === 'unverified') metaParts.push('⚠ Unverified');
+  else if (vStatus === 'proof_reviewed') metaParts.push('Proof graph reviewed');
   if (proofCount > 0) metaParts.push(`${proofCount} DAG step${proofCount === 1 ? '' : 's'}`);
   if (delegCount > 0) metaParts.push(`${delegCount} worker${delegCount === 1 ? '' : 's'}`);
   if (honestyWarn > 0) metaParts.push(`⚠ ${honestyWarn} honesty`);
@@ -197,6 +202,31 @@ export function applySessionTelemetry(stats, hasMessages = false) {
 }
 
 // --- 2. Rigor Mode Presets synced with Verifier & Strategist chips ---
+
+function wireResearchOptions() {
+  const options = document.getElementById('research-options');
+  if (!options) return;
+  const toggle = options.querySelector('summary');
+  const close = () => { options.open = false; };
+  document.addEventListener('pointerdown', (event) => {
+    if (options.open && !options.contains(event.target)) close();
+  });
+  options.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && options.open) {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+      toggle.focus();
+    }
+  });
+  // Return the space to the conversation when a choice opens its own panel.
+  options.addEventListener('click', (event) => {
+    if (event.target.closest('.option-controls button')) close();
+  });
+  options.addEventListener('focusout', (event) => {
+    if (event.relatedTarget && !options.contains(event.relatedTarget)) close();
+  });
+}
 
 function wireModePresets() {
   const group = document.getElementById('mode-preset-group');
@@ -284,7 +314,19 @@ function wireConventionsPopover() {
     }
   }
 
-  const closePop = () => { if (pop) pop.hidden = true; };
+  const closePop = () => {
+    if (!pop || pop.hidden) return;
+    const restoreFocus = pop.contains(document.activeElement) || document.activeElement === document.body;
+    pop.hidden = true;
+    if (restoreFocus) document.querySelector('#research-options summary')?.focus();
+  };
+  pop?.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      closePop();
+    }
+  });
 
   if (btn && pop) {
     btn.addEventListener('click', async () => {
@@ -292,7 +334,7 @@ function wireConventionsPopover() {
       pop.hidden = !opening;
       if (opening) {
         await refreshConventionsState();
-        if (input) input.focus();
+        if (!pop.hidden) input?.focus();
       }
     });
   }
@@ -307,13 +349,14 @@ function wireConventionsPopover() {
     saveBtn.addEventListener('click', async () => {
       saveBtn.disabled = true;
       const trimmed = input.value.trim();
-      const sid = typeof callbacks.getActiveSessionId === 'function' ? callbacks.getActiveSessionId() : null;
+      const sid = callbacks.getActiveSessionId?.();
       try {
         if (sid) await api.setSessionConventions(sid, trimmed);
         else await api.updateProviderSettings({ pinned_conventions: trimmed });
-        currentConventions = trimmed;
-        syncConventionsIndicators();
-        closePop();
+        if (sid === callbacks.getActiveSessionId?.()) {
+          refreshConventionsState(trimmed);
+          closePop();
+        }
         notify(
           sid
             ? (trimmed ? 'Session conventions saved for Orchestrator, workers & Verifier.' : 'Session conventions cleared.')
@@ -329,20 +372,22 @@ function wireConventionsPopover() {
 }
 
 export async function refreshConventionsState(overrideText) {
-  if (typeof overrideText === 'string') {
-    currentConventions = overrideText;
+  const request = ++conventionsRequest;
+  const sid = callbacks.getActiveSessionId?.();
+  const apply = (text) => {
+    if (request !== conventionsRequest || sid !== callbacks.getActiveSessionId?.()) return;
+    currentConventions = text;
     syncConventionsIndicators();
+  };
+  if (typeof overrideText === 'string') {
+    apply(overrideText);
     return;
   }
-  const sid = overrideText !== null && typeof callbacks.getActiveSessionId === 'function'
-    ? callbacks.getActiveSessionId()
-    : null;
-  if (sid) {
+  if (sid && overrideText !== null) {
     try {
       const sess = await api.getSession(sid);
       if (typeof sess?.meta?.pinned_conventions === 'string') {
-        currentConventions = sess.meta.pinned_conventions;
-        syncConventionsIndicators();
+        apply(sess.meta.pinned_conventions);
         return;
       }
     } catch {
@@ -351,11 +396,10 @@ export async function refreshConventionsState(overrideText) {
   }
   try {
     const s = await api.getProviderSettings();
-    currentConventions = String((s && s.pinned_conventions) || '');
+    apply(String(s?.pinned_conventions || ''));
   } catch {
     // Keep existing cached conventions
   }
-  syncConventionsIndicators();
 }
 
 function syncConventionsIndicators() {
@@ -422,7 +466,7 @@ function wireCanvasResizerAndViews() {
     wideBtn.addEventListener('click', () => {
       const cur = parseInt(getComputedStyle(shell).getPropertyValue('--canvas-width'), 10) || 460;
       const target = cur > 520 ? 460 : 620;
-      shell.setAttribute('data-canvas-open', 'true');
+      setDrawerOpen('canvas', true);
       applyWidth(target);
       const actual = parseInt(getComputedStyle(shell).getPropertyValue('--canvas-width'), 10) || target;
       wideBtn.setAttribute('aria-pressed', actual > 520 ? 'true' : 'false');
@@ -464,6 +508,7 @@ export async function refreshConnectionBadge(refresh = false) {
     const data = await api.getConnections(refresh);
     const list = Array.isArray(data && data.connections) ? data.connections : [];
     connectedCount = list.filter((c) => c && c.connected).length;
+    sympyWorker = data?.capabilities?.sympy_worker || null;
   } catch {
     // Keep prior count
   }
@@ -479,58 +524,76 @@ export async function refreshConnectionBadge(refresh = false) {
   return connectedCount;
 }
 
-function wireResponsiveDrawers() {
+export function setDrawerOpen(drawer, open) {
   const shell = document.getElementById('app-shell');
-  const railToggle = document.getElementById('rail-toggle');
-  const canvasToggle = document.getElementById('canvas-toggle');
-  if (!shell) return;
+  const pane = document.getElementById(drawer === 'rail' ? 'left-rail' : 'canvas-drawer');
+  const toggle = document.getElementById(`${drawer}-toggle`);
+  if (open && window.innerWidth <= 960) {
+    setDrawerOpen(drawer === 'rail' ? 'canvas' : 'rail', false);
+  }
+  shell?.setAttribute(`data-${drawer}-open`, String(open));
+  toggle?.setAttribute('aria-expanded', String(open));
+  if (pane) {
+    if (!open && pane.contains(document.activeElement)) toggle?.focus();
+    pane.inert = !open;
+  }
+}
+
+function wireResponsiveDrawers() {
+  if (!document.getElementById('app-shell')) return;
   let wasNarrow1120 = null;
   let wasNarrow780 = null;
   const syncForWidth = () => {
     const isNarrow1120 = window.innerWidth <= 1120;
     const isNarrow780 = window.innerWidth <= 780;
     if (isNarrow1120 && wasNarrow1120 !== true) {
-      shell.setAttribute('data-canvas-open', 'false');
-      if (canvasToggle) canvasToggle.setAttribute('aria-expanded', 'false');
+      setDrawerOpen('canvas', false);
     }
     if (isNarrow780 && wasNarrow780 !== true) {
-      shell.setAttribute('data-rail-open', 'false');
+      setDrawerOpen('rail', false);
     }
     wasNarrow1120 = isNarrow1120;
     wasNarrow780 = isNarrow780;
   };
   syncForWidth();
   window.addEventListener('resize', syncForWidth);
-  railToggle?.addEventListener('click', () => {
-    if (window.innerWidth <= 960 && shell.getAttribute('data-rail-open') === 'true') {
-      shell.setAttribute('data-canvas-open', 'false');
-      if (canvasToggle) canvasToggle.setAttribute('aria-expanded', 'false');
-    }
-  });
-  canvasToggle?.addEventListener('click', () => {
-    if (window.innerWidth <= 960 && shell.getAttribute('data-canvas-open') === 'true') {
-      shell.setAttribute('data-rail-open', 'false');
-    }
-  });
 }
 
 function wireKeyboardShortcuts() {
   document.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape' || ev.isComposing || ev.keyCode === 229) return;
+    if (document.querySelector('dialog[open], #conventions-popover:not([hidden]), #effort-popover:not([hidden])')) return;
+    const shell = document.getElementById('app-shell');
+    const drawers = [
+      ['rail', 'left-rail', 780],
+      ['canvas', 'canvas-drawer', 1120],
+    ];
+    for (const [drawer, id, maxWidth] of drawers) {
+      if (window.innerWidth > maxWidth || shell?.getAttribute(`data-${drawer}-open`) !== 'true') continue;
+      if (!document.getElementById(id)?.contains(ev.target)) continue;
+      ev.preventDefault();
+      ev.stopPropagation();
+      document.getElementById(`${drawer}-close-btn`)?.click();
+      return;
+    }
+  }, { capture: true });
+  document.addEventListener('keydown', (ev) => {
     const mod = ev.ctrlKey || ev.metaKey;
-    if (!mod) return;
+    if (!mod || ev.defaultPrevented || document.querySelector('dialog[open]')) return;
     if (ev.key.toLowerCase() === 'b' && !ev.shiftKey) {
       ev.preventDefault();
       const t = document.getElementById('rail-toggle');
       if (t) t.click();
     } else if (ev.key === '\\') {
-      ev.preventDefault();
       const t = document.getElementById('canvas-toggle');
-      if (t) t.click();
+      if (t && document.getElementById('app-shell')?.getAttribute('data-project-overview') !== 'true') {
+        ev.preventDefault();
+        t.click();
+      }
     } else if (ev.key.toLowerCase() === 'k') {
       ev.preventDefault();
       const search = document.getElementById('session-search');
-      const shell = document.getElementById('app-shell');
-      if (shell) shell.setAttribute('data-rail-open', 'true');
+      setDrawerOpen('rail', true);
       if (search) search.focus();
     }
   });

@@ -1,10 +1,10 @@
 //! Deterministic honesty linter and campaign phase inference over the hash-chained ledger.
 
 use ledger::{Event, Ledger};
-use research_tools::ProofDag;
+use research_tools::{ProofDag, ProofStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HonestyFinding {
@@ -71,16 +71,80 @@ const PROOF_PHRASES: &[&str] = &[
     "q.e.d.",
 ];
 
-fn tool_result_value(payload: &Value, ledger: Option<&Ledger>) -> Option<Value> {
-    let result = payload.get("result")?;
-    if let Some(text) = result.get("inline").and_then(Value::as_str).or_else(|| result.as_str()) {
+pub(crate) fn recorded_value(value: &Value, ledger: Option<&Ledger>) -> Option<Value> {
+    if let Some(text) = value.get("inline").and_then(Value::as_str).or_else(|| value.as_str()) {
         return serde_json::from_str(text).ok();
     }
-    if let Some(hash) = result.get("blob").and_then(Value::as_str) {
+    if let Some(hash) = value.get("blob").and_then(Value::as_str) {
         let bytes = ledger?.get_blob(hash).ok()?;
         return serde_json::from_slice(&bytes).ok();
     }
-    result.is_object().then(|| result.clone())
+    value.is_object().then(|| value.clone())
+}
+
+pub(crate) struct RecordedToolCheck<'a> {
+    pub(crate) call_id: &'a str,
+    pub(crate) tool: &'a str,
+    pub(crate) args: &'a Value,
+    pub(crate) result: Value,
+    pub(crate) seq: u64,
+}
+
+impl RecordedToolCheck<'_> {
+    pub(crate) fn matches_ref(&self, reference: &str) -> bool {
+        research_tools::proof_dag::tool_reference_matches(reference, self.call_id, self.seq)
+    }
+
+    fn supports_claim(&self) -> bool {
+        match self.tool {
+            "sympy_eval" => {
+                self.result.get("value").is_some()
+                    && self.result["error"].is_null()
+                    && self.result["validation_truncated"] != true
+                    && self.result.get("validation").is_none_or(|validation| {
+                        validation["kind"] == "symbolic_identity"
+                            && validation["status"] == "symbolic_agreement"
+                            && validation["domain"]["status"] != "restricted"
+                    })
+            }
+            "lean_check" => {
+                self.result["status"].as_str() == Some("verified")
+                    && self.result["ok"].as_bool() != Some(false)
+                    && self.result["axioms"].as_array().is_none_or(Vec::is_empty)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Match typed check results to the actual session tool request, including blob-backed records.
+pub(crate) fn recorded_tool_checks<'a>(
+    events: &'a [Event],
+    ledger: Option<&Ledger>,
+    tools: &[&str],
+) -> Vec<RecordedToolCheck<'a>> {
+    let mut requests = HashMap::new();
+    let mut checks = Vec::new();
+    for ev in events {
+        let payload = &ev.payload;
+        let Some(call_id) = payload["call_id"].as_str() else { continue };
+        match ev.kind.as_str() {
+            "tool.request" => {
+                if let Some(tool) = payload["tool"].as_str().filter(|tool| tools.contains(tool)) {
+                    requests.insert(call_id, (tool, &payload["args"]));
+                }
+            }
+            "tool.result" if payload["ok"].as_bool() == Some(true) => {
+                if let Some((tool, args)) = requests.remove(call_id) {
+                    if let Some(result) = recorded_value(&payload["result"], ledger) {
+                        checks.push(RecordedToolCheck { call_id, tool, args, result, seq: ev.seq });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    checks
 }
 
 fn find_claim(candidate_text: &str, lower_ascii: &str, phrases: &[&str]) -> Option<String> {
@@ -113,45 +177,47 @@ fn lint_with_results(
     events: &[Event],
     ledger: Option<&Ledger>,
 ) -> HonestyReport {
-    let mut tool_by_call_id: HashMap<&str, &str> = HashMap::new();
-    let mut has_sympy_ok = false;
-    let mut has_lean_verified = false;
-
-    for ev in events {
-        match ev.kind.as_str() {
-            "tool.request" => {
-                if let (Some(cid), Some(tool)) = (
-                    ev.payload.get("call_id").and_then(Value::as_str),
-                    ev.payload.get("tool").and_then(Value::as_str),
-                ) {
-                    tool_by_call_id.insert(cid, tool);
-                }
-            }
-            "tool.result" => {
-                if ev.payload.get("ok").and_then(Value::as_bool) != Some(true) {
-                    continue;
-                }
-                let Some(cid) = ev.payload.get("call_id").and_then(Value::as_str) else {
-                    continue;
-                };
-                match tool_by_call_id.get(cid).copied() {
-                    Some("sympy_eval") if !has_sympy_ok => {
-                        has_sympy_ok = tool_result_value(&ev.payload, ledger).is_some_and(|result| {
-                            result.get("value").is_some() && result["error"].is_null()
-                        });
-                    }
-                    Some("lean_check") if !has_lean_verified => {
-                        has_lean_verified = tool_result_value(&ev.payload, ledger)
-                            .is_some_and(|result| result["status"].as_str() == Some("verified"));
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
+    let boundary = events.iter().rev().find(|ev| {
+        matches!(ev.kind.as_str(), "session.start" | "session.resume" | "autonomous.feedback")
+    });
+    let candidate_seq = boundary.map_or(0, |ev| ev.seq);
+    let active: HashMap<_, _> = dag.entries.iter()
+        .filter(|e| !matches!(e.status, ProofStatus::Superseded | ProofStatus::Rejected))
+        .map(|e| (e.entry_id.as_str(), e))
+        .collect();
+    let candidate = dag.entries.iter().rev().find(|e| {
+        e.seq > candidate_seq && e.entry_type == "final_answer" && active.contains_key(e.entry_id.as_str())
+    });
+    let mut pending: Vec<_> = candidate.into_iter().collect();
+    let referenced_words = candidate_text
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_');
+    pending.extend(referenced_words.filter_map(|word| active.get(word).copied()));
+    let mut visited = HashSet::new();
+    let mut references = Vec::new();
+    while let Some(entry) = pending.pop() {
+        if visited.insert(entry.entry_id.as_str()) {
+            references.extend(entry.tool_call_ref.as_deref().map(|reference| (reference, entry.seq)));
+            pending.extend(entry.depends_on.iter().filter_map(|id| active.get(id.as_str()).copied()));
         }
     }
-
-    let has_verifier_accepted = dag.latest_full_verification_accepted;
+    let checks = recorded_tool_checks(events, ledger, &["sympy_eval", "lean_check"]);
+    let supports = |tool| checks.iter().any(|check| {
+        check.tool == tool && check.supports_claim()
+            && (boundary.is_none() || references.iter().any(|(reference, seq)| {
+                check.seq < *seq && check.matches_ref(reference)
+            }))
+    });
+    let has_sympy_ok = supports("sympy_eval");
+    let has_lean_verified = supports("lean_check");
+    let has_verifier_accepted = dag.latest_full_verification_accepted && (
+        boundary.is_none() || candidate.is_some_and(|entry| {
+            let answer_hash = ledger::sha256_hex(candidate_text.as_bytes());
+            let Some(verification) = &entry.verification else { return false };
+            verification["kind"].as_str() == Some("full")
+                && verification["verdict"].as_str() == Some("accepted")
+                && verification["answer_sha256"].as_str() == Some(answer_hash.as_str())
+        })
+    );
     let lower = candidate_text.to_ascii_lowercase();
     let mut findings = Vec::new();
 
@@ -160,8 +226,8 @@ fn lint_with_results(
             findings.push(HonestyFinding {
                 severity: "error".to_string(),
                 claim,
-                reason: "prose claims Lean verification without a passing `lean_check` tool call with status \"verified\"".to_string(),
-                suggestion: "Run `lean_check` via `delegate_lean` and verify status \"verified\", or remove the Lean verification claim.".to_string(),
+                reason: "prose claims Lean verification without a matching axiom-free `lean_check` result linked to the candidate proof".to_string(),
+                suggestion: "Record the verified Lean check's `tool_call_ref` on a relevant proof entry and cite that entry, or qualify the claim.".to_string(),
             });
         }
     }
@@ -171,8 +237,8 @@ fn lint_with_results(
             findings.push(HonestyFinding {
                 severity: "error".to_string(),
                 claim,
-                reason: "prose claims SymPy verification without a succeeding `sympy_eval` tool call".to_string(),
-                suggestion: "Run `sympy_eval` (directly or via `delegate_compute`) to verify the calculation, or remove the SymPy claim.".to_string(),
+                reason: "prose claims SymPy verification without a successful `sympy_eval` result linked to the candidate proof".to_string(),
+                suggestion: "Record the successful calculation's `tool_call_ref` on a relevant proof entry and cite that entry, or qualify the claim.".to_string(),
             });
         }
     }
@@ -264,6 +330,16 @@ mod tests {
             ev(6, "tool.result", json!({"call_id": "c3", "ok": true, "result": {
                 "inline": json!({"value": null, "error": {"type": "ValueError", "message": "math error"}}).to_string()
             }})),
+            ev(7, "tool.request", json!({"call_id": "c4", "tool": "sympy_eval"})),
+            ev(8, "tool.result", json!({"call_id": "c4", "ok": true, "result": {
+                "value": "counterexample",
+                "validation": {"kind": "symbolic_identity", "status": "counterexample", "schema_version": 1}
+            }})),
+            ev(9, "tool.request", json!({"call_id": "c5", "tool": "sympy_eval"})),
+            ev(10, "tool.result", json!({"call_id": "c5", "ok": true, "result": {
+                "value": "report",
+                "validation": {"kind": "symbolic_identity", "status": "symbolic_agreement", "domain": {"status": "restricted"}, "schema_version": 1}
+            }})),
         ];
         let rep_fail = lint_honesty("Checked with SymPy and checked by Lean.", &dag, &unbacked);
         assert_eq!(rep_fail.findings.len(), 2);
@@ -315,6 +391,39 @@ mod tests {
         );
         assert!(report.has_sympy_ok && report.has_lean_verified);
         assert!(report.passed);
+    }
+
+    #[test]
+    fn prior_or_unlinked_checks_do_not_support_a_new_claim() {
+        let mut events = vec![
+            ev(1, "session.start", json!({ "prompt": "Prove A" })),
+            ev(2, "tool.request", json!({ "call_id": "prior-lean", "tool": "lean_check" })),
+            ev(3, "tool.result", json!({ "call_id": "prior-lean", "ok": true, "result": { "status": "verified" } })),
+            ev(4, "proof.entry", json!({
+                "entry_id": "e-1", "entry_type": "verification", "details": "Proof of A",
+                "tool_call_ref": "prior-lean",
+            })),
+            ev(5, "session.resume", json!({ "prompt": "Prove B" })),
+            ev(6, "tool.request", json!({ "call_id": "same-turn-lean", "tool": "lean_check" })),
+            ev(7, "tool.result", json!({ "call_id": "same-turn-lean", "ok": true, "result": { "status": "verified" } })),
+            ev(8, "proof.entry", json!({
+                "entry_id": "e-2", "entry_type": "verification", "details": "Unrelated proof of C",
+                "tool_call_ref": "same-turn-lean",
+            })),
+            ev(9, "proof.entry", json!({
+                "entry_id": "e-3", "entry_type": "final_answer", "details": "B was checked by Lean."
+            })),
+        ];
+        let dag = ProofDag { entries: crate::guardrails::materialize_proof_entries(&events), ..Default::default() };
+        assert!(!lint_honesty("B was checked by Lean.", &dag, &events).passed);
+        assert!(!lint_honesty("B was checked by Lean (see e-10).", &dag, &events).passed);
+
+        events.push(ev(10, "proof.entry", json!({
+            "entry_id": "e-4", "entry_type": "final_answer", "details": "A was checked by Lean.",
+            "depends_on": ["e-1"]
+        })));
+        let dag = ProofDag { entries: crate::guardrails::materialize_proof_entries(&events), ..Default::default() };
+        assert!(lint_honesty("A was checked by Lean.", &dag, &events).passed);
     }
 
     #[test]

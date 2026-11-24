@@ -20,6 +20,8 @@ pub mod model_list;
 pub mod narrator;
 pub mod openai;
 pub mod presets;
+mod provenance;
+pub use provenance::workspace_revision;
 pub mod provider_config;
 pub mod responses;
 pub mod resume;

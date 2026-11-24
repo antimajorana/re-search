@@ -1,12 +1,15 @@
 //! Source file walker and session ledger/JSON withdrawal & retraction scanners for `tex_audit`.
 
 use crate::sandbox::{is_symlink_or_junction, strip_verbatim_prefix, WorkspaceSandbox};
+use crate::tex_bundle::{find_tex_includes_in_line_block, normalize_rel_segments};
 use crate::tex_scan::{base_arxiv_id, normalize_doi, normalize_ws, strip_latex_comments};
 use ledger::Ledger;
+use regex::Regex;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 
 const MAX_SCANNED_FILES: usize = 512;
 const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
@@ -19,6 +22,58 @@ pub(crate) struct LoadedFile {
     pub stripped_tex: String,
     pub norm_raw: String,
     pub norm_stripped: String,
+}
+
+/// Resolve the files used by a selected manuscript. The lookup is confined to
+/// the files already loaded from its workspace or ingested source bundle.
+pub(crate) fn manuscript_files(files: &[LoadedFile], root: &LoadedFile) -> BTreeSet<String> {
+    static BIB: OnceLock<Regex> = OnceLock::new();
+    let bib = BIB.get_or_init(|| {
+        Regex::new(r"\\(?:bibliography|addbibresource)(?:\s*\[[^\]]*\])?\s*\{([^{}]+)\}").unwrap()
+    });
+    let bundle = if root.from_sources_dir {
+        root.display_id.splitn(3, '/').take(2).collect::<Vec<_>>().join("/")
+    } else {
+        String::new()
+    };
+    let mut selected = BTreeSet::new();
+    let mut pending = vec![root];
+    while let Some(file) = pending.pop() {
+        if !selected.insert(file.display_id.clone()) || file.ext != "tex" {
+            continue;
+        }
+        let parent = file.display_id.rsplit_once('/').map_or("", |(parent, _)| parent);
+        let tex = find_tex_includes_in_line_block(&file.stripped_tex);
+        let bibliographies = bib.captures_iter(&file.stripped_tex)
+            .flat_map(|capture| capture.get(1).unwrap().as_str().split(','))
+            .map(|path| (path.trim(), "bib"));
+        let targets = tex.iter().map(|(_, path)| (path.as_str(), "tex")).chain(bibliographies);
+        for (path, ext) in targets {
+            let path = path.trim().trim_matches(['"', '\'']);
+            if path.is_empty() || path.starts_with('/') {
+                continue;
+            }
+            for base in [parent, bundle.as_str()] {
+                let joined = if base.is_empty() { path.to_string() } else { format!("{base}/{path}") };
+                let Some(joined) = normalize_rel_segments(&joined) else { continue };
+                let Some(candidate) = files.iter().find(|candidate| {
+                    candidate.ext == ext && candidate.from_sources_dir == root.from_sources_dir
+                        && (!root.from_sources_dir || candidate.display_id.starts_with(&format!("{bundle}/")))
+                        && (candidate.display_id == joined
+                            || candidate.display_id.strip_suffix(&format!(".{ext}")) == Some(joined.as_str()))
+                }) else { continue };
+                pending.push(candidate);
+                break;
+            }
+        }
+        if let Some(stem) = file.display_id.rsplit_once('.').map(|(stem, _)| stem) {
+            let generated = format!("{stem}.bbl");
+            if files.iter().any(|f| f.display_id == generated && f.from_sources_dir == root.from_sources_dir) {
+                selected.insert(generated);
+            }
+        }
+    }
+    selected
 }
 
 pub(crate) fn collect_text_files(

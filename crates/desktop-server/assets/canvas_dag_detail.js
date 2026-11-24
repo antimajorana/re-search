@@ -57,6 +57,329 @@ function renderDepRow(container, label, ids, byId, onJump) {
   container.appendChild(row);
 }
 
+const EVIDENCE_LABEL = {
+  computation: 'SymPy computation',
+  lean: 'Lean check',
+  source_read: 'Recorded source read',
+  source_ingested: 'Ingested source',
+  literature: 'Literature result',
+  paper_passages: 'Paper passages',
+  formal_library: 'Lean library search',
+  validation_decision: 'Frozen validation plan',
+  citation: 'Researcher citation',
+  unavailable: 'Unresolved evidence link',
+};
+
+const EVIDENCE_STATUS = {
+  completed: 'completed',
+  failed: 'failed',
+  verified: 'type-checked',
+  rejected_sorry: 'incomplete proof',
+  rejected_axiom: 'axiom rejected',
+  source_changed: 'source changed during check',
+  lean_not_found: 'Lean unavailable',
+  timeout: 'timed out',
+  declined: 'declined',
+  recorded: 'recorded',
+  matches: 'matches recorded',
+  declarations_found: 'declarations found',
+  no_match: 'no match',
+  library_not_found: 'library unavailable',
+  frozen_checks_passed: 'checks passed',
+  frozen_checks_failed: 'checks failed',
+  researcher_recorded: 'researcher-entered',
+  result_unavailable: 'result unavailable',
+  source_record_unavailable: 'source record unavailable',
+  unsupported_reference: 'unsupported tool record',
+  unknown_reference: 'record unavailable',
+};
+
+const VALIDATION_LABEL = {
+  symbolic_identity: 'Symbolic identity',
+  numerical_convergence: 'Numerical convergence',
+};
+
+const VALIDATION_STATUS = {
+  symbolic_agreement: 'zero symbolic residual',
+  counterexample: 'counterexample',
+  undetermined: 'undetermined',
+  within_tolerance: 'within tolerance',
+  not_stable: 'unstable at the chosen levels',
+  outside_reference_tolerance: 'outside reference tolerance',
+  insufficient_data: 'insufficient data',
+  evaluation_failed: 'evaluation failed',
+};
+
+const CONVERGENCE_AXIS = {
+  resolution: 'Resolution',
+  basis: 'Basis size',
+  precision: 'Precision (dps)',
+};
+
+function addEvidenceText(parent, tag, value, className) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  node.textContent = value;
+  parent.appendChild(node);
+  return node;
+}
+
+function addEvidenceField(parent, label, value, preformatted = false) {
+  if (typeof value !== 'string' || !value.trim()) return;
+  addEvidenceText(parent, 'div', label, 'dag-evidence-meta');
+  addEvidenceText(parent, preformatted ? 'pre' : 'p', value, preformatted ? 'trace-io' : '');
+}
+
+function addSourceReaderButton(parent, anchor, onOpenSource) {
+  if (!anchor?.source_id || !anchor.path || !anchor.file_sha256 || !onOpenSource) return;
+  const label = anchor.start_line ? 'Open cited lines' : 'Open recorded file';
+  const button = addEvidenceText(parent, 'button', label, 'pill-btn sm dag-evidence-open');
+  button.type = 'button';
+  button.addEventListener('click', () => onOpenSource(anchor));
+}
+
+function addEvidenceSource(parent, source, onOpenSource) {
+  if (!source) return;
+  addEvidenceField(parent, 'Ledger source', source.title || source.source_id);
+  addEvidenceField(parent, 'Materialized file', source.path);
+  addEvidenceField(parent, 'Raw source SHA-256', source.raw_sha256, true);
+  addEvidenceField(parent, 'Recorded file SHA-256', source.file_sha256, true);
+  if (source.seq) addEvidenceText(parent, 'div', `Ingestion event ${source.seq}`, 'dag-evidence-meta');
+  addSourceReaderButton(parent, source.reader, onOpenSource);
+}
+
+function validationValue(value) {
+  if (value == null) return '—';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value !== 'object') return String(value);
+  return Object.entries(value).map(([key, part]) => `${key} = ${part}`).join(', ') || '—';
+}
+
+function readableStatus(status) {
+  return typeof status === 'string' && status ? status.replaceAll('_', ' ') : '—';
+}
+
+function addValidationField(parent, label, value, preformatted = false) {
+  if (value != null) addEvidenceField(parent, label, validationValue(value), preformatted);
+}
+
+function addValidationTable(parent, label, rows, columns) {
+  if (!Array.isArray(rows) || !rows.length) return;
+  addEvidenceText(parent, 'div', label, 'dag-evidence-meta');
+  const wrapper = document.createElement('div');
+  wrapper.className = 'dag-validation-table';
+  wrapper.tabIndex = 0;
+  wrapper.setAttribute('aria-label', label);
+  const table = document.createElement('table');
+  table.setAttribute('aria-label', label);
+  const head = document.createElement('thead');
+  const headers = document.createElement('tr');
+  for (const [heading] of columns) {
+    addEvidenceText(headers, 'th', heading).scope = 'col';
+  }
+  head.appendChild(headers);
+  table.appendChild(head);
+  const body = document.createElement('tbody');
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+    for (const [, field] of columns) addEvidenceText(tr, 'td', field(row || {}));
+    body.appendChild(tr);
+  }
+  table.appendChild(body);
+  wrapper.appendChild(table);
+  parent.appendChild(wrapper);
+}
+
+function addSymbolicValidation(parent, report) {
+  addValidationField(parent, 'Left-hand expression', report.lhs, true);
+  addValidationField(parent, 'Right-hand expression', report.rhs, true);
+  addValidationField(parent, 'Simplified residual', report.residual, true);
+  for (const [symbol, flags] of Object.entries(report.assumptions || {})) {
+    addValidationField(parent, `Assumptions for ${symbol}`, flags);
+  }
+  addValidationField(parent, 'Requested domain', report.domain?.requested);
+  if (report.domain?.effective !== report.domain?.requested && report.domain?.effective !== report.domain?.common) {
+    addValidationField(parent, 'Effective domain', report.domain.effective);
+  }
+  addValidationField(parent, 'Common domain', report.domain?.common);
+  if (report.domain?.status) {
+    addValidationField(parent, 'Domain analysis', readableStatus(report.domain.status));
+  }
+  if (report.dimensions?.status) {
+    addValidationField(parent, 'Dimensions', readableStatus(report.dimensions.status));
+    addValidationField(parent, 'Left-hand dimension', report.dimensions.lhs);
+    addValidationField(parent, 'Right-hand dimension', report.dimensions.rhs);
+    addValidationField(parent, 'Dimension diagnostic', report.dimensions.error);
+  }
+  const comparisons = [
+    ['LHS', (row) => validationValue(row.lhs)],
+    ['RHS', (row) => validationValue(row.rhs)],
+    ['Result', (row) => readableStatus(row.status)],
+  ];
+  addValidationTable(parent, 'Sample points', report.samples, [
+    ['Point', (row) => validationValue(row.point)],
+    ...comparisons,
+  ]);
+  addValidationTable(parent, 'Limits', report.limits, [
+    ['Point', (row) => validationValue(row.point)],
+    ['Direction', (row) => validationValue(row.direction)],
+    ...comparisons,
+  ]);
+}
+
+function addConvergenceValidation(parent, report) {
+  const axis = CONVERGENCE_AXIS[report.axis] || 'Level';
+  const summary = document.createElement('div');
+  summary.className = 'dag-validation-summary';
+  parent.appendChild(summary);
+  addValidationField(summary, 'Refinement axis', axis);
+  addValidationField(summary, 'Stable across tail', report.stable ?? 'Undetermined');
+  addValidationField(summary, 'Within reported tolerance', report.within_tolerance ?? 'Undetermined');
+  addValidationField(summary, 'Required adjacent comparisons', report.tail);
+  addValidationField(summary, 'Analysis precision (dps)', report.analysis_dps);
+  addValidationField(summary, 'Absolute tolerance', report.atol);
+  addValidationField(summary, 'Relative tolerance', report.rtol);
+  addValidationField(summary, 'Reference', report.reference);
+  addValidationField(summary, 'Reference within tolerance', report.reference_within_tolerance);
+  const columns = [
+    [axis, (row) => validationValue(row.level)],
+    ['Work dps', (row) => validationValue(row.work_dps)],
+    ['Value', (row) => validationValue(row.value)],
+    ['Change', (row) => validationValue(row.delta)],
+    ['Tolerance', (row) => validationValue(row.threshold)],
+    ['Within tolerance', (row) => validationValue(row.passes)],
+  ];
+  if (report.reference != null) {
+    columns.push(
+      ['Reference error', (row) => validationValue(row.reference_error)],
+      ['Reference tolerance', (row) => validationValue(row.reference_threshold)],
+      ['Reference passes', (row) => validationValue(row.reference_passes)],
+    );
+  }
+  if (report.samples?.some((row) => row?.error)) {
+    columns.push(['Evaluation error', (row) => [row.error?.type, row.error?.message].filter(Boolean).join(' · ') || '—']);
+  }
+  addValidationTable(parent, 'Refinement levels', report.samples, columns);
+}
+
+function addEvidenceRecord(parent, entry, item, onSelectNode, onOpenSource) {
+  const section = document.createElement('details');
+  section.className = 'dag-evidence-row';
+  const validation = item.kind === 'computation' && item.validation?.schema_version === 1
+    && VALIDATION_LABEL[item.validation.kind] && VALIDATION_STATUS[item.validation.status]
+    ? item.validation : null;
+  const title = validation ? VALIDATION_LABEL[validation.kind] : EVIDENCE_LABEL[item.kind] || 'Evidence';
+  const status = validation ? VALIDATION_STATUS[validation.status] : EVIDENCE_STATUS[item.status] || 'unavailable';
+  addEvidenceText(section, 'summary', `${title} · ${status}`);
+  if (item.via_entry_id && item.via_entry_id !== entry.entry_id) {
+    const button = addEvidenceText(section, 'button', `Linked through ${item.via_entry_id}`, 'dag-dep-chip');
+    button.type = 'button';
+    button.addEventListener('click', () => onSelectNode?.(item.via_entry_id));
+  }
+  if (item.request_seq) {
+    const sequence = item.result_seq ? `Request ${item.request_seq} · outcome ${item.result_seq}` : `Request ${item.request_seq}`;
+    addEvidenceText(section, 'div', sequence, 'dag-evidence-meta');
+  }
+  addEvidenceField(section, 'Tool reference', item.tool_call_ref);
+  if (item.kind === 'computation') {
+    if (validation) {
+      addEvidenceText(section, 'div', 'Computational evidence', 'dag-evidence-meta');
+      if (validation.kind === 'symbolic_identity') addSymbolicValidation(section, validation);
+      if (validation.kind === 'numerical_convergence') addConvergenceValidation(section, validation);
+      if (validation.rows_omitted) addEvidenceText(section, 'p', 'Showing selected rows from the recorded report.', 'dag-evidence-meta');
+    } else {
+      addEvidenceField(section, 'Value', item.value, true);
+      addEvidenceField(section, 'LaTeX', item.latex, true);
+    }
+    addEvidenceField(section, 'Standard output', item.stdout, true);
+    addEvidenceField(section, 'Standard error', item.stderr, true);
+    if (item.worker_truncated) addEvidenceText(section, 'p', 'The worker truncated its recorded output.');
+    if (item.validation_truncated) addEvidenceText(section, 'p', 'The structured report exceeded the worker’s recording limit.');
+  }
+  if (item.kind === 'lean') {
+    addEvidenceField(section, 'Recorded Lean statement and code', item.code, true);
+    addEvidenceField(section, 'Checked file', item.path);
+    addEvidenceField(section, 'Checked source SHA-256', item.source_sha256, true);
+    if (Array.isArray(item.axioms) && item.axioms.length > 0) {
+      addEvidenceField(section, 'Declared axioms', item.axioms.join(', '));
+    }
+  }
+  if (item.kind === 'source_read') {
+    addEvidenceField(section, 'Recorded path', [item.root, item.path].filter(Boolean).join('/'));
+    if (item.start_line && item.end_line) {
+      addEvidenceText(section, 'div', `Lines ${item.start_line}–${item.end_line}`, 'dag-evidence-meta');
+    } else if (typeof item.match_count === 'number') {
+      addEvidenceText(section, 'div', `${item.match_count} recorded matches`, 'dag-evidence-meta');
+    }
+    addSourceReaderButton(section, item.reader, onOpenSource);
+  }
+  if (item.kind === 'citation') {
+    addEvidenceField(section, 'Source', item.source_title || item.source_id || 'No source selected');
+    addEvidenceField(section, 'DOI', item.source_doi);
+    addEvidenceField(section, 'Recorded location', item.location);
+    addEvidenceField(section, 'Researcher-entered quote', item.quote, true);
+  }
+  if (item.kind === 'validation_decision') {
+    addEvidenceField(section, 'Plan', item.plan_id);
+    if (item.result_seq) addEvidenceText(section, 'div', `Decision event ${item.result_seq}`, 'dag-evidence-meta');
+    addValidationField(section, 'Candidate value', item.candidate_value, true);
+    addValidationField(section, 'Known-pass control passed', item.known_pass_passed);
+    addValidationField(section, 'Planted-fail control rejected', item.planted_fail_rejected);
+    addEvidenceField(section, 'Plan commitment SHA-256', item.commit_hash, true);
+  }
+  for (const passage of Array.isArray(item.passages) ? item.passages : []) {
+    const lines = passage.start_line === passage.end_line ? `line ${passage.start_line}`
+      : `lines ${passage.start_line}–${passage.end_line}`;
+    addEvidenceField(section, passage.title || 'Source passage', `${passage.path} · ${lines}`);
+    addEvidenceField(section, 'Recorded excerpt', passage.excerpt, true);
+    addEvidenceField(section, 'Source file SHA-256', passage.file_sha256, true);
+    addSourceReaderButton(section, passage.reader, onOpenSource);
+  }
+  for (const declaration of Array.isArray(item.declarations) ? item.declarations : []) {
+    addEvidenceField(section, declaration.name, [declaration.module, declaration.path,
+      declaration.line ? `line ${declaration.line}` : null].filter(Boolean).join(' · '));
+    addEvidenceField(section, 'Source declaration', declaration.signature, true);
+    addEvidenceField(section, 'Source file SHA-256', declaration.source_sha256, true);
+  }
+  for (const record of Array.isArray(item.records) ? item.records : []) {
+    const label = [record.title, record.arxiv_id, record.doi].filter(Boolean).join(' · ');
+    const warning = record.withdrawn ? ' · withdrawn' : record.retracted ? ' · retracted' : '';
+    if (label) addEvidenceText(section, 'p', label + warning);
+  }
+  addEvidenceSource(section, item.source, onOpenSource);
+  addEvidenceField(section, 'Recorded excerpt', item.excerpt, true);
+  addEvidenceField(section, 'Recorded error', item.error);
+  parent.appendChild(section);
+}
+
+export function renderProofEvidence(container, entry, data, onSelectNode, onOpenSource) {
+  container.replaceChildren();
+  if (!data) {
+    addEvidenceText(container, 'p', 'Evidence is unavailable for this entry.', 'dag-evidence-meta');
+    return;
+  }
+  const reviews = Array.isArray(data.model_reviews) ? data.model_reviews : [];
+  const support = Array.isArray(data.support) ? data.support : [];
+  if (!reviews.length && !support.length) {
+    addEvidenceText(container, 'p', 'No recorded evidence is linked to this entry.', 'dag-evidence-meta');
+    return;
+  }
+  if (data.retired) addEvidenceText(container, 'p', 'Historical evidence for a superseded entry.', 'dag-evidence-meta');
+  for (const review of reviews) {
+    const section = document.createElement('details');
+    section.className = 'dag-evidence-row';
+    const scope = review.scope === 'full' ? 'Full-solution model review' : review.scope === 'step' ? 'Step model review' : 'Model review';
+    addEvidenceText(section, 'summary', `${scope} · ${review.verdict}`);
+    addEvidenceText(section, 'div', `Review event ${review.seq}`, 'dag-evidence-meta');
+    addEvidenceField(section, 'Summary', review.summary);
+    for (const issue of Array.isArray(review.issues) ? review.issues : []) addEvidenceText(section, 'p', issue);
+    addEvidenceField(section, 'Reviewed answer SHA-256', review.answer_sha256, true);
+    container.appendChild(section);
+  }
+  for (const item of support) addEvidenceRecord(container, entry, item, onSelectNode, onOpenSource);
+  if (data.truncated) addEvidenceText(container, 'p', 'Some linked records are omitted. Open a dependency to inspect its evidence.', 'dag-evidence-meta');
+}
+
 export function renderDagNodeDetail(detailEl, entry, allEntries, opts = {}) {
   if (!detailEl) return;
   if (!entry) {
@@ -113,13 +436,14 @@ export function renderDagNodeDetail(detailEl, entry, allEntries, opts = {}) {
       <div class="dag-section-title">Dependency Links</div>
       <div id="dag-deps-rows"></div>
     </div>
-    <div class="dag-section" id="dag-verif-section" hidden>
-      <div class="dag-section-title">Verifier Note</div>
-      <div class="dag-verification-box rich-prose"></div>
+    <div class="dag-section">
+      <div class="dag-section-title">Linked Evidence</div>
+      <div id="dag-evidence" aria-live="polite"></div>
     </div>
     <div class="dag-detail-actions">
       <button id="node-explain-btn" type="button" class="pill-btn sm primary">Explain in Detail</button>
       <button id="node-fork-step-btn" type="button" class="pill-btn sm">Fork from Here</button>
+      ${typeof opts.onPromoteStep === 'function' ? '<button id="node-promote-btn" type="button" class="pill-btn sm">Save Finding</button>' : ''}
     </div>
   `;
 
@@ -161,17 +485,20 @@ export function renderDagNodeDetail(detailEl, entry, allEntries, opts = {}) {
     }
   }
 
-  if (entry.verification && typeof entry.verification === 'object') {
-    const verSec = detailEl.querySelector('#dag-verif-section');
-    const verBox = detailEl.querySelector('.dag-verification-box');
-    if (verSec && verBox) {
-      verSec.hidden = false;
-      const vs = entry.verification.summary || entry.verification.verdict || '';
-      const issList = Array.isArray(entry.verification.issues)
-        ? entry.verification.issues.map((i) => `- **${i.severity || 'issue'}:** ${i.message || i.description || ''}`).join('\n')
-        : '';
-      renderRichInto(verBox, [vs, issList].filter(Boolean).join('\n\n'));
-    }
+  const evidence = detailEl.querySelector('#dag-evidence');
+  if (evidence && opts.loadEvidence) {
+    evidence.textContent = 'Loading linked evidence…';
+    opts.loadEvidence(entry.entry_id).then((result) => {
+      if (detailEl.querySelector('#dag-evidence') !== evidence) return;
+      const record = result.entries?.find((item) => item.entry_id === entry.entry_id);
+      renderProofEvidence(evidence, entry, record, opts.onSelectNode, opts.onOpenSource);
+    }).catch((error) => {
+      if (detailEl.querySelector('#dag-evidence') === evidence) {
+        evidence.textContent = error?.message || 'The evidence request failed.';
+      }
+    });
+  } else if (evidence) {
+    renderProofEvidence(evidence, entry, null, opts.onSelectNode);
   }
 
   detailEl.querySelector('#node-explain-btn')?.addEventListener('click', () => {
@@ -180,4 +507,5 @@ export function renderDagNodeDetail(detailEl, entry, allEntries, opts = {}) {
   detailEl.querySelector('#node-fork-step-btn')?.addEventListener('click', () => {
     if (typeof opts.onForkAtStep === 'function') opts.onForkAtStep(entry);
   });
+  detailEl.querySelector('#node-promote-btn')?.addEventListener('click', () => opts.onPromoteStep(entry));
 }

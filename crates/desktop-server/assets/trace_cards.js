@@ -369,27 +369,31 @@ export function buildRecoveryPrompt(action, ctx = {}) {
 export function buildVerificationVerdictCard(msgPayload, onInspectStep, onRecoveryAction) {
   if (!msgPayload) return null;
   const status = msgPayload.verified_status;
-  if (status !== 'verified' && status !== 'unverified') return null;
+  const isVerified = status === 'verified';
+  const isDraft = status === 'unverified';
+  const proofOnly = status === 'proof_reviewed';
+  if (!isVerified && !isDraft && !proofOnly) return null;
   const verifications = Array.isArray(msgPayload.verifications)
     ? msgPayload.verifications.filter((v) => v && v.verified_status)
     : [];
 
   const latest = verifications.findLast((v) => v.verified_status === status);
-  const isVerified = status === 'verified';
   const rounds = Number(msgPayload.verification_rounds) || verifications.length || 1;
   const targetId = String(msgPayload.verified_entry_id || (latest && latest.target_entry_id) || '');
-  const summary = String((latest && latest.summary) || (isVerified ? 'The Independent Verifier accepted the final answer.' : 'Independent Verifier reported unresolved issues.'));
+  const summary = proofOnly
+    ? 'An earlier model review covered the proof graph. The displayed answer has no recorded review.'
+    : String((latest && latest.summary) || (isVerified ? 'A separate model review accepted this answer.' : 'Independent Verifier reported unresolved issues.'));
   const issues = Array.isArray(latest && latest.issues) ? latest.issues : [];
   const recovery = typeof msgPayload.recovery === 'string' ? msgPayload.recovery.trim() : '';
 
   const card = document.createElement('div');
-  card.className = `verdict-card ${isVerified ? 'is-verified' : 'is-unverified'}`;
+  card.className = `verdict-card ${isVerified ? 'is-verified' : isDraft ? 'is-unverified' : ''}`;
 
   const roundLabel = `${rounds} verification round${rounds === 1 ? '' : 's'}`;
   const stepJumpHtml = targetId
     ? `<button type="button" class="pill-btn sm verdict-step-btn">Inspect ${escapeHtml(targetId)} in DAG ↗</button>`
     : '';
-  const issuesHtml = (!isVerified && issues.length > 0)
+  const issuesHtml = (isDraft && issues.length > 0)
     ? `<details class="verdict-issues" open><summary>${issues.length} flagged issue${issues.length === 1 ? '' : 's'}</summary><ul>${
       issues.map((iss) => {
         const sev = escapeHtml(String(iss.severity || 'issue'));
@@ -399,7 +403,7 @@ export function buildVerificationVerdictCard(msgPayload, onInspectStep, onRecove
       }).join('')
     }</ul></details>`
     : '';
-  const recoveryHtml = !isVerified
+  const recoveryHtml = isDraft
     ? `<div class="verdict-recovery">
         ${recovery ? `<div class="verdict-recovery-body rich-prose">${escapeHtml(recovery)}</div>` : ''}
         <div class="verdict-actions">
@@ -413,7 +417,7 @@ export function buildVerificationVerdictCard(msgPayload, onInspectStep, onRecove
   card.innerHTML = `
     <div class="verdict-head">
       <div class="verdict-title-wrap">
-        <span class="badge ${isVerified ? 'ok' : 'warn'}">${isVerified ? '✓ Independently Verified' : '⚠ Unverified Draft'}</span>
+        <span class="badge ${isVerified ? 'ok' : isDraft ? 'warn' : ''}">${isVerified ? '✓ Verified by model' : isDraft ? '⚠ Unverified Draft' : 'Proof graph reviewed'}</span>
         <span class="verdict-meta">${escapeHtml(roundLabel)}</span>
       </div>
       ${stepJumpHtml}
@@ -429,7 +433,7 @@ export function buildVerificationVerdictCard(msgPayload, onInspectStep, onRecove
     const recEl = card.querySelector('.verdict-recovery-body');
     if (recEl) renderRichInto(recEl, recovery);
   }
-  if (!isVerified && typeof card.querySelectorAll === 'function') {
+  if (isDraft && typeof card.querySelectorAll === 'function') {
     const issueEls = card.querySelectorAll('.verdict-issue-desc');
     issueEls.forEach((el, idx) => {
       const iss = issues[idx];

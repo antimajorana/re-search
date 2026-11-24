@@ -6,20 +6,25 @@ import { buildHonestyNoticeCard, buildStructuredTraceCard, buildVerificationVerd
 
 const STARTER_PROMPTS = [
   {
-    title: 'Exact SymPy & Perturbation Check',
-    prompt: 'Compute the ground-state energy gap of the 1D Kitaev chain at $\\mu = 0$ and verify the Majorana edge-mode commutator algebra in SymPy.',
+    title: 'Check a derivation',
+    description: 'Follow a scalar field from its action to its equation of motion.',
+    prompt: 'Starting from the free real scalar field action in flat spacetime, derive the Klein–Gordon equation. State the metric signature, track the boundary term, and record the assumptions and steps in the proof graph.',
   },
   {
-    title: 'arXiv TeX Source Audit',
-    prompt: 'Fetch the arXiv LaTeX source, cross-check all \\ref{} and \\cite{} keys, and summarize the main theorem with exact notation.',
+    title: 'Investigate a conjecture',
+    description: 'Test a matrix identity and locate the assumption it needs.',
+    prompt: 'For square complex matrices A and B, investigate whether $e^{A+B}=e^A e^B$. Give a worked counterexample if the claim fails, then prove a sufficient condition and record it in the proof graph.',
   },
   {
-    title: 'Proof-DAG Step Verification',
-    prompt: 'Derive the dispersion relation $\\omega(k) = \\sqrt{\\Delta^2 + (2t \\cos k)^2}$, append structured proof steps, and run deterministic verification.',
+    title: 'Find a paper',
+    description: 'Trace the area law for entanglement to its sources.',
+    prompt: 'Find original papers on the entanglement area law for gapped one-dimensional spin chains. Compare their hypotheses and distinguish the rigorous theorem from numerical evidence. Cite each result.',
   },
   {
-    title: 'Asymptotic Expansion & Sign Audit',
-    prompt: 'Expand $\\int_0^\\infty \\frac{k^2\\,dk}{\\sqrt{k^2 + m^2}\\,(e^{\\beta\\sqrt{k^2+m^2}} + 1)}$ at $\\beta m \\ll 1$, check leading coefficients numerically in Python, and record each step.',
+    title: 'Test numerical convergence',
+    description: 'Compare a truncated series with its exact limit.',
+    requiresSympy: true,
+    prompt: 'Use the Compute Worker to study the partial sums of the inverse-square series. Record a convergence check across increasing cutoffs, compare with $\\pi^2/6$, and state how the truncation error scales.',
   },
 ];
 
@@ -31,8 +36,7 @@ let onNotify = null;
 let onInspectStep = null;
 let onRecoveryAction = null;
 let onOpenConnect = null;
-let onPickWorkspace = null;
-let onOpenConventions = null;
+let onOpenProjects = null;
 let getSetupInfo = null;
 let liveStreamText = '';
 let liveRenderPending = false;
@@ -45,8 +49,7 @@ export function initStream(opts = {}) {
   onInspectStep = opts.onInspectStep || null;
   onRecoveryAction = opts.onRecoveryAction || null;
   onOpenConnect = opts.onOpenConnect || null;
-  onPickWorkspace = opts.onPickWorkspace || null;
-  onOpenConventions = opts.onOpenConventions || null;
+  onOpenProjects = opts.onOpenProjects || null;
   getSetupInfo = opts.getSetupInfo || null;
 }
 
@@ -106,70 +109,44 @@ export function renderSessionStream(sessionId, sessionPayload) {
 
 export function refreshEmptyHeroIfVisible() {
   const inner = getInnerContainer();
-  if (!inner || !inner.querySelector('.empty-hero')) return;
+  const hero = inner?.querySelector('.empty-hero');
+  if (!hero) return;
+  const focused = hero.contains(document.activeElement) ? document.activeElement.textContent : null;
   inner.innerHTML = '';
   renderEmptyHero(inner);
-}
-
-function basenameOfPath(p) {
-  if (!p) return '';
-  const parts = String(p).replace(/[\\/]+$/, '').split(/[\\/]/);
-  return parts[parts.length - 1] || String(p);
+  if (focused) {
+    const buttons = Array.from(inner.querySelectorAll('button'));
+    (buttons.find(button => button.textContent === focused) || buttons[0])?.focus({ preventScroll: true });
+  }
 }
 
 function renderEmptyHero(inner) {
-  const info = typeof getSetupInfo === 'function' ? (getSetupInfo() || {}) : {};
-  const connCount = Number(info.connectedCount) || 0;
-  const wsPath = String(info.workspaceRoot || '');
-  const hasConv = Boolean(info.hasConventions);
-
+  const info = getSetupInfo?.() || {};
+  const hasProvider = Number(info.connectedCount) > 0;
+  const hasSympyWorker = info.sympyWorker === 'configured';
   const hero = document.createElement('div');
   hero.className = 'empty-hero';
   hero.innerHTML = `
-    <h1>What are we proving today?</h1>
-    <p>Sandboxed symbolic checks, literature auditing, and independent Proof-DAG verification.</p>
-    <div class="quickstart-strip">
-      <div class="quickstart-card">
-        <div class="quickstart-head">
-          <span>1. Provider</span>
-          <span class="badge ${connCount > 0 ? 'ok' : 'warn'}">${connCount > 0 ? `${connCount} ready` : 'Setup'}</span>
-        </div>
-        <div class="quickstart-desc">${connCount > 0 ? 'Ready. Choose your model next to Send or customize per-agent models in Settings.' : 'Connect ChatGPT, Claude Code, Antigravity, API keys, or local Ollama.'}</div>
-        <div><button type="button" class="pill-btn sm hero-connect-btn ${connCount > 0 ? '' : 'primary'}">${connCount > 0 ? 'Providers' : 'Connect Model'}</button></div>
-      </div>
-      <div class="quickstart-card">
-        <div class="quickstart-head">
-          <span>2. Workspace</span>
-          <span class="badge ${wsPath ? 'ok' : ''}">${wsPath ? escapeHtml(basenameOfPath(wsPath)) : 'Optional'}</span>
-        </div>
-        <div class="quickstart-desc">${wsPath ? `Linked to ${escapeHtml(basenameOfPath(wsPath))}. Inspect and edit .tex files in Canvas.` : 'Attach a local folder to read, patch, and audit .tex manuscripts.'}</div>
-        <div><button type="button" class="pill-btn sm hero-ws-btn">${wsPath ? 'Switch Folder' : 'Attach Folder'}</button></div>
-      </div>
-      <div class="quickstart-card">
-        <div class="quickstart-head">
-          <span>3. Conventions</span>
-          <span class="badge ${hasConv ? 'ok' : 'accent'}">${hasConv ? 'Pinned' : 'Verified'}</span>
-        </div>
-        <div class="quickstart-desc">${hasConv ? 'Active across Orchestrator and Verifier.' : 'Lock metric signature, units, and Fourier factors so signs stay consistent.'}</div>
-        <div><button type="button" class="pill-btn sm hero-conv-btn">${hasConv ? 'Edit' : 'Set Conventions'}</button></div>
-      </div>
-    </div>
-    <div class="starter-grid"></div>
+    <h2>Start a research question</h2>
+    <p>Choose an example to edit or write your own question below.</p>
+    ${hasProvider ? '' : `<div class="provider-callout">
+      <div><strong>Connect a model to run your first question</strong>
+      <span>Use a subscription, an API key, or a local Ollama model.</span></div>
+      <button type="button" class="pill-btn primary hero-connect-btn">Connect model</button>
+    </div>`}
+    <div class="starter-grid" aria-label="Example research questions"></div>
+    <button type="button" class="project-shortcut">Open a research project <span aria-hidden="true">→</span></button>
   `;
-
-  const connBtn = hero.querySelector('.hero-connect-btn');
-  const wsBtn = hero.querySelector('.hero-ws-btn');
-  const convBtn = hero.querySelector('.hero-conv-btn');
-  if (connBtn && typeof onOpenConnect === 'function') connBtn.addEventListener('click', onOpenConnect);
-  if (wsBtn && typeof onPickWorkspace === 'function') wsBtn.addEventListener('click', onPickWorkspace);
-  if (convBtn && typeof onOpenConventions === 'function') convBtn.addEventListener('click', onOpenConventions);
+  hero.querySelector('.hero-connect-btn')?.addEventListener('click', () => onOpenConnect?.('providers'));
+  hero.querySelector('.project-shortcut')?.addEventListener('click', () => onOpenProjects?.());
 
   const grid = hero.querySelector('.starter-grid');
   for (const item of STARTER_PROMPTS) {
+    if (item.requiresSympy && !hasSympyWorker) continue;
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'starter-chip';
-    btn.innerHTML = `<strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.prompt)}</span>`;
+    btn.innerHTML = `<strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.description)}</span>`;
     btn.addEventListener('click', () => {
       if (typeof onPromptPick === 'function') {
         onPromptPick(item.prompt);
@@ -221,7 +198,7 @@ export function removeOptimisticUserMessage() {
 
 // A plain-text warning line in the transcript (for example a vendor CLI's built-in tool
 // running outside re:Search's tools). Text only, never HTML.
-export function appendWarningLine(text) {
+export function appendWarningLine(text, action = null) {
   const inner = clearHeroIfPresent();
   if (!inner) return;
   const row = document.createElement('div');
@@ -231,6 +208,14 @@ export function appendWarningLine(text) {
   line.className = 'msg-warning';
   line.textContent = String(text);
   row.appendChild(line);
+  if (action) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'pill-btn sm';
+    button.textContent = action.label;
+    button.addEventListener('click', action.onClick);
+    row.appendChild(button);
+  }
   inner.appendChild(row);
   scrollToBottom();
 }

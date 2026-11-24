@@ -19,6 +19,8 @@ pub(crate) fn builtin_tool_warning(data: &Value) -> String {
 #[derive(Default)]
 pub(crate) struct FinalAnswerVerification {
     active_finals: Vec<String>,
+    answer: String,
+    response_blocks: Option<usize>,
     pub(crate) status: Option<&'static str>,
 }
 
@@ -27,11 +29,34 @@ impl FinalAnswerVerification {
         self.active_finals.last().map(String::as_str)
     }
 
+    pub(crate) fn answer(&self) -> &str {
+        &self.answer
+    }
+
     /// Returns a verdict only when the event verifies the current turn's active final answer.
     pub(crate) fn observe(&mut self, kind: &str, payload: &Value) -> Option<&'static str> {
         let is_full = payload["kind"].as_str() == Some("full");
         match kind {
             "session.start" | "session.resume" | "autonomous.feedback" => *self = Self::default(),
+            "model.response" => {
+                self.answer.clear();
+                self.response_blocks = Some(0);
+                self.status = None;
+            }
+            "model.text" | "model.refusal" => {
+                let text = payload["text"].as_str().unwrap_or_default();
+                match (&mut self.response_blocks, kind) {
+                    (Some(count), "model.text") => {
+                        if *count > 0 {
+                            self.answer.push('\n');
+                        }
+                        self.answer.push_str(text);
+                        *count += 1;
+                    }
+                    _ => self.answer = text.to_string(),
+                }
+                self.status = None;
+            }
             "proof.entry" => {
                 if payload["entry_type"].as_str() == Some("final_answer") {
                     if let Some(id) = payload["entry_id"].as_str().filter(|id| !id.is_empty()) {
@@ -51,7 +76,16 @@ impl FinalAnswerVerification {
             "proof.verification" if is_full => {
                 if payload["target_entry_id"].as_str().is_some_and(|id| self.current_entry_id() == Some(id)) {
                     self.status = match payload["verdict"].as_str() {
-                        Some("accepted") => Some("verified"),
+                        Some("accepted") => match payload.get("answer_sha256") {
+                            None => Some("proof_reviewed"),
+                            Some(hash)
+                                if !self.answer.trim().is_empty()
+                                    && hash.as_str() == Some(ledger::sha256_hex(self.answer.as_bytes()).as_str()) =>
+                            {
+                                Some("verified")
+                            }
+                            Some(_) => Some("unverified"),
+                        },
                         Some("rejected") => Some("unverified"),
                         _ => None,
                     };

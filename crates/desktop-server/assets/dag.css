@@ -92,6 +92,10 @@
   stroke-width: 2.75px;
   filter: drop-shadow(0 0 0 2px var(--accent-soft));
 }
+.dag-node:focus-visible rect {
+  stroke: var(--accent);
+  stroke-width: 3px;
+}
 
 /* Rich Node Inspector Card */
 .dag-inspector-empty {
@@ -158,6 +162,36 @@
   color: var(--ink-primary);
 }
 
+.dag-evidence-row {
+  margin-block: 6px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.dag-evidence-row summary { cursor: pointer; }
+.dag-evidence-row > p { margin: 3px 0 7px; }
+.dag-evidence-row > .trace-io { margin: 3px 0 7px; }
+.dag-evidence-meta { color: var(--ink-muted); font-size: 12px; margin-top: 5px; }
+.dag-validation-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px 10px;
+  margin-block: 10px;
+}
+.dag-validation-summary > * { margin: 0; }
+.dag-validation-table { max-width: 100%; overflow: auto; margin-block: 3px 8px; }
+.dag-validation-table table { min-width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
+.dag-validation-table th, .dag-validation-table td {
+  padding: 4px 7px;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+.dag-validation-table th { color: var(--ink-secondary); font-weight: 600; white-space: nowrap; }
+.dag-validation-table td { font-family: var(--font-mono); min-width: 5ch; max-width: 26ch; }
+
 .dag-eq-box {
   padding: 10px 14px;
   border-radius: var(--radius-sm);
@@ -209,15 +243,6 @@
 .dag-dep-chip:hover {
   background: var(--accent-soft);
   border-color: var(--accent);
-}
-
-.dag-verification-box {
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-subtle);
-  font-size: 12.5px;
-  line-height: 1.5;
 }
 
 .dag-detail-actions {
@@ -280,4 +305,153 @@
 }
 .source-origin-link:hover {
   text-decoration: underline;
+}
+
+.paper-passage-search label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: 600;
+}
+
+.paper-passage-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.paper-passage-controls input {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+#paper-passage-status:not(:empty) {
+  margin-top: 8px;
+  color: var(--ink-secondary);
+}
+
+.paper-passage-result {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  overflow-wrap: anywhere;
+}
+
+.paper-passage-result .source-raw-pre {
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-stage);
+}
+
+.paper-passage-meta {
+  font-size: 12px;
+  color: var(--ink-secondary);
+}
+
+
+.formal-library > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.formal-library form {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.formal-library-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.formal-library-controls input {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+#formal-library-status:not(:empty) {
+  margin-top: 8px;
+  color: var(--ink-secondary);
+}
+
+.formal-library-result {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  overflow-wrap: anywhere;
+}
+
+.formal-library-result pre {
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-stage);
+}
+
+.formal-library-result button {
+  justify-self: start;
+}
+
+.formal-library-meta {
+  font-size: 12px;
+  color: var(--ink-secondary);
+}
+
+#source-reader-dialog {
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 24px);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: var(--ink-primary);
+}
+
+#source-reader-dialog::backdrop {
+  background: rgb(15 20 28 / 45%);
+}
+
+#source-reader-dialog .modal-card {
+  max-width: 100%;
+  max-height: none;
+  margin: 0;
+  box-shadow: none;
+}
+
+#source-reader-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#source-reader-file {
+  max-width: min(260px, calc(100vw - 74px));
+}
+
+#source-reader-status {
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--ink-secondary);
+}
+
+#source-reader-status:empty {
+  display: none;
+}
+
+#source-reader-body mark {
+  background: var(--accent-soft);
+  color: var(--ink-primary);
+}
+
+.dag-evidence-open {
+  margin: 6px 0;
 }

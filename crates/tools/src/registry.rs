@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDef {
@@ -46,6 +46,7 @@ pub struct CallCtx<'a> {
     pub required_epoch: Option<u64>,
     ran_epoch: AtomicU64,
     worker_request_id: AtomicU64,
+    worker_environment: OnceLock<Value>,
 }
 
 impl<'a> CallCtx<'a> {
@@ -64,6 +65,7 @@ impl<'a> CallCtx<'a> {
             required_epoch,
             ran_epoch: AtomicU64::new(0),
             worker_request_id: AtomicU64::new(0),
+            worker_environment: OnceLock::new(),
         }
     }
 
@@ -78,6 +80,29 @@ impl<'a> CallCtx<'a> {
     pub fn record_worker_execution(&self, epoch: u64, request_id: u64) {
         self.record_worker_epoch(epoch);
         self.worker_request_id.store(request_id, Ordering::Release);
+    }
+
+    /// Copy the reproducibility fields from the worker that ran this request.
+    pub fn record_worker_environment(&self, hello: &Value) {
+        let mut environment = serde_json::Map::new();
+        if let Some(protocol) = hello["protocol"].as_u64() {
+            environment.insert("protocol".into(), json!(protocol));
+        }
+        for field in [
+            "python", "sympy", "numpy", "mpmath", "platform", "worker_sha256",
+            "solver_calc_sha256", "symbolic_validation_sha256", "numerical_validation_sha256",
+        ] {
+            if let Some(value) = hello[field].as_str().filter(|s| s.len() <= 256) {
+                environment.insert(field.into(), json!(value));
+            }
+        }
+        if !environment.is_empty() {
+            let _ = self.worker_environment.set(Value::Object(environment));
+        }
+    }
+
+    pub(crate) fn worker_environment(&self) -> Option<&Value> {
+        self.worker_environment.get()
     }
 
     pub(crate) fn worker_request_id(&self) -> Option<u64> {

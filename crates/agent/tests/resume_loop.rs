@@ -88,6 +88,58 @@ fn defs_of(router: &Router) -> Vec<ToolDef> {
 }
 
 #[test]
+fn api_resume_replays_nested_counterfactual_fork_assumptions() {
+    let tmp = TempDir::new("resume-fork");
+    let session = "s-fork";
+    let router = make_router(
+        &tmp.path,
+        session,
+        Arc::new(MockApprover::new(true)),
+        Arc::new(MockEpoch::new(1, false)),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let ledger = Ledger::open(&tmp.path).unwrap();
+    let server = MockServer::start(vec![
+        ok_msg("m1", "end_turn", json!([{ "type": "text", "text": "Original answer" }])),
+        ok_msg("m2", "end_turn", json!([{ "type": "text", "text": "Branch answer" }])),
+    ]);
+    let transport = make_transport(server.base_url.clone(), "sk-test-fork");
+    run_agent_loop(
+        &transport,
+        &router,
+        &ledger,
+        &default_cfg("Assume x = 1", false),
+        &mut NoopSink,
+    )
+    .unwrap();
+    for (kind, assumption) in [("session.forked", "x = 2"), ("session.fork", "x = 3")] {
+        ledger
+            .append(session, kind, 1, &json!({ "modified_assumption": assumption }))
+            .unwrap();
+    }
+    resume_agent_loop(
+        &transport,
+        &router,
+        &ledger,
+        &resume_cfg("Recompute", "claude-haiku-4-5", DEFAULT_MAX_TURNS, false),
+        &mut NoopSink,
+    )
+    .unwrap();
+    let requests = server.requests_received();
+    server.finish();
+    let resumed: Value = serde_json::from_slice(&requests[1]).unwrap();
+    let messages = resumed["messages"].as_array().unwrap();
+    assert_eq!(messages[0]["content"][0]["text"], "Assume x = 1");
+    assert_eq!(messages[1]["content"][0]["text"], "Original answer");
+    let branch = &messages[2]["content"];
+    let first_assumption = branch[0]["text"].as_str().unwrap();
+    assert!(first_assumption.contains("Counterfactual assumption"));
+    assert!(first_assumption.ends_with("x = 2"));
+    assert!(branch[1]["text"].as_str().unwrap().ends_with("x = 3"));
+    assert_eq!(branch[2]["text"], "Recompute");
+}
+
+#[test]
 fn multi_leg_resume_preserves_thinking_large_tool_blobs_monotonic_turns_and_verifies() {
     let tmp = TempDir::new("resume-multileg");
     let session = "s-multileg-1";
@@ -434,6 +486,16 @@ fn fail_closed_rejections_write_zero_new_ledger_events() {
         s1.finish();
         let before = ledger.read_session(session).unwrap().len();
         let defs = defs_of(&router);
+
+        let mut extended = defs.clone();
+        extended.extend([
+            research_tools::formal_library::search_formal_library_def(),
+            research_tools::paper_passages::def(),
+        ]);
+        extended.sort_by(|a, b| a.id.cmp(&b.id));
+        assert!(inspect_session_for_resume(&ledger, session, builtin::POLICY_VERSION, &extended).is_ok());
+        extended.iter_mut().find(|def| def.id == "search_formal_library").unwrap().id = "unrelated_tool".into();
+        assert_eq!(inspect_session_for_resume(&ledger, session, builtin::POLICY_VERSION, &extended).unwrap_err().kind, ResumeRejectKind::Drift);
 
         assert_eq!(inspect_session_for_resume(&ledger, session, "v9.9", &defs).unwrap_err().kind, ResumeRejectKind::Drift);
         let mut mod_defs = defs.clone();

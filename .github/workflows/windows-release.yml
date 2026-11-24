@@ -1,0 +1,215 @@
+name: Windows release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  WINDOWS_TARGET: x86_64-pc-windows-msvc
+  RELEASE_RUST_VERSION: '1.100.0'
+  CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+  INSTALLER_NAME: reSearch-Setup-Windows-x64.exe
+
+jobs:
+  build:
+    name: Build and verify Windows x64 installer
+    runs-on: windows-2025
+    timeout-minutes: 55
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+      artifact: ${{ steps.version.outputs.artifact }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Check release version
+        id: version
+        run: |
+          $version = python -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('Cargo.toml').read_text(encoding='utf-8'))['workspace']['package']['version'])"
+          if ($version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' -or $env:GITHUB_REF_NAME -cne "v$version") {
+            throw "Release tag '$env:GITHUB_REF_NAME' must match the stable workspace version 'v$version'."
+          }
+          $commit = git rev-parse HEAD
+          "tag=$env:GITHUB_REF_NAME" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "commit=$commit" >> $env:GITHUB_OUTPUT
+          "artifact=windows-x64-$version" >> $env:GITHUB_OUTPUT
+
+      - name: Set up Rust for MSVC
+        run: |
+          $toolchain = "${env:RELEASE_RUST_VERSION}-${env:WINDOWS_TARGET}"
+          rustup toolchain install $toolchain --profile minimal --component rust-docs
+          rustup override set $toolchain
+          rustc -Vv
+
+      - name: Build release binaries
+        run: |
+          cargo fetch --locked --target $env:WINDOWS_TARGET
+          cargo build --locked --release --target $env:WINDOWS_TARGET -p desktop-app -p cli -p mcp-server
+
+      - name: Stage the installer payload
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'reSearch-payload'
+          $release = Join-Path $PWD "target/$env:WINDOWS_TARGET/release"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          foreach ($name in 're-search-app.exe', 're-search.exe', 'core.exe') {
+            Copy-Item -LiteralPath (Join-Path $release $name) -Destination $stage
+          }
+          Copy-Item -Path LICENSE-MIT, LICENSE-APACHE -Destination $stage
+          $worker = New-Item -ItemType Directory -Path (Join-Path $stage 'python')
+          foreach ($name in 'worker.py', 'solver_calc.py', 'symbolic_validation.py', 'numerical_validation.py') {
+            Copy-Item -LiteralPath (Join-Path 'python' $name) -Destination $worker.FullName
+          }
+          python packaging/windows/stage_runtime.py --output (Join-Path $stage 'runtime')
+          python scripts/generate-third-party-notices.py --target $env:WINDOWS_TARGET --output-dir (Join-Path $stage 'licenses')
+          "INSTALLER_STAGE=$stage" >> $env:GITHUB_ENV
+
+      - name: Build installer using NSIS
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $makensis = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
+          if (-not $makensis) {
+            $makensis = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
+            if (-not (Test-Path -LiteralPath $makensis)) {
+              choco install nsis --yes --no-progress
+            }
+          }
+          if (-not (Test-Path -LiteralPath $makensis -PathType Leaf)) { throw "MakeNSIS was not found." }
+          & $makensis /VERSION
+          $out = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'reSearch-release')
+          $installer = Join-Path $out.FullName $env:INSTALLER_NAME
+          & $makensis /WX "/DRE_SEARCH_VERSION=$env:RELEASE_VERSION" "/DRE_SEARCH_STAGE=$env:INSTALLER_STAGE" "/DRE_SEARCH_INSTALLER=$installer" "/DRE_SEARCH_BUNDLED_PYTHON" 'packaging/windows/re-search.nsi'
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw "MakeNSIS did not produce the installer." }
+          "INSTALLER_OUT=$($out.FullName)" >> $env:GITHUB_ENV
+
+      - name: Ensure WebView2 is available
+        run: |
+          $roots = @(${env:ProgramFiles(x86)}, $env:ProgramFiles, $env:LOCALAPPDATA)
+          $present = $roots | Where-Object { Test-Path (Join-Path $_ 'Microsoft/EdgeWebView/Application/*/msedgewebview2.exe') }
+          if (-not $present) {
+            $bootstrap = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $bootstrap
+            $signature = Get-AuthenticodeSignature $bootstrap
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'CN=Microsoft Corporation(?:,|$)') {
+              throw "Microsoft WebView2 bootstrapper signature verification failed."
+            }
+            $setup = Start-Process -FilePath $bootstrap -ArgumentList '/silent', '/install' -Wait -PassThru
+            if ($setup.ExitCode -ne 0) { throw "WebView2 installer exit code $($setup.ExitCode)." }
+          }
+
+      - name: Verify the installed app and isolated worker
+        timeout-minutes: 20
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $installer = Join-Path $env:INSTALLER_OUT $env:INSTALLER_NAME
+          $before = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+          ./packaging/windows/smoke-install.ps1 -Installer $installer -Stage $env:INSTALLER_STAGE -Version $env:RELEASE_VERSION -Target $env:WINDOWS_TARGET
+          $after = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+          if ($before -ne $after) { throw "Installer bytes changed during verification." }
+          $checksum = Join-Path $env:INSTALLER_OUT 'SHA256SUMS.txt'
+          [IO.File]::WriteAllText($checksum, "$($after.ToLowerInvariant())  $env:INSTALLER_NAME`n", [Text.UTF8Encoding]::new($false))
+
+      - name: Save verified release payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.version.outputs.artifact }}
+          path: |
+            ${{ env.INSTALLER_OUT }}/reSearch-Setup-Windows-x64.exe
+            ${{ env.INSTALLER_OUT }}/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+  publish:
+    name: Publish verified Windows installer
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Retrieve verified release payload
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: verified-release
+
+      - name: Verify release files and publish
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          EXPECTED_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          set -euo pipefail
+          manifest=SHA256SUMS.txt
+          source_dir="$GITHUB_WORKSPACE/verified-release"
+          verify_payload() {
+            local dir="$1"
+            local actual expected
+            actual="$(sha256sum "$dir/$INSTALLER_NAME" | cut -d ' ' -f 1)"
+            expected="$(printf '%s  %s\n' "$actual" "$INSTALLER_NAME")"
+            cmp -s "$dir/$manifest" <(printf '%s\n' "$expected") || {
+              echo "The installer does not match its SHA-256 manifest." >&2
+              return 1
+            }
+          }
+
+          verify_payload "$source_dir"
+          actual_commit="$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq .sha)"
+          if [[ "$actual_commit" != "$EXPECTED_COMMIT" ]]; then
+            echo "Tag $RELEASE_TAG changed after the installer was built." >&2
+            exit 1
+          fi
+          uploaded="$(mktemp -d)"
+          trap 'rm -r "$uploaded"' EXIT
+
+          if release="$(gh release view "$RELEASE_TAG" --json isDraft)"; then
+            if [[ "$(jq -r .isDraft <<< "$release")" == false ]]; then
+              gh release download "$RELEASE_TAG" --pattern "$INSTALLER_NAME" --pattern "$manifest" --dir "$uploaded"
+              verify_payload "$uploaded"
+              echo "The published installer and its manifest already match."
+              exit 0
+            fi
+          else
+            notes="docs/releases/$RELEASE_VERSION.md"
+            args=(--generate-notes)
+            if [[ -f "$notes" ]]; then
+              args=(--notes-file "$notes")
+            fi
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "reSearch $RELEASE_TAG" "${args[@]}"
+          fi
+
+          # Replace only draft assets so an interrupted run can be retried safely.
+          gh release upload "$RELEASE_TAG" "$source_dir/$INSTALLER_NAME" "$source_dir/$manifest" --clobber
+          gh release download "$RELEASE_TAG" --pattern "$INSTALLER_NAME" --pattern "$manifest" --dir "$uploaded"
+          verify_payload "$uploaded"
+          cmp "$source_dir/$manifest" "$uploaded/$manifest"
+          actual_commit="$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq .sha)"
+          if [[ "$actual_commit" != "$EXPECTED_COMMIT" ]]; then
+            echo "Tag $RELEASE_TAG changed before publication." >&2
+            exit 1
+          fi
+          gh release edit "$RELEASE_TAG" --draft=false --latest

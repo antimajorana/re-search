@@ -122,6 +122,47 @@ Citations: \\citep[see][p.~4]{kitaev2001, sakurai2011, fake_comment_key, missing
 }
 
 #[test]
+fn audit_scopes_reference_labels_and_candidate_blockers() {
+    let tmp = TempDir::new().unwrap();
+    let ws = tmp.path().join("paper");
+    let data = tmp.path().join("data");
+    fs::create_dir_all(ws.join("sections")).unwrap();
+    fs::write(ws.join("main.tex"), r"See \ref{used} and \ref{unrelated}. \input{sections/results}\bibliography{main}").unwrap();
+    fs::write(ws.join("sections/results.tex"), r"\label{used}\cite{valid}").unwrap();
+    fs::write(ws.join("main.bib"), "@article{valid, title={A relevant source}}").unwrap();
+    fs::write(ws.join("notes.tex"), r"\label{unrelated} arXiv:2311.00001v2").unwrap();
+    let env = ResearchEnv::with_workspace(data, ws).unwrap();
+    let opts = AuditOptions {
+        target_path: Some("main.tex".into()),
+        withdrawn_arxiv_ids: vec!["2311.00001v2".into()],
+        ..Default::default()
+    };
+    let report = run_tex_audit(&env, "s-scope", None, &opts).unwrap();
+    assert_eq!(report.error_count, 1, "{:?}", report.issues);
+    assert_eq!(report.issues[0].target, "unrelated");
+    assert_eq!(report.blocker_count, 0);
+
+    let draft = AuditOptions {
+        candidate_texts: vec![(
+            "main.tex".into(),
+            r"See \ref{used}. \input{sections/results}\bibliography{main}".into(),
+        )],
+        ..opts.clone()
+    };
+    let report = run_tex_audit(&env, "s-scope", None, &draft).unwrap();
+    assert!(report.ok, "{:?}", report.issues);
+
+    let candidate = AuditOptions {
+        candidate_only: true,
+        candidate_texts: vec![("answer".into(), "An unrelated calculation gives 4.".into())],
+        target_path: None,
+        ..opts
+    };
+    let report = run_tex_audit(&env, "s-scope", None, &candidate).unwrap();
+    assert!(report.ok, "{:?}", report.issues);
+}
+
+#[test]
 fn f6_quotes_no_self_match_and_withdrawn_arxiv_retracted_doi_blockers() {
     let tmp = TempDir::new().unwrap();
     let ws = tmp.path().join("ws");

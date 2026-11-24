@@ -1,0 +1,118 @@
+.validation-toolbar,
+.validation-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.validation-toolbar select,
+.validation-candidates select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.validation-status,
+.validation-hint,
+.validation-private p {
+  color: var(--ink-secondary);
+  font-size: 13px;
+}
+
+.validation-status[data-error="true"] {
+  color: var(--status-err);
+}
+
+.validation-card {
+  margin-top: 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  background: var(--bg-surface);
+}
+
+.validation-card textarea {
+  padding-block: 8px;
+  resize: vertical;
+}
+
+.validation-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
+  gap: 8px 12px;
+}
+
+.validation-private {
+  min-inline-size: 0;
+  margin: 3px 0 0;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.validation-private legend {
+  padding-inline: 4px;
+  color: var(--ink-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.validation-private p {
+  margin-top: 0;
+}
+
+.validation-end {
+  justify-content: flex-end;
+}
+
+.validation-claim {
+  margin-block: 12px;
+  overflow-wrap: anywhere;
+}
+
+.validation-details {
+  display: grid;
+  grid-template-columns: minmax(5rem, max-content) minmax(0, 1fr);
+  gap: 4px 12px;
+  margin-block: 12px;
+  font-size: 13px;
+}
+
+.validation-details dt {
+  color: var(--ink-muted);
+}
+
+.validation-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.validation-candidates,
+.validation-result {
+  display: grid;
+  gap: 8px;
+  margin-block: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.validation-result h4,
+.validation-result dl,
+.validation-hint {
+  margin: 0;
+}
+
+.validation-result button {
+  justify-self: start;
+}
+
+.validation-ledger summary {
+  color: var(--ink-secondary);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.validation-ledger dd {
+  font-family: var(--font-mono);
+}

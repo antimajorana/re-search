@@ -17,6 +17,7 @@ const MAX_SESSIONS = 200;
 
 let popoverEl = null;
 let triggerBtn = null;
+let returnFocus = null;
 let gridEl = null;
 let modelLabelEl = null;
 let currentEffort = '';
@@ -63,13 +64,13 @@ export function initEffortPicker(opts = {}) {
       else openEffortWindow(null);
     });
   }
-  if (closeBtn) closeBtn.addEventListener('click', closeEffortWindow);
+  if (closeBtn) closeBtn.addEventListener('click', () => closeEffortWindow());
 
   document.addEventListener('click', (ev) => {
     if (!popoverEl || popoverEl.hidden) return;
     if (popoverEl.contains(ev.target) || (triggerBtn && triggerBtn.contains(ev.target))) return;
     if (ev.target && ev.target.id === 'composer-model') return;
-    closeEffortWindow();
+    closeEffortWindow(false);
   });
 
   renderGrid();
@@ -78,6 +79,9 @@ export function initEffortPicker(opts = {}) {
 
 export function openEffortWindow(choice = null) {
   if (!popoverEl) return;
+  if (popoverEl.hidden) {
+    returnFocus = choice ? document.getElementById('composer-model') : document.querySelector('#research-options summary');
+  }
   const effective = choice && choice.model
     ? choice
     : (typeof callbacks.getModelChoice === 'function' ? callbacks.getModelChoice() : null);
@@ -93,8 +97,11 @@ export function openEffortWindow(choice = null) {
   if (active) active.focus();
 }
 
-export function closeEffortWindow() {
-  if (popoverEl) popoverEl.hidden = true;
+export function closeEffortWindow(restoreFocus = true) {
+  if (!popoverEl || popoverEl.hidden) return;
+  popoverEl.hidden = true;
+  if (restoreFocus) returnFocus?.focus();
+  returnFocus = null;
 }
 
 export function getReasoningEffort() {

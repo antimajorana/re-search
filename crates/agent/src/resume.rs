@@ -81,22 +81,32 @@ fn req_str<'a>(ev: &'a Event, field: &str) -> Result<&'a str, ResumeReject> {
         .ok_or_else(|| corrupt(format!("session `{}` seq {} missing `{field}`", ev.session, ev.seq)))
 }
 
+pub(crate) fn fork_assumption(event: &Event) -> Option<&str> {
+    if !matches!(event.kind.as_str(), "session.fork" | "session.forked") {
+        return None;
+    }
+    event.payload["modified_assumption"].as_str().map(str::trim).filter(|text| !text.is_empty())
+}
+
+pub(crate) fn format_fork_assumption(assumption: &str) -> String {
+    format!(
+        "Counterfactual assumption supplied by the user for this fork. Apply it over any conflicting earlier assumptions.\n\n{assumption}"
+    )
+}
+
 pub(crate) fn verify_and_read(
     ledger: &Ledger,
     session: &str,
     expected_policy_version: &str,
     expected_defs: &[ToolDef],
 ) -> Result<(ResumeInspection, Vec<Event>), ResumeReject> {
-    if let Err(err) = ledger.verify_session(session) {
+    let (_, events) = ledger.read_verified_session(session).map_err(|err| {
         let kind = match err {
             ledger::Error::LegacyUnchainedSchema => ResumeRejectKind::LegacySchema,
             _ => ResumeRejectKind::TamperOrMissing,
         };
-        return Err(reject(kind, format!("cannot resume session `{session}`: {err}")));
-    }
-    let events = ledger
-        .read_session(session)
-        .map_err(|e| reject(ResumeRejectKind::TamperOrMissing, format!("cannot read session `{session}`: {e}")))?;
+        reject(kind, format!("cannot resume session `{session}`: {err}"))
+    })?;
     if events.is_empty() {
         return Err(corrupt(format!("session `{session}` has no events")));
     }
@@ -120,6 +130,11 @@ pub(crate) fn verify_and_read(
         ));
     }
     check_tool_defs_drift(session, &start_ev.payload, expected_defs)?;
+    if let Some(resume) = events.iter().rev().find(|event| {
+        event.kind == "session.resume" && event.payload["tool_defs"].is_array()
+    }) {
+        check_tool_defs_drift(session, &resume.payload, expected_defs)?;
+    }
 
     let (mut resume_count, mut max_turn_seen, mut last_leg_idx) = (0u32, 0u32, 0usize);
     let (mut last_provider, mut last_model) = (None, None);
@@ -178,18 +193,22 @@ fn check_tool_defs_drift(session: &str, payload: &Value, expected_defs: &[ToolDe
         .get("tool_defs")
         .and_then(Value::as_array)
         .ok_or_else(|| reject(ResumeRejectKind::Drift, format!("session `{session}` missing `tool_defs`")))?;
-    if recorded.len() != expected_defs.len() {
-        return Err(reject(
-            ResumeRejectKind::Drift,
-            format!("cannot resume session `{session}`: tool count changed (recorded {}, expected {})", recorded.len(), expected_defs.len()),
-        ));
-    }
-    for (rec, exp) in recorded.iter().zip(expected_defs.iter()) {
-        let same_id = rec.get("id").and_then(Value::as_str) == Some(exp.id.as_str());
-        let same_hash = rec.get("def_hash").and_then(Value::as_str) == Some(exp.def_hash().as_str());
-        if !same_id || !same_hash {
+    let mut prior = recorded.iter().peekable();
+    for exp in expected_defs {
+        let same_id = prior.peek().and_then(|rec| rec["id"].as_str()) == Some(exp.id.as_str());
+        // Existing research sessions can gain these two read-only discovery tools.
+        // Every recorded tool still has to match its original definition and order.
+        if !same_id && matches!(exp.id.as_str(), "search_formal_library" | "search_paper_passages")
+            && exp.effect == policy::EffectClass::ReadWorkspace
+        {
+            continue;
+        }
+        if !same_id || prior.next().and_then(|rec| rec["def_hash"].as_str()) != Some(exp.def_hash().as_str()) {
             return Err(reject(ResumeRejectKind::Drift, format!("cannot resume session `{session}`: tool definition drift for `{}`", exp.id)));
         }
+    }
+    if prior.next().is_some() {
+        return Err(reject(ResumeRejectKind::Drift, format!("cannot resume session `{session}`: tools were removed or reordered")));
     }
     Ok(())
 }
@@ -362,6 +381,11 @@ pub(crate) fn rehydrate_history(
             "session.start" | "session.resume" => {
                 active_provider = Some(ProviderKind::parse(req_str(ev, "provider")?).map_err(|e| corrupt(format!("seq {}: {e}", ev.seq)))?);
                 append_user_prompt(&mut history, req_str(ev, "prompt")?.to_string());
+            }
+            "session.fork" | "session.forked" => {
+                if let Some(assumption) = fork_assumption(ev) {
+                    append_user_prompt(&mut history, format_fork_assumption(assumption));
+                }
             }
             "autonomous.feedback" => {
                 if let Some(text) = ev.payload.get("text").and_then(Value::as_str) {

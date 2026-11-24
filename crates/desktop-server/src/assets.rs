@@ -10,6 +10,10 @@ pub const INDEX_HTML: &str = include_str!("../assets/index.html");
 pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
     let clean = path.split('?').next().unwrap_or(path);
     match clean {
+        "/assets/re-search-icon.png" => Some(StaticAsset {
+            content_type: "image/png",
+            bytes: include_bytes!("../assets/re-search-icon.png"),
+        }),
         "/assets/tokens.css" => Some(StaticAsset {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../assets/tokens.css"),
@@ -33,6 +37,22 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
         "/assets/dag.css" => Some(StaticAsset {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../assets/dag.css"),
+        }),
+        "/assets/projects.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/projects.css"),
+        }),
+        "/assets/project_library.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/project_library.css"),
+        }),
+        "/assets/project_validation.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/project_validation.css"),
+        }),
+        "/assets/experiments.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/experiments.css"),
         }),
         "/assets/api.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
@@ -101,6 +121,30 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
         "/assets/canvas_sources.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/canvas_sources.js"),
+        }),
+        "/assets/projects.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/projects.js"),
+        }),
+        "/assets/project_library.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/project_library.js"),
+        }),
+        "/assets/project_edits.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/project_edits.js"),
+        }),
+        "/assets/project_validation.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/project_validation.js"),
+        }),
+        "/assets/experiments.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/experiments.js"),
+        }),
+        "/assets/formal_library.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/formal_library.js"),
         }),
         "/assets/hitl.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",

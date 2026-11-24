@@ -39,6 +39,20 @@ export function extractArxivId(text) {
   return mOld ? mOld[1] : null;
 }
 
+function versionedArxivId(...values) {
+  const ids = values.map(extractArxivId).filter(Boolean);
+  const first = ids[0];
+  if (!first || /v\d+$/i.test(first)) return first;
+  return ids.find((id) => /v\d+$/i.test(id) && id.replace(/v\d+$/i, '') === first) || first;
+}
+
+function dropsArxivVersion(url, arxivId) {
+  if (!url || !arxivId || !/v\d+$/i.test(arxivId)) return false;
+  const parsed = new URL(url);
+  return ['arxiv.org', 'export.arxiv.org'].includes(parsed.hostname)
+    && extractArxivId(parsed.pathname) === arxivId.replace(/v\d+$/i, '');
+}
+
 export function extractDoi(text) {
   if (!text || typeof text !== 'string') return null;
   const cleaned = text.trim().replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '');
@@ -57,17 +71,16 @@ export function linksForPaper(item) {
   };
 
   const rawDirect = safeSourceUrl(item.url);
-  const arxivCand = extractArxivId(String(item.arxiv_id || item.base_id || item.id || ''));
+  const arxivCand = versionedArxivId(item.arxiv_id, item.base_id, item.id, rawDirect);
   const doi = extractDoi(String(item.doi || ''));
   const srcName = String(item.source || '').toLowerCase();
 
-  if (rawDirect) {
-    pushLink(arxivCand ? 'Open on arXiv' : 'Open Paper', rawDirect, 'primary');
+  if (rawDirect && !dropsArxivVersion(rawDirect, arxivCand)) {
+    pushLink(/^https:\/\/(?:export\.)?arxiv\.org\//.test(rawDirect) ? 'Open on arXiv' : 'Open Paper', rawDirect, 'primary');
   }
   if (arxivCand) {
-    const base = arxivCand.replace(/v\d+$/i, '');
     pushLink('arXiv Abstract', `https://arxiv.org/abs/${arxivCand}`, 'primary');
-    pushLink('PDF', `https://arxiv.org/pdf/${base}`, 'pdf');
+    pushLink('PDF', `https://arxiv.org/pdf/${arxivCand}`, 'pdf');
   } else if (srcName === 'inspire' && item.id && /^\d+$/.test(String(item.id).trim())) {
     pushLink('INSPIRE Record', `https://inspirehep.net/literature/${String(item.id).trim()}`, 'primary');
   }
@@ -88,15 +101,14 @@ export function linksForIngestedSource(src) {
     links.push({ label, url: safe, kind });
   };
 
-  if (src.url) pushLink('Open Original', String(src.url), 'primary');
-  const arxivId =
-    extractArxivId(String(src.origin || '')) ||
-    extractArxivId(String(src.source_id || '')) ||
-    extractArxivId(String(src.primary_path || ''));
+  const rawDirect = safeSourceUrl(src.url);
+  const arxivId = versionedArxivId(src.origin, src.source_id, src.primary_path, rawDirect);
+  if (rawDirect && !dropsArxivVersion(rawDirect, arxivId)) {
+    pushLink('Open Original', rawDirect, 'primary');
+  }
   if (arxivId) {
-    const base = arxivId.replace(/v\d+$/i, '');
     pushLink(`arXiv:${arxivId}`, `https://arxiv.org/abs/${arxivId}`, 'primary');
-    pushLink('PDF', `https://arxiv.org/pdf/${base}`, 'pdf');
+    pushLink('PDF', `https://arxiv.org/pdf/${arxivId}`, 'pdf');
   }
   const doi = extractDoi(String(src.origin || ''));
   if (doi) {
@@ -130,7 +142,8 @@ export function resolveSourceTitle(src) {
 export function resolveOriginInfo(src) {
   if (!src || typeof src !== 'object') return { text: '', url: null };
   const rawOrigin = String(src.origin || '').trim();
-  const arxivId = extractArxivId(rawOrigin);
+  const arxivId = extractArxivId(rawOrigin)
+    && versionedArxivId(rawOrigin, src.source_id, src.primary_path, src.url);
   if (arxivId) {
     const absUrl = `https://arxiv.org/abs/${arxivId}`;
     return { text: absUrl, url: absUrl };

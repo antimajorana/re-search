@@ -167,7 +167,7 @@ fn f7_http_allowlist_redirects_and_arxiv_id_normalization() {
     assert!(fetch_bytes_allowlisted("https://evil.example/api", &ep, MAX_METADATA_BYTES).is_err());
 
     let srv = MockHttpServer::start(|path, req| {
-        if !req.to_ascii_lowercase().contains("user-agent: re-search/0.0.1") {
+        if !req.to_ascii_lowercase().contains(concat!("user-agent: re-search/", env!("CARGO_PKG_VERSION"))) {
             return MockResp { status: 400, headers: vec![], body: b"missing UA".to_vec() };
         }
         match path {

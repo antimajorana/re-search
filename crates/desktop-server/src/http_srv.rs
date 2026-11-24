@@ -10,7 +10,7 @@ use crate::routes_session::{
 use crate::routes_tools::{
     handle_dag, handle_export, handle_get_sidetalk, handle_latex_patch, handle_lean_check,
     handle_literature, handle_narrate, handle_post_sidetalk, handle_tex_audit, handle_upload,
-    handle_verify, handle_workspace, handle_workspace_file,
+    handle_verify, handle_workspace, handle_workspace_file, MAX_UPLOAD_BODY_BYTES,
 };
 use crate::state::DesktopState;
 use serde_json::{json, Value};
@@ -69,7 +69,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<DesktopState>, shutdown: 
     let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(READ_TIMEOUT));
 
-    // Headers only: the body (up to 60 MiB) is read after the Host and credential checks.
+    // Read the body only after the Host and credential checks.
     let (mut req, content_length) = match read_http_head(&mut stream) {
         Ok(r) => r,
         Err((status, msg)) => {
@@ -198,6 +198,73 @@ fn dispatch_api(
     let method = req.method.as_str();
 
     match (method, segs.as_slice()) {
+        ("GET", ["api", "projects"]) => write_api_res(&mut stream, crate::projects::handle_list(state)),
+        ("POST", ["api", "projects"]) => {
+            write_api_res(&mut stream, crate::projects::handle_create(state, &req.body));
+        }
+        ("GET", ["api", "projects", id]) => write_api_res(&mut stream, crate::projects::handle_get(state, id)),
+        ("PUT", ["api", "projects", id]) => {
+            write_api_res(&mut stream, crate::projects::handle_put(state, id, &req.body));
+        }
+        ("PUT", ["api", "projects", id, "sessions", session_id]) => {
+            write_api_res(&mut stream, crate::projects::handle_attach(state, id, session_id));
+        }
+        ("POST", ["api", "projects", id, "items"]) => {
+            write_api_res(&mut stream, crate::projects::handle_add_item(state, id, &req.body));
+        }
+        ("DELETE", ["api", "projects", id, "items", item]) => {
+            write_api_res(&mut stream, crate::projects::handle_delete_item(state, id, item));
+        }
+        ("POST", ["api", "projects", id, "sources"]) => {
+            write_api_res(&mut stream, crate::projects::handle_add_source(state, id, &req.body));
+        }
+        ("DELETE", ["api", "projects", id, "sources", source]) => {
+            write_api_res(&mut stream, crate::projects::handle_delete_source(
+                state, id, source, req.query.get("revision").map(String::as_str),
+            ));
+        }
+        ("GET", ["api", "projects", id, "validation-plans"]) => {
+            write_api_res(&mut stream, crate::validation_plans::handle_list(state, id));
+        }
+        ("POST", ["api", "projects", id, "validation-plans"]) => {
+            write_api_res(&mut stream, crate::validation_plans::handle_create(state, id, &req.body));
+        }
+        ("GET", ["api", "projects", id, "validation-plans", plan, "candidates"]) => {
+            write_api_res(&mut stream, crate::validation_plans::handle_candidates(state, id, plan));
+        }
+        ("POST", ["api", "projects", id, "validation-plans", plan, "evaluate"]) => {
+            write_api_res(&mut stream, crate::validation_plans::handle_evaluate(state, id, plan, &req.body));
+        }
+        ("GET", ["api", "projects", id, "export"]) => {
+            match crate::projects::export_bibtex(state, id, req.query.get("format").map(String::as_str)) {
+                Ok(bytes) => write_bytes(
+                    &mut stream,
+                    200,
+                    "application/x-bibtex; charset=utf-8",
+                    &bytes,
+                    &[
+                        ("Content-Disposition", "attachment; filename=\"project-references.bib\""),
+                        ("Cache-Control", "no-store"),
+                    ],
+                ),
+                Err((st, msg)) => write_json(&mut stream, st, json!({ "error": msg }), &[]),
+            }
+        }
+        ("GET", ["api", "projects", id, "experiments"]) => {
+            write_api_res(&mut stream, crate::experiments::handle_list(state, id));
+        }
+        ("POST", ["api", "projects", id, "experiments"]) => {
+            write_api_res(&mut stream, crate::experiments::handle_create(state, id, &req.body));
+        }
+        ("POST", ["api", "projects", id, "experiments", experiment, "branches"]) => {
+            write_api_res(&mut stream, crate::experiments::handle_add_branch(state, id, experiment, &req.body));
+        }
+        ("POST", ["api", "projects", id, "experiments", experiment, "branches", session, "observations"]) => {
+            write_api_res(&mut stream, crate::experiments::handle_record_observation(state, id, experiment, session, &req.body));
+        }
+        ("GET", ["api", "projects", id, "experiments", experiment, "branches", session, "diff"]) => {
+            write_api_res(&mut stream, crate::experiments::handle_branch_diff(state, id, experiment, session));
+        }
         ("GET", ["api", "sessions"]) => write_api_res(&mut stream, handle_list_sessions(state)),
         ("POST", ["api", "sessions"]) => {
             write_api_res(&mut stream, handle_create_session(state, &req.body));
@@ -276,8 +343,24 @@ fn dispatch_api(
         ("POST", ["api", "sessions", id, "literature"]) => {
             write_api_res(&mut stream, handle_literature(state, id, &req.body));
         }
+        ("POST", ["api", "sessions", id, "paper-passages"]) => {
+            write_api_res(&mut stream, crate::routes_tools::handle_paper_passages(state, id, &req.body));
+        }
+        ("POST", ["api", "sessions", id, "formal-library"]) => {
+            write_api_res(&mut stream, crate::routes_tools::handle_formal_library(state, id, &req.body));
+        }
         ("GET", ["api", "sessions", id, "dag"]) => {
             write_api_res(&mut stream, handle_dag(state, id));
+        }
+        ("GET", ["api", "sessions", id, "evidence"]) => {
+            write_api_res(
+                &mut stream,
+                crate::evidence::handle_session_evidence(
+                    state,
+                    id,
+                    req.query.get("entry_id").map(String::as_str),
+                ),
+            );
         }
         ("POST", ["api", "sessions", id, "verify"]) => {
             write_api_res(&mut stream, handle_verify(state, id));
@@ -408,8 +491,14 @@ fn read_http_head(stream: &mut TcpStream) -> Result<(ParsedRequest, usize), (u16
             .map_err(|_| (400, "invalid Content-Length".to_string()))?,
         None => 0,
     };
-    if content_length > MAX_BODY_BYTES {
-        return Err((413, format!("request body exceeds {MAX_BODY_BYTES} bytes")));
+    let is_upload = method == "POST"
+        && matches!(
+            path.split('/').filter(|s| !s.is_empty()).collect::<Vec<_>>().as_slice(),
+            ["api", "sessions", _, "upload"]
+        );
+    let max_body_bytes = if is_upload { MAX_UPLOAD_BODY_BYTES } else { MAX_BODY_BYTES };
+    if content_length > max_body_bytes {
+        return Err((413, format!("request body exceeds {max_body_bytes} bytes")));
     }
 
     let mut body = buf[hdr_len..].to_vec();
@@ -535,6 +624,7 @@ fn write_bytes(
 ) {
     let reason = match status {
         200 => "OK",
+        201 => "Created",
         202 => "Accepted",
         400 => "Bad Request",
         401 => "Unauthorized",

@@ -80,6 +80,85 @@ export function listSessions() {
   return rawJson('GET', '/api/sessions');
 }
 
+export function listProjects() {
+  return rawJson('GET', '/api/projects');
+}
+
+export function createProject(payload) {
+  return rawJson('POST', '/api/projects', payload);
+}
+
+export function getProject(id) {
+  return rawJson('GET', projectPath(id));
+}
+
+export function updateProject(id, payload) {
+  return rawJson('PUT', projectPath(id), payload);
+}
+
+export function linkProjectSession(id, sessionId) {
+  return rawJson('PUT', projectPath(id, '/sessions', sessionId), {});
+}
+
+export function addProjectItem(id, payload) {
+  return rawJson('POST', projectPath(id, '/items'), payload);
+}
+
+export function deleteProjectItem(id, itemId) {
+  return rawJson('DELETE', projectPath(id, '/items', itemId));
+}
+
+export function saveProjectSource(id, payload) {
+  return rawJson('POST', projectPath(id, '/sources'), payload);
+}
+
+export function deleteProjectSource(id, sourceId, revision) {
+  const query = revision == null ? '' : `?revision=${encodeURIComponent(revision)}`;
+  return rawJson('DELETE', projectPath(id, '/sources', sourceId) + query);
+}
+
+export function listValidationPlans(projectId) {
+  return rawJson('GET', projectPath(projectId, '/validation-plans'));
+}
+
+export function freezeValidationPlan(projectId, plan) {
+  return rawJson('POST', projectPath(projectId, '/validation-plans'), plan);
+}
+
+export function listValidationCandidates(projectId, planId) {
+  return rawJson('GET', projectPath(projectId, '/validation-plans', planId) + '/candidates');
+}
+
+export function evaluateValidationPlan(projectId, planId, candidate) {
+  return rawJson('POST', projectPath(projectId, '/validation-plans', planId) + '/evaluate', candidate);
+}
+
+function projectPath(id, suffix = '', child = null) {
+  return `/api/projects/${encodeURIComponent(id)}${suffix}${child === null ? '' : `/${encodeURIComponent(child)}`}`;
+}
+
+export function listExperiments(projectId) {
+  return rawJson('GET', projectPath(projectId, '/experiments'));
+}
+
+export function createExperiment(projectId, payload) {
+  return rawJson('POST', projectPath(projectId, '/experiments'), payload);
+}
+
+export function registerExperimentBranch(projectId, experimentId, payload) {
+  return rawJson('POST', projectPath(projectId, '/experiments', experimentId) + '/branches', payload);
+}
+
+export function recordExperimentObservation(projectId, experimentId, sessionId, payload) {
+  const path = projectPath(projectId, '/experiments', experimentId);
+  return rawJson('POST', path + '/branches/' + encodeURIComponent(sessionId) + '/observations', payload);
+}
+
+export function diffExperimentBranch(projectId, experimentId, sessionId) {
+  const path = projectPath(projectId, '/experiments', experimentId);
+  return rawJson('GET', path + '/branches/' + encodeURIComponent(sessionId) + '/diff');
+}
+
 export function createSession(opts = {}) {
   return rawJson('POST', '/api/sessions', opts);
 }
@@ -167,8 +246,20 @@ export function searchLiterature(id, payload) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/literature`, payload);
 }
 
+export function searchFormalLibrary(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/formal-library`, payload);
+}
+
+export function searchPaperPassages(id, query) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/paper-passages`, { query });
+}
+
 export function getDag(id) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/dag`);
+}
+
+export function getProofEvidence(id, entryId) {
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/evidence?entry_id=${encodeURIComponent(entryId)}`);
 }
 
 export function verifySession(id) {
@@ -287,10 +378,33 @@ export function openSessionEvents(id, handlers) {
       }
     });
   }
+  if (typeof handlers.open === 'function') {
+    es.addEventListener('open', handlers.open);
+  }
   es.onerror = (err) => {
     if (typeof handlers.error === 'function') {
       handlers.error(err);
     }
   };
   return es;
+}
+
+export function waitForSessionEvents(source, timeoutMs = 5000) {
+  if (!source || source.readyState === EventSource.CLOSED) return Promise.resolve(false);
+  if (source.readyState === EventSource.OPEN) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const finish = (ready) => {
+      clearTimeout(timer);
+      source.removeEventListener('open', onOpen);
+      source.removeEventListener('error', onError);
+      resolve(ready);
+    };
+    const onOpen = () => finish(true);
+    const onError = () => {
+      if (source.readyState === EventSource.CLOSED) finish(false);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    source.addEventListener('open', onOpen);
+    source.addEventListener('error', onError);
+  });
 }

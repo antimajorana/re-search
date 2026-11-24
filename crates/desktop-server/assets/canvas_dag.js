@@ -3,6 +3,7 @@ import * as api from '/assets/api.js';
 import { escapeHtml } from '/assets/math.js';
 import { getModelChoice } from '/assets/model_picker.js';
 import { renderDagNodeDetail } from '/assets/canvas_dag_detail.js';
+import { openSessionSource } from '/assets/canvas_sources.js';
 
 function sideModelPayload() {
   const c = getModelChoice();
@@ -43,6 +44,11 @@ export function initDagCanvas(opts = {}) {
   viewportEl = document.getElementById('dag-viewport');
   zoomResetBtn = document.getElementById('dag-zoom-reset');
   detailEl = document.getElementById('dag-node-detail');
+  if (detailEl) {
+    detailEl.tabIndex = -1;
+    detailEl.setAttribute('role', 'region');
+    detailEl.setAttribute('aria-label', 'Selected proof step');
+  }
   verifyBadgeEl = document.getElementById('dag-verify-badge');
   forkBarEl = document.getElementById('dag-fork-bar');
   forkSeqEl = document.getElementById('fork-seq-label');
@@ -329,6 +335,8 @@ function renderDagSvg(dag, isNewSession = false) {
   viewState.contentW = width;
   viewState.contentH = height;
 
+  const focused = document.activeElement;
+  const focusedEntryId = focused && stageEl?.contains(focused) ? focused.getAttribute('data-entry-id') : null;
   svgEl.removeAttribute('viewBox');
   svgEl.innerHTML = '';
 
@@ -381,14 +389,21 @@ function renderDagSvg(dag, isNewSession = false) {
     stageEl.appendChild(path);
   }
 
+  let nodeToRefocus;
   for (const entry of entries) {
     const pos = nodeCoords.get(entry.entry_id);
     if (!pos) continue;
     const pal = statusPalette(entry.status);
     const g = document.createElementNS(SVG_NS, 'g');
-    g.setAttribute('class', `dag-node${selectedEntry && selectedEntry.entry_id === entry.entry_id ? ' is-selected' : ''}`);
+    const selected = selectedEntry?.entry_id === entry.entry_id;
+    g.setAttribute('class', selected ? 'dag-node is-selected' : 'dag-node');
     g.setAttribute('data-entry-id', entry.entry_id);
     g.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
+    g.setAttribute('role', 'button');
+    g.setAttribute('tabindex', '0');
+    g.setAttribute('aria-label', `${entry.entry_id} · ${entry.entry_type || 'step'} · ${entry.status || 'pending'}${entry.summary ? ` · ${entry.summary}` : ''}`);
+    g.setAttribute('aria-controls', 'dag-node-detail');
+    g.setAttribute('aria-pressed', String(selected));
 
     const rect = document.createElementNS(SVG_NS, 'rect');
     rect.setAttribute('width', String(NODE_W));
@@ -419,7 +434,24 @@ function renderDagSvg(dag, isNewSession = false) {
       if (suppressNextNodeClick) return;
       selectNode(entry);
     });
+    g.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      ev.preventDefault();
+      if (!ev.repeat) {
+        selectNode(entry);
+        detailEl?.focus();
+      }
+    });
+    g.addEventListener('focus', () => {
+      if (!viewportEl || !g.matches(':focus-visible')) return;
+      const view = viewportEl.getBoundingClientRect();
+      const node = g.getBoundingClientRect();
+      if (node.left < view.left || node.right > view.right || node.top < view.top || node.bottom > view.bottom) {
+        centerOnNode(entry.entry_id);
+      }
+    });
     stageEl.appendChild(g);
+    if (entry.entry_id === focusedEntryId) nodeToRefocus = g;
   }
 
   if (isNewSession || !viewState.hasAutoFit || !viewState.userAdjusted) {
@@ -427,31 +459,45 @@ function renderDagSvg(dag, isNewSession = false) {
   } else {
     applyViewTransform();
   }
+  nodeToRefocus?.focus({ preventScroll: true });
 }
 
 function updateSelectedHighlight() {
   if (!stageEl) return;
   for (const node of stageEl.querySelectorAll('.dag-node')) {
-    node.classList.toggle('is-selected', Boolean(selectedEntry && node.getAttribute('data-entry-id') === selectedEntry.entry_id));
+    const selected = selectedEntry?.entry_id === node.getAttribute('data-entry-id');
+    node.classList.toggle('is-selected', selected);
+    node.setAttribute('aria-pressed', String(selected));
   }
 }
 
 export function selectNodeById(entryId, centerView = true) {
-  if (!currentDag || !Array.isArray(currentDag.entries)) return;
+  if (!currentDag || !Array.isArray(currentDag.entries)) return false;
   const found = currentDag.entries.find((e) => e.entry_id === entryId);
   if (found) {
     selectNode(found);
     if (centerView) centerOnNode(found.entry_id);
+    return true;
   }
+  return false;
 }
 
 function renderDetailForEntry(entry) {
   const entries = (currentDag && currentDag.entries) || [];
+  const sid = currentSessionId;
   renderDagNodeDetail(detailEl, entry, entries, {
+    loadEvidence: sid && ((id) => api.getProofEvidence(sid, id)),
     onNotify: callbacks.onNotify,
-    onSelectNode: (id) => selectNodeById(id, true),
+    onSelectNode: (id) => {
+      if (selectNodeById(id)) detailEl?.focus();
+      else callbacks.onNotify?.('This proof step is unavailable.');
+    },
+    onOpenSource: sid && ((anchor) => openSessionSource(sid, anchor.source_id, anchor.path, anchor)),
     onExplainStep: (ent) => typeof callbacks.onExplainStep === 'function' && callbacks.onExplainStep(ent),
     onForkAtStep: (ent) => openForkBarForSeq(ent.seq),
+    onPromoteStep: callbacks.onPromoteStep && ((ent) => {
+      if (currentSessionId === sid) callbacks.onPromoteStep(ent);
+    }),
   });
 }
 
@@ -512,6 +558,10 @@ async function handleConfirmFork() {
       }
       await callbacks.onForkCreated?.(newId, revision === sessionRevision);
       if (currentSessionId === newId) renderBranchDiff(diff);
+    }
+    if (typeof receipt.warning === 'string' && receipt.warning.trim()
+        && (revision === sessionRevision || currentSessionId === newId)) {
+      callbacks.onNotify?.(receipt.warning);
     }
   } catch (err) {
     if (revision === sessionRevision) callbacks.onNotify?.(`Fork failed: ${err.message}`);

@@ -12,7 +12,7 @@
   --bg-code: #f5f7fb;
   --ink-primary: #1f1f1f;
   --ink-secondary: #444746;
-  --ink-muted: #747775;
+  --ink-muted: #606569;
   --accent: #0b57d0;
   --accent-hover: #0842a0;
   --accent-ink: #ffffff;
@@ -109,9 +109,8 @@
   display: none !important;
 }
 
-.theme-switching .pill-btn,
-.theme-switching .chip-toggle,
-.theme-switching .compact-select,
-.theme-switching .session-item {
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
   transition: none !important;
 }

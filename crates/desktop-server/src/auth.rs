@@ -200,10 +200,14 @@ impl AuthGuard {
         false
     }
 
-    /// `GET /api/sessions/{id}/events` and `.../export`: the only routes the cookie opens.
+    /// The stream cookie can open session events and session or project downloads.
     fn is_cookie_route(path: &str) -> bool {
         let segs: Vec<&str> = path.split('/').collect();
-        matches!(segs.as_slice(), ["", "api", "sessions", id, "events" | "export"] if !id.is_empty())
+        matches!(
+            segs.as_slice(),
+            ["", "api", "sessions", id, "events" | "export"] | ["", "api", "projects", id, "export"]
+                if !id.is_empty()
+        )
     }
 
     /// The whole credential rule for `/api/` routes other than `/api/health`.

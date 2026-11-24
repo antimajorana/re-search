@@ -183,9 +183,20 @@ pub fn ingest_bytes(
     req: &IngestRequest<'_>,
 ) -> Result<IngestedSource, String> {
     validate_session_id(req.session_id).map_err(|e| e.to_string())?;
-    let source_id = build_source_id(req.source_id_hint.unwrap_or(req.file_name), req.raw_bytes);
-
     let prepared = prepare_ingestion(req.file_name, req.raw_bytes, req.section_filter)?;
+    let materialized_hashes: BTreeMap<_, _> = prepared
+        .materialized
+        .iter()
+        .map(|(path, content)| (path, ledger::sha256_hex(content.as_bytes())))
+        .collect();
+    let identity = json!({
+        "raw": ledger::sha256_hex(req.raw_bytes),
+        "format": prepared.format,
+        "primary": prepared.primary_rel,
+        "assembled": prepared.assembled_rel,
+        "files": materialized_hashes,
+    });
+    let source_id = build_source_id(req.source_id_hint.unwrap_or(req.file_name), &identity);
 
     let canon_sources = sandbox
         .canonical_root(SandboxRoot::Sources, req.session_id, true)
@@ -193,11 +204,13 @@ pub fn ingest_bytes(
         .ok_or_else(|| "cannot initialize session sources root".to_string())?;
 
     let mut written_files = Vec::with_capacity(prepared.materialized.len());
+    let mut files_sha256 = BTreeMap::new();
     for (rel_inside, content) in &prepared.materialized {
         let full_rel = format!("{source_id}/{rel_inside}");
         let (parts, norm) = sanitize_rel_components(&full_rel, false).map_err(|e| e.to_string())?;
         WorkspaceSandbox::atomic_write_in_root(&canon_sources, &parts, content.as_bytes())
             .map_err(|e| e.to_string())?;
+        files_sha256.insert(norm.clone(), &materialized_hashes[rel_inside]);
         written_files.push(norm);
     }
 
@@ -229,6 +242,7 @@ pub fn ingest_bytes(
                     "primary_path": primary_path,
                     "assembled_path": assembled_path,
                     "files": written_files,
+                    "files_sha256": files_sha256,
                     "page_count": prepared.page_count,
                 }),
             )
@@ -255,7 +269,7 @@ pub fn ingest_bytes(
     })
 }
 
-fn build_source_id(hint: &str, raw_bytes: &[u8]) -> String {
+fn build_source_id(hint: &str, identity: &Value) -> String {
     let base = hint.rsplit('/').next().unwrap_or(hint);
     let stem = base
         .strip_suffix(".tar.gz")
@@ -274,7 +288,7 @@ fn build_source_id(hint: &str, raw_bytes: &[u8]) -> String {
     }
     let clean = slug.trim_matches('-');
     let prefix = if clean.is_empty() { "doc" } else { clean };
-    let short_hash = &ledger::sha256_hex(raw_bytes)[..8];
+    let short_hash = &ledger::sha256_hex(identity.to_string().as_bytes())[..16];
     format!("{prefix}-{short_hash}")
 }
 

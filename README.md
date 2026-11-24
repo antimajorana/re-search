@@ -33,7 +33,7 @@ Ordinary AI coding/chat assistants fail on serious mathematical and physics deri
 | Failure Mode in Standard Chats | How reSearch Solves It |
 | --- | --- |
 | **Context bloat:** long SymPy tracebacks, huge arXiv `.tex` sources, and failed Lean attempts pollute the main conversation. | **Context-isolated Workers:** heavy SymPy retries, paper reading, Lean proofs, and parallel explorations run in clean short-lived worker contexts and return only concise verified summaries + `e-N` Proof-DAG IDs. |
-| **Self-grading bias:** the same context that dropped a minus sign also "verifies" its own final answer. | **Zero-bias Stateless Verifiers:** in `Verified`, `Deep`, and `Interactive` modes, a fresh Verifier sees only the prompt, the Proof DAG, `<pinned_conventions>`, Lean results, and deterministic `tex_audit` XML — never the solver's scratch reasoning. |
+| **Self-grading bias:** the same context that dropped a minus sign also "verifies" its own final answer. | **Independent model review:** in `Verified`, `Deep`, and `Interactive` modes a fresh Verifier receives the displayed answer, the prompt and conventions, the active Proof DAG, linked Lean evidence, and a deterministic TeX audit. The ledger binds its verdict to the answer it reviewed. |
 | **"Evidence" dressed up as "proof":** saying *"SymPy confirmed / q.e.d."* when a check failed or never ran. | **Typed Proof DAG + Honesty Linter:** symbolic/numerical checks, literature facts, and proof steps have separate node types, and `honesty.lint` cross-checks final prose against actual ledger & artifact evidence. |
 | **Silent execution / local edits:** arbitrary Python or file writes happen behind your back. | **Fail-closed Policy + AppContainer:** every tool call crosses the Rust router (`policy`), is SHA-256 hash-chained into `ledger.db`, and Python runs inside a zero-capability AppContainer (no network, no user files, no DPAPI, no env secrets). |
 
@@ -41,22 +41,58 @@ Ordinary AI coding/chat assistants fail on serious mathematical and physics deri
 
 ## 2. Quick Start (3 Minutes)
 
+**Install on Windows 11 (x64).** Download the installer, run it under your Windows account, then open **reSearch** from Start. The installer includes a private Python runtime with SymPy, NumPy, and mpmath. [Download the latest Windows installer](https://github.com/antimajorana/re-search/releases/latest/download/reSearch-Setup-Windows-x64.exe) · [Release notes and checksums](https://github.com/antimajorana/re-search/releases/latest)
+
 1. **Launch the desktop window:**
    Run `re-search-app.exe` (or `re-search desktop` / Start menu shortcut **reSearch** on Windows 11, or `re-search ui` to open a single-use `http://127.0.0.1:<port>/?launch=...` tab in your default browser).
 2. **Connect at least one provider:**
-   Click **Settings & Guide → Providers** (bottom-left) and connect Sign in with ChatGPT, Claude Code, Anthropic/OpenAI/Gemini API, local Ollama, or (if explicitly acknowledged) Google Antigravity.
+   Choose **Connect model** on the start screen, or open **Settings → Providers**, and connect Sign in with ChatGPT, Claude Code, Anthropic/OpenAI/Gemini API, local Ollama, or (if explicitly acknowledged) Google Antigravity.
 3. **Set your math conventions & rigor:**
-   Click **Conventions** next to the composer to pin metric signatures, natural units, or Fourier prefactors, and pick a mode: **`Direct`**, **`✓ Verified`** (recommended default), **`✦ Deep`**, or **`Interactive`**.
+   Open **Research options → Conventions** to pin metric signatures, natural units, or Fourier prefactors. In **Research options** pick a review mode from **`Direct`**, **`✓ Verified`** (recommended default), **`✦ Deep`**, or **`Interactive`**.
 4. **Optionally attach a paper folder:**
-   Click **Workspace** to point the session at a local `.tex`/`.bib` directory (or drop `.tex`, `.bib`, `.pdf`, `.zip` files directly with **Attach**).
+   Choose **Research options → Workspace** to use a local `.tex`/`.bib` directory. To ingest individual papers, choose **Attach**, select files, and press **Send**.
 5. **Run & inspect:**
    Watch the live pipeline stepper (**Orchestrator → Proof DAG → Verifier → Strategist**), inspect equations in **Canvas → LaTeX / Proof DAG**, ask clarifying questions safely in **Explain**, or steer mid-turn.
+
+### Carry a derivation across sessions
+
+- Open **Projects** to record a conjecture, hypotheses, notation, or units. Keep findings, open questions, and failed approaches with the project. Start a session from the project to give the agent a brief containing recent notes and paper references.
+- Use **Projects → Sources** to find papers by title, citation, or annotation, save a page or equation reference, and export saved BibTeX. In the **Proof DAG**, open a step to see linked computations, Lean evidence, citations, and model reviews. Save the step to the project to retain its provenance.
+- In **Canvas → LaTeX**, download the **Reproducible ZIP** for recorded tool versions, available Git revisions, source hashes, computation inputs and outputs, and a replay script. See the bundle's README for the commands to compare replayed and recorded outputs.
+
+### Validate a calculation
+
+Ask the Compute Worker to check an identity, a branch choice or a limiting case. Give the domain and units or dimensions you want it to use. For a numerical result, specify the precision, grid or basis refinements, the tolerances and an independent reference when you have one. Open the linked computation in **Proof DAG** to inspect the recorded result.
+
+Both helpers are available inside `sympy_eval`. Return the report as the last Python expression to capture it for inspection and replay.
+
+```python
+x = Symbol("x")
+check_symbolic_identity(sqrt(x**2), x, domain=S.Reals, limits=[(0, "-"), (0, "+")])
+```
+
+```python
+from mpmath import mp
+check_convergence(
+    lambda n: 1 + mp.mpf(1)/n**2, [8, 16, 32, 64],
+    axis="basis", atol="0.004", rtol=0, reference=1,
+)
+```
+
+The symbolic report records the residual, available real-domain analysis, exact probes, and requested limits or dimensions. Keep an unevaluated SymPy expression when its original form contains an exclusion that simplification would erase. The numerical report gives adjacent changes and reference errors for a scalar observable or norm. Its verdict applies to the supplied levels and tolerances.
+
+### Reuse sources and compare approaches
+
+- In **Canvas → Sources**, search passages from ingested papers. Each match has an excerpt, a file and line range, and a digest from source ingestion. The agent can cite the matching tool result in the Proof DAG.
+- Attach a Lean workspace with Physlib source and search **Formal Library** in Sources. Found declarations include the source signature and location. Build the workspace and its dependencies with its pinned Lean toolchain before checking an import. The checker resolves standard prebuilt Lake libraries in the workspace and its declared local checkouts. Lean checks the submitted statement against those compiled imports. The recorded source hash and the scan for incomplete proofs and declared axioms cover the submitted file or snippet.
+- Use **Projects → Experiments** to set a shared question, metric, and budget. Fork a verified ledger prefix, track candidate approaches and failures, and compare researcher-recorded observations linked to the branch.
+- Use **Projects → Validation** to commit a scalar validation protocol before computing the candidate. The project keeps the independent reference and controls local. After a linked convergence result is recorded, the evaluator checks it against the frozen tolerances and records the decision in the session ledger.
 
 ---
 
 ## 3. Mental Model: Follow One Derivation Through All 5 Layers
 
-reSearch synthesizes three architectural patterns — **OpenTorus** (fail-closed policy clamps, AppContainer sandbox, loopback WebView2 isolation, SHA-256 ledger), **open-math-harness** (Orchestrator → Worker delegation, Ultramath parallel exploration, Lean 4 anti-cheat), and **solver-agent** (Campaign Phases, artifact-aware `honesty.lint`, zero-bias verification):
+reSearch draws on typed evidence and specialist workers from **OpenTorus**, parallel exploration and Lean checking from **Open Math Harness**, and stateless review and dependency tracking from **Solver Agent**. It implements these ideas in a Rust workbench with a SHA-256 ledger and a Windows AppContainer Python worker.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐
@@ -131,12 +167,12 @@ Configure models per agent anytime under **Settings & Guide → Agents & Models*
 | **Literature Worker** | `literature_worker` | **Auto Smaller Model** | `arxiv_search`, `literature_search`, `doc_ingest`, `fs_read` on bulky papers/TeX files. |
 | **Lean Prover Worker** | `lean_worker` | **Auto Smaller Model** | Formalizes claims in Lean 4 without `sorry`, `admit`, or custom axioms; iterates on `lean_check` diagnostics. |
 | **Parallel Explorer** | `explorer_worker` | **Auto Smaller Model** | Ultramath multi-branch runner (`delegate_explore`, 2–4 concurrent branches, read/compute-only). |
-| **Step / Full Verifier** | `step_verifier`, `full_verifier` | Follow Orchestrator | Zero-bias stateless auditors checking DAG ancestors, `tex_audit` XML, and Lean checks. |
+| **Step / Full Verifier** | `step_verifier`, `full_verifier` | Follow Orchestrator | Reviews proof steps or the displayed final answer with the relevant DAG, linked Lean checks, and TeX audit. |
 | **Research Strategist** | `strategist` | Follow Orchestrator | Diagnoses rejected proof attempts in `Deep` mode to plan structural revisions. |
 | **Proof Narrator / Explain / Builder** | `narrator`, `sidetalk`, `subagent_builder` | Follow Orchestrator | `Narrate Proof` sheets, isolated **Explain** Q&A, and generating custom specialist profiles. |
 
 - **Automatic Smaller-Model Routing:** By default, worker roles pick a faster, cheaper model from connected live catalogs (`Catalog::pick_smaller_model`), recording the choice in `routing_reason`. Override any role explicitly to pin your preferred model.
-- **Custom Subagents (`<data_dir>/subagents.json`):** Describe a specialist in plain English in **Agents & Models** and click **Generate with AI Agent** to draft a role (`read_only`, `compute`, or `full_research` tool profile, optional model, effort, and rigor including `interactive`). Invokable directly from the composer pill (`Agent: ...`) or via `delegate_subagent` — still strictly bound by `v0.4-research` policy and AppContainer isolation.
+- **Custom Subagents (`<data_dir>/subagents.json`):** Describe a specialist in plain English in **Agents & Models** and click **Generate with AI Agent** to draft a role (`read_only`, `compute`, or `full_research` tool profile, optional model, effort, and rigor including `interactive`). Selectable under **Research options → Agent** or via `delegate_subagent` — still strictly bound by `v0.4-research` policy and AppContainer isolation.
 
 ---
 
@@ -172,7 +208,7 @@ Settings precedence for `re-search-app.exe` (and desktop UI launches):
 1. **CLI flags:** `--workspace DIR`, `--data-dir DIR`, `--python EXE`, `--worker-script PY`, `--port PORT`, `--core-exe EXE`, `--claude EXE`, `--agy EXE`
 2. **Environment variables:** `RE_SEARCH_PYTHON`, `RE_SEARCH_DATA`, `RE_SEARCH_WORKER_SCRIPT`, `RE_SEARCH_CLAUDE` (plus `RESEARCH_CORE_*` fallbacks), `RE_SEARCH_CORE_EXE`, `RE_SEARCH_AGY`
 3. **`re-search-app.json` next to the executable** *(used by Start-menu launches where env vars aren't set; relative paths resolve next to the binary)* — keys: `python`, `worker_script`, `data_dir`, `workspace`, `core_exe`, `claude`, `agy`
-4. **Defaults:** `%LOCALAPPDATA%\re-search`, sibling `python/worker.py` + `core.exe`, and `claude.exe` / `agy.exe` from `PATH` or default install folders
+4. **Defaults:** `%LOCALAPPDATA%\re-search`, the installed `runtime/python.exe`, sibling `python/worker.py` and `core.exe`, and `claude.exe` / `agy.exe` from `PATH` or default install folders
 
 Headless & test automation flags (`re-search ui`): `--port PORT`, `--no-open true`, `--print-url-json true`, `--api-base URL` (disables `/models` fetches so keys aren't leaked to a single mock endpoint), `--arxiv-base URL`, `--inspire-base URL`, `--crossref-base URL`. Server binds strictly to `127.0.0.1`, requires `X-ReSearch-Token` on `/api/*`, uses a scoped stream cookie for SSE/exports, and refuses `--workspace` overlapping `--data-dir`.
 
@@ -221,8 +257,13 @@ Also available: `re-search desktop`, `re-search ui`, `re-search show <session>`,
 cargo build
 cargo test -p policy -p ledger -p tools -p research-tools -p agent -p chatgpt-auth -p export -p cli-route -p desktop-server -p desktop-app -p cli
 
-# Offline KaTeX 0.19.1, XSS, Trace Cards & HITL UI tests
-node --test crates/desktop-server/tests/math_render.test.mjs crates/desktop-server/tests/hitl_ui.test.mjs
+# Browser UI modules and symbolic / numerical research checks
+node --test crates/desktop-server/tests/*.test.mjs
+python -m unittest discover -s python
+
+# Desktop, tablet, and phone workflows against the built loopback server.
+# Requires Python Playwright and Chromium (or pass --chromium /path/to/chromium).
+python crates/desktop-server/tests/workbench_browser.py
 ```
 
 Windows 11 AppContainer sandbox probes require Python with `sympy` and `numpy`:

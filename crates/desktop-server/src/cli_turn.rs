@@ -20,7 +20,7 @@ use crate::DesktopConfig;
 use cli_route::antigravity::Antigravity;
 use cli_route::claude::ClaudeCode;
 use cli_route::core_tools::core_tool_set;
-use cli_route::history::{build_prompt, prior_turns, DEFAULT_HISTORY_BUDGET};
+use cli_route::history::{build_session_prompt, DEFAULT_HISTORY_BUDGET};
 use cli_route::{run_turn, CoreLaunch, Recorder, SessionGuard, StopHandle, TurnEnd, TurnSpec, VendorCli};
 use research_tools::{strip_verbatim_prefix, validate_session_id, LiteratureEndpoints};
 use serde_json::{json, Value};
@@ -378,6 +378,7 @@ pub(crate) fn run_cli_turn(
     let (reasoning_effort, subagent) =
         crate::subagents::resolve_turn_options(state, session_id, req, meta);
     let research = Arc::new(state.research_env_for_session(session_id)?);
+    let project_context = crate::project_context::brief(state, session_id)?;
 
     let ledger = state.open_ledger()?;
     let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
@@ -387,11 +388,27 @@ pub(crate) fn run_cli_turn(
     if !existing.is_empty() {
         ledger.verify_session(session_id).map_err(|e| format!("cannot continue session `{session_id}`: {e}"))?;
     }
-    let eff_msg = match &subagent {
+    let mut eff_msg = match &subagent {
         Some(sa) => crate::subagents::apply_subagent_to_turn_prompt(sa, message),
         None => message.to_string(),
     };
-    let replay = build_prompt(&prior_turns(&existing), &eff_msg, DEFAULT_HISTORY_BUDGET);
+    eff_msg = format!(
+        "Use `search_paper_passages` to locate exact passages in ingested papers and \
+         `search_formal_library` to discover Lean declarations in the attached workspace. \
+         Cite recorded source locations, and type-check any intended formal application.\n\n{eff_msg}"
+    );
+    if state.cfg.python.is_some() {
+        eff_msg = format!(
+            "The re:Search compute worker exposes `check_symbolic_identity(lhs, rhs, variable=x, domain=...)` \
+             and `check_convergence(run, levels, axis=..., atol=..., rtol=..., reference=...)` in `sympy_eval`. \
+             Return the report as the final Python expression and record its `tool_call_ref` with the proof entry. \
+             Report excluded points, counterexamples, and the scope of numerical evidence. \n\n{eff_msg}"
+        );
+    }
+    if let Some(context) = &project_context {
+        eff_msg = format!("{context}\n\nCurrent user request\n{eff_msg}");
+    }
+    let replay = build_session_prompt(&existing, &eff_msg, DEFAULT_HISTORY_BUDGET);
 
     validate_session_id(session_id).map_err(|e| e.to_string())?;
     let sdir = state.session_dir(session_id)?;
@@ -433,6 +450,8 @@ pub(crate) fn run_cli_turn(
         "history_turns": replay.turns_included,
         "history_turns_dropped": replay.turns_dropped,
         "workspace_root": workspace.as_deref().map(|w| path_str(&strip_verbatim_prefix(w))),
+        "workspace_revision": workspace.as_deref().and_then(agent::workspace_revision),
+        "project_context": project_context,
     });
     if kind == CliRouteKind::Antigravity {
         start_fields["confinement"] = json!(cli_route::antigravity::CONFINEMENT);

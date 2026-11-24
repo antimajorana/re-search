@@ -1082,9 +1082,10 @@ note, start event and session API identify the route as vendor-sandboxed.
   `--crossref-base` and the matching `RE_SEARCH_*_BASE` environment variables
   accept `http://127.0.0.1:<port>` (used by the tests); whoever controls the
   launch environment can point searches at a local service.
-- **Desktop server resource use.** One thread per connection with no cap, and
-  an authenticated request may carry a 60 MiB body; a local process can tie up
-  threads by opening many connections (local denial of service only).
+- **Desktop server resource use.** One thread per connection with no cap.
+  Authenticated requests may carry 60 MiB bodies, with a larger limit for up to
+  five Base64-encoded 10 MiB uploads plus framing. A local process can tie up
+  threads by opening many connections.
 - **MCP route without an approval relay.** When `core.exe` runs without the
   supervisor's approval channel, every tool that must ask (code execution,
   workspace writes, and now literature search) is denied; nothing falls back to

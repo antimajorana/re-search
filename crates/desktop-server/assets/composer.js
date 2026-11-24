@@ -20,12 +20,18 @@ let strategistChip = null;
 let wsDialogEl = null;
 let wsInputEl = null;
 let callbacks = {};
-let stagedFiles = [];
-let submitting = false;
+const drafts = new Map();
+let draftSessionId = null;
+let activeDraft = createDraft();
+let draftRevision = 0;
+let filePickerRevision = null;
+let composerVisible = true;
+let sessionLoading = false;
 let turnRunning = false;
+let stopRequest = null;
 let defaultSendHtml = '';
 let currentRoute = null;
-let defaultPlaceholder = 'Ask a derivation, run SymPy, or audit arXiv TeX...';
+let defaultPlaceholder = 'Ask a derivation, verify a theorem, or audit a paper...';
 
 export function initComposer(opts = {}) {
   callbacks = opts;
@@ -47,7 +53,7 @@ export function initComposer(opts = {}) {
   if (inputEl) {
     inputEl.addEventListener('input', resizeTextarea);
     inputEl.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter' && !ev.shiftKey) {
+      if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) {
         ev.preventDefault();
         if (formEl) formEl.requestSubmit();
       }
@@ -62,18 +68,24 @@ export function initComposer(opts = {}) {
   }
 
   if (uploadEl) {
+    uploadEl.addEventListener('click', () => { filePickerRevision = draftRevision; });
+    uploadEl.addEventListener('cancel', () => { filePickerRevision = null; });
     uploadEl.addEventListener('change', handleFileSelection);
   }
 
   const triggerStop = async () => {
-    if (typeof callbacks.onStopTurn !== 'function') return;
-    if (stopEl) stopEl.disabled = true;
-    if (topbarStopEl) topbarStopEl.disabled = true;
+    if (!turnRunning || stopRequest || typeof callbacks.onStopTurn !== 'function') return;
+    const request = {};
+    stopRequest = request;
+    syncButtons();
     try {
-      await callbacks.onStopTurn();
-    } finally {
-      if (stopEl) stopEl.disabled = false;
-      if (topbarStopEl) topbarStopEl.disabled = false;
+      if (await callbacks.onStopTurn()) return;
+    } catch (err) {
+      notify(`Could not stop the turn. ${err.message}`);
+    }
+    if (stopRequest === request) {
+      stopRequest = null;
+      syncButtons();
     }
   };
 
@@ -81,26 +93,18 @@ export function initComposer(opts = {}) {
   if (topbarStopEl) topbarStopEl.addEventListener('click', triggerStop);
 
   document.addEventListener('keydown', (ev) => {
-    if (ev.key !== 'Escape') return;
+    if (ev.key !== 'Escape' || ev.defaultPrevented || ev.repeat || ev.isComposing || ev.keyCode === 229) return;
+    if (wsDialogEl?.open || document.getElementById('settings-dialog')?.open ||
+        document.getElementById('source-reader-dialog')?.open) return;
     const effortPop = document.getElementById('effort-popover');
     if (effortPop && !effortPop.hidden) {
       ev.preventDefault();
       closeEffortWindow();
       return;
     }
-    const readerOpen = document.getElementById('source-reader-dialog');
-    if (readerOpen && !readerOpen.hidden) {
-      ev.preventDefault();
-      readerOpen.hidden = true;
-      return;
-    }
-    if (!turnRunning) return;
-    const settingsOpen = document.getElementById('settings-dialog');
-    const wsOpen = document.getElementById('workspace-dialog');
+    if (!turnRunning || document.getElementById('project-overview')?.hidden === false) return;
     const convOpen = document.getElementById('conventions-popover');
-    if ((settingsOpen && !settingsOpen.hidden) || (wsOpen && !wsOpen.hidden) || (convOpen && !convOpen.hidden)) {
-      return;
-    }
+    if (convOpen && !convOpen.hidden) return;
     ev.preventDefault();
     triggerStop();
   });
@@ -124,16 +128,26 @@ function resizeTextarea() {
 }
 
 export function setComposerPrompt(text, focusInput = true) {
+  activeDraft.text = text || '';
   if (!inputEl) return;
-  inputEl.value = text || '';
+  inputEl.value = activeDraft.text;
   resizeTextarea();
   if (focusInput) inputEl.focus();
 }
 
+export function reuseComposerPrompt(text) {
+  if (!inputEl || !text) return;
+  if (inputEl.value.trim() && inputEl.value.trim() !== text.trim()) {
+    inputEl.focus();
+    notify('Your current draft is still in the composer.');
+    return;
+  }
+  setComposerPrompt(text);
+}
+
 export function submitComposerPrompt(text) {
   if (!inputEl || !text) return false;
-  inputEl.value = text;
-  resizeTextarea();
+  setComposerPrompt(text, false);
   if (!turnRunning && formEl) {
     formEl.requestSubmit();
     return true;
@@ -145,10 +159,83 @@ export function submitComposerPrompt(text) {
 const CLI_ROUTES = new Set(['claude-cli', 'claude-code-cli', 'antigravity']);
 const canSteer = () => !CLI_ROUTES.has(currentRoute);
 
+function createDraft() {
+  return { text: '', files: [], submitting: false, notice: '' };
+}
+
+function readDraftText(draft) {
+  if (draft === activeDraft && inputEl) draft.text = inputEl.value;
+  return draft.text;
+}
+
+export function setComposerSession(sessionId, { adoptDraft = false } = {}) {
+  if (sessionId === draftSessionId) return;
+  readDraftText(activeDraft);
+  if (adoptDraft && draftSessionId === null && sessionId && !drafts.has(sessionId)) {
+    // First Send keeps ownership of the draft while it creates its destination.
+    drafts.delete(null);
+  } else {
+    if (activeDraft.text || activeDraft.files.length || activeDraft.submitting || activeDraft.notice) {
+      drafts.set(draftSessionId, activeDraft);
+    } else {
+      drafts.delete(draftSessionId);
+    }
+    activeDraft = drafts.get(sessionId) || createDraft();
+    draftRevision += 1;
+  }
+  draftSessionId = sessionId;
+  if (uploadEl) uploadEl.value = '';
+  renderDraft();
+}
+
+export function setComposerVisible(visible) {
+  if (visible === composerVisible) return;
+  composerVisible = visible;
+  draftRevision += 1;
+  showDraftNotice();
+}
+
+export function discardComposerDraft(sessionId) {
+  drafts.delete(sessionId);
+  if (draftSessionId !== sessionId) return;
+  activeDraft = createDraft();
+  draftRevision += 1;
+  renderDraft();
+}
+
+function renderDraft() {
+  setComposerPrompt(activeDraft.text, false);
+  renderFileChips();
+  syncButtons();
+  showDraftNotice();
+}
+
+function showDraftNotice() {
+  if (!composerVisible || !activeDraft.notice) return;
+  notify(activeDraft.notice);
+  activeDraft.notice = '';
+}
+
+function notifyDraft(draft, message) {
+  draft.notice = message;
+  if (draft === activeDraft) showDraftNotice();
+}
+
+function restoreDraftText(draft, text) {
+  if (readDraftText(draft)) return;
+  draft.text = text;
+  if (draft === activeDraft) setComposerPrompt(text, false);
+}
+
 function syncButtons() {
+  const { submitting } = activeDraft;
   const steerMode = turnRunning && canSteer();
+  if (uploadEl) uploadEl.disabled = submitting;
+  if (filesBoxEl) {
+    for (const button of filesBoxEl.querySelectorAll('button')) button.disabled = submitting;
+  }
   if (sendEl) {
-    sendEl.disabled = submitting || (turnRunning && !canSteer());
+    sendEl.disabled = submitting || sessionLoading || Boolean(stopRequest) || (turnRunning && !canSteer());
     sendEl.hidden = false;
     if (steerMode) {
       sendEl.textContent = 'Steer';
@@ -169,16 +256,22 @@ function syncButtons() {
   }
   if (stopEl) {
     stopEl.hidden = !turnRunning;
-    stopEl.disabled = false;
+    stopEl.disabled = Boolean(stopRequest);
   }
   if (topbarStopEl) {
     topbarStopEl.hidden = !turnRunning;
-    topbarStopEl.disabled = false;
+    topbarStopEl.disabled = Boolean(stopRequest);
   }
 }
 
 export function setComposerBusy(busy) {
   turnRunning = !!busy;
+  if (!busy) stopRequest = null;
+  syncButtons();
+}
+
+export function setComposerLoading(loading) {
+  sessionLoading = loading;
   syncButtons();
 }
 
@@ -209,11 +302,19 @@ export function getComposerOptions(choice) {
 }
 
 function handleFileSelection() {
-  if (!uploadEl || !uploadEl.files) return;
+  const { files, submitting } = activeDraft;
+  const pickedIn = filePickerRevision;
+  filePickerRevision = null;
+  if (!uploadEl?.files) return;
   const chosen = Array.from(uploadEl.files);
-  if (stagedFiles.length + chosen.length > MAX_FILES) {
+  uploadEl.value = '';
+  if (pickedIn !== null && pickedIn !== draftRevision) {
+    if (chosen.length) notify('The chat changed while the file picker was open. Choose files again in the intended chat.');
+    return;
+  }
+  if (submitting || !composerVisible) return;
+  if (files.length + chosen.length > MAX_FILES) {
     notify(`Maximum ${MAX_FILES} files per upload batch.`);
-    uploadEl.value = '';
     return;
   }
   for (const file of chosen) {
@@ -221,21 +322,21 @@ function handleFileSelection() {
       notify(`"${file.name}" exceeds the 10 MiB limit.`);
       continue;
     }
-    stagedFiles.push(file);
+    files.push(file);
   }
-  uploadEl.value = '';
   renderFileChips();
 }
 
 function renderFileChips() {
   if (!filesBoxEl) return;
+  const draft = activeDraft;
   filesBoxEl.innerHTML = '';
-  if (stagedFiles.length === 0) {
+  if (draft.files.length === 0) {
     filesBoxEl.hidden = true;
     return;
   }
   filesBoxEl.hidden = false;
-  stagedFiles.forEach((file, idx) => {
+  draft.files.forEach((file, idx) => {
     const chip = document.createElement('span');
     chip.className = 'file-chip';
     const kb = Math.max(1, Math.round(file.size / 1024));
@@ -243,13 +344,15 @@ function renderFileChips() {
     const rm = document.createElement('button');
     rm.type = 'button';
     rm.className = 'icon-btn';
+    rm.disabled = draft.submitting;
     rm.style.height = '20px';
     rm.style.minWidth = '20px';
     rm.style.padding = '0';
     rm.textContent = '×';
     rm.setAttribute('aria-label', `Remove ${file.name}`);
     rm.addEventListener('click', () => {
-      stagedFiles.splice(idx, 1);
+      if (draft !== activeDraft || draft.submitting) return;
+      draft.files.splice(idx, 1);
       renderFileChips();
     });
     chip.appendChild(rm);
@@ -267,51 +370,72 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
-async function flushStagedUploads(sessionId) {
-  if (stagedFiles.length === 0) return null;
+async function flushStagedUploads(sessionId, draft, isCurrent) {
+  const files = draft.files;
   const encoded = [];
-  for (const file of stagedFiles) {
+  for (const file of files) {
     const buf = await file.arrayBuffer();
+    if (!isCurrent()) return null;
     encoded.push({
       name: file.name,
       content_base64: arrayBufferToBase64(buf),
     });
   }
-  const resp = await api.uploadFilesBase64(sessionId, encoded);
-  stagedFiles = [];
-  renderFileChips();
-  return resp;
+  let result;
+  try {
+    result = await api.uploadFilesBase64(sessionId, encoded);
+  } catch (error) {
+    if (Array.isArray(error.payload?.ingested) && Array.isArray(error.payload?.failed)) {
+      result = error.payload;
+    } else if (error.status >= 400 && error.status < 500) {
+      throw error;
+    }
+  }
+  const failures = new Map(
+    Array.isArray(result?.failed) ? result.failed.map((item) => [item?.index, item?.error]) : []
+  );
+  const ingested = files.filter((_, index) => !failures.has(index));
+  if (!Array.isArray(result?.ingested) || result.ingested.length !== ingested.length ||
+      ingested.length + failures.size !== files.length) {
+    // Without a receipt, some files may already exist on disk. Require explicit
+    // reattachment so the next Send cannot duplicate an unconfirmed batch.
+    draft.files = [];
+    if (draft === activeDraft) renderFileChips();
+    return { ingested: [], unconfirmed: files, failed: [] };
+  }
+  draft.files = files.filter((_, index) => failures.has(index));
+  if (draft === activeDraft) renderFileChips();
+  const failed = Array.from(failures, ([index, error]) => ({ name: files[index].name, error }));
+  return { ingested, unconfirmed: [], failed };
 }
 
 async function handleSubmit() {
-  if (submitting) return;
+  const draft = activeDraft;
+  const revision = draftRevision;
+  const isCurrent = () => draft === activeDraft && revision === draftRevision;
+  if (!composerVisible || draft.submitting || sessionLoading || stopRequest) return;
+  const prompt = readDraftText(draft).trim();
   if (turnRunning) {
     if (!canSteer()) {
       notify('Live steering is only available on in-core API/ChatGPT sessions.');
       return;
     }
-    const text = inputEl ? inputEl.value.trim() : '';
-    if (!text || typeof callbacks.onSteerTurn !== 'function') return;
+    if (!draftSessionId || !prompt || typeof callbacks.onSteerTurn !== 'function') return;
     try {
-      submitting = true;
+      draft.submitting = true;
       syncButtons();
-      inputEl.value = '';
-      resizeTextarea();
-      await callbacks.onSteerTurn(text);
+      setComposerPrompt('', false);
+      await callbacks.onSteerTurn(draftSessionId, prompt);
     } catch (err) {
-      if (inputEl && !inputEl.value) {
-        inputEl.value = text;
-        resizeTextarea();
-      }
-      if (!err || !err._notified) notify(`Steer failed: ${err.message}`);
+      restoreDraftText(draft, prompt);
+      notifyDraft(draft, `Could not queue steer: ${err.message}`);
     } finally {
-      submitting = false;
-      syncButtons();
+      draft.submitting = false;
+      if (draft === activeDraft) syncButtons();
     }
     return;
   }
-  const prompt = inputEl ? inputEl.value.trim() : '';
-  if (!prompt && stagedFiles.length === 0) return;
+  if (!prompt && draft.files.length === 0) return;
   const currentChoice = () => (typeof callbacks.getModelChoice === 'function' ? callbacks.getModelChoice() : null);
   // Keep the prompt when nothing can answer it: no model connected, or none on the
   // route the session is bound to (the server would refuse the send).
@@ -326,10 +450,10 @@ async function handleSubmit() {
   }
 
   try {
-    submitting = true;
+    draft.submitting = true;
     syncButtons();
     const sessionId = await callbacks.ensureSession();
-    if (!sessionId) return;
+    if (!sessionId || sessionId !== draftSessionId || !isCurrent()) return;
     // Selecting or creating the session may have changed which models it can use: check
     // again before anything is uploaded, cleared or shown as sent.
     const choice = currentChoice();
@@ -337,35 +461,45 @@ async function handleSubmit() {
       refuseNoModel();
       return;
     }
+    const options = prompt ? getComposerOptions(choice) : null;
 
-    if (stagedFiles.length > 0) {
-      await flushStagedUploads(sessionId);
-      notify('Uploaded sources ingested into session.');
-      if (typeof callbacks.onSourcesUpdated === 'function') {
+    if (draft.files.length > 0) {
+      const result = await flushStagedUploads(sessionId, draft, isCurrent);
+      if (!result) return;
+      const { ingested, unconfirmed, failed } = result;
+      if ((ingested.length || unconfirmed.length) && typeof callbacks.onSourcesUpdated === 'function') {
         callbacks.onSourcesUpdated(sessionId);
       }
+      const names = (files) => files.map((file) => `“${file.name}”`).join(', ');
+      if (unconfirmed.length) {
+        notifyDraft(draft, `Could not confirm upload of ${names(unconfirmed)}. Check Sources and reattach any missing files.`);
+        return;
+      }
+      const added = ingested.length ? `Added ${names(ingested)}.` : '';
+      if (failed.length) {
+        const details = failed.map(({ name, error }) => `“${name}” (${error})`).join(', ');
+        notifyDraft(draft, `${added} Could not add ${details}.`.trim());
+        return;
+      }
+      if (added) notifyDraft(draft, added);
     }
 
-    if (prompt) {
-      inputEl.value = '';
-      resizeTextarea();
+    if (prompt && isCurrent()) {
+      if (readDraftText(draft).trim() === prompt) setComposerPrompt('', false);
       if (typeof callbacks.onSendPrompt === 'function') {
         try {
-          await callbacks.onSendPrompt(sessionId, prompt, getComposerOptions(choice));
+          await callbacks.onSendPrompt(sessionId, prompt, options);
         } catch (err) {
-          if (inputEl && !inputEl.value) {
-            inputEl.value = prompt;
-            resizeTextarea();
-          }
+          restoreDraftText(draft, prompt);
           throw err;
         }
       }
     }
   } catch (err) {
-    notify(`Send failed: ${err.message}`);
+    notifyDraft(draft, `Send failed: ${err.message}`);
   } finally {
-    submitting = false;
-    syncButtons();
+    draft.submitting = false;
+    if (draft === activeDraft) syncButtons();
   }
 }
 
@@ -374,15 +508,24 @@ function wireWorkspaceModal() {
   const cancelBtn = document.getElementById('workspace-cancel-btn');
   const wsForm = document.getElementById('workspace-form');
 
-  const closeModal = () => {
-    if (wsDialogEl) wsDialogEl.hidden = true;
-  };
+  const closeModal = () => wsDialogEl?.close();
   const openManualModal = () => {
-    if (wsDialogEl) {
-      wsDialogEl.hidden = false;
-      if (wsInputEl) wsInputEl.focus();
-    }
+    if (!wsDialogEl || wsDialogEl.open) return;
+    wsDialogEl.showModal();
+    wsInputEl?.focus();
   };
+  wsDialogEl?.addEventListener('close', () => {
+    if (wsDialogEl.open) return;
+    const controls = [workspaceBtn, document.querySelector('#research-options > summary'), inputEl];
+    for (const node of controls) {
+      if (!node) continue;
+      node.focus();
+      if (document.activeElement === node) break;
+    }
+  });
+  wsDialogEl?.addEventListener('click', (event) => {
+    if (event.target === wsDialogEl) closeModal();
+  });
   if (workspaceBtn) {
     workspaceBtn.addEventListener('click', async () => {
       workspaceBtn.disabled = true;

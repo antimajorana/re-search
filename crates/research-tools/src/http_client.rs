@@ -8,7 +8,7 @@ use ureq::http::Uri;
 pub const MAX_METADATA_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_EPRINT_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_REDIRECTS: usize = 3;
-pub const USER_AGENT: &str = "re-search/0.0.1";
+pub const USER_AGENT: &str = concat!("re-search/", env!("CARGO_PKG_VERSION"));
 
 const ALLOWLISTED_HTTPS_HOSTS: &[&str] = &[
     "export.arxiv.org",
@@ -110,7 +110,7 @@ fn build_agent(is_https: bool) -> ureq::Agent {
 }
 
 /// Performs a bounded GET request enforcing HTTPS allowlist (or loopback mock ports),
-/// following up to 3 redirects across allowlisted origins with `User-Agent: re-search/0.0.1`.
+/// following up to 3 redirects across allowlisted origins with the versioned reSearch user agent.
 pub fn fetch_bytes_allowlisted(
     url: &str,
     endpoints: &LiteratureEndpoints,

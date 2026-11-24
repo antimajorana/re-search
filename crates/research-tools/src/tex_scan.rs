@@ -386,12 +386,12 @@ pub fn normalize_doi(raw: &str) -> Option<String> {
         "https://dx.doi.org/",
         "http://dx.doi.org/",
     ] {
-        if s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        if s.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix)) {
             s = &s[prefix.len()..];
             break;
         }
     }
-    if s.len() >= 4 && s[..4].eq_ignore_ascii_case("doi:") {
+    if s.get(..4).is_some_and(|head| head.eq_ignore_ascii_case("doi:")) {
         s = s[4..].trim_start();
     }
     let slash = s.find('/')?;

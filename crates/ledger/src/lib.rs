@@ -18,12 +18,18 @@ pub mod verify;
 
 pub use verify::{SessionVerifyReport, VerifyAllReport};
 
-use rusqlite::{config::DbConfig, params, Connection, OpenFlags};
+use rusqlite::{
+    config::DbConfig, params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
+};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fmt::{self, Write as _};
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+static NEXT_BLOB_TEMP: AtomicU64 = AtomicU64::new(0);
 
 /// Previous-hash anchor for `seq == 1` of every session.
 pub const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -307,56 +313,74 @@ impl Ledger {
         if self.legacy_unchained {
             return Err(Error::LegacyUnchainedSchema);
         }
-        let payload_text = canonical_json(payload);
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let run = || -> Result<AppendedEvent> {
-            let max_seq: i64 = self.conn.query_row(
-                "SELECT COALESCE(MAX(seq), 0) FROM event WHERE session = ?1",
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let (last_seq, prev_hash) = tx
+            .query_row(
+                "SELECT seq, event_hash FROM event WHERE session = ?1 ORDER BY seq DESC LIMIT 1",
                 params![session],
-                |r| r.get(0),
-            )?;
-            let seq = max_seq + 1;
-            let seq_u64 = u64::try_from(seq)
-                .map_err(|_| Error::Tamper(format!("invalid next sequence number {seq}")))?;
-            let prev_hash = if seq == 1 {
-                GENESIS_HASH.to_string()
-            } else {
-                self.conn.query_row(
-                    "SELECT event_hash FROM event WHERE session = ?1 AND seq = ?2",
-                    params![session, max_seq],
-                    |r| r.get::<_, String>(0),
-                )?
-            };
-            let ts_ms = now_ms();
-            let event_hash = compute_event_hash(
-                session,
-                seq_u64,
-                ts_ms,
-                kind,
-                schema_version,
-                &payload_text,
-                &prev_hash,
-            );
-            self.conn.execute(
-                "INSERT INTO event (session, seq, ts_ms, kind, schema_version, payload, prev_hash, event_hash)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![session, seq, ts_ms, kind, schema_version, payload_text, prev_hash, event_hash],
-            )?;
-            Ok(AppendedEvent { seq: seq_u64, ts_ms, prev_hash, event_hash })
-        };
-        match run() {
-            Ok(ev) => {
-                if let Err(e) = self.conn.execute_batch("COMMIT") {
-                    let _ = self.conn.execute_batch("ROLLBACK");
-                    return Err(e.into());
-                }
-                Ok(ev)
-            }
-            Err(e) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(e)
-            }
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .unwrap_or_else(|| (0, GENESIS_HASH.to_string()));
+        let seq = last_seq
+            .checked_add(1)
+            .ok_or_else(|| Error::Tamper(format!("next sequence number overflows for session `{session}`")))?;
+        let event = Self::insert_event(&tx, session, seq, &prev_hash, kind, schema_version, payload)?;
+        tx.commit()?;
+        Ok(event)
+    }
+
+    /// Create a fresh session with a nonempty sequence of events in one transaction.
+    pub fn append_new_session(&self, session: &str, events: &[(&str, u32, &Value)]) -> Result<()> {
+        if self.legacy_unchained {
+            return Err(Error::LegacyUnchainedSchema);
         }
+        if events.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "new session requires events").into());
+        }
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM event WHERE session = ?1)",
+            params![session],
+            |r| r.get(0),
+        )?;
+        if exists {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("ledger session `{session}` already exists"),
+            )
+            .into());
+        }
+
+        let mut prev_hash = GENESIS_HASH.to_string();
+        for (idx, &(kind, schema_version, payload)) in events.iter().enumerate() {
+            let seq = idx as i64 + 1;
+            prev_hash = Self::insert_event(&tx, session, seq, &prev_hash, kind, schema_version, payload)?.event_hash;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn insert_event(
+        conn: &Connection,
+        session: &str,
+        seq: i64,
+        prev_hash: &str,
+        kind: &str,
+        schema_version: u32,
+        payload: &Value,
+    ) -> Result<AppendedEvent> {
+        let payload_text = canonical_json(payload);
+        let seq_u64 =
+            u64::try_from(seq).map_err(|_| Error::Tamper(format!("invalid next sequence number {seq}")))?;
+        let ts_ms = now_ms();
+        let event_hash = compute_event_hash(session, seq_u64, ts_ms, kind, schema_version, &payload_text, prev_hash);
+        conn.execute(
+            "INSERT INTO event (session, seq, ts_ms, kind, schema_version, payload, prev_hash, event_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![session, seq, ts_ms, kind, schema_version, payload_text, prev_hash, event_hash],
+        )?;
+        Ok(AppendedEvent { seq: seq_u64, ts_ms, prev_hash: prev_hash.to_string(), event_hash })
     }
 
     /// Append one event and return its sequence number (1, 2, 3, ... per
@@ -421,9 +445,18 @@ impl Ledger {
         let path = self.blob_path(&hash)?;
         if !path.exists() {
             std::fs::create_dir_all(path.parent().expect("blob path has a parent"))?;
-            let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-            std::fs::write(&tmp, bytes)?;
-            if let Err(e) = std::fs::rename(&tmp, &path) {
+            let (tmp, mut file) = loop {
+                let seq = NEXT_BLOB_TEMP.fetch_add(1, Ordering::Relaxed);
+                let tmp = path.with_extension(format!("tmp{}.{seq}", std::process::id()));
+                match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+                    Ok(file) => break (tmp, file),
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(e.into()),
+                }
+            };
+            let written = file.write_all(bytes);
+            drop(file);
+            if let Err(e) = written.and_then(|_| std::fs::rename(&tmp, &path)) {
                 let _ = std::fs::remove_file(&tmp);
                 if !path.exists() {
                     return Err(e.into());

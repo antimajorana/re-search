@@ -1,7 +1,8 @@
 //! Offline tamper verification for the Stage 3 hash-chained ledger and blobs.
 
 use crate::{
-    canonical_json, compute_event_hash, is_lower_hex, is_sha256_hex, sha256_hex, Error, Ledger, Result, GENESIS_HASH,
+    canonical_json, compute_event_hash, is_lower_hex, is_sha256_hex, sha256_hex, Error, Event, Ledger, Result,
+    GENESIS_HASH,
 };
 use rusqlite::params;
 use serde_json::Value;
@@ -29,12 +30,27 @@ pub struct VerifyAllReport {
 impl Ledger {
     /// Verify one session's hash chain, canonical payloads, and fixed blob slots.
     pub fn verify_session(&self, session: &str) -> Result<SessionVerifyReport> {
+        self.verify_session_collect(session, None)
+    }
+
+    /// Read the exact events and head hash verified in the same SQLite snapshot.
+    pub fn read_verified_session(&self, session: &str) -> Result<(SessionVerifyReport, Vec<Event>)> {
+        let mut events = Vec::new();
+        let report = self.verify_session_collect(session, Some(&mut events))?;
+        Ok((report, events))
+    }
+
+    fn verify_session_collect(
+        &self,
+        session: &str,
+        events: Option<&mut Vec<Event>>,
+    ) -> Result<SessionVerifyReport> {
         if self.legacy_unchained {
             return Err(Error::LegacyUnchainedSchema);
         }
         let mut referenced = HashSet::new();
         self.in_read_tx(|| {
-            let report = self.verify_session_inner(session, &mut referenced)?;
+            let report = self.verify_session_inner(session, &mut referenced, events)?;
             self.verify_schema_triggers()?;
             Ok(report)
         })
@@ -56,7 +72,7 @@ impl Ledger {
             let mut reports = Vec::with_capacity(sessions.len());
             let mut total_events = 0u64;
             for session in sessions {
-                let report = self.verify_session_inner(&session, &mut referenced)?;
+                let report = self.verify_session_inner(&session, &mut referenced, None)?;
                 total_events += report.event_count;
                 reports.push(report);
             }
@@ -108,6 +124,7 @@ impl Ledger {
         &self,
         session: &str,
         referenced: &mut HashSet<String>,
+        mut events: Option<&mut Vec<Event>>,
     ) -> Result<SessionVerifyReport> {
         let mut stmt = self.conn.prepare(
             "SELECT session, seq, ts_ms, kind, schema_version, payload, prev_hash, event_hash
@@ -176,6 +193,18 @@ impl Ledger {
             }
 
             blob_refs_verified += self.verify_event_blobs(session, seq, &kind, &parsed, referenced)?;
+            if let Some(events) = events.as_mut() {
+                events.push(Event {
+                    session: row_session,
+                    seq: seq as u64,
+                    ts_ms,
+                    kind,
+                    schema_version,
+                    payload: parsed,
+                    prev_hash,
+                    event_hash: event_hash.clone(),
+                });
+            }
             expected_seq += 1;
             expected_prev = event_hash;
         }

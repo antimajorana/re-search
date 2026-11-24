@@ -166,15 +166,21 @@ fn find_core_exe(flag: Option<String>, exe_dir: &Path) -> Result<PathBuf, String
     Ok(core_exe)
 }
 
+fn resolve_python(flag: Option<String>, exe_dir: &Path) -> Option<PathBuf> {
+    flag.filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env_path_any(&["RE_SEARCH_PYTHON", "RESEARCH_CORE_PYTHON"]))
+        .or_else(|| {
+            let bundled = exe_dir.join("runtime").join("python.exe");
+            (cfg!(windows) && bundled.is_file()).then_some(bundled)
+        })
+}
+
 pub(crate) fn resolve_worker_paths(
     flags: &mut HashMap<String, String>,
     exe_dir: &Path,
 ) -> Result<(Option<PathBuf>, Option<PathBuf>), String> {
-    let python = flags
-        .remove("python")
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| env_path_any(&["RE_SEARCH_PYTHON", "RESEARCH_CORE_PYTHON"]));
+    let python = resolve_python(flags.remove("python"), exe_dir);
     let worker_script_flag = flags.remove("worker-script").map(PathBuf::from);
     let worker_script = match (&python, worker_script_flag) {
         (Some(_), Some(script)) => Some(script),
@@ -270,9 +276,7 @@ fn run_command(mut flags: HashMap<String, String>, data_dir: PathBuf) -> Result<
                 // `absolute`, not `canonicalize`: no verbatim `\\?\` prefix, which Python and
                 // the CLI handle badly in working directories.
                 data_dir: std::path::absolute(&data_dir).map_err(|e| e.to_string())?,
-                python: python_flag
-                    .map(PathBuf::from)
-                    .or_else(|| env_path_any(&["RE_SEARCH_PYTHON", "RESEARCH_CORE_PYTHON"]))
+                python: resolve_python(python_flag, exe_dir)
                     .ok_or("no Python: pass --python or set RE_SEARCH_PYTHON")?,
                 claude: match claude_flag {
                     Some(p) => PathBuf::from(p),

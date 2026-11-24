@@ -265,6 +265,35 @@ fn guardrails_masking_conventions_computation_and_final_answer_gates() {
 }
 
 #[test]
+fn verifiers_reject_unstructured_and_incomplete_verdicts() {
+    let tmp = TempDir::new("incomplete-verdicts");
+    let session = "s-ver-incomplete";
+    let ledger = Ledger::open(&tmp.path).unwrap();
+    let env = ResearchEnv::new(&tmp.path);
+    ledger.append_with_hash(session, "session.start", 1, &json!({ "prompt": "What is 2+2?" })).unwrap();
+    ledger.append_with_hash(session, "proof.entry", 1, &json!({
+        "entry_id": "e-1", "entry_type": "final_answer", "summary": "2+2=4", "details": "Two plus two is four."
+    })).unwrap();
+
+    for (reason, reply, expected) in [
+        (StopReason::EndTurn, "Rejected. This should never be called \"accepted\".", VerificationVerdict::Rejected),
+        (StopReason::MaxTokens, r#"{"verdict":"accepted","summary":"Start"#, VerificationVerdict::Rejected),
+        (StopReason::MaxTokens, r#"{"verdict":"accepted","summary":"Sound."}"#, VerificationVerdict::Rejected),
+        (StopReason::EndTurn, "```json\n{\"verdict\":\"accepted\",\"summary\":\"Sound.\"}", VerificationVerdict::Rejected),
+        (StopReason::EndTurn, "```json\n{\"verdict\":\"accepted\",\"summary\":\"Sound.\"}\n```", VerificationVerdict::Accepted),
+    ] {
+        let mut response = CapturingTransport::text_reply("claude-haiku-4-5", reply);
+        response.stop_reason = reason;
+        let transport = CapturingTransport::new("anthropic-messages", vec![response]);
+        let report = verify_full_solution(&transport, &ledger, &env, session, "claude-haiku-4-5").unwrap();
+        assert_eq!(report.verdict, expected, "{reply}");
+        let recorded = ledger.read_session(session).unwrap().pop().unwrap();
+        assert_eq!(recorded.kind, "proof.verification");
+        assert_eq!(recorded.payload["verdict"], expected.as_str());
+    }
+}
+
+#[test]
 fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_blockers() {
     let tmp = TempDir::new("verifiers");
     let session = "s-ver-1";
@@ -281,6 +310,39 @@ fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_block
         .unwrap();
     // Main solver bias text that MUST NOT appear in stateless verifier prompt.
     ledger.append_with_hash(session, "model.text", 1, &json!({ "text": "SOLVER_PRIVATE_BIAS_TOKEN" })).unwrap();
+    ledger.append_with_hash(session, "session.fork", 1, &json!({
+        "modified_assumption": "Take k < 0 for this branch."
+    })).unwrap();
+    for (call_id, code) in [
+        ("linked-lean", "theorem linked_check : True := trivial"),
+        ("unrelated-lean", "theorem unrelated_check : True := trivial"),
+    ] {
+        ledger.append_with_hash(session, "tool.request", 1, &json!({
+            "call_id": call_id, "tool": "lean_check", "args": { "inline": json!({ "code": code }).to_string() },
+        })).unwrap();
+        ledger.append_with_hash(session, "tool.result", 1, &json!({
+            "call_id": call_id, "ok": true, "result": {
+                "inline": json!({
+                    "status": "verified", "ok": true, "axioms": [],
+                    "source_sha256": ledger::sha256_hex(code.as_bytes()),
+                }).to_string(),
+            },
+        })).unwrap();
+    }
+    for (call_id, point) in [("linked-cas", "x = -1"), ("unrelated-cas", "UNRELATED_PROBE")] {
+        ledger.append_with_hash(session, "tool.request", 1, &json!({
+            "call_id": call_id, "tool": "sympy_eval",
+        })).unwrap();
+        ledger.append_with_hash(session, "tool.result", 1, &json!({
+            "call_id": call_id, "ok": true, "result": {
+                "value": "report",
+                "validation": {
+                    "schema_version": 1, "kind": "symbolic_identity", "status": "counterexample",
+                    "samples": [{"status": "counterexample", "point": point, "lhs": "1", "rhs": "-1"}],
+                },
+            },
+        })).unwrap();
+    }
     ledger
         .append_with_hash(
             session,
@@ -288,7 +350,8 @@ fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_block
             1,
             &json!({
                 "entry_id": "e-1", "entry_type": "assumption",
-                "summary": "Assume A", "details": "A holds", "latex": "A = 1", "depends_on": []
+                "summary": "Assume A", "details": "A holds", "latex": "A = 1", "depends_on": [],
+                "tool_call_ref": "linked-lean"
             }),
         )
         .unwrap();
@@ -299,7 +362,8 @@ fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_block
             1,
             &json!({
                 "entry_id": "e-unrelated", "entry_type": "derivation",
-                "summary": "Unrelated U", "details": "UNRELATED_BRANCH_TOKEN", "depends_on": []
+                "summary": "Unrelated U", "details": "UNRELATED_BRANCH_TOKEN", "depends_on": [],
+                "tool_call_ref": "unrelated-lean"
             }),
         )
         .unwrap();
@@ -310,7 +374,8 @@ fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_block
             1,
             &json!({
                 "entry_id": "e-2", "entry_type": "derivation",
-                "summary": "From A get B", "details": "B follows from A", "latex": "B = A", "depends_on": ["e-1"]
+                "summary": "From A get B", "details": "B follows from A", "latex": "B = A", "depends_on": ["e-1"],
+                "tool_call_ref": "linked-cas"
             }),
         )
         .unwrap();
@@ -335,6 +400,13 @@ fn verifiers_isolate_ancestors_emit_attempts_and_force_reject_on_tex_audit_block
     assert!(user_txt.contains("Prove Z") && user_txt.contains("e-1") && user_txt.contains("e-2"));
     assert!(user_txt.contains("<deterministic_tex_audit"));
     assert!(user_txt.contains("<pinned_conventions>\nUse mostly-plus metric.\n</pinned_conventions>"));
+    assert!(user_txt.contains("<fork_assumptions>\nTake k &lt; 0 for this branch.\n</fork_assumptions>"));
+    assert!(user_txt.contains("<lean_checks>"));
+    assert!(user_txt.contains("theorem linked_check : True := trivial"));
+    assert!(!user_txt.contains("theorem unrelated_check"));
+    assert!(user_txt.contains("<computational_checks>"));
+    assert!(user_txt.contains("linked-cas") && user_txt.contains("x = -1"));
+    assert!(!user_txt.contains("UNRELATED_PROBE"));
     assert!(reqs[0].system.as_deref().unwrap().contains("<pinned_conventions>"));
     assert!(!user_txt.contains("SOLVER_PRIVATE_BIAS_TOKEN"));
     assert!(!user_txt.contains("UNRELATED_BRANCH_TOKEN"));

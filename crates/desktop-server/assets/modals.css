@@ -31,7 +31,9 @@
   position: absolute;
   right: 14px;
   bottom: calc(100% + 10px);
-  width: min(360px, 92vw);
+  width: min(360px, calc(100% - 24px));
+  max-height: 46dvh;
+  overflow-y: auto;
   z-index: 45;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
@@ -88,6 +90,18 @@
 .effort-option.is-active .effort-opt-desc { color: var(--accent-soft-ink); opacity: 0.88; }
 
 /* Settings Modal 4-Tab Navigation */
+.workbench-dialog {
+  max-width: calc(100vw - 24px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+.workbench-dialog::backdrop { background: rgba(15, 20, 28, 0.45); }
+.workbench-dialog .modal-card { max-width: 100%; }
+#settings-status { margin: 0; font-size: 13px; }
+#settings-status:empty { display: none; }
+
 .modal-card.modal-wide {
   width: min(760px, 94vw);
   max-height: 88vh;

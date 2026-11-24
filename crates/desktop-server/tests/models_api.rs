@@ -154,7 +154,12 @@ fn both_routes_need_the_token() {
     for path in ["/api/connections", "/api/models", "/api/models?refresh=1"] {
         assert_eq!(raw_http(s.port, "GET", path, &[], b"").0, 401, "{path}");
         assert_eq!(raw_http(s.port, "GET", path, &[("X-ReSearch-Token", "0000")], b"").0, 401, "{path}");
-        assert_eq!(s.get(path).0, 200, "{path}");
+        let (status, body, _) = s.get(path);
+        assert_eq!(status, 200, "{path}");
+        if path == "/api/connections" {
+            let expected = if cfg!(windows) { "unconfigured" } else { "unsupported_platform" };
+            assert_eq!(body["capabilities"]["sympy_worker"], expected);
+        }
     }
     s.srv.shutdown();
 }

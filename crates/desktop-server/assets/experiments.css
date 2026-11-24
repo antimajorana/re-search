@@ -1,0 +1,97 @@
+.experiment-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.experiment-actions > label {
+  display: flex;
+  flex: 1 1 160px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.experiment-actions > label select {
+  flex: 1;
+  min-width: 0;
+}
+
+.experiment-form,
+.experiment-branch-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  padding: 13px;
+  margin-block: 12px;
+}
+
+.experiment-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr));
+  gap: 10px;
+}
+
+.experiment-form label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.experiment-form input,
+.experiment-form select,
+.experiment-form textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.experiment-form textarea { resize: vertical; }
+
+.experiment-description {
+  padding-block: 14px 2px;
+  overflow-wrap: anywhere;
+}
+
+#project-experiments-panel h3,
+#project-experiments-panel h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.experiment-muted,
+.experiment-diff,
+.experiment-observation {
+  font-size: 12px;
+}
+
+.experiment-muted { color: var(--ink-muted); }
+
+.experiment-best {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--status-ok);
+}
+
+.experiment-diff {
+  overflow: auto;
+  max-height: 22rem;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.experiment-observation {
+  border-top: 1px solid var(--border-subtle);
+  padding: 8px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.experiment-observation p { margin-block: 0 6px; }
+.experiment-observation details > * + * { margin-block: 5px; }
+.experiment-observation code { display: block; }
+.experiment-note { white-space: pre-wrap; }

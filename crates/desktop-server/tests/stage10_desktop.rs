@@ -347,7 +347,8 @@ fn workbench_assets_and_session_verification_telemetry_served_accurately() {
                 &sid,
                 "proof.verification",
                 1,
-                &json!({ "target_entry_id": "e-1", "kind": "full", "verdict": "accepted", "summary": "Checked algebraically." }),
+                &json!({ "target_entry_id": "e-1", "kind": "full", "verdict": "accepted",
+                    "summary": "Checked algebraically.", "answer_sha256": ledger::sha256_hex(br"Gap is $2|\Delta|$.") }),
             )
             .unwrap();
         ledger

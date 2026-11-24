@@ -114,12 +114,12 @@ pub fn compute_worker_tools() -> Vec<String> {
 }
 
 pub fn literature_worker_tools() -> Vec<String> {
-    ["arxiv_search", "literature_search", "doc_ingest", "fs_list", "fs_read", "ledger_query", "ledger_note"]
+    ["arxiv_search", "literature_search", "search_paper_passages", "doc_ingest", "fs_list", "fs_read", "ledger_query", "ledger_note"]
         .into_iter().map(str::to_string).collect()
 }
 
 pub fn lean_worker_tools() -> Vec<String> {
-    ["lean_check", "fs_list", "fs_read", "ledger_append", "ledger_query", "ledger_note"]
+    ["lean_check", "search_formal_library", "fs_list", "fs_read", "ledger_append", "ledger_query", "ledger_note"]
         .into_iter().map(str::to_string).collect()
 }
 
@@ -129,7 +129,7 @@ pub fn allowed_tools_for_profile(profile: &str, router: &Router) -> Vec<String> 
         ids.iter().filter(|id| available.contains(**id)).map(|id| (*id).to_string()).collect()
     };
     match profile.trim().to_ascii_lowercase().as_str() {
-        "read_only" => keep(&["fs_list", "fs_read", "arxiv_search", "literature_search", "doc_ingest", "ledger_query", "tex_audit"]),
+        "read_only" => keep(&["fs_list", "fs_read", "arxiv_search", "literature_search", "search_paper_passages", "search_formal_library", "doc_ingest", "ledger_query", "tex_audit"]),
         "compute" => keep(&["sympy_eval", "check_expression_sanity", "fs_list", "fs_read", "ledger_append", "ledger_query", "ledger_note"]),
         _ => available.into_iter().filter(|id| !is_delegation_tool(id)).map(str::to_string).collect(),
     }
@@ -282,8 +282,12 @@ fn build_worker_user_prompt(tool_name: &str, task: &str, input: &Value) -> Strin
     if tool_name == DELEGATE_COMPUTE {
         match input.get("record_proof_entry").and_then(Value::as_bool) {
             Some(false) => msg.push_str("\n\nRun the computation without appending a Proof-DAG entry unless essential."),
-            _ => msg.push_str("\n\nWhen a substantive calculation succeeds, record it via `ledger_append` (`symbolic_computation` or `numerical_computation`) and cite `entry_id`."),
+            _ => msg.push_str("\n\nWhen a substantive calculation succeeds, record it via `ledger_append` (`symbolic_computation` or `numerical_computation`), copy its returned `tool_call_ref` into the entry, and cite `entry_id`."),
         }
+    } else if tool_name == DELEGATE_LEAN {
+        msg.push_str("\n\nWhen Lean verifies the statement, record the checked statement in a `verification` proof entry with the Lean result's `tool_call_ref`. Return the proof entry ID alongside the scope of the check and any axioms.");
+    } else if tool_name == DELEGATE_LITERATURE {
+        msg.push_str("\n\nRecord each source-backed result as a `reference_lookup` proof entry linked to the source record's `tool_call_ref`. Include the page, section, equation, or recorded line range when known and return the proof entry ID.");
     }
     msg
 }

@@ -9,10 +9,13 @@ let lineCountEl = null;
 let saveBtn = null;
 let auditBtn = null;
 let auditResultsEl = null;
+let fileNoteEl = null;
 let currentSessionId = null;
+let currentWorkspace = null;
 let workspaceRequest = 0;
 let fileRequest = 0;
 let originalContent = '';
+let editorBaseline = '';
 let previewTimer = null;
 let notifyFn = () => {};
 
@@ -25,6 +28,7 @@ export function initLatexCanvas(opts = {}) {
   saveBtn = document.getElementById('latex-save-btn');
   auditBtn = document.getElementById('tex-audit-btn');
   auditResultsEl = document.getElementById('tex-audit-results');
+  fileNoteEl = document.getElementById('latex-file-note');
 
   if (editorEl) {
     editorEl.addEventListener('input', () => {
@@ -38,8 +42,12 @@ export function initLatexCanvas(opts = {}) {
 
   if (fileSelectEl) {
     fileSelectEl.addEventListener('change', () => {
-      if (currentSessionId && fileSelectEl.value) {
+      if (!currentSessionId) return;
+      if (fileSelectEl.value) {
         loadLatexFile(currentSessionId, fileSelectEl.value);
+      } else {
+        fileRequest += 1;
+        showFile('', true);
       }
     });
   }
@@ -70,15 +78,20 @@ function updateLineCount() {
   lineCountEl.textContent = `${lines} line${lines === 1 ? '' : 's'}`;
 }
 
-function showFile(text, ready) {
+function showFile(text, ready, truncated = false) {
   originalContent = text;
   clearTimeout(previewTimer);
   if (editorEl) {
     editorEl.value = text;
     editorEl.disabled = !ready;
+    editorEl.readOnly = truncated;
+    if (truncated) editorEl.setAttribute('aria-describedby', 'latex-file-note');
+    else editorEl.removeAttribute('aria-describedby');
+    editorBaseline = editorEl.value;
   }
-  if (saveBtn) saveBtn.disabled = !ready;
-  if (auditBtn) auditBtn.disabled = !ready;
+  if (saveBtn) saveBtn.disabled = !ready || truncated;
+  if (auditBtn) auditBtn.disabled = !ready || truncated;
+  if (fileNoteEl) fileNoteEl.hidden = !truncated;
   if (auditResultsEl) auditResultsEl.hidden = true;
   updateLineCount();
   renderLatexDocumentPreview(previewEl, text);
@@ -88,6 +101,7 @@ export async function refreshWorkspaceFiles(sessionId) {
   const request = ++workspaceRequest;
   if (sessionId !== currentSessionId) {
     currentSessionId = sessionId;
+    currentWorkspace = null;
     fileRequest += 1;
     if (fileSelectEl) fileSelectEl.replaceChildren();
     showFile('', false);
@@ -96,6 +110,9 @@ export async function refreshWorkspaceFiles(sessionId) {
   try {
     const data = await api.getWorkspace(sessionId);
     if (request !== workspaceRequest) return;
+    const workspace = data?.workspace_root ?? null;
+    const sameWorkspace = workspace === currentWorkspace;
+    currentWorkspace = workspace;
     const entries = Array.isArray(data && data.files)
       ? data.files
       : Array.isArray(data && data.entries)
@@ -105,28 +122,26 @@ export async function refreshWorkspaceFiles(sessionId) {
       .map((item) => (typeof item === 'string' ? item : item.path || ''))
       .filter((p) => /\.(tex|bib|md|txt)$/i.test(p));
 
-    const prev = fileSelectEl.value;
+    const prev = sameWorkspace ? fileSelectEl.value : '';
+    const preserveDraft = sameWorkspace && editorEl && !editorEl.disabled && editorEl.value !== editorBaseline;
+    const chosen = preserveDraft || texFiles.includes(prev) ? prev : texFiles[0] || '';
+    const options = [...texFiles];
+    if (!options.includes(chosen)) options.unshift(chosen);
     fileSelectEl.innerHTML = '';
-    if (texFiles.length === 0) {
-      const opt = document.createElement('option');
-      opt.value = '';
-      opt.textContent = 'draft.tex (scratch)';
-      fileSelectEl.appendChild(opt);
-      if (prev || editorEl?.disabled) {
-        fileRequest += 1;
-        showFile('', true);
-      }
-      return;
-    }
-    for (const p of texFiles) {
+    for (const p of options) {
       const opt = document.createElement('option');
       opt.value = p;
-      opt.textContent = p;
+      opt.textContent = p || 'draft.tex (scratch)';
       fileSelectEl.appendChild(opt);
     }
-    const chosen = texFiles.includes(prev) ? prev : texFiles[0];
     fileSelectEl.value = chosen;
-    await loadLatexFile(sessionId, chosen);
+    if (preserveDraft) return;
+    if (chosen) {
+      await loadLatexFile(sessionId, chosen);
+    } else {
+      fileRequest += 1;
+      showFile('', true);
+    }
   } catch {
     // Session may not have an attached workspace yet
   }
@@ -139,7 +154,7 @@ async function loadLatexFile(sessionId, relPath) {
     const data = await api.getWorkspace(sessionId, relPath);
     if (request !== fileRequest) return;
     const content = (data && (data.content || data.text)) || '';
-    showFile(content, true);
+    showFile(content, true, data?.truncated === true);
   } catch (err) {
     if (request === fileRequest) notifyFn(`Could not load ${relPath}: ${err.message}`);
   }
@@ -164,6 +179,7 @@ async function handleSavePatch() {
     await api.patchLatex(sessionId, payload);
     if (request === fileRequest) {
       originalContent = nextText;
+      editorBaseline = nextText;
       notifyFn(`Saved patch to ${path}`);
     }
   } catch (err) {

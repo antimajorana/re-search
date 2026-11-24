@@ -100,6 +100,67 @@ impl EventSink for RecordingSink {
 }
 
 #[test]
+fn autonomous_verifier_checks_delivered_text_against_the_current_final_entry() {
+    let tmp = TempDir::new().unwrap();
+    let env = Arc::new(ResearchEnv::new(tmp.path()));
+    let mut reg = Registry::new();
+    register_research_tools(&mut reg, env.clone());
+    let session = "s-visible-answer";
+    let ledger = Ledger::open(tmp.path()).unwrap();
+    let router = Router::new(reg, research_policy(), Ledger::open(tmp.path()).unwrap(), session, Arc::new(DenyAsk));
+    let mut append = anthropic_text_reply("append", "");
+    append.stop_reason = StopReason::ToolUse;
+    append.content = vec![ContentBlock::ToolUse {
+        id: "call-final".into(),
+        name: "ledger_append".into(),
+        input: json!({
+            "entry_type": "final_answer", "summary": "DAG: 2+2=4", "details": "Two plus two is four."
+        }),
+    }];
+    let mut answer = anthropic_text_reply("answer", "Visible reasoning");
+    answer.content.push(ContentBlock::Text { text: "Visible conclusion: 2+2=5".into() });
+    let delivered = "Visible reasoning\nVisible conclusion: 2+2=5";
+    let solver = MockTransport::new("anthropic-messages", vec![append, answer]);
+    let verifier = MockTransport::new("anthropic-messages", vec![anthropic_text_reply(
+        "verdict",
+        r#"{"verdict":"rejected","summary":"Visible conclusion contradicts the DAG proof."}"#,
+    )]);
+    let roles = AutonomousRoles { verifier: Some((&verifier, "claude-haiku-4-5")), ..Default::default() };
+    let cfg = AgentConfig {
+        prompt: "What is 2+2?".into(),
+        model_requested: "claude-haiku-4-5".into(),
+        model: "claude-haiku-4-5".into(),
+        system_prompt: RESEARCH_SYSTEM_PROMPT.into(),
+        max_turns: 4,
+        max_tokens: DEFAULT_MAX_TOKENS,
+        containment: "test".into(),
+        contained: false,
+        reasoning_effort: None,
+    };
+    let auto = AutonomousConfig {
+        guardrails: GuardrailConfig { verification_mode: true, ..Default::default() },
+        max_verification_rounds: 1,
+        ..Default::default()
+    };
+    let out = run_autonomous_research_loop(
+        &solver, &roles, &router, &ledger, &env, &cfg, &auto, None, &mut RecordingSink::default(),
+    ).unwrap();
+    assert_eq!(out, SessionOutcome::Completed { turns: 2, stop_reason: "completed_unverified".into() });
+    let requests = verifier.seen_requests();
+    let ContentBlock::Text { text } = &requests[0].messages[0].content[0] else { panic!("expected text"); };
+    assert!(text.contains("DAG: 2+2=4"));
+    assert!(text.contains(&format!("<final_answer_text>\n{delivered}\n</final_answer_text>")));
+    let events = ledger.read_session(session).unwrap();
+    let review = events.iter().find(|e| e.kind == "proof.verification").unwrap();
+    assert_eq!(review.payload["target_entry_id"], "e-1");
+    assert_eq!(review.payload["answer_sha256"], ledger::sha256_hex(delivered.as_bytes()));
+    assert_eq!(review.payload["verdict"], "rejected");
+    let end = events.last().unwrap();
+    assert_eq!(end.payload["outcome"], "completed_unverified");
+    assert!(end.payload["verified_entry_id"].is_null());
+}
+
+#[test]
 fn autonomous_loop_rejects_consults_strategist_revises_accepts_and_resumes_losslessly() {
     let tmp = TempDir::new().unwrap();
     let data = tmp.path().join("data");

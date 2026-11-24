@@ -129,6 +129,82 @@ fn multi_connection_interleaving_verifies_cleanly() {
 }
 
 #[test]
+fn new_session_append_is_atomic_and_rejects_existing_ids() {
+    let dir = fresh_dir("new-session");
+    let ledger = Ledger::open(&dir).unwrap();
+    let raw = Connection::open(dir.join("ledger.db")).unwrap();
+    raw.execute_batch(
+        "CREATE TRIGGER reject_test_event BEFORE INSERT ON event WHEN NEW.kind = 'reject'
+         BEGIN SELECT RAISE(ABORT, 'test insert failure'); END;",
+    )
+    .unwrap();
+    let payload = json!({"name": "branch"});
+
+    assert!(ledger.append_new_session("s1", &[("session.start", 1, &payload), ("reject", 1, &payload)]).is_err());
+    assert!(ledger.read_session("s1").unwrap().is_empty());
+
+    let rows = [("session.start", 1, &payload), ("session.fork", 1, &payload)];
+    ledger.append_new_session("s1", &rows).unwrap();
+    assert!(matches!(
+        ledger.append_new_session("s1", &rows),
+        Err(Error::Io(e)) if e.kind() == ErrorKind::AlreadyExists
+    ));
+    let (report, events) = ledger.read_verified_session("s1").unwrap();
+    assert_eq!(report.event_count, 2);
+    assert_eq!(events[0].prev_hash, GENESIS_HASH);
+    assert_eq!(events[1].prev_hash, events[0].event_hash);
+    assert_eq!(report.head_hash, events[1].event_hash);
+
+    drop(raw);
+    drop(ledger);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn concurrent_blob_writers_publish_only_whole_files() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Barrier,
+    };
+
+    let dir = fresh_dir("parallel-blob");
+    let ledger = Ledger::open(&dir).unwrap();
+    for byte in 0..8u8 {
+        let contents = vec![byte; 512 * 1024];
+        let hash = sha256_hex(&contents);
+        let final_path = dir.join("blobs").join(&hash[..2]).join(&hash);
+        let writers_finished = AtomicBool::new(false);
+        let start = Barrier::new(8);
+        std::thread::scope(|scope| {
+            let reader = scope.spawn(|| {
+                while !writers_finished.load(Ordering::Acquire) {
+                    if let Ok(meta) = std::fs::metadata(&final_path) {
+                        assert_eq!(meta.len(), contents.len() as u64);
+                    }
+                    std::thread::yield_now();
+                }
+            });
+            let writers = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let writer = Ledger::open_existing(&dir);
+                        start.wait();
+                        assert_eq!(writer.unwrap().put_blob(&contents).unwrap(), hash);
+                    })
+                })
+                .collect::<Vec<_>>();
+            let writers_ok = writers.into_iter().map(|writer| writer.join().is_ok()).collect::<Vec<_>>();
+            writers_finished.store(true, Ordering::Release);
+            reader.join().unwrap();
+            assert!(writers_ok.into_iter().all(|ok| ok));
+        });
+        assert_eq!(ledger.get_blob(&hash).unwrap(), contents);
+    }
+    drop(ledger);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn offline_tamper_mutations_all_rejected() {
     let cases: [(&str, &str); 7] = [
         ("payload", "UPDATE event SET payload = '{\"n\":99}' WHERE seq = 2"),

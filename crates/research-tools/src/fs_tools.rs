@@ -268,7 +268,7 @@ pub fn handle_fs_read(env: &ResearchEnv, session: &str, args: &Value) -> Result<
     let use_regex = args.get("regex").and_then(Value::as_bool).unwrap_or(false);
 
     if !query.is_empty() {
-        return run_query_mode(&QueryParams {
+        let mut result = run_query_mode(&QueryParams {
             rel_path: &resolved.rel_path,
             root,
             text,
@@ -277,7 +277,9 @@ pub fn handle_fs_read(env: &ResearchEnv, session: &str, args: &Value) -> Result<
             query,
             use_regex,
             max_chars: effective_max,
-        });
+        })?;
+        result["file_sha256"] = json!(ledger::sha256_hex(&buf));
+        return Ok(result);
     }
 
     let (slice, actual_start, actual_end, start_line, end_line) = slice_utf8_chars(text, offset, effective_max);
@@ -286,6 +288,7 @@ pub fn handle_fs_read(env: &ResearchEnv, session: &str, args: &Value) -> Result<
     Ok(json!({
         "root": root.as_str(),
         "path": resolved.rel_path,
+        "file_sha256": ledger::sha256_hex(&buf),
         "content": slice,
         "offset": actual_start,
         "end_offset": actual_end,

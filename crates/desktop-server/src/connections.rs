@@ -373,5 +373,15 @@ pub fn handle_connections(state: &DesktopState, query: &HashMap<String, String>)
     for p in API_PROVIDERS {
         list.push(api_entry(state, &store, p, refresh, since));
     }
-    Ok((200, json!({ "connections": list })))
+    let sympy_worker = if !cfg!(windows) {
+        "unsupported_platform"
+    } else if state.cfg.python.is_some() && state.cfg.worker_script.is_some() {
+        "configured"
+    } else {
+        "unconfigured"
+    };
+    Ok((200, json!({
+        "connections": list,
+        "capabilities": { "sympy_worker": sympy_worker },
+    })))
 }

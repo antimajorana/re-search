@@ -1,5 +1,6 @@
 //! Session, SSE, approval, fork, diff, and provider-settings REST handlers.
 
+use crate::projects::{attach_session, list_projects, project_for_session, save_new_session};
 use crate::session_lifecycle::{is_turn_running, list_session_grants};
 use crate::session_view::summarize_session_events;
 use crate::sse::stream_session_sse;
@@ -9,7 +10,7 @@ use agent::{ProviderKeyStore, ProviderKind, RoleAssignment};
 use export::{compute_branch_diff, fork_session, ForkOptions};
 use research_tools::validate_session_id;
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -72,6 +73,11 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
     let ledger = state.open_ledger().map_err(internal)?;
     let ledger_ids = ledger.sessions().map_err(|e| internal(e.to_string()))?;
     let meta_ids = state.list_meta_ids();
+    let projects = list_projects(state)?;
+    let membership: HashMap<_, _> = projects
+        .iter()
+        .flat_map(|p| p.session_ids.iter().map(|s| (s.as_str(), p.id.as_str())))
+        .collect();
     let mut ids = BTreeSet::new();
     for (id, _) in ledger_ids {
         if validate_session_id(&id).is_ok() {
@@ -124,6 +130,7 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
             "route_label": is_agy.then_some(crate::antigravity::AGY_LABEL),
             "workspace_root": workspace_root,
             "parent_session": parent_session,
+            "project_id": membership.get(id.as_str()),
             "event_count": events.len(),
             "archived": archived,
             "running": is_turn_running(state, &id),
@@ -150,9 +157,10 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
         }
         _ => format!("s-{}", random_hex(8)),
     };
-    if state.session_exists(&id).map_err(internal)? {
-        return Err(conflict(format!("session `{id}` already exists")));
-    }
+    let project_id = match val.get("project_id").filter(|value| !value.is_null()) {
+        Some(value) => Some(value.as_str().ok_or_else(|| bad("project_id must be a string"))?),
+        None => None,
+    };
 
     let workspace_root = val
         .get("workspace_root")
@@ -223,7 +231,7 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
         archived: false,
         deleted: false,
     };
-    state.save_meta(&meta).map_err(internal)?;
+    save_new_session(state, &meta, project_id)?;
 
     if let Some(prompt) = val
         .get("prompt")
@@ -242,6 +250,7 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
             "workspace_root": workspace_root,
             "created_ms": meta.created_ms,
             "route": meta.route,
+            "project_id": project_id,
         }),
     ))
 }
@@ -279,6 +288,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
     let (route, provenance) = crate::cli_turn::session_route(meta.as_ref(), &events);
     let is_agy = route.as_str() == Some(crate::state::ANTIGRAVITY_ROUTE);
     let fork_info = session_fork_info(meta.as_ref(), &events);
+    let project = project_for_session(state, session_id)?;
 
     let events_json: Vec<Value> = events
         .iter()
@@ -307,6 +317,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
             "provenance": provenance,
             "meta": meta,
             "fork_info": fork_info,
+            "project_id": project.map(|p| p.id),
             "events": events_json,
             "messages": messages,
             "traces": traces,
@@ -391,6 +402,7 @@ pub fn handle_fork(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRe
         return Err(not_found(format!("session `{session_id}` not found")));
     }
     let val = parse_json_body(body)?;
+    let parent_project = project_for_session(state, session_id)?;
     let ledger = state.open_ledger().map_err(internal)?;
     let events = ledger
         .read_session(session_id)
@@ -443,7 +455,14 @@ pub fn handle_fork(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRe
         deleted: false,
     };
     let _ = state.save_meta(&child_meta);
-    Ok((200, serde_json::to_value(receipt).map_err(|e| internal(e.to_string()))?))
+    let mut response = serde_json::to_value(&receipt).map_err(|e| internal(e.to_string()))?;
+    if let Some(project) = parent_project {
+        match attach_session(state, &project.id, &receipt.new_session) {
+            Ok(_) => response["project_id"] = json!(project.id),
+            Err((_, error)) => response["warning"] = json!(format!("Could not link fork to project: {error}")),
+        }
+    }
+    Ok((200, response))
 }
 
 pub fn handle_diff(state: &DesktopState, base_id: &str, other_id: &str) -> ApiResult {

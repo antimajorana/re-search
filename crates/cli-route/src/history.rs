@@ -139,6 +139,36 @@ pub fn build_prompt(prior: &[PriorTurn], new_message: &str, budget: usize) -> Re
     build_prompt_with_nonce(prior, new_message, budget, &tools::canon::random_hex(8))
 }
 
+/// Include the current branch's user assumptions even when the transcript window drops
+/// the turns that preceded the fork. Keep the assumptions in order alongside the current
+/// request so the CLI receives the full branch context.
+pub fn build_session_prompt(events: &[Event], new_message: &str, budget: usize) -> Replay {
+    let prior = prior_turns(events);
+    let assumptions: Vec<_> = events
+        .iter()
+        .filter(|event| matches!(event.kind.as_str(), "session.fork" | "session.forked"))
+        .filter_map(|event| event.payload["modified_assumption"].as_str())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect();
+    if assumptions.is_empty() {
+        return build_prompt(&prior, new_message, budget);
+    }
+    let assumptions = serde_json::json!(assumptions);
+    let context = format!(
+        "Counterfactual assumptions supplied by the user for this branch, oldest to newest. Apply them over conflicting assumptions in the parent history. When fork assumptions conflict, use the later one.\n{assumptions}\n\n"
+    );
+    let context_chars = context.chars().count();
+    let mut replay = build_prompt(
+        &prior,
+        &format!("{context}{new_message}"),
+        budget.saturating_sub(context_chars),
+    );
+    replay.history_chars += context_chars;
+    replay.replayed = true;
+    replay
+}
+
 /// [`build_prompt`] with a given marker (`nonce`: ASCII letters and digits). The new message
 /// alone when there are no earlier turns, otherwise the bounded transcript followed by the
 /// new message.

@@ -78,6 +78,7 @@ export function renderSessionRailList(containerEl, opts = {}) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = `session-item${s.id === activeSessionId ? ' is-active' : ''}`;
+    if (s.id === activeSessionId) btn.setAttribute('aria-current', 'true');
 
     const stats = s.stats || {};
     const badges = [];
@@ -85,9 +86,11 @@ export function renderSessionRailList(containerEl, opts = {}) {
       badges.push('<span class="mini-pill accent" title="Turn currently running">● Run</span>');
     }
     if (stats.verified_status === 'verified') {
-      badges.push('<span class="mini-pill ok" title="Independently verified">✓</span>');
+      badges.push('<span class="mini-pill ok" title="Answer verified by model">✓</span>');
     } else if (stats.verified_status === 'unverified') {
       badges.push('<span class="mini-pill warn" title="Unverified draft">!</span>');
+    } else if (stats.verified_status === 'proof_reviewed') {
+      badges.push('<span class="mini-pill" title="Proof graph reviewed">Review</span>');
     }
     if ((Number(stats.proof_entries) || 0) > 0) {
       badges.push(`<span class="mini-pill" title="Proof-DAG steps">${Number(stats.proof_entries)}</span>`);

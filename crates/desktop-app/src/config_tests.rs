@@ -150,6 +150,24 @@ fn agy_follows_flag_env_file_order() {
 }
 
 #[test]
+fn bundled_python_enables_the_worker_and_respects_a_configured_interpreter() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    let bundled = base.join("runtime").join("python.exe");
+    std::fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+    std::fs::write(&bundled, b"fixture").unwrap();
+    std::fs::create_dir(base.join("python")).unwrap();
+    std::fs::write(base.join("python/worker.py"), b"fixture").unwrap();
+    let env = env_of(&[("LOCALAPPDATA", s("local"))]);
+    let default = resolve(&Flags::default(), &env, None, base).unwrap();
+    assert_eq!(default.python, Some(bundled));
+    assert_eq!(default.worker_script, Some(base.join("python/worker.py")));
+    let custom = FileConfig { python: Some("custom.exe".into()), ..Default::default() };
+    let configured = resolve(&Flags::default(), &env, Some(&custom), base).unwrap();
+    assert_eq!(configured.python, Some(base.join("custom.exe")));
+}
+
+#[test]
 fn worker_script_defaults_to_python_worker_py_next_to_the_exe() {
     let tmp = tempfile::tempdir().unwrap();
     let exe_dir = tmp.path().join("app");

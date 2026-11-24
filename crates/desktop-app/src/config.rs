@@ -176,7 +176,11 @@ pub fn resolve(
         .as_deref()
         .map(PathBuf::from)
         .or_else(|| env_any(env, &["RE_SEARCH_PYTHON", "RESEARCH_CORE_PYTHON"]))
-        .or_else(|| file_path(exe_dir, &file.python));
+        .or_else(|| file_path(exe_dir, &file.python))
+        .or_else(|| {
+            let bundled = exe_dir.join("runtime").join("python.exe");
+            bundled.is_file().then_some(bundled)
+        });
 
     let worker_script = match &python {
         None => None,

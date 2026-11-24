@@ -396,7 +396,17 @@ impl Router {
 
         let ctx = CallCtx::new(&self.session, caller, call_id, &self.ledger, required_epoch);
         match handler.call(&ctx, args) {
-            Ok(value) => {
+            Ok(mut value) => {
+                // Give the model the same durable reference that appears in the ledger.
+                if matches!(
+                    tool_id,
+                    "sympy_eval" | "lean_check" | "doc_ingest" | "fs_read" | "arxiv_search"
+                        | "literature_search" | "search_paper_passages" | "search_formal_library"
+                ) {
+                    if let Some(result) = value.as_object_mut() {
+                        result.insert("tool_call_ref".into(), json!(call_id));
+                    }
+                }
                 let stored = self.inline_or_blob(&canonical_json(&value))?;
                 let mut payload = json!({ "call_id": call_id, "ok": true, "result": stored });
                 if let (Some(epoch), Some(request_id)) = (ctx.worker_epoch(), ctx.worker_request_id()) {
@@ -405,6 +415,9 @@ impl Router {
                         "epoch": epoch,
                         "request_id": request_id,
                     });
+                    if let Some(environment) = ctx.worker_environment() {
+                        payload["worker_execution"]["environment"] = environment.clone();
+                    }
                 }
                 self.record("tool.result", payload)?;
                 if scope == ApprovalScope::WorkerSession {

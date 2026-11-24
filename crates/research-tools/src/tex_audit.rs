@@ -3,7 +3,7 @@
 
 use crate::sandbox::{validate_rel_workspace_path, SandboxRoot, WorkspaceSandbox};
 use crate::tex_audit_sources::{
-    collect_ledger_retractions, collect_text_files, scan_json_for_retractions, LoadedFile,
+    collect_ledger_retractions, collect_text_files, manuscript_files, scan_json_for_retractions, LoadedFile,
 };
 use crate::tex_scan::{
     base_arxiv_id, extract_bibitem_keys, extract_tex_citations, extract_tex_labels,
@@ -58,6 +58,8 @@ pub type TexAuditFinding = AuditIssue;
 pub struct AuditOptions {
     pub target_path: Option<String>,
     pub candidate_texts: Vec<(String, String)>,
+    #[serde(default)]
+    pub candidate_only: bool,
     pub quotes: Vec<String>,
     pub withdrawn_arxiv_ids: Vec<String>,
     pub retracted_dois: Vec<String>,
@@ -227,6 +229,30 @@ pub fn run_tex_audit(
     if let Ok(Some(canon_src)) = sandbox.canonical_root(SandboxRoot::Sources, session, false) {
         collect_text_files(&canon_src, &canon_src, "sources", true, &mut files);
     }
+    let mut candidate_in_target = None;
+    let target_scope = if let Some(raw) = &opts.target_path {
+        let rel = validate_rel_workspace_path(raw)?.join("/");
+        let target = files.iter().position(|file| file.ext == "tex" && !file.from_sources_dir && file.display_id == rel)
+            .or_else(|| files.iter().position(|file| {
+                file.ext == "tex" && file.from_sources_dir
+                    && (file.display_id == rel || file.display_id.strip_prefix("sources/") == Some(rel.as_str()))
+            }))
+            .ok_or_else(|| format!("target `.tex` file `{rel}` not found"))?;
+        let root = &mut files[target];
+        if let Some((idx, (_, draft))) = opts.candidate_texts.iter().enumerate().find(|(_, (name, _))| {
+            name == raw || name == &rel || name == &root.display_id
+        }) {
+            // The canvas passes the editor's current buffer under the manuscript path.
+            root.raw.clone_from(draft);
+            root.stripped_tex = strip_latex_comments(draft);
+            root.norm_raw = normalize_ws(draft);
+            root.norm_stripped = normalize_ws(&root.stripped_tex);
+            candidate_in_target = Some(idx);
+        }
+        Some(manuscript_files(&files, &files[target]))
+    } else {
+        None
+    };
 
     let mut withdrawn_arxiv: BTreeMap<String, String> = BTreeMap::new();
     for id in &opts.withdrawn_arxiv_ids {
@@ -256,7 +282,13 @@ pub fn run_tex_audit(
     let mut issues = Vec::new();
 
     for f in &files {
+        if target_scope.as_ref().is_some_and(|scope| !scope.contains(&f.display_id)) {
+            continue;
+        }
         if f.ext == "tex" {
+            if opts.candidate_only {
+                continue;
+            }
             let mut file_labels = BTreeMap::new();
             for (lbl, line) in extract_tex_labels(&f.stripped_tex) {
                 if !f.from_sources_dir {
@@ -287,7 +319,10 @@ pub fn run_tex_audit(
             }
         }
     }
-    for (_, cand_tex) in &opts.candidate_texts {
+    for (index, (_, cand_tex)) in opts.candidate_texts.iter().enumerate() {
+        if candidate_in_target == Some(index) {
+            continue;
+        }
         let stripped = strip_latex_comments(cand_tex);
         for (lbl, _) in extract_tex_labels(&stripped) {
             known_labels.insert(lbl);
@@ -297,19 +332,15 @@ pub fn run_tex_audit(
         }
     }
 
-    let target_rel = match &opts.target_path {
-        Some(raw) => Some(validate_rel_workspace_path(raw)?.join("/")),
-        None => None,
-    };
     let has_workspace_tex = files.iter().any(|f| !f.from_sources_dir && f.ext == "tex");
 
     let mut audit_targets: Vec<(String, String, Option<usize>)> = Vec::new();
     for (idx, f) in files.iter().enumerate() {
-        if f.ext != "tex" {
+        if f.ext != "tex" || opts.candidate_only {
             continue;
         }
-        let include = if let Some(rel) = &target_rel {
-            f.display_id == *rel || f.display_id == format!("sources/{rel}")
+        let include = if let Some(scope) = &target_scope {
+            scope.contains(&f.display_id)
         } else if !f.from_sources_dir {
             true
         } else {
@@ -319,13 +350,10 @@ pub fn run_tex_audit(
             audit_targets.push((f.display_id.clone(), f.stripped_tex.clone(), Some(idx)));
         }
     }
-    if let Some(rel) = &target_rel {
-        if audit_targets.is_empty() {
-            return Err(format!("target `.tex` file `{rel}` not found"));
+    for (index, (name, text)) in opts.candidate_texts.iter().enumerate() {
+        if candidate_in_target != Some(index) {
+            audit_targets.push((name.clone(), strip_latex_comments(text), None));
         }
-    }
-    for (name, text) in &opts.candidate_texts {
-        audit_targets.push((name.clone(), strip_latex_comments(text), None));
     }
 
     for (doc_name, stripped, self_idx) in &audit_targets {

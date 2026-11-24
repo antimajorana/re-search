@@ -27,9 +27,21 @@ factors, operator grading, lattice/indexing conventions) and record foundational
 2. Delegate Specialist Work (or use direct tools when delegation is absent): \
 Delegate heavy symbolic/numerical Python scripts, traceback retries, and `check_expression_sanity` \
 to `delegate_compute` (or call `sympy_eval` / `check_expression_sanity` directly). \
+In `sympy_eval`, use `check_symbolic_identity(lhs, rhs, variable=x, domain=...)` to record the residual, \
+exact branch tests, and any `limits=[(point, direction)]` or `dimensions={symbol: {base: power}}`. \
+Use `check_convergence(run, levels, axis=..., atol=..., rtol=..., reference=...)` for precision, resolution, \
+or basis refinement. Set the levels, tolerances and independent reference when available before running. \
+Return the report as the final Python expression, and cite the resulting computation entry. State its scope, \
+especially excluded points, counterexamples, or convergence failures. Agreement over sampled levels is empirical. \
+Use `set_random_seed(seed)` before stochastic Python calculations. Record the precision, \
+tolerance, and relevant assumptions for numerical checks. \
 Delegate arXiv/literature searches, ingestion, and bulky `.tex` reading under `sources` to \
 `delegate_literature` (or use `arxiv_search`, `literature_search`, `fs_list`, `fs_read` directly \
 rather than guessing citations from memory). \
+Use `search_paper_passages` to retrieve exact file and line references from ingested sources. \
+Quote only passages that support the claim, and include the source path, lines, and tool reference. \
+For formal physics, use `search_formal_library` in the attached workspace to find existing Physlib or Lean declarations. \
+Match the declaration's assumptions and statement to the current claim before calling `lean_check`. \
 Delegate Lean 4 formalization and `lean_check` machine-checked proofs to `delegate_lean`. \
 Use `delegate_explore` to test 2..=4 competing strategies or Ansaetze concurrently before committing.\n\
 3. Honesty & Evidence Discipline (`evidence != proof`): Never claim `SymPy confirmed`, \
@@ -39,7 +51,11 @@ or an accepted full Verifier review).\n\
 4. Maintain the Proof DAG: Record assumptions (`assumption`), derivations (`derivation`), \
 verified calculations (`symbolic_computation` / `numerical_computation`), interpreted conclusions \
 (`result` citing dependencies in `depends_on`) via `ledger_append`, and your complete concluding \
-synthesis (`final_answer`). Give EVERY `ledger_append` entry a clear one-line `summary` and a \
+synthesis (`final_answer`). Store the returned `tool_call_ref` on each proof entry recording a \
+successful SymPy calculation or Lean check. Link the relevant evidence through `depends_on` in your \
+final answer or cite its proof entry ID in the answer text. For a literature claim, use a `reference_lookup` \
+entry with the relevant source read or search result's `tool_call_ref` and record the source location \
+when known. Give EVERY `ledger_append` entry a clear one-line `summary` and a \
 self-contained `details` explanation spelling out the exact steps, equations, and why the result \
 follows from `depends_on` (so inspecting any node in the Proof DAG is immediately readable). \
 Supersede flawed entries explicitly with `ledger_supersede`.\n\
@@ -54,7 +70,10 @@ pub(crate) fn ensure_active_final_answer_entry(
     leg_start_seq: u64,
     round: u32,
     last_text: &str,
-) -> Result<(), String> {
+) -> Result<String, String> {
+    if last_text.trim().is_empty() {
+        return Err("the solver produced no final answer text to verify".to_string());
+    }
     let dag = read_proof_dag(audit.ledger, audit.session)?;
     let fresh_final = dag.entries.iter().rev().find(|e| {
         e.seq > leg_start_seq && e.entry_type == "final_answer" && e.status != ProofStatus::Superseded
@@ -68,11 +87,7 @@ pub(crate) fn ensure_active_final_answer_entry(
             .filter(|e| e.entry_type != "final_answer" && e.status != ProofStatus::Superseded)
             .map(|e| &e.entry_id)
             .collect();
-        let details: String = if last_text.trim().is_empty() {
-            "(empty candidate response)".to_string()
-        } else {
-            last_text.chars().take(15_500).collect()
-        };
+        let details: String = last_text.chars().take(15_500).collect();
         append_supervisor_entry(router, audit, &json!({
             "entry_type": "final_answer",
             "summary": format!("Candidate solution (verification round {round})"),
@@ -88,7 +103,7 @@ pub(crate) fn ensure_active_final_answer_entry(
         .map(|e| &e.entry_id)
         .collect();
     if rejected.is_empty() {
-        return Ok(());
+        return Ok(new_id);
     }
     let reason = format!("Revised candidate recorded in {new_id}");
     let correction_id = append_supervisor_entry(router, audit, &json!({
@@ -108,7 +123,7 @@ pub(crate) fn ensure_active_final_answer_entry(
             return Err(format!("could not supersede rejected final answer {entry_id}: {err}"));
         }
     }
-    Ok(())
+    Ok(new_id)
 }
 
 fn append_supervisor_entry(router: &Router, audit: &mut Audit<'_>, args: &Value) -> Result<String, String> {

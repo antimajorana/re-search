@@ -2,10 +2,12 @@
 
 use crate::{ForkOptions, ForkReceipt};
 use ledger::{Event, Ledger};
+use research_tools::sandbox::sanitize_rel_components;
 use research_tools::{validate_session_id, SandboxRoot, WorkspaceSandbox};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const MAX_MODIFIED_ASSUMPTION_CHARS: usize = 4_000;
 const EVENT_SCHEMA_VERSION: u32 = 1;
@@ -32,22 +34,20 @@ pub fn fork_session(data_dir: &Path, opts: &ForkOptions) -> Result<ForkReceipt, 
     }
 
     let ledger = Ledger::open_existing(data_dir).map_err(|e| e.to_string())?;
-    ledger
-        .verify_session(&opts.parent_session)
+    let (_, events) = ledger
+        .read_verified_session(&opts.parent_session)
         .map_err(|e| format!("parent session `{}` failed verification: {e}", opts.parent_session))?;
-    let events = ledger
-        .read_session(&opts.parent_session)
-        .map_err(|e| format!("failed to read parent session `{}`: {e}", opts.parent_session))?;
-    if opts.at_seq == 0 || (opts.at_seq as usize) > events.len() {
-        return Err(format!(
+    let prefix_len = usize::try_from(opts.at_seq)
+        .ok()
+        .filter(|&len| len > 0 && len <= events.len())
+        .ok_or_else(|| format!(
             "fork sequence `at_seq` ({}) out of bounds for session `{}` (1..={})",
             opts.at_seq,
             opts.parent_session,
             events.len()
-        ));
-    }
+        ))?;
 
-    let prefix: &[Event] = &events[..opts.at_seq as usize];
+    let prefix = &events[..prefix_len];
     let anchor = prefix
         .last()
         .ok_or_else(|| "fork prefix must contain at least one event".to_string())?;
@@ -71,14 +71,6 @@ pub fn fork_session(data_dir: &Path, opts: &ForkOptions) -> Result<ForkReceipt, 
         new_session = generate_session_id()?;
     }
 
-    for ev in prefix {
-        ledger
-            .append_with_hash(&new_session, &ev.kind, ev.schema_version, &ev.payload)
-            .map_err(|e| format!("failed copying event seq {} into `{new_session}`: {e}", ev.seq))?;
-    }
-
-    copy_session_sources(data_dir, &opts.parent_session, &new_session)?;
-
     let mut fork_payload = json!({
         "parent_session": opts.parent_session,
         "parent_seq": opts.at_seq,
@@ -87,28 +79,35 @@ pub fn fork_session(data_dir: &Path, opts: &ForkOptions) -> Result<ForkReceipt, 
     if let (Some(mod_a), Some(map)) = (&opts.modified_assumption, fork_payload.as_object_mut()) {
         map.insert("modified_assumption".into(), json!(mod_a));
     }
-    ledger
-        .append_with_hash(&new_session, "session.fork", EVENT_SCHEMA_VERSION, &fork_payload)
-        .map_err(|e| format!("failed to append session.fork: {e}"))?;
-
-    if let Some(mod_a) = &opts.modified_assumption {
-        let entry_id = next_entry_id(prefix);
+    let assumption = if let Some(mod_a) = &opts.modified_assumption {
+        let entry_id = next_entry_id(prefix)?;
         let summary: String = mod_a.chars().take(120).collect();
-        ledger
-            .append_with_hash(
-                &new_session,
-                "proof.entry",
-                EVENT_SCHEMA_VERSION,
-                &json!({
-                    "entry_id": entry_id,
-                    "entry_type": "assumption",
-                    "summary": format!("Fork counterfactual assumption: {summary}"),
-                    "details": mod_a,
-                    "latex": Value::Null,
-                    "depends_on": [],
-                }),
-            )
-            .map_err(|e| format!("failed to append counterfactual assumption proof.entry: {e}"))?;
+        Some(json!({
+            "entry_id": entry_id,
+            "entry_type": "assumption",
+            "summary": format!("Fork counterfactual assumption: {summary}"),
+            "details": mod_a,
+            "latex": Value::Null,
+            "depends_on": [],
+        }))
+    } else {
+        None
+    };
+    let mut batch: Vec<_> = prefix
+        .iter()
+        .map(|ev| (ev.kind.as_str(), ev.schema_version, &ev.payload))
+        .collect();
+    batch.push(("session.fork", EVENT_SCHEMA_VERSION, &fork_payload));
+    if let Some(assumption) = &assumption {
+        batch.push(("proof.entry", EVENT_SCHEMA_VERSION, assumption));
+    }
+
+    let mut staged = copy_session_sources(data_dir, &opts.parent_session, &new_session, prefix)?;
+    ledger
+        .append_new_session(&new_session, &batch)
+        .map_err(|e| format!("failed to record fork `{new_session}`: {e}"))?;
+    if let Some(staged) = &mut staged {
+        staged.committed = true;
     }
 
     Ok(ForkReceipt {
@@ -120,7 +119,7 @@ pub fn fork_session(data_dir: &Path, opts: &ForkOptions) -> Result<ForkReceipt, 
     })
 }
 
-fn next_entry_id(events: &[Event]) -> String {
+fn next_entry_id(events: &[Event]) -> Result<String, String> {
     let mut max_n = 0u64;
     for ev in events {
         if ev.kind == "proof.entry" {
@@ -131,51 +130,89 @@ fn next_entry_id(events: &[Event]) -> String {
             }
         }
     }
-    format!("e-{}", max_n + 1)
+    max_n
+        .checked_add(1)
+        .map(|next| format!("e-{next}"))
+        .ok_or_else(|| "no available proof entry ID for the counterfactual assumption".to_string())
 }
 
-fn copy_session_sources(data_dir: &Path, parent: &str, child: &str) -> Result<(), String> {
-    let sandbox = WorkspaceSandbox::new(data_dir, None);
-    let Ok(Some(src_root)) = sandbox.canonical_root(SandboxRoot::Sources, parent, false) else {
-        return Ok(());
-    };
-    let Some(dst_root) = sandbox
-        .canonical_root(SandboxRoot::Sources, child, true)
-        .map_err(|e| e.to_string())?
-    else {
-        return Ok(());
-    };
-    copy_dir_no_symlinks(&src_root, &src_root, &dst_root)
+struct StagedSources {
+    child_dir: PathBuf,
+    committed: bool,
 }
 
-fn copy_dir_no_symlinks(base_src: &Path, cur_src: &Path, dst_root: &Path) -> Result<(), String> {
-    let rd = fs::read_dir(cur_src)
-        .map_err(|e| format!("failed to read source dir `{}`: {e}", cur_src.display()))?;
-    for entry in rd {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-        if research_tools::is_symlink_or_junction(&path, &meta) {
-            continue;
-        }
-        let canon = fs::canonicalize(&path).map_err(|e| e.to_string())?;
-        if !WorkspaceSandbox::is_same_or_inside(base_src, &canon) {
-            return Err("source symlink escape detected during fork".into());
-        }
-        let rel = path
-            .strip_prefix(base_src)
-            .map_err(|e| e.to_string())?
-            .to_string_lossy()
-            .replace('\\', "/");
-        if meta.is_dir() {
-            copy_dir_no_symlinks(base_src, &canon, dst_root)?;
-        } else if meta.is_file() {
-            let bytes = fs::read(&canon).map_err(|e| e.to_string())?;
-            let (parts, _) = research_tools::sandbox::sanitize_rel_components(&rel, false)
-                .map_err(|e| e.to_string())?;
-            WorkspaceSandbox::atomic_write_in_root(dst_root, &parts, &bytes)
-                .map_err(|e| e.to_string())?;
+impl Drop for StagedSources {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = fs::remove_dir_all(&self.child_dir);
         }
     }
-    Ok(())
+}
+
+fn copy_session_sources(
+    data_dir: &Path,
+    parent: &str,
+    child: &str,
+    prefix: &[Event],
+) -> Result<Option<StagedSources>, String> {
+    let mut files = BTreeMap::new();
+    for ev in prefix.iter().filter(|ev| ev.kind == "source.ingested") {
+        let payload = &ev.payload;
+        let paths = payload["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .chain([&payload["primary_path"], &payload["assembled_path"]]);
+        for path in paths.filter_map(Value::as_str) {
+            let (parts, normalized) = sanitize_rel_components(path, false)
+                .map_err(|e| format!("invalid fork source path at event {}: {e}", ev.seq))?;
+            if parts.len() < 2 || payload["source_id"].as_str() != parts.first().map(String::as_str) {
+                return Err(format!("fork source path `{path}` does not belong to its recorded source"));
+            }
+            let hash = payload
+                .get("files_sha256")
+                .map(|hashes| {
+                    hashes[path]
+                        .as_str()
+                        .ok_or_else(|| format!("fork source `{path}` is missing its recorded hash"))
+                })
+                .transpose()?;
+            files.insert(normalized, hash);
+        }
+    }
+    if files.is_empty() {
+        return Ok(None);
+    }
+
+    let sandbox = WorkspaceSandbox::new(data_dir, None);
+    let parent_sources = sandbox
+        .canonical_root(SandboxRoot::Sources, parent, false)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("recorded sources for session `{parent}` are missing"))?;
+    let sessions_dir = parent_sources
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| format!("cannot locate sessions directory from `{}`", parent_sources.display()))?;
+    let child_dir = sessions_dir.join(child);
+    fs::create_dir(&child_dir).map_err(|e| format!("failed to reserve fork `{child}`: {e}"))?;
+    let staged = StagedSources { child_dir, committed: false };
+    let destination = staged.child_dir.join("sources");
+    fs::create_dir(&destination).map_err(|e| format!("failed to stage sources for fork `{child}`: {e}"))?;
+    let destination = fs::canonicalize(destination).map_err(|e| e.to_string())?;
+    for (path, expected_hash) in files {
+        // Resolve without following symlinks or junctions within the source tree.
+        let source = sandbox
+            .resolve_for_write(SandboxRoot::Sources, parent, &path)
+            .map_err(|e| format!("failed to resolve fork source `{path}`: {e}"))?;
+        if !source.exists || !source.target_path.is_file() {
+            return Err(format!("recorded fork source `{path}` is missing or is not a regular file"));
+        }
+        let bytes = fs::read(&source.target_path).map_err(|e| format!("failed to read fork source `{path}`: {e}"))?;
+        if expected_hash.is_some_and(|expected| ledger::sha256_hex(&bytes) != expected) {
+            return Err(format!("fork source `{path}` does not match its recorded hash"));
+        }
+        WorkspaceSandbox::atomic_write_in_root(&destination, &source.rel_parts, &bytes)
+            .map_err(|e| format!("failed to copy fork source `{path}`: {e}"))?;
+    }
+    Ok(Some(staged))
 }

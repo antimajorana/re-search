@@ -88,6 +88,11 @@ impl SecretKey {
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Redact this key without exposing its value to callers.
+    pub fn redact_from(&self, text: &str) -> String {
+        scrub_text(text, self.as_str())
+    }
 }
 
 impl fmt::Debug for SecretKey {

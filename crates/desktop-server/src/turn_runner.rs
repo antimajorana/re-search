@@ -179,6 +179,7 @@ fn run_session_turn(
         .unwrap_or(DEFAULT_MAX_TOKENS);
 
     let env = Arc::new(state.research_env_for_session(session_id)?);
+    let project_context = crate::project_context::brief(state, session_id)?;
     let transport = state.build_transport(provider, &model)?;
     let v_built = crate::agent_models::resolve_optional_role_transport(
         state,
@@ -268,7 +269,14 @@ fn run_session_turn(
                 "compute_worker",
                 "Compute Worker",
                 b,
-                "You are the isolated Compute Worker for reSearch. Write and retry sandboxed Python/SymPy/NumPy scripts via `sympy_eval`, check identities with `check_expression_sanity`, and record substantive passing calculations via `ledger_append` (`symbolic_computation` or `numerical_computation`). Never call `ledger_append` with `final_answer`; return exact computed values, equations, and Proof-DAG `entry_id`s.",
+                "You are the isolated Compute Worker for reSearch. Use `sympy_eval` to run Python/SymPy/NumPy. \
+                 Use `check_symbolic_identity(lhs, rhs, variable=x, domain=...)` for explicit domains and branch checks. \
+                 Supply `limits=[(point, direction)]` or `dimensions={symbol: {base: power}}` where relevant. \
+                 Use `check_convergence(run, levels, axis=..., atol=..., rtol=..., reference=...)` for precision, resolution, or basis refinement. \
+                 Choose tolerances and an independent reference when available before running. Return the helper report as the last expression. \
+                 Record checks and counterexamples with `tool_call_ref` on a `symbolic_computation` or `numerical_computation` Proof DAG entry. \
+                 State excluded points and limitations. Treat a stable numerical result as empirical evidence. \
+                 Use `set_random_seed(seed)` for stochastic calculations. Leave the final answer to the Orchestrator.",
                 compute_worker_tools(),
                 DEFAULT_WORKER_MAX_TURNS,
             )
@@ -278,7 +286,9 @@ fn run_session_turn(
                 "literature_worker",
                 "Literature Worker",
                 b,
-                "You are the isolated Literature Worker for reSearch. Use `arxiv_search`, `literature_search`, `doc_ingest`, `fs_list`, and `fs_read` (plus `ledger_query`/`ledger_note`) to retrieve papers and inspect local or ingested sources. Extract exact theorem statements, conventions, arXiv IDs/DOIs/links, and section references concisely.",
+                "You are the isolated Literature Worker for reSearch. Use `arxiv_search`, `literature_search`, and `doc_ingest` to find or ingest papers. \
+                 Use `search_paper_passages` to find supporting passages in ingested papers and `fs_read` to inspect surrounding context. \
+                 Return exact passages, source paths, line ranges and tool references alongside terms, conventions, and arXiv IDs or DOIs.",
                 literature_worker_tools(),
                 DEFAULT_WORKER_MAX_TURNS,
             )
@@ -288,7 +298,9 @@ fn run_session_turn(
                 "lean_worker",
                 "Lean Prover Worker",
                 b,
-                "You are the isolated Lean Prover Worker for reSearch. Formalize mathematical claims in Lean 4 without `sorry`, `admit`, or unproven `axiom` declarations, run `lean_check` to type-check and anti-cheat verify the code, iterate on diagnostics, and report verified status, diagnostics, and any recorded Proof-DAG `entry_id`s.",
+                "You are the isolated Lean Prover Worker for reSearch. Use `search_formal_library` to find reusable Lean and Physlib declarations in the attached workspace. \
+                 Compare their statements and assumptions to the precise target. Run `lean_check` on the formalized claim without `sorry`, `admit`, or unproven axioms. \
+                 Report reusable declarations, verified status, diagnostics, and recorded Proof DAG entries.",
                 lean_worker_tools(),
                 DEFAULT_WORKER_MAX_TURNS,
             )
@@ -331,6 +343,7 @@ fn run_session_turn(
     };
     let auto_cfg = AutonomousConfig {
         guardrails,
+        project_context,
         use_strategist: req.get("use_strategist").and_then(Value::as_bool).unwrap_or(false),
         interactive_plan_mode,
         pause_after_explore,
@@ -409,7 +422,7 @@ fn run_session_turn(
 
     match outcome {
         SessionOutcome::Aborted { reason, .. } => Err(reason),
-        SessionOutcome::Completed { .. } | SessionOutcome::Refusal { .. } => Ok(sink.final_text),
+        SessionOutcome::Completed { .. } | SessionOutcome::Refusal { .. } => Ok(sink.final_text().to_string()),
     }
 }
 
@@ -496,6 +509,9 @@ pub(crate) fn build_desktop_router(
                 .evaluate_in_epoch(code, timeout, ctx.required_epoch)
                 .map_err(|e| e.to_string())?;
             ctx.record_worker_execution(ran_epoch, w.last_request_id());
+            if let Some(hello) = w.hello() {
+                ctx.record_worker_environment(hello);
+            }
             Ok(result)
         }),
     );

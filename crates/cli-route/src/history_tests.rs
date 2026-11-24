@@ -44,6 +44,22 @@ fn first_turn_is_the_message_alone() {
 }
 
 #[test]
+fn session_prompt_applies_fork_assumptions_even_when_old_transcript_is_dropped() {
+    let events = [
+        ev(1, "session.start", json!({ "prompt": "original question" })),
+        ev(2, "model.text", json!({ "text": "original answer" })),
+        ev(3, "session.fork", json!({ "modified_assumption": "x = 2" })),
+        ev(4, "session.fork", json!({ "modified_assumption": "x = 3" })),
+        ev(5, "session.resume", json!({ "prompt": "a".repeat(2_000) })),
+    ];
+    let replay = build_session_prompt(&events, "Recompute now", 650);
+    assert_eq!(replay.turns_dropped, 1);
+    assert!(replay.prompt.contains("conflicting assumptions in the parent history"));
+    assert!(replay.prompt.ends_with("[\"x = 2\",\"x = 3\"]\n\nRecompute now"));
+    assert_eq!(replay.history_chars, replay.prompt.chars().count() - "Recompute now".len());
+}
+
+#[test]
 fn later_turns_carry_a_delimited_transcript_then_the_message() {
     let prior = vec![turn("Q1", "A1")];
     let r = build_prompt_with_nonce(&prior, "Q2 now", DEFAULT_HISTORY_BUDGET, "n0nce");

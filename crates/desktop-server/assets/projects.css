@@ -1,0 +1,265 @@
+#app-shell[data-project-overview="true"] {
+  --canvas-track-width: 0px;
+}
+
+#app-shell[data-project-overview="true"] #canvas-drawer,
+#app-shell[data-project-overview="true"] #message-stream,
+#app-shell[data-project-overview="true"] .composer-dock,
+#app-shell[data-project-overview="true"] #pipeline-bar,
+#app-shell[data-project-overview="true"] .session-heading,
+#app-shell[data-project-overview="true"] #active-workspace-pill,
+#app-shell[data-project-overview="true"] .topbar-right > :not(#projects-open-btn) {
+  display: none;
+}
+
+#project-overview {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.project-page {
+  max-width: 1160px;
+  margin-inline: auto;
+  padding: clamp(20px, 4vw, 48px);
+}
+
+.project-page-header,
+.project-session-heading,
+.project-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.project-page-header,
+.project-session-heading {
+  justify-content: space-between;
+}
+
+.project-page-header h1,
+.project-notebook-main h2,
+.project-sessions h3,
+.project-conventions h3 {
+  margin: 0;
+  line-height: 1.35;
+}
+
+.project-page-header h1 {
+  font-size: clamp(25px, 3vw, 34px);
+  letter-spacing: -0.025em;
+}
+
+.project-page-header select {
+  max-width: min(280px, 64vw);
+}
+
+.project-status,
+.project-context-note {
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.project-status[data-error="true"] {
+  color: var(--status-err);
+}
+
+.project-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(215px, 265px);
+  align-items: start;
+  gap: clamp(16px, 3vw, 32px);
+  margin-top: 24px;
+}
+
+.project-notebook-main h2 {
+  overflow-wrap: anywhere;
+  font-size: clamp(20px, 2.5vw, 28px);
+  letter-spacing: -0.02em;
+}
+
+.project-tabs {
+  display: flex;
+  margin-top: 12px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.project-tabs button {
+  min-width: max-content;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 9px 11px;
+  background: transparent;
+  color: var(--ink-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.project-tabs button[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.project-tabs button:focus-visible {
+  outline-offset: -3px;
+}
+
+.project-panel {
+  padding-block: 18px;
+}
+
+.project-conventions {
+  margin-top: 22px;
+}
+
+.project-conventions h3,
+.project-sessions h3 {
+  font-size: 14px;
+}
+
+.project-context-note {
+  margin: 18px 0 12px;
+}
+
+.project-edit-form,
+.project-note-form,
+.project-sessions {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  background: var(--bg-surface);
+}
+
+.project-edit-form {
+  margin-top: 24px;
+}
+
+.project-conflicts {
+  color: var(--ink-secondary);
+  font-size: 13px;
+}
+
+.project-conflicts dt { font-weight: 600; }
+.project-conflicts dd {
+  margin: 4px 0 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.project-edit-form label,
+.project-note-form label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.project-edit-form textarea,
+.project-note-form textarea {
+  padding-block: 8px;
+  resize: vertical;
+}
+
+.project-note-form {
+  display: grid;
+  gap: 8px;
+}
+
+.project-note-form .project-actions,
+.project-edit-form .project-actions {
+  justify-content: flex-end;
+}
+
+.project-note-actions select {
+  margin-right: auto;
+}
+
+.project-promotion {
+  margin-bottom: 12px;
+  border-color: var(--accent);
+}
+
+.project-claim-source summary {
+  width: fit-content;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.project-claim-source .form-grid {
+  margin-top: 8px;
+}
+
+.project-claim-source select {
+  max-width: 100%;
+}
+
+.project-notes,
+#project-session-list {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+}
+
+.project-note {
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+}
+
+.project-note .project-actions {
+  margin-top: 8px;
+}
+
+.project-note .project-remove-note {
+  margin-left: auto;
+}
+
+.project-note blockquote {
+  margin: 8px 0 0;
+  border-left: 2px solid var(--border-strong);
+  padding-left: 10px;
+  color: var(--ink-secondary);
+}
+
+.project-session-heading {
+  margin-bottom: 10px;
+}
+
+.project-session-link {
+  width: 100%;
+  justify-content: flex-start;
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-link-session {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+}
+
+.project-link-session select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.project-empty {
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+@media (max-width: 1020px) {
+  .project-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

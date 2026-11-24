@@ -10,14 +10,14 @@ use crate::guardrails::{
     GuardrailConfig,
 };
 use crate::honesty::{infer_campaign_phase, lint_honesty_with_ledger, CampaignPhase};
-use crate::resume::{rehydrate_history, verify_and_read, ResumeConfig};
+use crate::resume::{fork_assumption, format_fork_assumption, rehydrate_history, verify_and_read, ResumeConfig};
 use crate::runner::{
     run_turn_leg, tool_defs_json, AgentConfig, Audit, EventSink, LegResult, LoopParams, SessionOutcome,
 };
 use crate::transport::{CancelToken, ContentBlock, Message, ProviderKind, Role, Transport};
-use crate::verifiers::{verify_full_solution_cancellable, VerificationVerdict};
+use crate::verifiers::{verify_delivered_answer, DeliveredAnswer, VerificationVerdict};
 use ledger::Ledger;
-use research_tools::{read_proof_dag, ResearchEnv};
+use research_tools::{read_proof_dag, ProofStatus, ResearchEnv};
 use serde_json::json;
 use std::time::Instant;
 use tools::{Router, ToolDef};
@@ -42,6 +42,7 @@ pub struct AutonomousConfig {
     pub max_verification_rounds: u32,
     pub interactive_plan_mode: bool,
     pub pause_after_explore: bool,
+    pub project_context: Option<String>,
 }
 
 impl Default for AutonomousConfig {
@@ -52,6 +53,7 @@ impl Default for AutonomousConfig {
             max_verification_rounds: DEFAULT_MAX_VERIFICATION_ROUNDS,
             interactive_plan_mode: false,
             pause_after_explore: false,
+            project_context: None,
         }
     }
 }
@@ -102,7 +104,8 @@ pub fn run_autonomous_research_loop(
     let session = router.session();
     let info = solver_transport.info();
     let defs = router.registry().defs();
-    let last_seq = ledger.read_session(session).ok().and_then(|ev| ev.last().map(|e| e.seq)).unwrap_or(0);
+    let events = ledger.read_session(session).map_err(|e| e.to_string())?;
+    let last_seq = events.last().map_or(0, |e| e.seq);
     let mut audit = Audit { ledger, session, sink, last_seq };
     audit.emit(
         "session.start",
@@ -115,6 +118,8 @@ pub fn run_autonomous_research_loop(
             "model_requested": cfg.model_requested,
             "model": cfg.model,
             "prompt": cfg.prompt,
+            "project_context": auto_cfg.project_context,
+            "workspace_revision": env.workspace_root.as_deref().and_then(crate::workspace_revision),
             "system_prompt": system_prompt,
             "max_turns": cfg.max_turns,
             "max_tokens": cfg.max_tokens,
@@ -131,10 +136,14 @@ pub fn run_autonomous_research_loop(
         }),
     )?;
 
-    let initial_messages = vec![Message {
-        role: Role::User,
-        content: vec![ContentBlock::Text { text: cfg.prompt.clone() }],
-    }];
+    let mut initial_content: Vec<_> = events.iter().filter_map(fork_assumption)
+        .map(|assumption| ContentBlock::Text { text: format_fork_assumption(assumption) })
+        .collect();
+    if let Some(context) = &auto_cfg.project_context {
+        initial_content.push(ContentBlock::Text { text: context.clone() });
+    }
+    initial_content.push(ContentBlock::Text { text: cfg.prompt.clone() });
+    let initial_messages = vec![Message { role: Role::User, content: initial_content }];
     drive_autonomous_rounds(
         solver_transport,
         roles,
@@ -188,10 +197,12 @@ pub fn resume_autonomous_research_loop(
     let info = solver_transport.info();
     let target_provider = ProviderKind::parse(info.provider)?;
     let mut messages = rehydrate_history(ledger, &events, target_provider).map_err(|e| e.to_string())?;
+    let current_content: Vec<_> = auto_cfg.project_context.iter().chain(std::iter::once(&cfg.prompt))
+        .map(|text| ContentBlock::Text { text: text.clone() }).collect();
     if let Some(last) = messages.last_mut().filter(|m| m.role == Role::User) {
-        last.content.push(ContentBlock::Text { text: cfg.prompt.clone() });
+        last.content.extend(current_content);
     } else {
-        messages.push(Message { role: Role::User, content: vec![ContentBlock::Text { text: cfg.prompt.clone() }] });
+        messages.push(Message { role: Role::User, content: current_content });
     }
 
     let base_sys = cfg.system_prompt.as_deref().unwrap_or(&inspection.system_prompt);
@@ -237,6 +248,8 @@ pub fn resume_autonomous_research_loop(
             "model_requested": cfg.model_requested,
             "model": cfg.model,
             "prompt": cfg.prompt,
+            "project_context": auto_cfg.project_context,
+            "workspace_revision": env.workspace_root.as_deref().and_then(crate::workspace_revision),
             "system_prompt": system_prompt,
             "max_turns": cfg.max_turns,
             "max_tokens": cfg.max_tokens,
@@ -408,7 +421,13 @@ fn drive_autonomous_rounds(
             return Ok(SessionOutcome::Aborted { turns: turns_used, reason });
         }
 
-        ensure_active_final_answer_entry(router, audit, leg_start_seq, round, &leg.last_text)?;
+        let target_entry_id = match ensure_active_final_answer_entry(router, audit, leg_start_seq, round, &leg.last_text) {
+            Ok(id) => id,
+            Err(reason) => {
+                audit.emit("session.abort", json!({ "reason": reason }))?;
+                return Ok(SessionOutcome::Aborted { turns: turns_used, reason });
+            }
+        };
 
         let (v_transport, v_model) = roles.verifier.unwrap_or((solver_transport, solver_model));
         audit.sink.on_thinking_delta(&format!(
@@ -416,13 +435,14 @@ fn drive_autonomous_rounds(
         ));
 
         audit.emit("campaign.phase", json!({ "phase": CampaignPhase::Verify.as_str() }))?;
-        let report = match verify_full_solution_cancellable(
+        let report = match verify_delivered_answer(
             v_transport,
             audit.ledger,
             env,
             audit.session,
             v_model,
             cancel,
+            DeliveredAnswer { entry_id: &target_entry_id, text: &leg.last_text },
         ) {
             Ok(r) => r,
             Err(err) => {
@@ -440,7 +460,21 @@ fn drive_autonomous_rounds(
         audit.flush_interleaved()?;
 
         if report.verdict == VerificationVerdict::Accepted {
+            let current = read_proof_dag(audit.ledger, audit.session)?;
+            let active_final = current.entries.iter().rev().find(|entry| {
+                entry.entry_type == "final_answer" && entry.status != ProofStatus::Superseded
+            });
+            if active_final.is_none_or(|entry| entry.seq <= leg_start_seq || entry.entry_id != report.target_entry_id) {
+                let reason = "The verified candidate is no longer the current final answer.".to_string();
+                audit.emit("session.abort", json!({ "reason": reason }))?;
+                return Ok(SessionOutcome::Aborted { turns: turns_used, reason });
+            }
             check_final_answer_gate(audit.ledger, audit.session, true)?;
+            if honesty.findings.iter().any(|finding| finding.severity == "warning") {
+                let events = audit.ledger.read_session(audit.session).map_err(|e| e.to_string())?;
+                let confirmed = lint_honesty_with_ledger(&leg.last_text, &current, &events, audit.ledger);
+                audit.emit("honesty.lint", serde_json::to_value(&confirmed).unwrap())?;
+            }
             audit.sink.on_thinking_delta(&format!(
                 "[Verifier ACCEPTED `{}`: {}]\n",
                 report.target_entry_id, report.summary

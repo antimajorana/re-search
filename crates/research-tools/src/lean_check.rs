@@ -2,7 +2,7 @@
 //! with pre-execution anti-cheat scanning for `sorry`, `admit`, and unexpected `axiom` declarations.
 
 use crate::sandbox::{
-    is_symlink_or_junction, strip_verbatim_prefix, validate_rel_workspace_path,
+    is_symlink_or_junction, sanitize_rel_components, strip_verbatim_prefix, validate_rel_workspace_path,
     validate_session_id, WorkspaceSandbox,
 };
 use crate::ResearchEnv;
@@ -220,6 +220,8 @@ pub fn run_lean_check(env: &ResearchEnv, session: &str, args: &Value) -> Result<
             "hint": "Lean 4 (`lean`) was not found. Install via elan (https://lean-lang.org/install) or set RE_SEARCH_LEAN."
         }));
     };
+    let checking_workspace_file = ws_paths.is_some();
+    let source_sha256 = ledger::sha256_hex(source.as_bytes());
     let ((work_dir, target_path), _guard) = match ws_paths {
         Some(paths) => (paths, ScratchGuard(None)),
         None => {
@@ -229,7 +231,17 @@ pub fn run_lean_check(env: &ResearchEnv, session: &str, args: &Value) -> Result<
         }
     };
     let mut cmd = Command::new(&lean_bin);
-    cmd.current_dir(&work_dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).arg(&target_path);
+    let cwd = env.workspace_root.as_deref().unwrap_or(&work_dir);
+    cmd.current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).arg(&target_path);
+    if let Some(workspace) = &env.workspace_root {
+        let mut paths = lake_library_paths(workspace)?;
+        if !paths.is_empty() {
+            if let Some(existing) = std::env::var_os("LEAN_PATH") {
+                paths.extend(std::env::split_paths(&existing));
+            }
+            cmd.env("LEAN_PATH", std::env::join_paths(paths).map_err(|e| format!("invalid Lean library path: {e}"))?);
+        }
+    }
     for k in SCRUBBED_KEY_ENVS { cmd.env_remove(k); }
     #[cfg(windows)]
     { use std::os::windows::process::CommandExt; cmd.creation_flags(0x0800_0000); }
@@ -245,10 +257,17 @@ pub fn run_lean_check(env: &ResearchEnv, session: &str, args: &Value) -> Result<
             "error": format!("Lean check timed out after {}s", timeout.as_secs())
         }));
     }
+    if checking_workspace_file && !fs::read(&target_path).is_ok_and(|bytes| bytes == source.as_bytes()) {
+        return Ok(json!({
+            "ok": false, "status": "source_changed", "axioms": anti.axioms,
+            "diagnostics": diags, "stdout": stdout, "stderr": stderr,
+            "error": "The workspace file changed during Lean verification. Run the check again on the current file.",
+        }));
+    }
     let ok = out.exit_code == Some(0) && diags.iter().all(|d| d.severity != "error");
     Ok(json!({
         "ok": ok, "status": if ok { "verified" } else { "failed" },
-        "exit_code": out.exit_code, "axioms": anti.axioms,
+        "exit_code": out.exit_code, "axioms": anti.axioms, "source_sha256": source_sha256,
         "diagnostics": diags, "stdout": stdout, "stderr": stderr,
     }))
 }
@@ -264,6 +283,53 @@ fn step_verified_dir(root: &Path, cur: &Path, seg: &str, create: bool) -> Result
     let canon = fs::canonicalize(&next).map_err(|e| e.to_string())?;
     if !WorkspaceSandbox::is_same_or_inside(root, &canon) { return Err(format!("`{seg}` escapes sandbox root")); }
     Ok(canon)
+}
+
+// Resolve conventional outputs of an already-built Lake project without evaluating its
+// configuration. Dependency order comes from the manifest. Ignore unchecked-out packages.
+fn lake_library_paths(workspace: &Path) -> Result<Vec<PathBuf>, String> {
+    let root = WorkspaceSandbox::canonicalize_existing_dir(workspace).map_err(|e| e.to_string())?;
+    let mut paths = Vec::new();
+    let mut add_library = |relative: &str| {
+        let Ok((parts, _)) = sanitize_rel_components(relative, false) else { return };
+        let lib = parts.iter().try_fold(root.clone(), |parent, part| {
+            step_verified_dir(&root, &parent, part, false)
+        });
+        if let Ok(lib) = lib {
+            // Recent Lake builds put .olean files in lib/lean. Older builds use lib.
+            let dir = if fs::symlink_metadata(lib.join("lean")).is_ok() {
+                let Ok(dir) = step_verified_dir(&root, &lib, "lean", false) else { return };
+                dir
+            } else { lib };
+            let dir = strip_verbatim_prefix(&dir);
+            if !paths.contains(&dir) { paths.push(dir); }
+        }
+    };
+    let manifest_file = root.join("lake-manifest.json");
+    let manifest = if fs::symlink_metadata(&manifest_file).is_ok_and(|m| {
+        m.is_file() && !is_symlink_or_junction(&manifest_file, &m) && m.len() <= 1024 * 1024
+    }) {
+        let file = fs::File::open(&manifest_file).map_err(|e| format!("could not open Lake manifest: {e}"))?;
+        serde_json::from_reader::<_, Value>(file.take(1024 * 1024 + 1))
+            .map_err(|e| format!("invalid Lake manifest: {e}"))?
+    } else { Value::Null };
+    let packages_dir = manifest["packagesDir"].as_str().unwrap_or(".lake/packages");
+    for package in manifest["packages"].as_array().into_iter().flatten() {
+        let package_root = match package["type"].as_str() {
+            Some("path") => package["dir"].as_str().map(str::to_owned),
+            Some("git") => package["name"].as_str().map(|name| {
+                let subdir = package["subDir"].as_str().unwrap_or("");
+                format!("{packages_dir}/{name}/{subdir}")
+            }),
+            _ => None,
+        };
+        if let Some(package_root) = package_root {
+            add_library(&format!("{package_root}/.lake/build/lib"));
+        }
+    }
+    let lake_dir = manifest["lakeDir"].as_str().unwrap_or(".lake");
+    add_library(&format!("{lake_dir}/build/lib"));
+    Ok(paths)
 }
 
 fn resolve_workspace_lean_file(env: &ResearchEnv, raw: &str) -> Result<(PathBuf, PathBuf, String), String> {
@@ -383,6 +449,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lake_imports_follow_prebuilt_manifest_dependencies_within_the_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        let git_lib = ".lake/packages/physlib/.lake/build/lib/lean";
+        let path_lib = "algebra/.lake/build/lib";
+        let own_lib = ".lake/build/lib/lean";
+        for dir in [git_lib, path_lib, own_lib, ".lake/packages/unused/.lake/build/lib"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        fs::create_dir_all(temp.path().join("private/.lake/build/lib")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(temp.path().join("private"), root.join("linked")).unwrap();
+        let manifest = json!({
+            "packagesDir": ".lake/packages", "lakeDir": ".lake",
+            "packages": [
+                {"type": "git", "name": "physlib"},
+                {"type": "path", "dir": "./algebra"},
+                {"type": "path", "dir": "../private"},
+                {"type": "path", "dir": "linked"}
+            ]
+        });
+        fs::write(root.join("lake-manifest.json"), manifest.to_string()).unwrap();
+        assert_eq!(lake_library_paths(&root).unwrap(), [git_lib, path_lib, own_lib].map(|path| {
+            strip_verbatim_prefix(&root.join(path).canonicalize().unwrap())
+        }));
+    }
+
+    #[test]
     fn anti_cheat_detects_sorry_admit_and_ignores_comments() {
         let clean = "-- sorry and admit\n/- sorry /- admit -/ -/\n/-- doc sorry -/\ndef s := \"sorry\"\ndef q : Char := '\"'\ndef not_sorry_lemma := 1\ntheorem ok' : True := trivial\n";
         assert!(!scan_lean_anti_cheat(clean).has_sorry_or_admit);
@@ -462,12 +556,14 @@ mod tests {
 
         let ok_ws = run_lean_check(&env, "s-mock", &json!({ "path": "ok.lean" })).unwrap();
         assert_eq!((ok_ws["ok"].as_bool(), ok_ws["status"].as_str()), (Some(true), Some("verified")));
+        assert_eq!(ok_ws["source_sha256"], ledger::sha256_hex(b"theorem ok : True := trivial\n"));
         let fail_ws = run_lean_check(&env, "s-mock", &json!({ "path": "fail.lean" })).unwrap();
         assert_eq!((fail_ws["ok"].as_bool(), fail_ws["status"].as_str(), fail_ws["exit_code"].as_i64()), (Some(false), Some("failed"), Some(1)));
         assert_eq!((fail_ws["diagnostics"][0]["line"].as_u64(), fail_ws["diagnostics"][0]["col"].as_u64(), fail_ws["diagnostics"][0]["severity"].as_str()), (Some(2), Some(4), Some("error")));
 
         let ok_code = run_lean_check(&env, "s-mock", &json!({ "code": "theorem t : True := trivial" })).unwrap();
         assert_eq!((ok_code["ok"].as_bool(), ok_code["status"].as_str()), (Some(true), Some("verified")));
+        assert_eq!(ok_code["source_sha256"], ledger::sha256_hex(b"theorem t : True := trivial"));
         let fail_code = run_lean_check(&env, "s-mock", &json!({ "code": "theorem b : False := TRIGGER_FAIL" })).unwrap();
         assert_eq!((fail_code["ok"].as_bool(), fail_code["status"].as_str(), fail_code["diagnostics"][0]["severity"].as_str()), (Some(false), Some("failed"), Some("error")));
     }

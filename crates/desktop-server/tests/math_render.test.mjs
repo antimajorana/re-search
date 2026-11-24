@@ -182,11 +182,7 @@ test('Nested environments stay atomic and render cleanly in KaTeX 0.19.1', () =>
   assert.ok(!items[0].tex.includes('\\label'), '\\label must be stripped from KaTeX input');
 });
 
-test('Starter prompts from stream.js render cleanly in real KaTeX 0.19.1', () => {
-  const streamJs = fs.readFileSync(path.join(assetsDir, 'stream.js'), 'utf8');
-  assert.match(streamJs, /\$\\\\mu = 0\$/);
-  assert.match(streamJs, /\\omega\(k\)/);
-
+test('Inline physics notation survives Markdown and renders in KaTeX', () => {
   const p1 = 'Compute the ground-state energy gap of the 1D Kitaev chain at $\\mu = 0$ and verify the Majorana edge-mode commutator algebra in SymPy.';
   const p3 = 'Derive the dispersion relation $\\omega(k) = \\sqrt{\\Delta^2 + (2t \\cos k)^2}$, append structured proof steps, and run deterministic verification.';
 

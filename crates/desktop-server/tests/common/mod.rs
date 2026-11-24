@@ -40,7 +40,10 @@ impl MockHttp {
                 let _ = stream.flush();
             }
         });
-        Self { base_url: format!("http://{addr}"), handle: Some(handle) }
+        Self {
+            base_url: format!("http://{addr}"),
+            handle: Some(handle),
+        }
     }
 
     pub fn finish(mut self) {
@@ -82,7 +85,9 @@ pub fn raw_http(
     body: &[u8],
 ) -> (u16, Vec<(String, String)>, Vec<u8>) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
     let mut req = format!("{method} {path} HTTP/1.1\r\nConnection: close\r\n");
     let mut has_host = false;
     for &(k, v) in headers {
@@ -94,7 +99,11 @@ pub fn raw_http(
     if !has_host {
         req.push_str(&format!("Host: 127.0.0.1:{port}\r\n"));
     }
-    if !body.is_empty() && !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-length")) {
+    if !body.is_empty()
+        && !headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+    {
         req.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
     req.push_str("\r\n");
@@ -110,7 +119,12 @@ pub fn raw_http(
     let head = String::from_utf8_lossy(&raw[..split]);
     let mut lines = head.lines();
     let status_line = lines.next().unwrap();
-    let status: u16 = status_line.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap();
     let mut out_hdrs = Vec::new();
     for line in lines {
         if let Some((k, v)) = line.split_once(':') {
@@ -120,7 +134,12 @@ pub fn raw_http(
     (status, out_hdrs, raw[split + 4..].to_vec())
 }
 
-pub fn test_cfg(data_dir: &Path, workspace: Option<PathBuf>, api_base: Option<String>, lit_base: Option<&str>) -> DesktopConfig {
+pub fn test_cfg(
+    data_dir: &Path,
+    workspace: Option<PathBuf>,
+    api_base: Option<String>,
+    lit_base: Option<&str>,
+) -> DesktopConfig {
     let endpoints = match lit_base {
         Some(u) => LiteratureEndpoints::loopback_mock(u).unwrap(),
         None => LiteratureEndpoints::default(),
@@ -162,7 +181,11 @@ pub fn offline_chatgpt_hooks() -> ChatGptTestHooks {
 pub fn launch_cookie(port: u16, token: &str) -> String {
     let (st, hdrs, _) = raw_http(port, "GET", "/", &[("X-ReSearch-Token", token)], b"");
     assert_eq!(st, 200);
-    let set_cookie = hdrs.iter().find(|(k, _)| k == "set-cookie").map(|(_, v)| v.clone()).expect("Set-Cookie");
+    let set_cookie = hdrs
+        .iter()
+        .find(|(k, _)| k == "set-cookie")
+        .map(|(_, v)| v.clone())
+        .expect("Set-Cookie");
     set_cookie.split(';').next().unwrap().trim().to_string()
 }
 
@@ -173,8 +196,16 @@ pub fn disable_auto_approve(port: u16, token: &str) {
         port,
         "PUT",
         "/api/settings/providers",
-        &[("X-ReSearch-Token", token), ("Content-Type", "application/json")],
+        &[
+            ("X-ReSearch-Token", token),
+            ("Content-Type", "application/json"),
+        ],
         br#"{"auto_approve_tools":false}"#,
     );
-    assert_eq!(st, 200, "disable_auto_approve failed: {}", String::from_utf8_lossy(&b));
+    assert_eq!(
+        st,
+        200,
+        "disable_auto_approve failed: {}",
+        String::from_utf8_lossy(&b)
+    );
 }
