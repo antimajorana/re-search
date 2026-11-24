@@ -26,10 +26,13 @@ export function filterConventions(items, query) {
     .some(value => String(value || '').toLocaleLowerCase().includes(term)));
 }
 
-export function conventionStatus(catalog, requested, running, selectedPages) {
+export function conventionStatus(catalog, requested, running, selectedPages, current = true) {
   const count = catalog?.items?.length || 0;
   const scope = selectedPages ? 'selected pages' : 'paper';
-  if (!catalog) return requested && running ? 'Reading the paper…' : 'No catalog recorded';
+  if (!catalog && requested) return running ? 'Reading the paper…' : 'Review stopped before the first batch';
+  if (!catalog) return 'No catalog recorded';
+  if (!current) return (count ? count + (count === 1 ? ' entry' : ' entries') + ' from an earlier reading' : 'Earlier reading') +
+    (requested && running ? ' · reading again…' : '');
   if (!catalog.done) return running ? (count ? count + ' found so far' : 'Reading the paper…') : 'Incomplete catalog';
   if (!count) return catalog.coverage === 'partial' ? 'None located in the reviewed passages' : 'None reported in the ' + scope;
   return count + (count === 1 ? ' entry' : ' entries') + (catalog.coverage === 'partial' ? ' · partial coverage' : '');
@@ -124,7 +127,7 @@ export function createConventionCatalog(host, renderAnchors, find) {
     const mapEl = document.getElementById('investigation-map'), panel = document.getElementById('investigation-panel');
     const before = mapEl.getBoundingClientRect().top;
     const preserve = !panel.hidden && panel.scrollTop > 0 && before <= panel.getBoundingClientRect().top;
-    title.textContent = 'Conventions · ' + conventionStatus(catalog, inv.conventions_requested, running, inv.page_start);
+    title.textContent = 'Conventions · ' + conventionStatus(catalog, inv.conventions_requested, running, inv.page_start, inv.conventions_is_current !== false);
     notes.replaceChildren();
     if (catalog && inv.conventions_is_current === false) notes.append(textElement('p', 'Saved catalog from an earlier reading of this paper.'));
     if (inv.conventions_error && !running && (!catalog?.done || inv.conventions_is_current === false)) {

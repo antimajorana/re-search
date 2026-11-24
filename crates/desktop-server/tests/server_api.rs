@@ -54,6 +54,10 @@ fn canvas_save_rejects_stale_drafts_before_and_after_approval() {
     let base = format!("/api/sessions/{}", session["id"].as_str().unwrap());
     let patch_url = format!("{base}/latex/patch");
     let approvals = format!("{base}/approvals");
+    for invalid in [json!(42), json!("not-a-digest")] {
+        let payload = json!({"path":"main.tex","content":"Recovered draft","expected_sha256":invalid});
+        assert_eq!(raw_http(port, "POST", &patch_url, &headers, payload.to_string().as_bytes()).0, 400);
+    }
     let past = json!(ledger::sha256_hex(b"Original version"));
     for (name, expected) in [
         ("main.tex", past.clone()),
@@ -109,7 +113,7 @@ fn canvas_save_rejects_stale_drafts_before_and_after_approval() {
         );
         save.join().unwrap()
     });
-    assert!((400..500).contains(&result.0));
+    assert_eq!(result.0, 409);
     assert!(String::from_utf8_lossy(&result.2).contains("changed on disk"));
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "New external edit");
     srv.shutdown();

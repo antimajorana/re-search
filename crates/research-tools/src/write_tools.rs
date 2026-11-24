@@ -14,6 +14,7 @@ use tools::{ApprovalScope, CallCtx, Registry, ToolDef, EVENT_SCHEMA_VERSION};
 
 pub const FS_WRITE: &str = "fs_write";
 pub const LATEX_PATCH: &str = "latex_patch";
+pub const EDIT_BASE_CHANGED: &str = "changed on disk. Copy your edits, then reload the file to reconcile the changes.";
 const MAX_WRITE_CHARS: u64 = 2_000_000;
 const MAX_WRITE_BYTES: usize = 4 * 1024 * 1024;
 const PREVIEW_SESSION_PLACEHOLDER: &str = "s-preview";
@@ -138,7 +139,7 @@ fn prepare_edit(env: &ResearchEnv, tool_id: &str, args: &Value) -> Result<Prepar
     let sha256_before = orig_bytes.as_deref().map(ledger::sha256_hex);
     if let Some(expected) = args.get("expected_sha256") {
         if expected != &serde_json::json!(sha256_before) {
-            return Err(format!("{} changed on disk. Copy your edits, then reload the file to reconcile the changes.", resolved.rel_path));
+            return Err(format!("{} {EDIT_BASE_CHANGED}", resolved.rel_path));
         }
     }
     let (old_text, new_text, replacements) = match tool_id {

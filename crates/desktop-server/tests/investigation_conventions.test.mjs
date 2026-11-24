@@ -9,6 +9,8 @@ const { conventionStatus, filterConventions } = await import('data:text/javascri
 test('catalog status distinguishes an unfinished search, selected-page absence, and partial coverage', () => {
   assert.equal(conventionStatus(null, false, false), 'No catalog recorded');
   assert.equal(conventionStatus(null, true, true), 'Reading the paper…');
+  assert.equal(conventionStatus(null, true, false), 'Review stopped before the first batch');
+  assert.equal(conventionStatus({items:[{}],done:true}, true, true, 1, false), '1 entry from an earlier reading · reading again…');
   assert.equal(conventionStatus({items:[{}], done:false}, true, true), '1 found so far');
   assert.equal(conventionStatus({items:[{}], done:false}, true, false), 'Incomplete catalog');
   assert.equal(conventionStatus({items:[], done:true, coverage:'paper'}, true, false, 1), 'None reported in the selected pages');

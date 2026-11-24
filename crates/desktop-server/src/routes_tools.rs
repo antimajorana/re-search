@@ -7,7 +7,7 @@ use crate::turn_runner::build_desktop_router;
 use agent::{ask_sidetalk, narrate_session, read_sidetalk_thread};
 use export::{export_session_bytes, ExportFormat};
 use research_tools::fs_tools::{handle_fs_list, handle_fs_read};
-use research_tools::write_tools::workspace_edit_sha256;
+use research_tools::write_tools::{workspace_edit_sha256, EDIT_BASE_CHANGED};
 use research_tools::{
     ingest_bytes, read_proof_dag, run_arxiv_search, run_literature_search, run_tex_audit,
     validate_session_id, ArxivSearchRequest, AuditOptions, IngestRequest, LiteratureRequest,
@@ -287,11 +287,16 @@ pub fn handle_latex_patch(state: &Arc<DesktopState>, session_id: &str, body: &[u
         (FS_WRITE, json!({ "path": path, "content": content }))
     };
     if let Some(expected) = val.get("expected_sha256") {
+        let expected = match expected {
+            Value::Null => None,
+            Value::String(s) if s.len() == 64 && s.bytes().all(|c| c.is_ascii_hexdigit()) => Some(s.to_ascii_lowercase()),
+            _ => return Err(bad("`expected_sha256` must be a 64-digit SHA-256 hex digest or null")),
+        };
         let current = workspace_edit_sha256(&env, path).map_err(bad)?;
-        if expected != &json!(current) {
-            return Err((409, format!("{path} changed on disk. Copy your edits, then reload the file to reconcile the changes.")));
+        if expected != current {
+            return Err((409, format!("{path} {EDIT_BASE_CHANGED}")));
         }
-        args["expected_sha256"] = expected.clone();
+        args["expected_sha256"] = json!(expected);
     }
 
     let (router, _, _) = build_desktop_router(Arc::clone(state), env, session_id).map_err(internal)?;
@@ -300,6 +305,7 @@ pub fn handle_latex_patch(state: &Arc<DesktopState>, session_id: &str, body: &[u
             Ok((200, json!({ "ok": true, "tool": tool_id, "output": output })))
         }
         Ok(tools::CallOutcome::Denied(reason)) => Err((403, reason)),
+        Ok(tools::CallOutcome::Error(reason)) if reason.ends_with(EDIT_BASE_CHANGED) => Err((409, reason)),
         Ok(tools::CallOutcome::Error(reason)) => Err(bad(reason)),
         Err(reason) => Err(internal(reason)),
     }
