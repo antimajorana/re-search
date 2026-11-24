@@ -485,7 +485,8 @@ fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
     rec("proof.entry", json!({"entry_id":"e-3","entry_type":"derivation","summary":"UNRELATED_ENTRY","depends_on":[]}));
     rec("model.response", json!({"stop_reason":"end_turn"}));
     let seq = rec("model.text", json!({"text":"The result:"}));
-    rec("model.text", json!({"text":"x is positive [e-2]. no verdict"}));
+    let repeated = format!("FIRST_OCCURRENCE x is positive [e-2]. {} SECOND_OCCURRENCE x is positive [e-2]. no verdict", "λ".repeat(1600));
+    rec("model.text", json!({"text":repeated}));
     rec("session.end", json!({"outcome":"completed"}));
     rec("session.resume", json!({"prompt":"LATER_UNRELATED_PROBLEM","pinned_conventions":"x<0"}));
     rec("model.text", json!({"text":"x is negative."}));
@@ -493,13 +494,14 @@ fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
     assert_eq!(call("POST", &route, json!({"claim":"x is negative.","answer_seq":seq})).0,400);
     assert_eq!(call("POST", &route, json!({"claim":"x is positive.","answer_seq":seq,"entry_id":"e-1"})).0,400);
     assert_eq!(call("POST", &route, json!({"entry_id":"e-missing"})).0,404);
+    assert_eq!(call("POST", &route, json!({"claim":"x is positive [e-2].","answer_seq":seq,"occurrence":2})).0,400);
     assert!(mock.captured().is_empty());
     assert_eq!(call("PUT", "/api/settings/providers", json!({
         "keys":{"openai":"sk-claim-test"},"base_urls":{"openai":mock.base_url},
         "agent_models":{"step_verifier":{"provider":"openai","model":"gpt-4.1-mini"}}
     })).0,200);
     let (code, claim) = std::thread::scope(|scope| {
-        let pending = scope.spawn(|| call("POST", &route, json!({"claim":"x is positive [e-2].","answer_seq":seq,"cited_steps":["e-2"]})));
+        let pending = scope.spawn(|| call("POST", &route, json!({"claim":"x is positive [e-2].","answer_seq":seq,"cited_steps":["e-2"],"occurrence":1})));
         entered.recv_timeout(Duration::from_secs(8)).unwrap();
         assert_eq!(call("POST", &route, json!({"entry_id":"e-1"})).0,409);
         assert_eq!(call("POST", &format!("/api/sessions/{sid}/messages"), json!({"prompt":"Busy!"})).0,409);
@@ -511,6 +513,7 @@ fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
     assert_eq!(claim["verdict"], "accepted");
     let request = mock.captured()[0].1.to_string();
     assert!(request.contains("RECORDED_EXACT_VALUE") && request.contains("factorial(3)"));
+    assert!(request.contains("SECOND_OCCURRENCE") && !request.contains("FIRST_OCCURRENCE"));
     assert!(!request.contains("UNRELATED_ENTRY"));
     assert_eq!(claim["cited_steps"], json!(["e-2"]));
     let (code, step) = call("POST", &route, json!({"entry_id":"e-1"}));
@@ -530,8 +533,17 @@ fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
     assert_eq!(selections.len(), 1);
     assert_eq!(selections[0]["payload"]["answer_seq"], seq);
     assert_eq!(selections[0]["payload"]["claim"], "x is positive [e-2].");
-    assert_eq!(selections[0]["payload"]["answer_sha256"], ledger::sha256_hex(b"The result:\nx is positive [e-2]. no verdict"));
+    assert_eq!(selections[0]["payload"]["occurrence"], 1);
+    assert_eq!(selections[0]["payload"]["answer_sha256"], ledger::sha256_hex(format!("The result:\n{repeated}").as_bytes()));
     assert_eq!(reopened["stats"]["step_checks"], 1);
+    for format in ["html","tex"] {
+        let (code, _, bytes) = raw_http(server.addr.port(), "GET", &format!("/api/sessions/{sid}/export?format={format}"), &auth, b"");
+        assert_eq!(code, 200);
+        let report = String::from_utf8(bytes).unwrap();
+        assert!(report.contains("Selected claim from answer event") && report.contains("Proof step e-1"));
+        assert!(report.contains("occurrence 2"));
+        assert!(report.contains("Follows under the stated assumption."));
+    }
     assert!(ledger.verify_session(sid).is_ok());
     server.shutdown();
 }

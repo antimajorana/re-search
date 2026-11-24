@@ -197,6 +197,7 @@ pub fn handle_delete_session(state: &DesktopState, session_id: &str) -> ApiResul
         };
         state.save_meta(&tombstone).map_err(internal)?;
     }
+    crate::session_folders::forget_session(state, session_id)?;
 
     Ok((
         200,

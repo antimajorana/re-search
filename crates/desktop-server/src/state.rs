@@ -29,6 +29,9 @@ pub struct SessionMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_model_title: Option<bool>,
     pub workspace_root: Option<String>,
+    /// An explicitly detached or restored session must not inherit the launch workspace.
+    #[serde(default)]
+    pub workspace_detached: bool,
     pub pinned_conventions: Option<String>,
     #[serde(default)]
     pub verification_mode: bool,
@@ -152,6 +155,7 @@ pub struct DesktopState {
     pub auth: AuthGuard,
     pub sse: Arc<SseHub>,
     pub active_turns: Mutex<HashSet<String>>,
+    pub(crate) backup_downloads: Mutex<HashMap<String, crate::projects::backup::Download>>,
     pub pending_approvals: Mutex<HashMap<(String, String), Arc<PendingSlot>>>,
     pub ledger_write_lock: Mutex<()>,
     /// Serializes load-modify-save updates to `ui_settings.json`.
@@ -183,6 +187,7 @@ impl DesktopState {
             auth,
             sse,
             active_turns: Mutex::new(HashSet::new()),
+            backup_downloads: Mutex::new(HashMap::new()),
             pending_approvals: Mutex::new(HashMap::new()),
             ledger_write_lock: Mutex::new(()),
             ui_settings_lock: Mutex::new(()),
@@ -327,12 +332,16 @@ impl DesktopState {
         Ok(!ledger.read_session(session_id).map_err(|e| e.to_string())?.is_empty())
     }
 
+    pub(crate) fn workspace_for(&self, meta: Option<&SessionMeta>) -> Option<PathBuf> {
+        match meta {
+            Some(m) if m.workspace_detached => None,
+            _ => meta.and_then(|m| m.workspace_root.as_ref()).map(PathBuf::from)
+                .or_else(|| self.cfg.workspace_root.clone()),
+        }
+    }
+
     pub fn research_env_for_session(&self, session_id: &str) -> Result<ResearchEnv, String> {
-        let meta = self.load_meta(session_id);
-        let ws = meta
-            .and_then(|m| m.workspace_root)
-            .map(PathBuf::from)
-            .or_else(|| self.cfg.workspace_root.clone());
+        let ws = self.workspace_for(self.load_meta(session_id).as_ref());
         let env = match ws {
             Some(root) => ResearchEnv::with_workspace(self.cfg.data_dir.clone(), root)
                 .map_err(|e| e.to_string())?,

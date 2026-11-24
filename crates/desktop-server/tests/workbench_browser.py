@@ -13,6 +13,7 @@ from playwright.sync_api import expect, sync_playwright
 from research_display_browser import check_research_display
 from project_backup_browser import check_project_backup
 from recovery_example_browser import check_recovery_example
+from session_folders_browser import check_session_folders
 
 
 def check_workbench(browser, binary, width, height):
@@ -146,6 +147,7 @@ def main():
                 check_workbench(browser, args.binary.resolve(), width, height)
             check_research_display(browser)
             check_recovery_example(browser, args.binary.resolve())
+            check_session_folders(browser, args.binary.resolve())
         finally:
             browser.close()
 

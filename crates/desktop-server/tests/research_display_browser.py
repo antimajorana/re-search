@@ -51,7 +51,7 @@ def fulfill(route):
             {"kind": "computation", "status": "completed", "via_entry_id": "e-1", "value": "5/2"}
         ]}]})
     elif path == "/api/sessions/s-test/claim-review":
-        assert route.request.post_data_json == {"answer_seq": 12, "claim": "An unlinked statement.", "cited_steps": []}
+        assert route.request.post_data_json == {"answer_seq": 12, "claim": "An unlinked statement.", "occurrence": 0, "cited_steps": []}
         route.fulfill(json={"scope": "claim", "verdict": "needs_revision", "summary": "The selected claim lacks a stated hypothesis."})
     elif path == "/api/sessions/s-test":
         route.fulfill(json={"sources": [], "events": [

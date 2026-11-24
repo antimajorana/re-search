@@ -1,6 +1,7 @@
 // Main entry controller: wires left rail (Active/Archived + Delete), Connect panel, model picker,
 // live pipeline bar, center stream, SSE live updates, resizable Canvas tabs, and postMessage bridge.
 import * as api from '/assets/api.js';
+import { fileNewSession, initFolders, openFolderDialog, sessionFolderName, sessionsInFolder } from '/assets/session_folders.js';
 import { renderMathTextInto } from '/assets/math.js';
 import { attachAnswerTrace } from '/assets/claim_trace.js';
 import {
@@ -212,6 +213,7 @@ async function boot() {
     },
   });
   const navigation = navigationRevision;
+  initFolders(renderSessionList, showToast);
   const background = Promise.all([checkHealth(), loadModels(false), loadSubagents()]);
   await refreshSessionList();
 
@@ -381,13 +383,15 @@ function syncProjectMembership(projectId) {
 
 function renderSessionList() {
   renderSessionRailList(el.sessionList, {
-    sessions: state.sessions,
+    sessions: sessionsInFolder(state.sessions),
     activeSessionId: state.activeSessionId,
     query: state.sessionQuery,
     filterMode: state.railFilterMode,
     onSelect: (id) => selectSession(id, { focus: true }),
     onArchive: handleArchiveSession,
     onDelete: handleDeleteSession,
+    onFile: openFolderDialog,
+    folderName: sessionFolderName,
   });
 }
 
@@ -469,6 +473,8 @@ async function createAndSelectSession(opts = {}, { focus = true, adoptDraft = fa
   const navigation = ++navigationRevision;
   try {
     const created = await api.createSession(opts);
+    try { await fileNewSession(created.id); }
+    catch (error) { showToast(`Session created. Could not file it. ${error.message}`); }
     await refreshSessionList();
     if (navigation === navigationRevision) await selectSession(created.id, { focus, adoptDraft });
     return created.id;

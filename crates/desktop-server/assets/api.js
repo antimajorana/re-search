@@ -80,6 +80,14 @@ export function listSessions() {
   return rawJson('GET', '/api/sessions');
 }
 
+export function getSessionFolders() {
+  return rawJson('GET', '/api/session-folders');
+}
+
+export function changeSessionFolder(payload) {
+  return rawJson('POST', '/api/session-folders', payload);
+}
+
 export function listProjects() {
   return rawJson('GET', '/api/projects');
 }
@@ -90,6 +98,10 @@ export function createProject(payload) {
 
 export function getProject(id) {
   return rawJson('GET', projectPath(id));
+}
+
+export function prepareProjectBackup(id) {
+  return rawJson('POST', projectPath(id, '/backup'), {});
 }
 
 export function updateProject(id, payload) {

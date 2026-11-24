@@ -27,19 +27,22 @@ export function assumptionDependents(entries, root) {
       children.get(parent).push(entry);
     }
   }
-  const ancestors = new Map([[root, null]]);
+  const distance = new Map([[root, 0]]);
   const queue = [root];
   const affected = [];
   for (let i = 0; i < queue.length; i++) {
     const parent = queue[i];
     for (const entry of children.get(parent) || []) {
-      if (ancestors.has(entry.entry_id)) continue;
-      ancestors.set(entry.entry_id, parent);
+      if (distance.has(entry.entry_id)) continue;
+      distance.set(entry.entry_id, distance.get(parent) + 1);
       queue.push(entry.entry_id);
-      affected.push({ entry, parent, direct: parent === root });
+      affected.push(entry);
     }
   }
-  return affected;
+  return affected.map(entry => ({
+    entry, direct: distance.get(entry.entry_id) === 1,
+    via: [...new Set(entry.depends_on)].filter(id => distance.has(id) && distance.get(id) < distance.get(entry.entry_id)),
+  }));
 }
 
 export function renderAssumptionImpact(host, entries, assumption, jump) {
@@ -55,7 +58,7 @@ export function renderAssumptionImpact(host, entries, assumption, jump) {
     ? 'Recheck these downstream steps. The list follows the dependencies recorded in this proof.'
     : 'No downstream step records a dependency on this assumption.';
   host.append(heading, description);
-  for (const { entry, parent, direct } of affected) {
+  for (const { entry, via, direct } of affected) {
     const line = document.createElement('div');
     const link = document.createElement('button');
     link.type = 'button';
@@ -64,7 +67,7 @@ export function renderAssumptionImpact(host, entries, assumption, jump) {
     link.addEventListener('click', () => jump(entry.entry_id));
     const retired = ['superseded', 'rejected'].includes(String(entry.status).toLowerCase()) ? ' · ' + entry.status : '';
     const relation = document.createElement('small');
-    relation.textContent = (direct ? 'Direct dependency' : 'Through ' + parent) + retired;
+    relation.textContent = (direct ? 'Direct dependency' : 'Through ' + via.join(', ')) + retired;
     line.append(link, relation);
     host.append(line);
   }

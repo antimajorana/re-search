@@ -205,6 +205,9 @@ fn dispatch_api(
         ("POST", ["api", "projects", "restore"]) => {
             write_api_res(&mut stream, crate::projects::backup::restore(state, &req.body));
         }
+        ("POST", ["api", "projects", id, "backup"]) => {
+            write_api_res(&mut stream, crate::projects::backup::prepare_download(state, id));
+        }
         ("GET", ["api", "projects", id]) => write_api_res(&mut stream, crate::projects::handle_get(state, id)),
         ("PUT", ["api", "projects", id]) => {
             write_api_res(&mut stream, crate::projects::handle_put(state, id, &req.body));
@@ -239,7 +242,12 @@ fn dispatch_api(
             write_api_res(&mut stream, crate::validation_plans::handle_evaluate(state, id, plan, &req.body));
         }
         ("GET", ["api", "projects", id, "export"]) if req.query.get("format").is_some_and(|v| v == "backup") => {
-            match crate::projects::backup::export(state, id) {
+            let result = if state.auth.has_valid_header_token(req.header("x-research-token"), req.header("authorization")) {
+                crate::projects::backup::export(state, id)
+            } else {
+                crate::projects::backup::take_download(state, id, req.query.get("ticket").map(String::as_str).unwrap_or_default())
+            };
+            match result {
                 Ok(bytes) => write_bytes(&mut stream, 200, "application/zip", &bytes, &[
                     ("Content-Disposition", &format!("attachment; filename=\"{id}.research-backup.zip\"")),
                     ("Cache-Control", "no-store"),
@@ -278,6 +286,9 @@ fn dispatch_api(
             write_api_res(&mut stream, crate::experiments::handle_branch_diff(state, id, experiment, session));
         }
         ("GET", ["api", "sessions"]) => write_api_res(&mut stream, handle_list_sessions(state)),
+        ("GET" | "POST", ["api", "session-folders"]) => {
+            write_api_res(&mut stream, crate::session_folders::handle(state, (method == "POST").then_some(req.body.as_slice())));
+        }
         ("POST", ["api", "sessions"]) => {
             write_api_res(&mut stream, handle_create_session(state, &req.body));
         }

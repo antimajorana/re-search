@@ -105,7 +105,7 @@
 .example-actions [aria-pressed="true"] { outline: 2px solid var(--accent); }
 #example-result details { margin: 1em 0; }
 #example-result pre { overflow: auto; }
-.example-launch { margin: .8em .8em 0 0; }
+.example-launch { margin-bottom: 1em; }
 .workbench-dialog .modal-card { max-width: 100%; }
 #settings-status { margin: 0; font-size: 13px; }
 #settings-status:empty { display: none; }

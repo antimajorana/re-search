@@ -72,6 +72,18 @@ function button(text, handler) {
   return el;
 }
 
+export function claimOccurrence(answer, excerpt, offset) {
+  let count = 0;
+  let start = 0;
+  while (excerpt && start < offset) {
+    const match = answer.indexOf(excerpt, start);
+    if (match < 0 || match >= offset) break;
+    count++;
+    start = match + excerpt.length;
+  }
+  return count;
+}
+
 function showReview(container, review) {
   container.replaceChildren(element('strong', 'Claim review · ' + review.verdict));
   if (review.model) container.append(element('span', ' · ' + review.model));
@@ -107,7 +119,7 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
   let snapshot;
   let selection = 0;
   let activeChoice;
-  let activeClaim;
+  let activeKey;
   let highlighted = '';
   const pendingReviews = new Map();
   const newReviews = new Map();
@@ -115,14 +127,16 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
     const range = window.getSelection();
     if (!range?.rangeCount || !body.contains(range.anchorNode) || !body.contains(range.focusNode)) return '';
     const raw = range.toString().trim();
-    return raw && answer.includes(raw) ? raw : '';
+    return raw && answer.indexOf(raw) >= 0 && answer.indexOf(raw) === answer.lastIndexOf(raw) ? raw : '';
   }
   toggle.addEventListener('pointerdown', () => { highlighted = selectedExcerpt(); });
 
-  async function trace(claim, pick) {
+  async function trace(claim, pick, start) {
     const request = ++selection;
+    const occurrence = claimOccurrence(answer, claim, start);
+    const key = JSON.stringify([claim, occurrence]);
     activeChoice = pick;
-    activeClaim = claim;
+    activeKey = key;
     for (const choice of body.querySelectorAll('.claim-choice')) choice.setAttribute('aria-pressed', String(choice === pick));
     panel.hidden = false;
     panel.replaceChildren(element('h4', 'Evidence for this claim'), element('p', 'Reading the session record…'));
@@ -191,18 +205,19 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
       }
       const reviewPanel = element('div', '', 'claim-review-result');
       reviewPanel.setAttribute('role', 'status');
-      const recorded = newReviews.get(claim) || events.findLast(e => e.kind === 'claim.review' && e.payload?.answer_seq === seq && e.payload.claim === claim)?.payload;
+      const recorded = newReviews.get(key) || events.findLast(e => e.kind === 'claim.review' &&
+        e.payload?.answer_seq === seq && e.payload.claim === claim && (e.payload.occurrence ?? 0) === occurrence)?.payload;
       if (recorded) showReview(reviewPanel, recorded);
       const review = button(recorded ? 'Review this claim again' : 'Review this claim', async () => {
-        if (pendingReviews.has(claim)) return;
+        if (pendingReviews.has(key)) return;
         review.disabled = true;
         reviewPanel.textContent = 'Requesting an independent model review…';
         const citedSteps = matches.filter(match => match.reason === 'Cited proof step').map(match => match.entry.entry_id);
-        const pending = api.reviewClaim(sessionId, { claim, answer_seq: seq, cited_steps: citedSteps });
-        pendingReviews.set(claim, pending);
+        const pending = api.reviewClaim(sessionId, { claim, answer_seq: seq, occurrence, cited_steps: citedSteps });
+        pendingReviews.set(key, pending);
         try {
           const result = await pending;
-          newReviews.set(claim, result);
+          newReviews.set(key, result);
           if (request === selection) {
             showReview(reviewPanel, result);
             review.textContent = 'Review this claim again';
@@ -210,12 +225,12 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
         } catch (error) {
           if (request === selection) reviewPanel.textContent = 'Review unavailable. ' + error.message;
         } finally {
-          pendingReviews.delete(claim);
+          pendingReviews.delete(key);
           review.disabled = false;
-          if (request !== selection && activeClaim === claim && open && activeChoice?.isConnected) trace(claim, activeChoice);
+          if (request !== selection && activeKey === key && open && activeChoice?.isConnected) trace(claim, activeChoice, start);
         }
       });
-      if (pendingReviews.has(claim)) { review.disabled = true; reviewPanel.textContent = 'Review in progress…'; }
+      if (pendingReviews.has(key)) { review.disabled = true; reviewPanel.textContent = 'Review in progress…'; }
       panel.append(review, reviewPanel);
     } catch (error) {
       snapshot = undefined;
@@ -236,8 +251,11 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
     snapshot = undefined;
     const fragment = document.createDocumentFragment();
     let containingChoice;
+    let cursor = 0;
     for (const claim of splitClaims(answer)) {
-      const pick = button('', () => trace(claim, pick));
+      const start = answer.indexOf(claim, cursor);
+      cursor = start + claim.length;
+      const pick = button('', () => trace(claim, pick, start));
       pick.className = 'claim-choice';
       pick.setAttribute('aria-pressed', 'false');
       renderMathTextInto(pick, claim);
@@ -245,7 +263,7 @@ export function attachAnswerTrace(row, answer, seq, sessionId, { inspectStep, op
       if (excerpt && !containingChoice && claim.includes(excerpt)) containingChoice = pick;
     }
     body.replaceChildren(fragment);
-    if (containingChoice) trace(excerpt, containingChoice);
+    if (containingChoice) trace(excerpt, containingChoice, answer.indexOf(excerpt));
     else body.querySelector('.claim-choice')?.focus();
   }
 }

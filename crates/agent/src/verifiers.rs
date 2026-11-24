@@ -188,6 +188,7 @@ fn format_linked_checks(
     ledger: &Ledger,
     events: &[Event],
     ancestors: &[ProofEntry],
+    include_rejected: bool,
 ) -> String {
     let mut lean = Vec::new();
     let mut validation = Vec::new();
@@ -205,7 +206,7 @@ fn format_linked_checks(
         &["lean_check", "sympy_eval", "check_expression_sanity", "search_paper_passages", "search_formal_library"],
     ).into_iter().rev() {
         let relevant_ids: Vec<_> = ancestors.iter()
-            .filter(|entry| !matches!(entry.status, ProofStatus::Superseded | ProofStatus::Rejected))
+                .filter(|entry| entry.status != ProofStatus::Superseded && (include_rejected || entry.status != ProofStatus::Rejected))
             .filter(|entry| {
                 check.seq < entry.seq
                     && entry.tool_call_ref.as_deref().is_some_and(|reference| check.matches_ref(reference))
@@ -430,7 +431,21 @@ pub struct AnswerClaim<'a> {
     pub answer_seq: u64,
     pub answer: &'a str,
     pub claim: &'a str,
+    pub occurrence: usize,
     pub cited_steps: &'a [String],
+}
+
+impl AnswerClaim<'_> {
+    fn context_xml(&self) -> Result<String, String> {
+        let (offset, _) = self.answer.match_indices(self.claim).nth(self.occurrence)
+            .ok_or("The selected occurrence could not be found in the saved answer.")?;
+        let before = &self.answer[..offset];
+        let after = &self.answer[offset + self.claim.len()..];
+        let start = before.char_indices().rev().nth(1499).map_or(0, |(i, _)| i);
+        let end = after.char_indices().nth(1500).map_or(after.len(), |(i, _)| i);
+        Ok(format!("<answer_context><preceding>{}</preceding><selected_claim>{}</selected_claim><following>{}</following></answer_context>\n\n",
+            xml_text(&before[start..]), xml_text(self.claim), xml_text(&after[..end])))
+    }
 }
 
 fn execute_verifier(
@@ -448,6 +463,7 @@ fn execute_verifier(
     if model.trim().is_empty() {
         return Err("verifier model name must not be empty".into());
     }
+    let selected_claim = params.claim.map(|claim| claim.context_xml()).transpose()?.unwrap_or_default();
     // Durable pre-call attempt barrier BEFORE contacting transport.
     let attempt_seq = ledger
         .append_with_hash(
@@ -468,9 +484,9 @@ fn execute_verifier(
     let tex_audit_xml = format_deterministic_tex_audit_xml(&tex_audit);
     let linked_checks = if kind == "full" {
         let ancestors = collect_ancestor_slice(entries_slice, target_entry_id)?;
-        format_linked_checks(ledger, params.events, &ancestors)
+        format_linked_checks(ledger, params.events, &ancestors, false)
     } else {
-        format_linked_checks(ledger, params.events, entries_slice)
+        format_linked_checks(ledger, params.events, entries_slice, params.on_demand)
     };
     let system_prompt = if kind == "claim" {
         "You are an independent verifier of one selected claim (claim_verification). Review only the exact text in <selected_claim>. \
@@ -520,14 +536,7 @@ fn execute_verifier(
     let user_prompt = format!(
         "target_entry_id: {target_entry_id}\nverification_kind: {kind}\n\n\
          {problem_context}\n\n\
-         {delivered_answer_xml}{}{linked_checks}{}\n\n{tex_audit_xml}",
-        params.claim.map_or_else(String::new, |c| {
-            let (before, after) = c.answer.split_once(c.claim).unwrap_or(("", ""));
-            let start = before.char_indices().rev().nth(1499).map_or(0, |(i, _)| i);
-            let end = after.char_indices().nth(1500).map_or(after.len(), |(i, _)| i);
-            format!("<answer_context>{}{}{}</answer_context>\n<selected_claim>{}</selected_claim>\n\n",
-                xml_text(&before[start..]), xml_text(c.claim), xml_text(&after[..end]), xml_text(c.claim))
-        }),
+         {delivered_answer_xml}{selected_claim}{linked_checks}{}\n\n{tex_audit_xml}",
         format_entries_xml(entries_slice)
     );
 
@@ -561,6 +570,11 @@ fn execute_verifier(
         .map_err(|e| format!("failed to record verifier.request: {e}"))?;
 
     let mut obs = CancelOnlyObserver(params.cancel);
+    if obs.is_cancelled() {
+        ledger.append_with_hash(session, "verifier.cancelled", EVENT_VERSION,
+            &json!({"kind": kind, "attempt_seq": attempt_seq, "phase": "before_send"})).map_err(|e| e.to_string())?;
+        return Err("Review cancelled before the model request.".into());
+    }
     let resp = transport.send_prepared_streaming(&prepared, &mut obs).map_err(|e| e.to_string())?;
     let resp_blob = ledger
         .put_blob(&resp.raw_body)
@@ -657,6 +671,7 @@ fn execute_verifier(
         payload["answer_sha256"] = json!(ledger::sha256_hex(c.answer.as_bytes()));
         payload["claim"] = json!(c.claim);
         payload["cited_steps"] = json!(c.cited_steps);
+        payload["occurrence"] = json!(c.occurrence);
     }
     let event_seq = ledger
         .append_with_hash(
@@ -739,7 +754,7 @@ pub fn review_answer_claim(
     transport: &dyn Transport, ledger: &Ledger, env: &ResearchEnv, session: &str,
     selection: AnswerClaim<'_>, model: &str, cancel: &CancelToken,
 ) -> Result<VerificationReport, String> {
-    if selection.claim.trim().is_empty() || selection.claim.chars().count() > 8192 || !selection.answer.contains(selection.claim) {
+    if selection.claim.trim().is_empty() || selection.claim.chars().count() > 8192 {
         return Err("Select an exact excerpt of up to 8192 characters from the saved answer.".into());
     }
     let events = ledger.read_session(session).map_err(|e| e.to_string())?;

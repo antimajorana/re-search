@@ -183,8 +183,8 @@ function renderEmptyHero(inner) {
       <span>Use a subscription, an API key, or a local Ollama model.</span></div>
       <button type="button" class="pill-btn primary hero-connect-btn">Connect model</button>
     </div>`}
-    <div class="starter-grid" aria-label="Example research questions"></div>
     <button type="button" class="pill-btn example-launch">Try a worked example offline</button>
+    <div class="starter-grid" aria-label="Example research questions"></div>
     <button type="button" class="project-shortcut">Open a research project <span aria-hidden="true">→</span></button>
   `;
   hero.querySelector('.hero-connect-btn')?.addEventListener('click', () => onOpenConnect?.('providers'));

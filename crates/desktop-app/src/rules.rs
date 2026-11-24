@@ -62,7 +62,10 @@ pub fn is_allowed_export(url: &str, base_url: &str) -> bool {
         session.split(['?', '#']).next().unwrap_or_default()
     } else if let Some(project) = rest
         .strip_prefix("/api/projects/")
-        .and_then(|path| path.strip_suffix("?format=bib").or_else(|| path.strip_suffix("?format=backup")))
+        .and_then(|path| path.strip_suffix("?format=bib").or_else(|| {
+            let (route, ticket) = path.split_once("?format=backup&ticket=")?;
+            (ticket.len() == 32 && ticket.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))).then_some(route)
+        }))
     {
         project
     } else {
@@ -170,7 +173,7 @@ mod tests {
             "http://127.0.0.1:43123/api/sessions/s-0123abcd/export?format=zip",
             "http://127.0.0.1:43123/api/sessions/s_1.fork-2/export?format=tex",
             "http://127.0.0.1:43123/api/projects/p-0123abcd/export?format=bib",
-            "http://127.0.0.1:43123/api/projects/p-0123abcd/export?format=backup",
+            "http://127.0.0.1:43123/api/projects/p-0123abcd/export?format=backup&ticket=0123456789abcdef0123456789abcdef",
         ] {
             assert!(is_allowed_export(ok, BASE), "{ok}");
         }

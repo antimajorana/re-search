@@ -100,6 +100,8 @@ export function renderSessionRailList(containerEl, opts = {}) {
     }
 
     const metaParts = [];
+    const folder = opts.folderName?.(s.id);
+    if (folder) metaParts.push(folder);
     if (stats.model) metaParts.push(stats.model);
     if (s.workspace_root) metaParts.push(basenameOf(s.workspace_root));
     if (metaParts.length === 0) metaParts.push(s.id);
@@ -117,6 +119,13 @@ export function renderSessionRailList(containerEl, opts = {}) {
 
     const actions = document.createElement('div');
     actions.className = 'session-row-actions';
+    const file = document.createElement('button');
+    file.type = 'button';
+    file.className = 'row-action-btn session-file-btn';
+    file.title = 'Move to folder';
+    file.setAttribute('aria-label', `Move ${s.title || s.id} to folder`);
+    file.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 5h6l2 3h10v11H3z"/></svg>';
+    file.addEventListener('click', () => opts.onFile?.(s));
 
     const archBtn = document.createElement('button');
     archBtn.type = 'button';
@@ -140,7 +149,7 @@ export function renderSessionRailList(containerEl, opts = {}) {
       if (typeof opts.onDelete === 'function') opts.onDelete(s);
     });
 
-    actions.append(archBtn, delBtn);
+    actions.append(file, archBtn, delBtn);
     row.append(btn, actions);
     containerEl.appendChild(row);
   }

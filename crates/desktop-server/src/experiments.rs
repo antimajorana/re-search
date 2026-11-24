@@ -232,6 +232,39 @@ pub(crate) fn backup_experiments(state: &DesktopState, id: &str) -> Result<Vec<E
     Ok(Store::open(state)?.experiments.into_iter().filter(|row| row.project_id == id).collect())
 }
 
+pub(crate) fn check_backup_anchors(rows: &[Experiment], ledgers: &std::collections::BTreeMap<String, Vec<Event>>) -> Result<()> {
+    let events = |id: &str| ledgers.get(id).map(Vec::as_slice).ok_or_else(|| bad("missing experiment session"));
+    for experiment in rows {
+        let base = &experiment.baseline;
+        let anchor = event_at(events(&base.session_id)?, base.at_seq)?;
+        if anchor.event_hash != base.event_hash || entry_id(anchor) != base.entry_id {
+            return Err(bad("experiment baseline does not match its saved ledger"));
+        }
+        for branch in &experiment.branches {
+            let trace = events(&branch.session_id)?;
+            let fork = event_at(trace, branch.fork_seq)?;
+            if fork.kind != "session.fork" || fork.event_hash != branch.fork_event_hash
+                || fork.payload["parent_session"].as_str() != Some(base.session_id.as_str())
+                || fork.payload["parent_event_hash"].as_str() != Some(base.event_hash.as_str())
+                || fork.payload["parent_seq"].as_u64() != Some(base.at_seq) {
+                return Err(bad("experiment branch does not match its saved fork"));
+            }
+            for item in &branch.observations {
+                let reference = &item.evidence;
+                let anchor = event_at(trace, reference.seq)?;
+                if reference.seq < fork.seq || anchor.event_hash != reference.event_hash || entry_id(anchor) != reference.entry_id {
+                    return Err(bad("experiment observation does not match its saved evidence"));
+                }
+                let (tools, omitted) = collect_tool_receipts(&trace[fork.seq as usize..reference.seq as usize]);
+                if json!(tools) != json!(reference.tools) || omitted != reference.tools_omitted {
+                    return Err(bad("experiment tool receipts do not match their saved evidence"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn restore_experiments(state: &DesktopState, project: &Project, rows: &[Experiment], apply: bool) -> Result<()> {
     let mut store = Store::open(state)?;
     let mut ids = std::collections::HashSet::new();

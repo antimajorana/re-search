@@ -1,6 +1,6 @@
 //! Standalone HTML export with embedded CSS and KaTeX-ready math delimiters (F15).
 
-use crate::latex::SessionExportData;
+use crate::latex::{requested_reviews, SessionExportData};
 
 fn html_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -40,6 +40,11 @@ pub(crate) fn render_html_document(data: &SessionExportData) -> String {
         }
         if *unverified { body.push_str("<p>The verifier reported unresolved issues.</p>"); }
         body.push_str(&format!("<p style=\"white-space:pre-wrap\">{}</p></section>\n", html_escape(answer)));
+    }
+    for (heading, lines) in requested_reviews(&data.events) {
+        body.push_str(&format!("<section><h2>{}</h2>", html_escape(&heading)));
+        for line in lines { body.push_str(&format!("<p>{}</p>", html_escape(&line))); }
+        body.push_str("</section>\n");
     }
     body.push_str("<section class=\"steps\"><h2>Proof Graph Steps</h2>\n");
     for e in &data.entries {

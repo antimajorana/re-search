@@ -8,7 +8,7 @@ from playwright.sync_api import expect
 def check_project_backup(browser, binary, root, original):
     archive = root / "project.research-backup.zip"
     with original.expect_download() as downloaded:
-        original.get_by_role("link", name="Back up project").click()
+        original.get_by_role("button", name="Back up project").click()
     downloaded.value.save_as(archive)
     server = subprocess.Popen([
         str(binary), "ui", "--data-dir", str(root / "recovered-data"), "--port", "0",

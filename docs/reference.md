@@ -84,6 +84,10 @@ re-search verify "$source_session" --data-dir ./data
 
 ## Exports and verification
 
+Use **Folders…** in the session list to group sessions. Folder filters work with search and archived sessions. Moving a session between folders preserves its project and history.
+
+Use **Projects → Back up project** for a restorable archive. The archive includes the project's sessions, folder assignments, evidence, saved papers, manuscript recovery copies, experiments, and private validation values. Restore it into a different installation or data directory with **Restore backup**. Existing projects and sessions retain their identities. External workspace folders must be backed up separately and reattached. The archive limit is 60 MiB compressed and 256 MiB expanded.
+
 Verified, Deep, and Interactive turns on in-core providers review the delivered answer and its Proof DAG together. The ledger records one full-solution verdict per review round. To request a separate verdict, use **Review this claim** on a passage in the answer or review a selected step in the proof graph. This action calls the configured in-core verifier. Tracing an answer, viewing historical evidence, and inspecting downstream dependencies run locally. Linked Lean and computation results apply to the claims and inputs they checked.
 
 Use **Canvas → LaTeX** to export a report as `.tex`, `.html` or **Reproducible ZIP**. **Explain** exports its own thread as Markdown or HTML. A session ZIP includes `report.tex`, `references.bib`, `report.html`, `ledger.json`, available sources and recorded computation artifacts, with provenance in `replay_manifest.json` and instructions in `REPRODUCE.md`.

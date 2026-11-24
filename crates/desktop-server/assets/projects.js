@@ -61,6 +61,7 @@ export function initProjects(opts) {
   byId('new-session').addEventListener('click', createProjectSession);
   byId('link-session-form').addEventListener('submit', linkSession);
   byId('restore-btn')?.addEventListener('click', () => byId('restore-file').click());
+  byId('backup-btn')?.addEventListener('click', downloadBackup);
   byId('restore-file')?.addEventListener('change', restoreBackup);
   byId('promote-cancel').addEventListener('click', () => { promotion = null; renderPromotion(); });
   byId('promote-form').addEventListener('submit', savePromotion);
@@ -175,12 +176,7 @@ function displayProject(project) {
     byId('open-question-text').value = draft?.question || '';
   }
   currentProject = project;
-  const backup = byId('backup-link');
-  if (backup) {
-    backup.hidden = !project;
-    if (project) backup.href = `/api/projects/${encodeURIComponent(project.id)}/export?format=backup`;
-    else backup.removeAttribute('href');
-  }
+  byId('backup-btn').hidden = !project;
   if (project) rememberProject(project.id);
   renderPicker();
   byId('notebook').hidden = !project || Boolean(edit) || loading;
@@ -195,6 +191,26 @@ function displayProject(project) {
   renderNotes(project, true);
   refreshProjectSessions();
   renderPromotion();
+}
+
+async function downloadBackup() {
+  const project = currentProject;
+  if (!project) return;
+  const button = byId('backup-btn');
+  button.disabled = true;
+  try {
+    showStatus('Preparing project backup…');
+    const { ticket } = await api.prepareProjectBackup(project.id);
+    const link = document.createElement('a');
+    link.href = `/api/projects/${encodeURIComponent(project.id)}/export?format=backup&ticket=${encodeURIComponent(ticket)}`;
+    link.download = `${project.id}.research-backup.zip`;
+    link.click();
+    showStatus('Project backup download started.');
+  } catch (err) {
+    showStatus(err.message, true);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function restoreBackup(event) {

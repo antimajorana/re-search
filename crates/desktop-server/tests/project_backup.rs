@@ -1,7 +1,7 @@
 //! A portable project backup must preserve exact evidence, isolate the project, and refuse collisions.
 mod common;
 
-use common::{raw_http, test_cfg};
+use common::{launch_cookie, raw_http, test_cfg};
 use desktop_server::{start_desktop_server, RunningDesktopServer};
 use ledger::{sha256_hex, Ledger};
 use serde_json::{json, Value};
@@ -56,7 +56,13 @@ fn restore_scoped_project_and_exact_receipts_without_rebinding_workspaces() {
     let target = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
     let src = start_desktop_server(test_cfg(source.path(), None, None, None)).unwrap();
-    let dst = start_desktop_server(test_cfg(target.path(), None, None, None)).unwrap();
+    let dst = start_desktop_server(test_cfg(
+        target.path(),
+        Some(workspace.path().to_owned()),
+        None,
+        None,
+    ))
+    .unwrap();
     let project = post(&src, "/api/projects", json!({"title":"Gap review"}), 201);
     let pid = project["id"].as_str().unwrap();
     let sid = "s-restore-test";
@@ -67,12 +73,39 @@ fn restore_scoped_project_and_exact_receipts_without_rebinding_workspaces() {
         200,
     );
     post(&src, "/api/sessions", json!({"id":"s-unrelated"}), 200);
+    let folders = "/api/session-folders";
+    let from = post(
+        &src,
+        folders,
+        json!({"revision":0,"op":"create","name":"Spectra"}),
+        200,
+    );
+    post(
+        &src,
+        folders,
+        json!({"revision":1,"op":"move","session":sid,"folder":from["created"]}),
+        200,
+    );
+    post(
+        &src,
+        folders,
+        json!({"revision":2,"op":"move","session":"s-unrelated","folder":from["created"]}),
+        200,
+    );
+    let into = post(
+        &dst,
+        folders,
+        json!({"revision":0,"op":"create","name":"spectra"}),
+        200,
+    );
     let ledger = Ledger::open(source.path()).unwrap();
     let text = b"Periodic boundary conditions";
     let hash = ledger.put_blob(text).unwrap();
     let file = "paper/boundary.txt";
     let directory = source.path().join("sessions").join(sid);
     fs::create_dir_all(directory.join("sources/paper")).unwrap();
+    fs::create_dir_all(directory.join("work")).unwrap();
+    fs::write(directory.join("work/mcp.json"), b"private tool configuration").unwrap();
     fs::write(directory.join("sources").join(file), text).unwrap();
     fs::write(directory.join("manuscript-drafts.json"), b"[]").unwrap();
     fs::write(
@@ -134,11 +167,21 @@ fn restore_scoped_project_and_exact_receipts_without_rebinding_workspaces() {
         &[],
     );
     assert_eq!(status, 200, "{}", String::from_utf8_lossy(&backup));
+    let link = format!("/api/projects/{pid}/export?format=backup");
+    let cookie = launch_cookie(src.addr.port(), &src.info.token);
+    let get = |path: &str| raw_http(src.addr.port(), "GET", path, &[("Cookie", &cookie)], &[]);
+    assert_eq!(get(&link).0, 403);
+    let ticket = post(&src, &format!("/api/projects/{pid}/backup"), json!({}), 200);
+    let link = format!("{link}&ticket={}", ticket["ticket"].as_str().unwrap());
+    assert_eq!(get(&link).0, 200);
+    assert_eq!(get(&link).0, 403);
     let info = zip::ZipArchive::new(Cursor::new(&backup)).unwrap();
     let foreign_object = format!("objects/{unrelated}");
     assert!(!info
         .file_names()
         .any(|name| name.unwrap() == foreign_object));
+    let private_config = format!("objects/{}", sha256_hex(b"private tool configuration"));
+    assert!(!info.file_names().any(|name| name.unwrap() == private_config));
     let restore = |buf: &[u8]| request(&dst, "POST", "/api/projects/restore", buf);
 
     let rebound = rewrite_manifest(&backup, |m| {
@@ -178,6 +221,11 @@ fn restore_scoped_project_and_exact_receipts_without_rebinding_workspaces() {
     );
     assert!(restored.get_blob(&unrelated).is_err());
     assert!(restored.read_session("s-unrelated").unwrap().is_empty());
+    let (_, catalog) = request(&dst, "GET", folders, &[]);
+    let catalog: Value = serde_json::from_slice(&catalog).unwrap();
+    assert_eq!(catalog["folders"].as_array().unwrap().len(), 1);
+    assert_eq!(catalog["members"][sid], into["created"]);
+    assert!(catalog["members"]["s-unrelated"].is_null());
     let directory = target.path().join("sessions").join(sid);
     assert_eq!(
         fs::read(directory.join("sources").join(file)).unwrap(),
@@ -190,6 +238,11 @@ fn restore_scoped_project_and_exact_receipts_without_rebinding_workspaces() {
     let meta: Value =
         serde_json::from_slice(&fs::read(directory.join("meta.json")).unwrap()).unwrap();
     assert!(meta["workspace_root"].is_null());
+    let (status, restored_session) = request(&dst, "GET", &format!("/api/sessions/{sid}"), &[]);
+    assert_eq!(status, 200);
+    assert!(
+        serde_json::from_slice::<Value>(&restored_session).unwrap()["workspace_root"].is_null()
+    );
     let (_, plan_bytes) = request(&dst, "GET", &plans, &[]);
     assert!(String::from_utf8(plan_bytes)
         .unwrap()

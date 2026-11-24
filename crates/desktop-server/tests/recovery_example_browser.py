@@ -66,14 +66,33 @@ def check_recovery_example(browser, binary):
             page.get_by_role("button", name="Start a manuscript").click()
             expect(editor).to_have_value("First version")
             session = page.evaluate("async () => (await (await import('/assets/api.js')).listSessions()).sessions[0].id")
+            other = page.context.new_page()
+            token = page.evaluate("async () => (await import('/assets/api.js')).getCsrfToken()")
+            other.set_extra_http_headers({"X-ReSearch-Token": token})
+            other.goto(page.url)
+            other_editor = open_manuscript(other)
+            expect(other_editor).to_have_value("First version")
+            attempts = []
+            def first_write_fails(route):
+                if route.request.method == "PUT":
+                    attempts.append(1)
+                    if len(attempts) == 1:
+                        route.fulfill(status=503, json={"error": "Retry the snapshot"})
+                        return
+                route.continue_()
+            page.route("**/manuscript-drafts", first_write_fails)
             editor.fill("My recovered derivation")
             expect(page.locator("#latex-recovery-status")).to_have_text("Recovery copy saved")
+            assert len(attempts) >= 2
+            other_editor.fill("An independent derivation")
+            expect(other.locator("#latex-recovery-status")).to_have_text("Recovery copy saved")
+            other.close()
             assert manuscript.read_text(encoding="utf-8") == "First version"
             # A second window that did not read the revision cannot wipe this draft.
             status = page.evaluate("""async session => {
               const api = await import('/assets/api.js');
               const [saved] = (await api.getManuscriptDrafts(session)).drafts;
-              try { await api.putManuscriptDraft(session, {...saved, revision:null, draft:null}); }
+              try { await api.putManuscriptDraft(session, {workspace:saved.workspace, path:saved.path, revision:null, draft:null}); }
               catch (e) { return e.status; }
             }""", session)
             assert status == 409
@@ -83,6 +102,7 @@ def check_recovery_example(browser, binary):
             editor = open_manuscript(page)
             expect(editor).to_have_value("An external edit")
             expect(editor).to_have_attribute("readonly", "")
+            expect(page.locator("#latex-recovery-list option")).to_have_count(2)
             page.get_by_role("button", name="Restore draft").click()
             expect(editor).to_have_value("My recovered derivation")
             page.locator("#latex-save-btn").click()
@@ -91,7 +111,10 @@ def check_recovery_example(browser, binary):
 
         with open_install(browser, binary, root) as page:
             editor = open_manuscript(page)
-            page.once("dialog", lambda dialog: dialog.accept())
+            page.on("dialog", lambda dialog: dialog.accept())
+            page.get_by_role("button", name="Discard draft").click()
+            expect(page.locator("#latex-recovery-list option")).to_have_count(1)
+            expect(page.locator("#latex-recovery-list option")).to_contain_text("alternate copy")
             page.get_by_role("button", name="Discard draft").click()
             expect(page.locator("#latex-recovery")).to_be_hidden()
             expect(editor).to_be_editable()

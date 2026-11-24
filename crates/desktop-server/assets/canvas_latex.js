@@ -18,6 +18,7 @@ let fileHash;
 const drafts = new Map();
 const recovered = new Map();
 const revisions = new Map();
+const recoveryTargets = new Map();
 const writes = new Map();
 let detachedDraft = false;
 let recoveryLoad = null;
@@ -139,21 +140,42 @@ function queueRecovery(key, draft) {
   const snapshot = draft ? { text: draft.text, originalContent: draft.originalContent, fileHash: draft.fileHash ?? null } : null;
   let queue = writes.get(key);
   if (queue) { queue.next = snapshot; return queue.promise; }
-  if (!snapshot && !revisions.has(key)) return Promise.resolve(true);
+  if (!snapshot && !revisions.has(recoveryTargets.get(key) || key)) return Promise.resolve(true);
   queue = { next: snapshot };
   writes.set(key, queue);
   const [session, workspace, path] = JSON.parse(key);
   queue.promise = (async () => {
+    let failures = 0;
     try {
       while (queue.next !== undefined) {
         const next = queue.next;
         queue.next = undefined;
         recoveryStatus(key, 'Saving recovery copy…');
-        const result = await api.putManuscriptDraft(session, { workspace, path, revision: revisions.get(key) ?? null, draft: next });
-        if (result.revision) revisions.set(key, result.revision);
-        else revisions.delete(key);
+        const address = recoveryTargets.get(key) || key;
+        const copy = JSON.parse(address)[3] || null;
+        let result;
+        try {
+          result = await api.putManuscriptDraft(session, { workspace, path, copy,
+            revision: revisions.get(address) ?? null, draft: next, keep_both: Boolean(next) });
+        } catch (err) {
+          if ((err.status && err.status < 500) || failures >= 3) throw err;
+          if (queue.next === undefined) queue.next = next;
+          recoveryStatus(key, 'Retrying recovery copy…');
+          await new Promise(resolve => setTimeout(resolve, 250 * 2 ** failures++));
+          continue;
+        }
+        failures = 0;
+        const stored = result.copy ? JSON.stringify([session, workspace, path, result.copy]) : key;
+        if (result.revision) {
+          recoveryTargets.set(key, stored);
+          revisions.set(stored, result.revision);
+          if (result.copy !== copy && result.copy) notifyFn('Another window edited this manuscript. Both recovery copies were kept.');
+        } else {
+          revisions.delete(stored);
+          recoveryTargets.delete(key);
+        }
       }
-      recoveryStatus(key, revisions.has(key) ? 'Recovery copy saved' : '');
+      recoveryStatus(key, revisions.has(recoveryTargets.get(key) || key) ? 'Recovery copy saved' : '');
       return true;
     } catch (err) {
       recoveryStatus(key, 'Recovery copy unavailable');
@@ -173,11 +195,12 @@ function renderRecoveryOptions() {
   const previous = select.value;
   select.replaceChildren();
   for (const key of recovered.keys()) {
-    const [session, workspace, path] = JSON.parse(key);
+    const [session, workspace, path, copy] = JSON.parse(key);
     if (session !== currentSessionId) continue;
     const option = document.createElement('option');
     option.value = key;
     option.textContent = `${path || 'Scratch manuscript'}${workspace && workspace !== currentWorkspace ? ' — ' + workspace : ''}`;
+    if (copy) option.textContent += ` (alternate copy, ${new Date(recovered.get(key).updated).toLocaleTimeString()})`;
     select.appendChild(option);
   }
   panel.hidden = select.options.length === 0;
@@ -190,23 +213,32 @@ function receiveRecovery(sessionId, data) {
     if (JSON.parse(key)[0] === sessionId) recovered.delete(key);
   }
   for (const rec of data.drafts || []) {
-    const key = JSON.stringify([sessionId, rec.workspace, rec.path]);
-    if (writes.has(key) || drafts.has(key)) continue;
+    const documentKey = JSON.stringify([sessionId, rec.workspace, rec.path]);
+    const key = rec.copy ? JSON.stringify([sessionId, rec.workspace, rec.path, rec.copy]) : documentKey;
+    if ((writes.has(documentKey) || drafts.has(documentKey)) && (recoveryTargets.get(documentKey) || documentKey) === key) continue;
     revisions.set(key, rec.revision);
-    recovered.set(key, { ...rec.draft, editorBaseline: rec.draft.originalContent.replace(/\r\n?/g, '\n') });
+    recovered.set(key, { ...rec.draft, updated: rec.updated_ms, editorBaseline: rec.draft.originalContent.replace(/\r\n?/g, '\n') });
   }
   renderRecoveryOptions();
 }
 
-function restoreSelectedDraft() {
+async function restoreSelectedDraft() {
   const key = document.getElementById('latex-recovery-list')?.value;
   const draft = recovered.get(key);
   if (!draft) return;
   rememberDraft();
-  const [, workspace, path] = JSON.parse(key);
+  const [session, workspace, path] = JSON.parse(key);
+  const documentKey = JSON.stringify([session, workspace, path]);
+  if (writes.has(documentKey)) await writes.get(documentKey).promise;
+  if (currentSessionId !== session || !recovered.has(key)) return;
+  if (drafts.has(documentKey)) {
+    const previous = recoveryTargets.get(documentKey) || documentKey;
+    recovered.set(previous, { ...drafts.get(documentKey), updated: Date.now() });
+  }
   const detached = workspace !== currentWorkspace;
   recovered.delete(key);
-  drafts.set(key, draft);
+  drafts.set(documentKey, draft);
+  recoveryTargets.set(documentKey, key);
   fileRequest++;
   if (!detached) {
     if (![...fileSelectEl.options].some(o => o.value === path)) {
@@ -218,7 +250,7 @@ function restoreSelectedDraft() {
     fileSelectEl.value = path;
   }
   showFile(draft.text, true);
-  displayedFile = key;
+  displayedFile = documentKey;
   ({ originalContent, editorBaseline, fileHash } = draft);
   detachedDraft = detached;
   if (detached) {
@@ -229,7 +261,7 @@ function restoreSelectedDraft() {
   } else if (saveBtn) {
     saveBtn.disabled = !currentWorkspace;
   }
-  recoveryStatus(key, 'Recovery copy restored');
+  recoveryStatus(documentKey, 'Recovery copy restored');
   renderRecoveryOptions();
   editorEl.focus();
 }
@@ -237,10 +269,17 @@ function restoreSelectedDraft() {
 async function discardSelectedDraft() {
   const key = document.getElementById('latex-recovery-list')?.value;
   if (!recovered.has(key) || !window.confirm('Discard this recovery copy?')) return;
-  if (!await queueRecovery(key, null)) return;
+  const [session, workspace, path, copy] = JSON.parse(key);
+  try {
+    await api.putManuscriptDraft(session, { workspace, path, copy, revision: revisions.get(key), draft: null });
+  } catch (err) {
+    notifyFn(`Could not discard the recovery copy. ${err.message}`);
+    return;
+  }
+  revisions.delete(key);
   recovered.delete(key);
   renderRecoveryOptions();
-  if (displayedFile === key) await refreshWorkspaceFiles(currentSessionId);
+  if (displayedFile === JSON.stringify([session, workspace, path])) await refreshWorkspaceFiles(currentSessionId);
 }
 
 function openDraft(path, text, truncated, hash) {
@@ -252,7 +291,7 @@ function openDraft(path, text, truncated, hash) {
   if (draft) {
     ({ originalContent, editorBaseline, fileHash } = draft);
   }
-  if (!draft && recovered.has(key)) {
+  if (!draft && [...recovered.keys()].some(address => JSON.stringify(JSON.parse(address).slice(0, 3)) === key)) {
     editorEl.readOnly = true;
     if (saveBtn) saveBtn.disabled = true;
     recoveryStatus(key, 'Choose Restore or Discard');

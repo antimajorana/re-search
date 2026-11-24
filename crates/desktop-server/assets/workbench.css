@@ -32,6 +32,8 @@
   justify-content: center;
 }
 
+.rail-folders { display: flex; gap: 6px; padding: 0 12px 6px; }
+.rail-folders select { flex: 1; min-width: 0; }
 .session-row {
   position: relative;
   display: flex;
@@ -39,7 +41,7 @@
   border-radius: var(--radius-md);
 }
 .session-row > .session-item {
-  padding-right: 58px;
+  padding-right: 84px;
 }
 .session-row-actions {
   position: absolute;

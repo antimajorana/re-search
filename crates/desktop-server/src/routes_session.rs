@@ -123,10 +123,7 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
         let events = ledger.read_session(&id).unwrap_or_default();
         let parent_session = session_fork_info(meta.as_ref(), &events).map(|fork| fork.parent_session);
         let title = session_title(meta.as_ref(), &events, &id);
-        let workspace_root = meta
-            .as_ref()
-            .and_then(|m| m.workspace_root.clone())
-            .or_else(|| state.cfg.workspace_root.as_ref().map(|p| p.display().to_string()));
+        let workspace_root = state.workspace_for(meta.as_ref());
         let created_ms = meta
             .as_ref()
             .map(|m| m.created_ms)
@@ -218,6 +215,7 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
         title: title.clone(),
         allow_model_title: Some(explicit_title.is_none()),
         workspace_root: workspace_root.clone(),
+        workspace_detached: false,
         pinned_conventions: val
             .get("pinned_conventions")
             .and_then(Value::as_str)
@@ -286,10 +284,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
     let linked_sources = crate::evidence::linked_session_sources(state, &ledger, &events);
     let stats = summarize_session_events(&events);
     let title = session_title(meta.as_ref(), &events, session_id);
-    let workspace_root = meta
-        .as_ref()
-        .and_then(|m| m.workspace_root.clone())
-        .or_else(|| state.cfg.workspace_root.as_ref().map(|p| p.display().to_string()));
+    let workspace_root = state.workspace_for(meta.as_ref());
     let pending = state.pending_for_session(session_id);
     let (route, provenance) = crate::cli_turn::session_route(meta.as_ref(), &events);
     let is_agy = route.as_str() == Some(crate::state::ANTIGRAVITY_ROUTE);
@@ -443,6 +438,7 @@ pub fn handle_fork(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRe
         title: format!("Fork of {}", session_title(parent_meta.as_ref(), &events, session_id)),
         allow_model_title: Some(false),
         workspace_root: parent_meta.as_ref().and_then(|m| m.workspace_root.clone()),
+        workspace_detached: parent_meta.as_ref().is_some_and(|m| m.workspace_detached),
         pinned_conventions: parent_meta.as_ref().and_then(|m| m.pinned_conventions.clone()),
         verification_mode: parent_meta.as_ref().is_some_and(|m| m.verification_mode),
         calculation_mode: parent_meta.as_ref().is_some_and(|m| m.calculation_mode),

@@ -21,6 +21,58 @@ const MAX_CONTENT: usize = 256 * 1024 * 1024;
 const MAX_ENTRIES: usize = 16384;
 const FORMAT: &str = "reSearch-project-v1";
 
+pub(crate) struct Download {
+    id: String,
+    ready: std::time::Instant,
+    bytes: Vec<u8>,
+}
+
+// Backups include private validation controls and conversations. The stream cookie alone
+// cannot authorize one. A header-authenticated click mints a short-lived single-use ticket.
+pub(crate) fn prepare_download(state: &DesktopState, id: &str) -> ApiResult {
+    let bytes = export(state, id)?;
+    let mut pool = state
+        .backup_downloads
+        .lock()
+        .map_err(|_| storage("backup downloads unavailable"))?;
+    pool.retain(|_, d| d.ready.elapsed().as_secs() < 60);
+    if pool.len() >= 4
+        || pool.values().map(|v| v.bytes.len()).sum::<usize>() + bytes.len() > 2 * MAX_ARCHIVE
+    {
+        return Err(conflict(
+            "Finish your pending backup downloads and try again.",
+        ));
+    }
+    let ticket = tools::canon::random_hex(16);
+    pool.insert(
+        ticket.clone(),
+        Download {
+            id: id.to_owned(),
+            ready: std::time::Instant::now(),
+            bytes,
+        },
+    );
+    Ok((200, json!({"ticket": ticket})))
+}
+
+pub(crate) fn take_download(state: &DesktopState, id: &str, ticket: &str) -> Result<Vec<u8>> {
+    let mut pool = state
+        .backup_downloads
+        .lock()
+        .map_err(|_| storage("backup downloads unavailable"))?;
+    pool.retain(|_, d| d.ready.elapsed().as_secs() < 60);
+    if pool.get(ticket).is_none_or(|d| d.id != id) {
+        return Err((
+            403,
+            "Back up the project again to start a new download.".into(),
+        ));
+    }
+    Ok(pool
+        .remove(ticket)
+        .expect("ticket checked under mutex")
+        .bytes)
+}
+
 #[derive(Serialize, Deserialize)]
 struct Manifest {
     format: String,
@@ -30,6 +82,8 @@ struct Manifest {
     files: BTreeMap<String, String>,
     experiments: Vec<experiments::Experiment>,
     validation_plans: Vec<validation_plans::StoredPlan>,
+    #[serde(default)]
+    folders: BTreeMap<String, String>,
 }
 
 fn invalid(error: impl std::fmt::Display) -> super::ApiError {
@@ -149,6 +203,7 @@ pub(crate) fn export(state: &DesktopState, id: &str) -> Result<Vec<u8>> {
             files: BTreeMap::new(),
             experiments: experiments::backup_experiments(state, id)?,
             validation_plans: validation_plans::backup_plans(root, id)?,
+            folders: crate::session_folders::backup_members(state, &project.session_ids)?,
         };
         let mut objects = Objects::default();
         for sid in &project.session_ids {
@@ -187,6 +242,7 @@ pub(crate) fn export(state: &DesktopState, id: &str) -> Result<Vec<u8>> {
                     },
                 };
             meta.workspace_root = None;
+            meta.workspace_detached = true;
             if !meta.deleted {
                 let rows = data.ledgers.get(sid).map(Vec::as_slice).unwrap_or_default();
                 for (path, expected) in recorded_sources(rows)? {
@@ -304,11 +360,36 @@ fn validate(data: &Manifest, objects: &Objects) -> Result<()> {
     if ids.len() != project.session_ids.len() || ids != data.sessions.keys().collect() {
         return Err(invalid("project and session IDs do not agree"));
     }
+    if data
+        .folders
+        .keys()
+        .any(|sid| !data.sessions.contains_key(sid))
+    {
+        return Err(invalid("folder assignment outside project"));
+    }
     for source in &project.sources {
         if let Some(url) = &source.url {
             super::validated_url(url.clone())?;
         }
     }
+    for sid in project
+        .items
+        .iter()
+        .filter_map(|item| item.session_id.as_ref())
+        .chain(
+            project
+                .sources
+                .iter()
+                .filter_map(|source| source.session_id.as_ref()),
+        )
+    {
+        if !data.sessions.contains_key(sid) {
+            return Err(invalid(
+                "project note or source refers to another project's session",
+            ));
+        }
+    }
+    experiments::check_backup_anchors(&data.experiments, &data.ledgers)?;
     let mut allowed = BTreeMap::new();
     for (sid, meta) in &data.sessions {
         validate_session_id(sid).map_err(invalid)?;
@@ -345,6 +426,9 @@ fn validate(data: &Manifest, objects: &Objects) -> Result<()> {
             || expected.as_ref().is_some_and(|expected| expected != hash)
         {
             return Err(invalid("damaged or ambiguous session file"));
+        }
+        if rel.ends_with("/manuscript-drafts.json") && rel.split('/').count() == 3 {
+            crate::manuscript_drafts::validate_backup(&objects.bytes[hash])?;
         }
     }
     for key in data.ledgers.keys() {
@@ -415,6 +499,7 @@ pub(crate) fn restore(state: &DesktopState, body: &[u8]) -> ApiResult {
     // are local capabilities, so the restored session keeps only its scientific record and settings.
     for (sid, meta) in &mut data.sessions {
         meta.workspace_root = None;
+        meta.workspace_detached = true;
         let parts = components(&format!("sessions/{sid}/meta.json"))?;
         WorkspaceSandbox::atomic_write_in_root(
             stage.path(),
@@ -432,6 +517,7 @@ pub(crate) fn restore(state: &DesktopState, body: &[u8]) -> ApiResult {
         .map_err(storage)?;
     }
     experiments::restore_experiments(state, &data.project, &data.experiments, false)?;
+    crate::session_folders::restore_members(state, &data.folders, false)?;
     validation_plans::restore_plans(
         &store.root,
         &data.project,
@@ -512,6 +598,7 @@ pub(crate) fn restore(state: &DesktopState, body: &[u8]) -> ApiResult {
         }
     }
     experiments::restore_experiments(state, &data.project, &data.experiments, true)?;
+    crate::session_folders::restore_members(state, &data.folders, true)?;
     validation_plans::restore_plans(
         &store.root,
         &data.project,

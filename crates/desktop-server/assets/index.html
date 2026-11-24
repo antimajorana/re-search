@@ -40,6 +40,10 @@
       <div class="rail-search-wrap">
         <input id="session-search" class="text-input" type="search" placeholder="Filter sessions (Ctrl+K)..." aria-label="Filter sessions">
       </div>
+      <div class="rail-folders">
+        <select id="session-folder-filter" class="compact-select" aria-label="Filter sessions by folder"><option value="*">All folders</option></select>
+        <button id="manage-session-folders" type="button" class="pill-btn sm">Folders…</button>
+      </div>
       <div class="rail-filter-bar">
         <div class="segmented-group wide-seg" role="group" aria-label="Chat filter">
           <button id="rail-tab-active" type="button" class="seg-btn is-active" aria-pressed="true">Active</button>
@@ -93,7 +97,7 @@
             <div class="project-actions">
               <select id="project-select" class="compact-select" aria-label="Select project"></select>
               <button id="project-create-btn" type="button" class="pill-btn sm primary">New project</button>
-              <a id="project-backup-link" class="pill-btn sm" title="Download sessions, sources, manuscript drafts, experiments and private validation values. Back up attached workspace folders separately." download hidden>Back up project</a>
+              <button id="project-backup-btn" type="button" class="pill-btn sm" title="Download sessions, sources, manuscript drafts, experiments and private validation values. Back up attached workspace folders separately." hidden>Back up project</button>
               <button id="project-restore-btn" type="button" class="pill-btn sm">Restore backup</button>
               <input id="project-restore-file" type="file" accept=".zip" hidden>
             </div>
@@ -656,6 +660,25 @@
           <button id="workspace-confirm-btn" type="submit" class="pill-btn primary">Attach</button>
         </div>
       </form>
+    </div>
+  </dialog>
+
+  <dialog id="session-folder-dialog" class="workbench-dialog" aria-labelledby="folder-dialog-heading">
+    <div class="modal-card">
+      <div class="modal-header"><h2 id="folder-dialog-heading">Session folders</h2>
+        <form method="dialog"><button class="icon-btn" aria-label="Close session folders">✕</button></form>
+      </div>
+      <form id="edit-session-folder" class="form-grid">
+        <label class="form-row">Folder to edit<select id="session-folder-choice" class="compact-select"></select></label>
+        <label class="form-row">Folder name<input id="session-folder-name" class="text-input" maxlength="80" required></label>
+        <div><button id="save-session-folder" type="submit" class="pill-btn primary">Create folder</button>
+          <button id="remove-session-folder" type="button" class="pill-btn" hidden>Remove folder</button></div>
+      </form>
+      <form id="file-session-form" class="form-grid" hidden>
+        <label class="form-row">Destination folder<select id="file-session-destination" class="compact-select"></select></label>
+        <button type="submit" class="pill-btn primary">Move session</button>
+      </form>
+      <p id="folder-dialog-status" role="status"></p>
     </div>
   </dialog>
 
