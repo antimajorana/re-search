@@ -472,6 +472,10 @@ fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
         (code, serde_json::from_slice::<Value>(&bytes).unwrap())
     };
     let (_, session) = call("POST", "/api/sessions", json!({"title":"Two turns"}));
+    let (status, agents) = call("GET", "/api/subagents", Value::Null);
+    assert_eq!(status, 200);
+    let step_role = agents["builtin"].as_array().unwrap().iter().find(|a| a["id"] == "step-verifier").unwrap();
+    assert_eq!(step_role["role_key"], "step_verifier");
     let sid = session["id"].as_str().unwrap();
     let route = format!("/api/sessions/{sid}/claim-review");
     let ledger = Ledger::open(temp.path()).unwrap();
@@ -516,6 +520,12 @@ fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
     assert!(request.contains("SECOND_OCCURRENCE") && !request.contains("FIRST_OCCURRENCE"));
     assert!(!request.contains("UNRELATED_ENTRY"));
     assert_eq!(claim["cited_steps"], json!(["e-2"]));
+    rec("proof.verification", json!({"kind":"step","target_entry_id":"e-2","verdict":"rejected"}));
+    let (code, retry) = call("POST", &route, json!({"entry_id":"e-2"}));
+    assert_eq!(code, 200, "{retry}");
+    let retry_request = mock.captured().last().unwrap().1.to_string();
+    assert!(retry_request.contains("RECORDED_EXACT_VALUE") && retry_request.contains("factorial(3)"));
+    assert!(!retry_request.contains("UNRELATED_ENTRY"));
     let (code, step) = call("POST", &route, json!({"entry_id":"e-1"}));
     assert_eq!(code, 200, "{step}");
     assert_eq!(step["scope"], "step");
@@ -535,6 +545,17 @@ fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
     assert_eq!(selections[0]["payload"]["claim"], "x is positive [e-2].");
     assert_eq!(selections[0]["payload"]["occurrence"], 1);
     assert_eq!(selections[0]["payload"]["answer_sha256"], ledger::sha256_hex(format!("The result:\n{repeated}").as_bytes()));
+    rec("session.resume", json!({"prompt":"Is the latest answer justified?"}));
+    rec("proof.entry", json!({"entry_id":"e-4","entry_type":"final_answer","summary":"Bound","depends_on":[]}));
+    rec("model.text", json!({"text":"The final bound."}));
+    rec("proof.verification", json!({"kind":"full","target_entry_id":"e-4","verdict":"rejected","summary":"Full review found a gap.",
+        "answer_sha256":ledger::sha256_hex(b"The final bound.")}));
+    rec("session.end", json!({"outcome":"completed_unverified"}));
+    let (code, scoped) = call("POST", &route, json!({"entry_id":"e-4"}));
+    assert_eq!(code, 200, "{scoped}");
+    assert_eq!(scoped["verdict"], "accepted");
+    let reopened = call("GET", &format!("/api/sessions/{sid}"), Value::Null).1;
+    assert_eq!(reopened["messages"].as_array().unwrap().last().unwrap()["verified_status"], "unverified");
     assert_eq!(reopened["stats"]["step_checks"], 1);
     for format in ["html","tex"] {
         let (code, _, bytes) = raw_http(server.addr.port(), "GET", &format!("/api/sessions/{sid}/export?format={format}"), &auth, b"");
@@ -542,6 +563,8 @@ fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
         let report = String::from_utf8(bytes).unwrap();
         assert!(report.contains("Selected claim from answer event") && report.contains("Proof step e-1"));
         assert!(report.contains("occurrence 2"));
+        assert!(report.contains("Full-solution review targeting e-4") && report.contains("Full review found a gap."));
+        assert!(report.contains("Proof step e-4"));
         assert!(report.contains("Follows under the stated assumption."));
     }
     assert!(ledger.verify_session(sid).is_ok());

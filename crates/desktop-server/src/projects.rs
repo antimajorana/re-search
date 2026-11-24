@@ -266,6 +266,9 @@ pub(crate) fn save_new_session(
     // Serialize creation with other creators and with project attach. In particular a
     // competing request for the same ID must never roll back a session it did not create.
     let mut store = ProjectStore::open(state)?;
+    if state.session_restore_pending(&meta.id).map_err(internal)? {
+        return Err(conflict("Finish the interrupted project restore before reusing this session."));
+    }
     if state.session_exists(&meta.id).map_err(internal)? {
         return Err(conflict(format!("session `{}` already exists", meta.id)));
     }

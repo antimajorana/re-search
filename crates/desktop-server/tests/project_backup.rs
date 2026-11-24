@@ -105,9 +105,16 @@ fn restore_scoped_project_and_exact_receipts_without_rebinding_workspaces() {
     let directory = source.path().join("sessions").join(sid);
     fs::create_dir_all(directory.join("sources/paper")).unwrap();
     fs::create_dir_all(directory.join("work")).unwrap();
-    fs::write(directory.join("work/mcp.json"), b"private tool configuration").unwrap();
+    fs::write(
+        directory.join("work/mcp.json"),
+        b"private tool configuration",
+    )
+    .unwrap();
     fs::write(directory.join("sources").join(file), text).unwrap();
-    fs::write(directory.join("manuscript-drafts.json"), b"[]").unwrap();
+    let draft = json!([{"workspace":workspace.path(),"path":"field.tex","revision":"a".repeat(32),
+        "draft":{"text":"Revised boundary","originalContent":"Boundary","fileHash":sha256_hex(b"Boundary")}}]);
+    let original_draft = serde_json::to_vec(&draft).unwrap();
+    fs::write(directory.join("manuscript-drafts.json"), &original_draft).unwrap();
     fs::write(
         directory.join("sidetalk.jsonl"),
         b"{\"text\":\"Check units\"}\n",
@@ -181,7 +188,13 @@ fn restore_scoped_project_and_exact_receipts_without_rebinding_workspaces() {
         .file_names()
         .any(|name| name.unwrap() == foreign_object));
     let private_config = format!("objects/{}", sha256_hex(b"private tool configuration"));
-    assert!(!info.file_names().any(|name| name.unwrap() == private_config));
+    assert!(!info
+        .file_names()
+        .any(|name| name.unwrap() == private_config));
+    let local_draft_object = format!("objects/{}", sha256_hex(&original_draft));
+    assert!(!info
+        .file_names()
+        .any(|name| name.unwrap() == local_draft_object));
     let restore = |buf: &[u8]| request(&dst, "POST", "/api/projects/restore", buf);
 
     let rebound = rewrite_manifest(&backup, |m| {
@@ -202,6 +215,10 @@ fn restore_scoped_project_and_exact_receipts_without_rebinding_workspaces() {
         .sessions()
         .unwrap()
         .is_empty());
+    let running = research_tools::session_activity::start_turn(target.path(), sid).unwrap();
+    assert_eq!(restore(&backup).0, 409);
+    drop(running);
+    assert!(!target.path().join("sessions").join(sid).exists());
     let (code, bytes) = restore(&backup);
     assert_eq!(code, 201, "{}", String::from_utf8_lossy(&bytes));
     assert_eq!(restore(&backup).0, 409);
@@ -231,10 +248,12 @@ fn restore_scoped_project_and_exact_receipts_without_rebinding_workspaces() {
         fs::read(directory.join("sources").join(file)).unwrap(),
         text
     );
-    assert_eq!(
-        fs::read(directory.join("manuscript-drafts.json")).unwrap(),
-        b"[]"
-    );
+    let drafts: Value =
+        serde_json::from_slice(&fs::read(directory.join("manuscript-drafts.json")).unwrap())
+            .unwrap();
+    assert_ne!(drafts[0]["workspace"], draft[0]["workspace"]);
+    assert_eq!(drafts[0]["draft"], draft[0]["draft"]);
+    assert_eq!(drafts[0]["path"], "field.tex");
     let meta: Value =
         serde_json::from_slice(&fs::read(directory.join("meta.json")).unwrap()).unwrap();
     assert!(meta["workspace_root"].is_null());
@@ -256,6 +275,108 @@ fn restore_scoped_project_and_exact_receipts_without_rebinding_workspaces() {
         .path()
         .join(format!(".restore-{}.pending", sha256_hex(pid.as_bytes())));
     fs::write(&marker, sha256_hex(&backup)).unwrap();
+    let session_marker = target
+        .path()
+        .join(research_tools::session_activity::pending_name(sid));
+    fs::write(&session_marker, sha256_hex(&backup)).unwrap();
+    assert_eq!(
+        request(&dst, "GET", &format!("/api/sessions/{sid}"), &[]).0,
+        404
+    );
+    post(&dst, "/api/sessions", json!({"id":sid}), 409);
+    assert!(research_tools::session_activity::start_turn(target.path(), sid).is_err());
     assert_eq!(restore(&backup).0, 200);
     assert!(!marker.exists());
+    assert!(!session_marker.exists());
+}
+
+#[test]
+fn tombstoned_sessions_keep_ledger_after_deleted_sources_and_active_sessions_require_evidence() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    let src = start_desktop_server(test_cfg(source.path(), None, None, None)).unwrap();
+    let dst = start_desktop_server(test_cfg(target.path(), None, None, None)).unwrap();
+    let project = post(
+        &src,
+        "/api/projects",
+        json!({"title":"Retired calculation"}),
+        201,
+    );
+    let pid = project["id"].as_str().unwrap();
+    let sid = "retired";
+    post(
+        &src,
+        "/api/sessions",
+        json!({"id":sid,"project_id":pid}),
+        200,
+    );
+    let ledger = Ledger::open(source.path()).unwrap();
+    let text = b"Published result";
+    let file = "sample/equation.txt";
+    let dir = source.path().join("sessions").join(sid);
+    fs::create_dir_all(dir.join("sources/sample")).unwrap();
+    let receipt = ledger.put_blob(text).unwrap();
+    ledger
+        .append(
+            sid,
+            "source.ingested",
+            1,
+            &json!({"source_id":"sample", "files":[file],
+        "files_sha256":{(file):receipt}, "raw_blob":receipt}),
+        )
+        .unwrap();
+    let export = || {
+        request(
+            &src,
+            "GET",
+            &format!("/api/projects/{pid}/export?format=backup"),
+            &[],
+        )
+    };
+    assert_eq!(export().0, 400, "live session missing its retained source");
+    fs::write(dir.join("sources").join(file), b"Changed").unwrap();
+    assert_eq!(
+        export().0,
+        400,
+        "live session source does not match its receipt"
+    );
+    fs::write(dir.join("sources").join(file), text).unwrap();
+    fs::write(dir.join(".active.lock"), std::process::id().to_string()).unwrap();
+    assert_eq!(export().0, 409, "legacy CLI processes use a PID lock");
+    fs::remove_file(dir.join(".active.lock")).unwrap();
+    {
+        let _publishing =
+            research_tools::session_activity::reserve_backup(source.path(), sid).unwrap();
+        post(
+            &src,
+            &format!("/api/sessions/{sid}/messages"),
+            json!({"prompt":"Continue"}),
+            409,
+        );
+    }
+    assert_eq!(
+        request(&src, "DELETE", &format!("/api/sessions/{sid}"), &[]).0,
+        200
+    );
+    assert!(!dir.join("sources").exists());
+    let (status, data) = export();
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&data));
+    let (status, body) = request(&dst, "POST", "/api/projects/restore", &data);
+    assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        request(&dst, "GET", &format!("/api/sessions/{sid}"), &[]).0,
+        404
+    );
+    let restored = Ledger::open(target.path()).unwrap();
+    assert_eq!(
+        ledger.read_verified_session(sid).unwrap(),
+        restored.read_verified_session(sid).unwrap()
+    );
+    assert_eq!(restored.get_blob(&receipt).unwrap(), text);
+    assert!(!target
+        .path()
+        .join("sessions")
+        .join(sid)
+        .join("sources")
+        .exists());
 }

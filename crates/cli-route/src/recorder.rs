@@ -164,7 +164,7 @@ pub(crate) fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), String
 
 /// Whether the session's `.active.lock` names a running process other than this one.
 /// Unknown liveness counts as running (nothing is deleted under a turn that may be live).
-fn locked_by_other_live_process(session_dir: &Path) -> bool {
+pub fn locked_by_other_live_process(session_dir: &Path) -> bool {
     let Some(pid) = std::fs::read_to_string(session_dir.join(".active.lock")).ok().and_then(|s| s.trim().parse::<u32>().ok())
     else {
         return false;

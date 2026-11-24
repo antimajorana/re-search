@@ -1,6 +1,7 @@
 """Exercise the local example and recover a manuscript after killing the server."""
 
 from contextlib import contextmanager
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -121,4 +122,65 @@ def check_recovery_example(browser, binary):
             expect(editor).to_have_value("An external edit")
             drafts = page.evaluate("async id => (await (await import('/assets/api.js')).getManuscriptDrafts(id)).drafts", session)
             assert drafts == []
-        print("Offline computation, crash recovery, concurrent drafts, external edits and discard passed")
+            moved = root / "relocated-project"
+            moved.mkdir()
+            (moved / "spring.tex").write_text("A different derivation", encoding="utf-8")
+            (moved / "notes.tex").write_text("First version", encoding="utf-8")
+            digest = hashlib.sha256(b"First version").hexdigest()
+            page.evaluate("""async ([id, hash]) => {
+              const api = await import('/assets/api.js');
+              await api.setSessionWorkspace(id, null);
+              await api.updateProviderSettings({auto_approve_tools: true});
+              for (const path of ['spring.tex', 'notes.tex']) {
+                await api.putManuscriptDraft(id, {workspace:'Backup workspace 1', path, revision:null,
+                  draft:{text:'Recovered ' + path, originalContent:'First version', fileHash:hash}});
+              }
+            }""", [session, digest])
+
+        with open_install(browser, binary, root) as page:
+            editor = open_manuscript(page)
+            recovery = page.locator("#latex-recovery-list")
+            recovery.select_option(label="spring.tex — Backup workspace 1")
+            page.get_by_role("button", name="Restore draft").click()
+            expect(editor).to_have_value("Recovered spring.tex")
+            expect(page.locator("#latex-save-btn")).to_be_disabled()
+            page.evaluate("""async ([id, path]) => {
+              await (await import('/assets/api.js')).setSessionWorkspace(id, path);
+              await (await import('/assets/canvas_latex.js')).refreshWorkspaceFiles(id);
+            }""", [session, str(moved)])
+            expect(editor).to_have_value("Recovered spring.tex")
+            destination = page.get_by_label("Destination in this workspace")
+            use_here = page.get_by_role("button", name="Use in this workspace")
+            expect(destination).to_have_value("spring.tex")
+            use_here.click()
+            expect(page.locator("#latex-file-note")).to_contain_text("differs from the saved baseline")
+            expect(page.locator("#latex-save-btn")).to_be_disabled()
+            destination.fill("restored.tex")
+            use_here.click()
+            expect(page.locator("#latex-save-btn")).to_be_enabled()
+            assert not (moved / "restored.tex").exists()
+            with page.expect_response(lambda r: "/latex/patch" in r.url) as response:
+                page.locator("#latex-save-btn").click()
+            assert response.value.ok, response.value.text()
+            assert (moved / "restored.tex").read_text(encoding="utf-8") == "Recovered spring.tex"
+            assert (moved / "spring.tex").read_text(encoding="utf-8") == "A different derivation"
+
+            recovery.select_option(label="notes.tex — Backup workspace 1")
+            page.get_by_role("button", name="Restore draft").click()
+            expect(destination).to_have_value("notes.tex")
+            use_here.click()
+            expect(page.locator("#latex-save-btn")).to_be_enabled()
+            assert (moved / "notes.tex").read_text(encoding="utf-8") == "First version"
+            # A workspace change in a second window invalidates even a matching file digest.
+            (paper / "notes.tex").write_text("First version", encoding="utf-8")
+            page.evaluate("async ([id, dir]) => (await import('/assets/api.js')).setSessionWorkspace(id, dir)", [session, str(paper)])
+            with page.expect_response(lambda r: "/latex/patch" in r.url) as response:
+                page.locator("#latex-save-btn").click()
+            assert response.value.status == 409
+            assert (paper / "notes.tex").read_text(encoding="utf-8") == "First version"
+            page.evaluate("async ([id, dir]) => (await import('/assets/api.js')).setSessionWorkspace(id, dir)", [session, str(moved)])
+            with page.expect_response(lambda r: "/latex/patch" in r.url) as response:
+                page.locator("#latex-save-btn").click()
+            assert response.value.ok, response.value.text()
+            assert (moved / "notes.tex").read_text(encoding="utf-8") == "Recovered notes.tex"
+        print("Offline computation, recovery across restarts, concurrent edits and portable draft reattachment passed")

@@ -52,6 +52,7 @@ export function initLatexCanvas(opts = {}) {
     }
   });
   document.getElementById('latex-restore-draft')?.addEventListener('click', restoreSelectedDraft);
+  document.getElementById('latex-bind-draft')?.addEventListener('submit', bindDetachedDraft);
   document.getElementById('latex-discard-draft')?.addEventListener('click', discardSelectedDraft);
 
   if (editorEl) {
@@ -258,14 +259,84 @@ async function restoreSelectedDraft() {
   if (detached) {
     fileSelectEl.selectedIndex = -1;
     saveBtn.disabled = true;
-    fileNoteEl.hidden = false;
-    fileNoteEl.textContent = `Recovered ${path || 'scratch manuscript'} from another workspace. Copy the text or attach its original folder to save it there.`;
+    showBindingOptions(path);
   } else if (saveBtn) {
     saveBtn.disabled = !currentWorkspace;
   }
   recoveryStatus(documentKey, 'Recovery copy restored');
   renderRecoveryOptions();
   editorEl.focus();
+}
+
+function showBindingOptions(path) {
+  const form = document.getElementById('latex-bind-draft');
+  const input = document.getElementById('latex-bind-path');
+  form.hidden = !currentWorkspace;
+  input.value = path || 'draft.tex';
+  fileNoteEl.hidden = false;
+  fileNoteEl.textContent = currentWorkspace
+    ? 'Choose a destination for this recovered manuscript. Save applies it to disk.'
+    : 'Attach a folder under Research options → Workspace to choose a destination for this recovered manuscript.';
+}
+
+async function bindDetachedDraft(event) {
+  event.preventDefault();
+  if (!detachedDraft || !currentWorkspace || !displayedFile) return;
+  const input = document.getElementById('latex-bind-path');
+  const path = input.value.trim().replaceAll('\\', '/');
+  if (!/\.(tex|bib|md|txt)$/i.test(path) || /^[A-Za-z]:/.test(path) ||
+      path.split('/').some(part => !part || part === '.' || part === '..')) {
+    fileNoteEl.textContent = 'Enter a relative .tex, .bib, .md or .txt path inside the attached folder.';
+    return;
+  }
+  const former = displayedFile;
+  const session = currentSessionId;
+  const workspace = currentWorkspace;
+  const request = fileRequest;
+  const target = JSON.stringify([session, workspace, path]);
+  const active = () => request === fileRequest && workspace === currentWorkspace && former === displayedFile;
+  const busyButton = event.currentTarget.querySelector('button');
+  if (busyButton.disabled) return;
+  busyButton.disabled = true;
+  editorEl.readOnly = true;
+  try {
+    if (writes.has(former) && !await writes.get(former).promise) return;
+    if (target !== former && (drafts.has(target) ||
+        [...recovered.keys()].some(k => JSON.stringify(JSON.parse(k).slice(0, 3)) === target))) {
+      throw new Error('Another recovery copy uses that name. Choose a different destination.');
+    }
+    const listing = await api.getWorkspace(session);
+    if (!active()) return;
+    if (listing.workspace_root !== workspace) throw new Error('The attached workspace changed. Choose the destination again.');
+    const listed = (listing.files || []).some(item => (typeof item === 'string' ? item : item.path) === path);
+    let base = '', hash = null;
+    if (listed) {
+      const file = await api.getWorkspace(session, path);
+      if (!active()) return;
+      if (file.truncated || !fileHash || file.file_sha256 !== fileHash) {
+        throw new Error('That file differs from the saved baseline. Choose a new filename to keep both versions.');
+      }
+      base = file.content;
+      hash = file.file_sha256;
+    }
+    const draft = { text: editorEl.value, originalContent: base, editorBaseline: base.replace(/\r\n?/g, '\n'), fileHash: hash };
+    if (!await queueRecovery(target, draft)) return;
+    drafts.set(target, draft);
+    if (!active()) return;
+    if (target !== former) drafts.delete(former);
+    fileRequest++;
+    if (![...fileSelectEl.options].some(o => o.value === path)) fileSelectEl.add(new Option(path, path));
+    fileSelectEl.value = path;
+    openDraft(path, base, false, hash);
+    recoveryStatus(target, 'Recovery copy saved');
+    editorEl.focus();
+    if (target !== former) await queueRecovery(former, null);
+  } catch (err) {
+    if (active()) fileNoteEl.textContent = err.message;
+  } finally {
+    busyButton.disabled = false;
+    if (active()) editorEl.readOnly = false;
+  }
 }
 
 async function discardSelectedDraft() {
@@ -302,6 +373,8 @@ function openDraft(path, text, truncated, hash) {
 }
 
 function showFile(text, ready, truncated = false) {
+  const binding = document.getElementById('latex-bind-draft');
+  if (binding) binding.hidden = true;
   recoveryStatus(displayedFile, '');
   detachedDraft = false;
   displayedFile = null;
@@ -375,8 +448,13 @@ export async function refreshWorkspaceFiles(sessionId) {
 
     const prev = sameWorkspace ? fileSelectEl.value : '';
     const preserveDraft = sameWorkspace && editorEl && !editorEl.disabled && editorEl.value !== editorBaseline;
-    const returningKey = detachedDraft && displayedFile && JSON.parse(displayedFile);
-    const returningPath = returningKey && returningKey[1] === workspace ? returningKey[2] : null;
+    if (detachedDraft) {
+      fileSelectEl.replaceChildren(...texFiles.map(p => new Option(p, p)));
+      fileSelectEl.selectedIndex = -1;
+      showBindingOptions(JSON.parse(displayedFile)[2]);
+      renderRecoveryOptions();
+      return;
+    }
     const attachedKey = JSON.stringify([sessionId, workspace, '']);
     const newDraft = workspace && !sameWorkspace && !texFiles.includes('draft.tex')
       && !recovered.has(attachedKey) && !drafts.has(attachedKey) && drafts.get(scratchKey);
@@ -385,7 +463,7 @@ export async function refreshWorkspaceFiles(sessionId) {
       drafts.delete(scratchKey);
       queueRecovery(attachedKey, newDraft).then(saved => { if (saved) queueRecovery(scratchKey, null); });
     }
-    const chosen = returningPath ?? (newDraft ? '' : preserveDraft || texFiles.includes(prev) ? prev : texFiles[0] || '');
+    const chosen = newDraft ? '' : preserveDraft || texFiles.includes(prev) ? prev : texFiles[0] || '';
     const options = [...texFiles];
     if (!options.includes(chosen)) options.unshift(chosen);
     fileSelectEl.innerHTML = '';
@@ -441,7 +519,10 @@ async function handleSavePatch() {
   const payload = originalContent
     ? { path, search: originalContent, replace: replacement, content: replacement }
     : { path, content: replacement };
-  if (fileHash !== undefined) payload.expected_sha256 = fileHash;
+  if (fileHash !== undefined) {
+    payload.expected_sha256 = fileHash;
+    if (currentWorkspace) payload.expected_workspace_root = currentWorkspace;
+  }
   const key = displayedFile;
   let checking = Boolean(onPendingSave);
   let approvalTimer;

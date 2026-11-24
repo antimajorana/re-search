@@ -223,6 +223,12 @@ pub fn handle_latex_patch(state: &Arc<DesktopState>, session_id: &str, body: &[u
         .ok_or_else(|| bad("`path` is required"))?;
 
     let env = Arc::new(state.research_env_for_session(session_id).map_err(bad)?);
+    if let Some(expected) = val.get("expected_workspace_root") {
+        let current = env.workspace_root.as_ref().map(|p| p.display().to_string());
+        if expected.as_str().is_none() || expected.as_str() != current.as_deref() {
+            return Err((409, "The attached workspace changed. Reopen the manuscript before saving.".into()));
+        }
+    }
     let has_search_replace = val
         .get("search")
         .and_then(Value::as_str)
@@ -491,6 +497,7 @@ pub fn handle_post_sidetalk(state: &DesktopState, session_id: &str, body: &[u8])
     if !state.session_exists(session_id).map_err(internal)? {
         return Err(not_found(format!("session `{session_id}` not found")));
     }
+    let _activity = crate::session_lifecycle::reserve_turn(state, session_id)?;
     let val = parse_json_body(body)?;
     let question = val
         .get("question")

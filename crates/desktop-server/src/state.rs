@@ -323,8 +323,14 @@ impl DesktopState {
         out
     }
 
-    pub fn session_exists(&self, session_id: &str) -> Result<bool, String> {
+    pub(crate) fn session_restore_pending(&self, session_id: &str) -> Result<bool, String> {
         validate_session_id(session_id).map_err(|e| e.to_string())?;
+        self.cfg.data_dir.join(research_tools::session_activity::pending_name(session_id))
+            .try_exists().map_err(|e| e.to_string())
+    }
+
+    pub fn session_exists(&self, session_id: &str) -> Result<bool, String> {
+        if self.session_restore_pending(session_id)? { return Ok(false); }
         if let Some(meta) = self.load_meta(session_id) {
             return Ok(!meta.deleted);
         }

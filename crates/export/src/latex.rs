@@ -53,7 +53,7 @@ pub(crate) struct SessionExportData {
 }
 
 /// Scope and verdict travel together so a passage review cannot read as an endorsement of a whole answer.
-pub(crate) fn requested_reviews(events: &[Event]) -> impl Iterator<Item = (String, Vec<String>)> + '_ {
+pub(crate) fn recorded_reviews(events: &[Event]) -> impl Iterator<Item = (String, Vec<String>)> + '_ {
     events.iter().filter_map(|e| {
         let p = &e.payload;
         let mut lines = Vec::new();
@@ -66,6 +66,15 @@ pub(crate) fn requested_reviews(events: &[Event]) -> impl Iterator<Item = (Strin
             }
             "proof.verification" if p["kind"] == "step" && p["on_demand"] == true =>
                 format!("Proof step {}", p["target_entry_id"].as_str()?),
+            "proof.verification" if p["kind"] == "full" => {
+                let target = p["target_entry_id"].as_str()?;
+                if let Some(hash) = p["answer_sha256"].as_str() {
+                    lines.push(format!("Reviewed answer SHA-256: {hash}"));
+                    format!("Full-solution review targeting {target}")
+                } else {
+                    format!("Full proof review targeting {target}")
+                }
+            }
             _ => return None,
         };
         let verdict = research_tools::effective_verification_verdict(p)?;
@@ -685,7 +694,7 @@ pub(crate) fn render_latex_document(data: &SessionExportData, bib_stem: &str) ->
         out.push_str(&escape_latex_unicode(answer, false));
         out.push_str("\n\n");
     }
-    for (heading, lines) in requested_reviews(&data.events) {
+    for (heading, lines) in recorded_reviews(&data.events) {
         out.push_str(&format!("\\subsection*{{{}}}\n", escape_latex_unicode(&heading, false)));
         for line in lines { out.push_str(&format!("{}\n\n", escape_latex_unicode(&line, false))); }
     }

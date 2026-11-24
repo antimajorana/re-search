@@ -452,6 +452,8 @@ export function renderDagNodeDetail(detailEl, entry, allEntries, opts = {}) {
     .map((e) => e.entry_id);
 
   const statusText = String(entry.status || 'pending');
+  const reviewScope = { step: 'Step review', full: 'Full review' }[entry.verification?.kind];
+  const badgeText = reviewScope && ['accepted', 'rejected'].includes(statusText) ? reviewScope + ' · ' + statusText : statusText;
   const tone = statusBadgeTone(statusText);
   const typeLabel = formatTypeLabel(entry.entry_type);
   const rawLatex = String(entry.latex || '').trim();
@@ -467,7 +469,7 @@ export function renderDagNodeDetail(detailEl, entry, allEntries, opts = {}) {
       <div class="dag-detail-badges">
         <span class="dag-detail-id">${escapeHtml(String(entry.entry_id || ''))}</span>
         <span class="badge accent">${escapeHtml(typeLabel)}</span>
-        <span class="badge ${tone}">${escapeHtml(statusText)}</span>
+        <span class="badge ${tone}">${escapeHtml(badgeText)}</span>
         ${supText}
       </div>
       <span class="dag-seq-label">seq ${escapeHtml(String(entry.seq || 0))}</span>

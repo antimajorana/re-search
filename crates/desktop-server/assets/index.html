@@ -360,6 +360,11 @@
           </div>
           <p id="latex-file-note" class="latex-file-note" role="status" hidden>This preview is truncated. Open the full file in your workspace to edit or audit it.</p>
           <button id="latex-start-manuscript" type="button" class="pill-btn">Start a manuscript</button>
+          <form id="latex-bind-draft" class="panel-toolbar" hidden>
+            <label for="latex-bind-path">Destination in this workspace</label>
+            <input id="latex-bind-path" class="text-input" type="text" required>
+            <button type="submit" class="pill-btn sm">Use in this workspace</button>
+          </form>
           <div id="latex-recovery" class="panel-toolbar" hidden>
             <label for="latex-recovery-list">Recover unsaved edits</label>
             <select id="latex-recovery-list" class="compact-select"></select>

@@ -54,6 +54,7 @@ pub(crate) fn handle_review(state: &Arc<DesktopState>, session: &str, body: &[u8
     if !state.session_exists(session).map_err(internal)? {
         return Err(not_found("Session not found."));
     }
+    let _activity = crate::session_lifecycle::reserve_turn(state, session)?;
     {
         let mut active = state
             .active_turns

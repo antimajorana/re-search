@@ -80,6 +80,24 @@ pub(crate) fn validate_backup(bytes: &[u8]) -> Result<(), (u16, String)> {
     Ok(())
 }
 
+pub(crate) fn portable_backup(bytes: &[u8]) -> Result<Vec<u8>, (u16, String)> {
+    validate_backup(bytes)?;
+    let mut records: Vec<Record> = serde_json::from_slice(bytes).map_err(|e| bad(e.to_string()))?;
+    let mut labels = std::collections::HashMap::<String, String>::new();
+    for r in &mut records {
+        if !r.path.is_empty() {
+            research_tools::sandbox::validate_rel_workspace_path(&r.path).map_err(bad)?;
+        }
+        if let Some(source) = r.workspace.take() {
+            let number = labels.len() + 1;
+            r.workspace = Some(labels.entry(source).or_insert_with(|| format!("Backup workspace {number}")).clone());
+        }
+    }
+    let bytes = serde_json::to_vec(&records).map_err(io_error)?;
+    if bytes.len() > MAX_STORE { return Err(bad("Portable manuscript recovery storage exceeds its limit.")); }
+    Ok(bytes)
+}
+
 fn read(root: &Path, id: &str) -> Result<Vec<Record>, ErrMsg> {
     let mut path = root.to_owned();
     for part in ["sessions", id, STORE] {
@@ -149,4 +167,35 @@ pub(crate) fn lock_writes(state: &DesktopState) -> Result<File, (u16, String)> {
         .open(state.cfg.data_dir.join("manuscript-drafts.lock")).map_err(io_error)?;
     lock.lock().map_err(io_error)?;
     Ok(lock)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn portable_drafts_preserve_distinct_workspaces_and_baselines() {
+        let sha = "ab".repeat(32);
+        let record = |workspace: Option<&str>, path: &str| json!({
+            "workspace": workspace, "path": path, "revision": "ab".repeat(16), "updated_ms": 42,
+            "draft": {"text": "Edited", "originalContent": "Baseline", "fileHash": sha}
+        });
+        let mut records = vec![
+            record(Some("C:/private/manuscript"), "paper.tex"), record(Some("/home/author/math"), "paper.tex"),
+            record(Some("C:/private/manuscript"), "notes.tex"), record(None, ""),
+        ];
+        let portable = portable_backup(&serde_json::to_vec(&records).unwrap()).unwrap();
+        assert_eq!(portable_backup(&portable).unwrap(), portable);
+        let exported: Vec<Record> = serde_json::from_slice(&portable).unwrap();
+        assert_eq!(exported[0].workspace.as_deref(), Some("Backup workspace 1"));
+        assert_eq!(exported[1].workspace.as_deref(), Some("Backup workspace 2"));
+        assert_eq!(exported[2].workspace, exported[0].workspace);
+        assert_eq!(exported[3].workspace, None);
+        assert_eq!(exported[0].path, "paper.tex");
+        assert_eq!(exported[0].draft.file_hash.as_deref(), Some(sha.as_str()));
+        assert_eq!(exported[0].draft.original_content, "Baseline");
+        assert_eq!(exported[0].draft.text, "Edited");
+        records[0]["path"] = json!("../private/paper.tex");
+        assert!(portable_backup(&serde_json::to_vec(&records).unwrap()).is_err());
+    }
 }

@@ -103,6 +103,11 @@ pub fn is_turn_running(state: &DesktopState, session_id: &str) -> bool {
             .unwrap_or(false)
 }
 
+pub(crate) fn reserve_turn(state: &DesktopState, session: &str) -> Result<fs::File, (u16, String)> {
+    research_tools::session_activity::start_turn(&state.cfg.data_dir, session)
+        .map_err(|e| if e.kind() == std::io::ErrorKind::WouldBlock { (409, e.to_string()) } else { internal(e.to_string()) })
+}
+
 fn stop_and_wait_briefly(state: &DesktopState, session_id: &str) {
     let _ = crate::turn_control::handle_stop_turn(state, session_id);
     let deadline = Instant::now() + Duration::from_millis(500);

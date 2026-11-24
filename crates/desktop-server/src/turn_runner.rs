@@ -31,6 +31,7 @@ pub(crate) fn spawn_turn_thread(
     req_json: Value,
     prompt: String,
 ) -> Result<(), (u16, String)> {
+    let activity = crate::session_lifecycle::reserve_turn(&state, &session_id)?;
     {
         let mut active = state
             .active_turns
@@ -82,6 +83,7 @@ pub(crate) fn spawn_turn_thread(
     std::thread::Builder::new()
         .name(format!("turn-{session_id}"))
         .spawn(move || {
+            let _activity = activity;
             let outcome = match (&registered_cli, &registered_api) {
                 (Some((reg, kind)), _) => {
                     crate::cli_turn::run_cli_turn(&thread_state, &thread_session, &req_json, &prompt, &reg.stop, *kind)

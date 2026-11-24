@@ -6,7 +6,8 @@ use crate::state::DesktopState;
 use crate::{experiments, validation_plans};
 use ledger::{sha256_hex, Event, Ledger};
 use research_tools::{
-    is_symlink_or_junction, sandbox::sanitize_rel_components, validate_session_id, WorkspaceSandbox,
+    is_symlink_or_junction, sandbox::sanitize_rel_components, session_activity,
+    validate_session_id, WorkspaceSandbox,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -194,6 +195,8 @@ impl Objects {
 
 pub(crate) fn export(state: &DesktopState, id: &str) -> Result<Vec<u8>> {
     super::with_project(state, id, |root, project| {
+        let _activity = reserve_sessions(root, &project.session_ids, None)?;
+        let _drafts = crate::manuscript_drafts::lock_writes(state)?;
         let ledger = state.open_ledger().map_err(storage)?;
         let mut data = Manifest {
             format: FORMAT.into(),
@@ -258,7 +261,14 @@ pub(crate) fn export(state: &DesktopState, id: &str) -> Result<Vec<u8>> {
                 for name in ["sidetalk.jsonl", "manuscript-drafts.json"] {
                     let rel = format!("sessions/{sid}/{name}");
                     if let Some(path) = checked_path(root, &rel)? {
-                        data.files.insert(rel, objects.file(&path)?);
+                        let hash = if name == "manuscript-drafts.json" {
+                            let bytes =
+                                read_limited(fs::File::open(&path).map_err(storage)?, MAX_CONTENT)?;
+                            objects.add(crate::manuscript_drafts::portable_backup(&bytes)?)?
+                        } else {
+                            objects.file(&path)?
+                        };
+                        data.files.insert(rel, hash);
                     }
                 }
             }
@@ -293,6 +303,67 @@ pub(crate) fn export(state: &DesktopState, id: &str) -> Result<Vec<u8>> {
         }
         Ok(bytes)
     })
+}
+
+// The same file locks are held by desktop solver/review/Explain turns and CLI run/resume.
+// On a crash, the per-session pending marker keeps a partially published session quiescent.
+fn reserve_sessions(
+    root: &Path,
+    sessions: &[String],
+    resume: Option<&str>,
+) -> Result<Vec<fs::File>> {
+    let mut guards = Vec::with_capacity(sessions.len());
+    for sid in sessions {
+        let guard = session_activity::reserve_backup(root, sid).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::WouldBlock {
+                conflict(e.to_string())
+            } else {
+                storage(e)
+            }
+        })?;
+        if let Some(path) = checked_path(root, &session_activity::pending_name(sid))? {
+            let pending = fs::read(path).map_err(storage)?;
+            if Some(pending.as_slice()) != resume.map(str::as_bytes) {
+                return Err(conflict(
+                    "Finish the interrupted restore with its original backup file.",
+                ));
+            }
+        }
+        // Older standalone CLI processes did not take the reservation.
+        if let Some(path) = checked_path(root, &format!("sessions/{sid}/.active.lock"))? {
+            let pid = fs::read_to_string(&path).map_err(storage)?;
+            if pid
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|pid| *pid > 0)
+                .is_none_or(|pid| pid == std::process::id())
+                || cli_route::recorder::locked_by_other_live_process(
+                    path.parent().expect("session directory"),
+                )
+            {
+                return Err(conflict(format!(
+                    "Wait for the active CLI turn in session {sid} to finish."
+                )));
+            }
+        }
+        guards.push(guard);
+    }
+    Ok(guards)
+}
+
+fn finish_restore(root: &Path, sessions: &[String], marker: &str) -> Result<()> {
+    // Remove the project marker last. A crash during cleanup can retry the same archive.
+    for name in sessions
+        .iter()
+        .map(|sid| session_activity::pending_name(sid))
+        .chain([marker.to_owned()])
+    {
+        if let Some(path) = checked_path(root, &name)? {
+            fs::remove_file(path).map_err(storage)?;
+        }
+    }
+    Ok(())
 }
 
 fn unpack(body: &[u8]) -> Result<(Manifest, Objects)> {
@@ -456,9 +527,14 @@ pub(crate) fn restore(state: &DesktopState, body: &[u8]) -> ApiResult {
         }
         None => false,
     };
+    let _activity = reserve_sessions(
+        &store.root,
+        &data.project.session_ids,
+        resuming.then_some(archive_hash.as_str()),
+    )?;
     if let Some(existing) = store.projects.iter().find(|p| &p.id == id) {
         if resuming && existing == &data.project {
-            let _ = fs::remove_file(store.root.join(&marker_name));
+            finish_restore(&store.root, &data.project.session_ids, &marker_name)?;
             return Ok((
                 200,
                 json!({"id": id, "title": existing.title, "sessions": existing.session_ids.len()}),
@@ -508,13 +584,19 @@ pub(crate) fn restore(state: &DesktopState, body: &[u8]) -> ApiResult {
         )
         .map_err(storage)?;
     }
+    let mut staged_file_hashes = data.files.clone();
     for (rel, hash) in &data.files {
-        WorkspaceSandbox::atomic_write_in_root(
-            stage.path(),
-            &components(rel)?,
-            &objects.bytes[hash],
-        )
-        .map_err(storage)?;
+        let portable;
+        let bytes = if rel.ends_with("/manuscript-drafts.json") && rel.split('/').count() == 3 {
+            // An older archive can still contain a machine-local workspace label.
+            portable = crate::manuscript_drafts::portable_backup(&objects.bytes[hash])?;
+            staged_file_hashes.insert(rel.clone(), sha256_hex(&portable));
+            portable.as_slice()
+        } else {
+            objects.bytes[hash].as_slice()
+        };
+        WorkspaceSandbox::atomic_write_in_root(stage.path(), &components(rel)?, bytes)
+            .map_err(storage)?;
     }
     experiments::restore_experiments(state, &data.project, &data.experiments, false)?;
     crate::session_folders::restore_members(state, &data.folders, false)?;
@@ -527,6 +609,7 @@ pub(crate) fn restore(state: &DesktopState, body: &[u8]) -> ApiResult {
     )?;
     let db = state.open_ledger().map_err(storage)?;
     checked_path(&store.root, "sessions")?;
+    let mut published_sessions = BTreeSet::new();
     for sid in &data.project.session_ids {
         if store.session_owner(sid).is_some()
             || crate::session_lifecycle::is_turn_running(state, sid)
@@ -548,6 +631,7 @@ pub(crate) fn restore(state: &DesktopState, body: &[u8]) -> ApiResult {
             }
         }
         if resuming && dest.is_some() {
+            published_sessions.insert(sid.clone());
             let meta = format!("sessions/{sid}/meta.json");
             let expected = serde_json::to_vec(&data.sessions[sid]).map_err(storage)?;
             let current = checked_path(&store.root, &meta)?
@@ -555,7 +639,7 @@ pub(crate) fn restore(state: &DesktopState, body: &[u8]) -> ApiResult {
             if fs::read(current).map_err(storage)? != expected {
                 return Err(conflict("restored session has since changed"));
             }
-            for (rel, hash) in data.files.range(format!("sessions/{sid}/")..) {
+            for (rel, hash) in staged_file_hashes.range(format!("sessions/{sid}/")..) {
                 if !rel.starts_with(&format!("sessions/{sid}/")) {
                     break;
                 }
@@ -585,6 +669,14 @@ pub(crate) fn restore(state: &DesktopState, body: &[u8]) -> ApiResult {
         )
         .map_err(storage)?;
     }
+    for sid in &data.project.session_ids {
+        WorkspaceSandbox::atomic_write_in_root(
+            &store.root,
+            &[session_activity::pending_name(sid)],
+            archive_hash.as_bytes(),
+        )
+        .map_err(storage)?;
+    }
     for hash in refs {
         db.put_blob(&objects.bytes[&hash]).map_err(storage)?;
         db.get_blob(&hash).map_err(storage)?;
@@ -593,7 +685,12 @@ pub(crate) fn restore(state: &DesktopState, body: &[u8]) -> ApiResult {
     fs::create_dir_all(store.root.join("sessions")).map_err(storage)?;
     for sid in data.sessions.keys() {
         let rel = format!("sessions/{sid}");
-        if checked_path(&store.root, &rel)?.is_none() {
+        if !published_sessions.contains(sid) {
+            if checked_path(&store.root, &rel)?.is_some() {
+                return Err(conflict(format!(
+                    "Session {sid} was created during restore."
+                )));
+            }
             fs::rename(stage.path().join(&rel), store.root.join(&rel)).map_err(storage)?;
         }
     }
@@ -607,7 +704,7 @@ pub(crate) fn restore(state: &DesktopState, body: &[u8]) -> ApiResult {
         true,
     )?;
     store.save()?;
-    let _ = fs::remove_file(store.root.join(marker_name));
+    finish_restore(&store.root, &data.project.session_ids, &marker_name)?;
     Ok((
         201,
         json!({"id": id, "title": data.project.title, "sessions": data.sessions.len()}),

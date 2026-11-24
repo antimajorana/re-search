@@ -16,6 +16,7 @@ pub mod policy_preset;
 pub mod proof_dag;
 pub mod sandbox;
 pub mod sanity;
+pub mod session_activity;
 pub mod tex_audit;
 mod tex_audit_sources;
 pub mod tex_bundle;

@@ -115,6 +115,7 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
 
     let mut sessions = Vec::new();
     for id in ids {
+        if state.session_restore_pending(&id).map_err(internal)? { continue; }
         let meta = state.load_meta(&id);
         if meta.as_ref().is_some_and(|m| m.deleted) {
             continue;
