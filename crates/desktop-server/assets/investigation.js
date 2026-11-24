@@ -89,11 +89,18 @@ function showStatus(text) {
 
 function renderOrigin(origin) {
   const el = byId('investigation-origin');
-  if (el.dataset.parent === (origin?.parent_session || '')) return;
-  el.dataset.parent = origin?.parent_session || '';
+  const signature = origin?.parent_session
+    ? JSON.stringify([sessionId, origin.parent_session, origin.map_seq, origin.node_id, origin.evidence_through_seq])
+    : '';
+  if (el.dataset.parent === signature) return;
+  el.dataset.parent = signature;
   el.replaceChildren();
   el.hidden = !origin?.parent_session;
   if (el.hidden) return;
+  const openPassage = anchor => async () => {
+    await callbacks.open(origin.parent_session);
+    if (sessionId === origin.parent_session) await callbacks.openSource(sessionId, anchor);
+  };
   const details = document.createElement('details');
   const title = document.createElement('summary');
   title.textContent = 'From a paper investigation';
@@ -120,6 +127,66 @@ function renderOrigin(origin) {
     }
     details.append(heading, list);
   }
+  if (origin.paper_conventions?.length) {
+    const limit = 8;
+    const conventions = document.createElement('details');
+    const heading = document.createElement('summary');
+    heading.textContent = 'Paper conventions (' + origin.paper_conventions.length + ')';
+    conventions.append(heading);
+    const list = document.createElement('ul');
+    for (const item of origin.paper_conventions.slice(0, limit)) {
+      const li = document.createElement('li');
+      const term = String(item?.label || '');
+      const bareTex = item?.category === 'notation' && /^\\[A-Za-z]+/.test(term) && !term.includes('$') &&
+        !term.startsWith('\\(') && !term.startsWith('\\[');
+      const label = document.createElement('strong');
+      renderMathTextInto(label, bareTex ? '$' + term + '$' : term);
+      const meaning = document.createElement('span');
+      renderMathTextInto(meaning, item?.meaning || '');
+      li.append(label, document.createTextNode(' — '), meaning);
+      if (item?.scope) {
+        const scope = document.createElement('small');
+        renderMathTextInto(scope, 'Scope · ' + item.scope);
+        li.append(document.createTextNode(' '), scope);
+      }
+      for (const anchor of item?.anchors || []) {
+        if (!anchor?.source_id || !(anchor.label || anchor.path)) continue;
+        const location = anchor.start_line == null ? ''
+          : anchor.end_line == null || anchor.start_line === anchor.end_line
+            ? ' · line ' + anchor.start_line
+            : ' · lines ' + anchor.start_line + '–' + anchor.end_line;
+        const link = document.createElement('button');
+        link.type = 'button'; link.className = 'pill-btn sm';
+        link.textContent = (anchor.label || anchor.path) + location;
+        link.addEventListener('click', openPassage(anchor));
+        li.append(document.createTextNode(' '), link);
+      }
+      list.append(li);
+    }
+    conventions.append(list);
+    if (origin.paper_conventions.length > limit) {
+      const more = document.createElement('p');
+      more.className = 'investigation-meta';
+      more.textContent = 'Showing ' + limit + ' of ' + origin.paper_conventions.length + ' conventions.';
+      const full = document.createElement('button');
+      full.type = 'button'; full.className = 'pill-btn sm';
+      full.textContent = 'Open full catalog in Investigation';
+      full.addEventListener('click', async () => {
+        await callbacks.open(origin.parent_session);
+        if (sessionId !== origin.parent_session) return;
+        selectView('map');
+        const catalog = byId('investigation-conventions');
+        if (catalog.hidden) {
+          showStatus('The current paper reading has no conventions catalog.');
+          return;
+        }
+        catalog.open = true;
+        catalog.querySelector('summary')?.focus();
+      });
+      conventions.append(more, full);
+    }
+    details.append(conventions);
+  }
   if (origin.sources?.length) {
     const evidence = document.createElement('details');
     const heading = document.createElement('summary');
@@ -131,10 +198,7 @@ function renderOrigin(origin) {
       const link = document.createElement('button');
       link.type = 'button'; link.className = 'pill-btn sm';
       link.textContent = (anchor.label || anchor.path) + ' · lines ' + anchor.start_line + '–' + anchor.end_line;
-      link.addEventListener('click', async () => {
-        await callbacks.open(origin.parent_session);
-        if (sessionId === origin.parent_session) await callbacks.openSource(sessionId, anchor);
-      });
+      link.addEventListener('click', openPassage(anchor));
       evidence.append(passage, link);
     }
     details.append(evidence);
