@@ -13,6 +13,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parent.parent
 EXTRAS = ROOT / "scripts" / "third-party"
+LEGACY_LICENSES = ROOT / "licenses" / "legacy"
 RELEASE_PACKAGES = {"desktop-app", "cli", "mcp-server"}
 LEGAL_NAME = re.compile(r"^(licen[cs]e|copying|copyright|notice|unlicense|authors|patents|third.party)([_.-]|$)", re.I)
 WEBVIEW2_CRATE = "0.39.1"
@@ -97,7 +98,7 @@ def package_notices(package, dest):
             raise ValueError(f"no license text found for {name} {version}")
         # These releases declare MIT and contain no separate copyright notice.
         # Provide the permission and disclaimer without inventing a year.
-        mit = (ROOT / "LICENSE-MIT").read_text(encoding="utf-8")
+        mit = (LEGACY_LICENSES / "LICENSE-MIT").read_text(encoding="utf-8")
         grant = mit[mit.index("Permission is hereby granted"):]
         authors = ", ".join(package["authors"])
         (dest / "MIT.txt").write_bytes(
@@ -107,7 +108,7 @@ def package_notices(package, dest):
     if key == ("pdf-extract", "0.12.1"):
         for filename in ("Adobe-Glyph-List-LICENSE.txt", "PDFBox-NOTICE.txt"):
             copy(EXTRAS / filename, dest)
-        copy(ROOT / "LICENSE-APACHE", dest, "PDFBox-Apache-2.0.txt")
+        copy(LEGACY_LICENSES / "LICENSE-APACHE", dest, "PDFBox-Apache-2.0.txt")
     if name == "libsqlite3-sys":
         # The bundled SQLite source identifies SQLite as public domain. The
         # SQLCipher license in the same archive applies to a separate build.
@@ -142,12 +143,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", choices=sorted(WEBVIEW2_HASHES), required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--source-url", help="Published source archive for this build, including downstream changes")
     parser.add_argument("--cargo", default=os.getenv("CARGO", "cargo"))
     parser.add_argument("--rustc", default=os.getenv("RUSTC", "rustc"))
     args = parser.parse_args()
 
+    source_url = args.source_url
+    if not source_url:
+        server = os.getenv("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
+        repository = os.getenv("GITHUB_REPOSITORY")
+        if not repository:
+            parser.error("supply --source-url for a build outside GitHub Actions")
+        revision = capture("git", "rev-parse", "HEAD").strip()
+        source_url = f"{server}/{repository}/archive/{revision}.tar.gz"
+
     packages = rust_packages(args.cargo, args.target)
     dest = args.output_dir
+    for name in ("LICENSE-MIT", "LICENSE-APACHE"):
+        copy(LEGACY_LICENSES / name, dest / "legacy")
     loader, checksum = native_notices(packages, args.target, dest)
     rustc = capture(args.rustc, "--version").strip()
     sysroot = Path(capture(args.rustc, "--print", "sysroot").strip())
@@ -157,7 +170,13 @@ def main():
     for path in sorted((rust_doc / "licenses").glob("*.txt")):
         copy(path, stdlib / "licenses")
     inventory = [
-        "reSearch Windows installer third-party notices",
+        "reSearch Windows installer source and third-party notices",
+        "",
+        "reSearch: GNU General Public License, version 3 only (see ../LICENSE).",
+        f"Project source archive: {source_url}",
+        "Build and installation scripts are in the archive. Run cargo fetch --locked",
+        "in the source tree to retrieve the dependency versions and checksums pinned in Cargo.lock.",
+        "Earlier MIT and Apache-2.0 grants are recorded in legacy/LICENSE-MIT and legacy/LICENSE-APACHE.",
         "",
         f"Target: {args.target}",
         f"Cargo.lock SHA-256: {digest(ROOT / 'Cargo.lock')}",
@@ -177,7 +196,10 @@ def main():
         directory = f"Rust-components/{name}-{version}"
         package_notices(package, dest / directory)
         declared = package["license"] or "see upstream license text"
-        inventory.append(f"{name} {version}  |  {declared}  |  {directory}/")
+        location = package["source"] or source_url
+        if location == "registry+https://github.com/rust-lang/crates.io-index":
+            location = f"https://crates.io/api/v1/crates/{name}/{version}/download"
+        inventory.append(f"{name} {version}  |  {declared}  |  {directory}/  |  {location}")
     (dest / "THIRD-PARTY-NOTICES.txt").write_bytes(("\n".join(inventory) + "\n").encode("utf-8"))
     print(f"Collected notices for {len(packages)} locked Rust dependencies and bundled assets.")
 
