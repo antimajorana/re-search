@@ -75,9 +75,17 @@ body {
   white-space: nowrap;
 }
 
-.brand-mark {
-  border-radius: 50%;
+.brand-mark,
+.topbar-brand-mark {
   flex-shrink: 0;
+}
+
+.topbar-brand-mark {
+  display: none;
+}
+
+#app-shell[data-rail-open="false"] .topbar-brand-mark {
+  display: block;
 }
 
 .rail-new-wrap {

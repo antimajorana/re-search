@@ -1,4 +1,4 @@
-# reSearch
+# <img src="docs/assets/re-search-icon.png" width="56" height="56" align="middle" alt=""> reSearch
 
 reSearch is an AI research workbench for mathematics and theoretical physics. Ask an agent to derive an equation, check a numerical result, or trace a claim to a paper. Each session keeps the argument alongside its assumptions, sources, and recorded calculations so you can inspect how the agent reached its answer.
 
