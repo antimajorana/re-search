@@ -183,6 +183,10 @@ export function checkInvestigation(id, request) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/rechecks`, request);
 }
 
+export function developInvestigation(id, request) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/branches`, request);
+}
+
 export function openInvestigationResearch(id, request) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/research`, request);
 }

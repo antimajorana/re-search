@@ -1,6 +1,7 @@
 """Use real paper ingestion and a deterministic provider result to exercise the map."""
 
 import hashlib
+import os
 from pathlib import Path
 import tempfile
 
@@ -8,26 +9,38 @@ from playwright.sync_api import expect
 from recovery_example_browser import open_install
 
 
+def capture_graph_screen(page, name, target):
+    folder = os.environ.get("RESEARCH_GRAPH_SCREENSHOTS")
+    if not folder:
+        return
+    directory = Path(folder)
+    directory.mkdir(parents=True, exist_ok=True)
+    target.evaluate("el => el.scrollIntoView({block:'start', inline:'nearest'})")
+    page.screenshot(path=directory / (name + ".png"), animations="disabled")
+
+
 def check_investigation(browser, binary):
     lines = ["Assume a unit mass.", "The net force equals its acceleration.", "We measure a unit force.",
              r"The calibrated acceleration $a = F/m$ stays constant throughout the interval in which the same force acts on the mass.",
-             "Calibration transfers the unit convention to the sensor."]
+             r"Calibration transfers the unit convention $m=1$ to the sensor, so the measured force can be expressed in the same units across observations."]
     body = "\n".join(lines)
     with tempfile.TemporaryDirectory(prefix="re-search-paper-map-") as directory:
         root = Path(directory)
         (root / "paper").mkdir()
-        with open_install(browser, binary, root) as page:
-            errors = []
-            page.on("pageerror", lambda error: errors.append(str(error)))
+        def mock_provider(page):
             page.route("**/api/models*", lambda r: r.fulfill(json={"providers": [
                 {"id": "antigravity", "label": "Antigravity", "route": "antigravity",
                  "models": [{"id": "gemini-carbon-fixture", "label": "Gemini fixture", "default": True}]}]}))
-            page.evaluate("async () => (await import('/assets/model_picker.js')).loadModels(true)")
+        with open_install(browser, binary, root, before_navigate=mock_provider) as page:
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            expect(page.locator('#composer-model option:checked')).to_have_text('Gemini fixture')
             page.get_by_role("button", name="Investigate a paper", exact=True).click()
             expect(page.locator("#investigation-setup")).to_be_visible()
+            expect(page.locator('#composer-model option:checked')).to_have_text('Gemini fixture')
             parent = page.evaluate("async () => (await (await import('/assets/api.js')).listSessions()).sessions[0].id")
             child = page.evaluate("async () => (await (await import('/assets/api.js')).createSession({title:'Linked research'})).id")
-            state = {"map": None, "map_seq": None, "corrections": [], "activities": []}
+            state = {"map": None, "map_seq": None, "corrections": [], "activities": [], "branches": []}
             receipts = {}
             origin = {}
             scenario = {"running": False}
@@ -70,6 +83,8 @@ def check_investigation(browser, binary):
                                        "reason": "The authors report a unit force.", "anchor": anchor(2)},
                                       {"from": "mass", "to": "calibrate", "kind": "depends_on", "basis": "explicit",
                                        "reason": "Calibration uses this unit convention.", "anchor": anchor(4)},
+                                      {"from": "calibrate", "to": "force", "kind": "supports", "basis": "inferred",
+                                       "reason": "The sensor's calibration supports the inferred acceleration.", "anchor": anchor(4)},
                                       {"from": "calibrate", "to": "second", "kind": "supports", "basis": "inferred",
                                        "reason": "The calibration supports the predicted acceleration.", "anchor": anchor(3)}]})
                 scenario.update(running=True, completed=state["map"], summary={"source_id":source, "request_seq":9,
@@ -94,6 +109,12 @@ def check_investigation(browser, binary):
                 state["activities"].append({**request, "status": "complete", "result": "The unit convention must be specified."})
                 route.fulfill(status=202, json={"status": "running"})
 
+            def develop(route):
+                request = route.request.post_data_json
+                state["branches"].append({**request, "request_seq": len(state["branches"]) + 40, "status": "running"})
+                scenario["running"] = True
+                route.fulfill(status=202, json={"status": "running"})
+
             def linked(route):
                 request = route.request.post_data_json
                 origin.update(parent_session=parent, question=request["question"], claim=lines[1], node_id="force", map_seq=11,
@@ -104,17 +125,18 @@ def check_investigation(browser, binary):
             page.route("**/" + parent + "/messages", send)
             page.route("**/" + parent + "/investigation/corrections", correct)
             page.route("**/" + parent + "/investigation/rechecks", check)
+            page.route("**/" + parent + "/investigation/branches", develop)
             page.route("**/" + parent + "/investigation/research", linked)
             paper_file = page.get_by_label("Primary paper", exact=True)
             paper_file.set_input_files({"name": "range.pdf", "mimeType": "application/pdf", "buffer": b"%PDF-"})
             expect(page.get_by_label("First page")).to_be_visible()
             page.get_by_label("First page").fill("2")
-            page.get_by_role("button", name="Build paper map").click()
+            page.get_by_role("button", name="Find main results").click()
             expect(page.locator("#investigation-status")).to_contain_text("Enter both page numbers")
             page.get_by_label("Primary paper", exact=True).set_input_files({"name": "dynamics.txt", "mimeType": "text/plain", "buffer": body.encode()})
             expect(page.get_by_label("First page")).to_be_hidden()
             page.get_by_label("Reading question").fill("Which assumption connects the result?")
-            page.get_by_role("button", name="Build paper map").click()
+            page.get_by_role("button", name="Find main results").click()
             brief = page.locator("#investigation-summary")
             expect(brief.get_by_role("heading", name="What, Why, and How")).to_be_visible()
             expect(brief).to_contain_text("Reading the paper")
@@ -124,41 +146,80 @@ def check_investigation(browser, binary):
             expect(page.locator("#investigation-map")).to_be_empty()
             brief.locator(".investigation-summary-part").first.locator("summary").first.click()
             scenario["running"] = False
-            state.update(map=scenario["completed"], map_seq=11)
+            completed = scenario["completed"]
+            state.update(map={**completed, "edges":[], "nodes":[n for n in completed["nodes"] if n["main"]]}, map_seq=11)
             page.evaluate("async id => (await import('/assets/investigation.js')).refreshInvestigation(id)", parent)
             expect(page.get_by_role("heading", name="Dynamics of a unit mass")).to_be_visible()
             expect(brief.locator("details").first).to_have_attribute("open", "")
+            brief.locator(".investigation-summary-part").first.locator("summary").first.click()
+            capture_graph_screen(page, "investigation-summary-desktop", brief)
             assert receipts["send"]["provider"] == "antigravity"
             assert "investigation_page_start" not in receipts["send"]
             assert receipts["send"]["model"] == "gemini-carbon-fixture"
             assert receipts["send"]["prompt"] == "Which assumption connects the result?"
             graph = page.locator("#investigation-map")
-            expect(graph.locator(".investigation-graph-node")).to_have_count(3)
-            expect(graph.locator(".question-match")).to_contain_text("Selected for your question")
-            expect(graph.locator(".question-match")).to_contain_text(lines[1])
+            expect(graph.locator(".investigation-graph-node")).to_have_count(0)
+            expect(graph.locator('.investigation-index [data-node]')).to_have_count(2)
             expect(graph.locator('[data-node="second"] .katex').first).to_be_visible()
-            edge = graph.locator('[data-from="mass"][data-to="second"]')
+            graph.locator('[data-node="force"]').click()
+            expect(graph.get_by_label("Focus question")).to_have_value("Which assumption connects the result?")
+            assert state["activities"] == [] and state["branches"] == []
+            graph.get_by_label("Focus question").fill("How does the calibration support the argument?")
+            graph.get_by_role("button", name="Develop this result").click()
+            expect(graph.get_by_text("Developing branch · How does the calibration support the argument?")).to_be_visible()
+            assert state["branches"][0]["provider"] == "antigravity" and state["branches"][0]["node_id"] == "force"
+            state["branches"][0]["status"] = "built"
+            scenario["running"] = False
+            state["map"] = {**completed, "edges":[e for e in completed["edges"] if e["to"] != "second"]}
+            page.evaluate("async id => (await import('/assets/investigation.js')).refreshInvestigation(id)", parent)
+            chart = graph.locator(".investigation-index")
+            expect(chart.locator(".investigation-graph-node")).to_have_count(2)
+            expect(chart.locator(".question-match")).to_contain_text("Selected for your question")
+            expect(chart.locator(".question-match")).to_contain_text(lines[1])
+            edge = chart.locator('[data-from="mass"][data-to="force"]')
             expect(edge).to_have_attribute("data-hidden", "1")
             edge.focus()
             edge.press("Enter")
             graph.get_by_role("button", name="Expand connecting statements").click()
-            expect(graph.locator('[data-node="calibrate"]')).to_be_visible()
-            expect(graph.locator('[data-from="calibrate"][data-to="second"]')).to_have_count(1)
+            expect(chart.locator('.investigation-graph-node [data-node="calibrate"]')).to_be_visible()
+            expect(chart.locator('[data-node="calibrate"] .katex').first).to_be_visible()
+            expect(chart.locator('[data-from="calibrate"][data-to="force"]')).to_have_count(1)
+            capture_graph_screen(page, "investigation-graph-desktop", chart)
             graph.get_by_role("button", name="Collapse expanded branches").click()
-            expect(graph.locator('[data-node="calibrate"]')).to_have_count(0)
+            expect(chart.locator('[data-node="calibrate"]')).to_have_count(0)
             graph.get_by_role("button", name="Steps in order").click()
             expect(graph.locator(".investigation-index > .investigation-node").first).to_have_attribute("data-node", "mass")
             graph.get_by_role("button", name="Graph", exact=True).click()
-            expect(graph.locator('[data-node="lab"]')).to_have_count(0)
+            expect(chart.locator('[data-node="lab"]')).to_have_count(0)
             search = graph.get_by_role("searchbox")
             search.fill("measure")
-            expect(graph.locator('[data-node="lab"]')).to_be_visible()
+            expect(chart.locator('[data-node="lab"]')).to_be_visible()
             search.fill("")
             page.set_viewport_size({"width": 390, "height": 844})
             if page.locator("#app-shell").get_attribute("data-rail-open") == "true":
                 page.get_by_role("button", name="Close sessions").click()
+            graph.get_by_role("button", name="Show all statements").click()
             assert graph.locator(".investigation-graph-viewport").evaluate("el => el.clientWidth <= window.innerWidth && el.scrollWidth > el.clientWidth")
+            capture_graph_screen(page, "investigation-graph-narrow", chart)
+            graph.get_by_role("button", name="← Main results").click()
+            capture_graph_screen(page, "investigation-summary-narrow", brief)
+            graph.locator('[data-node="second"]').click()
+            expect(graph.locator(".investigation-graph-viewport")).to_have_count(0)
+            expect(graph.get_by_label("Focus question")).to_have_value("Which assumption connects the result?")
+            graph.get_by_label("Focus question").fill("How was the acceleration prediction calibrated?")
+            graph.get_by_role("button", name="Develop this result").click()
+            expect(graph.get_by_text("Developing branch · How was the acceleration prediction calibrated?")).to_be_visible()
+            state["branches"][1]["status"] = "built"
+            assert state["branches"][1]["node_id"] == "second"
+            scenario["running"] = False
+            state["map"] = completed
+            page.evaluate("async id => (await import('/assets/investigation.js')).refreshInvestigation(id)", parent)
+            expect(graph.locator(".investigation-graph-viewport")).to_be_visible()
+            expect(graph.locator('.investigation-graph-viewport [data-node="force"]')).to_have_count(0)
+            graph.get_by_role("button", name="← Main results").click()
             graph.locator('[data-node="force"]').click()
+            expect(graph.locator(".investigation-graph-viewport")).to_be_visible()
+            assert len(state["branches"]) == 2 and state["activities"] == []
             expect(graph.get_by_role("heading", name="What this statement uses")).to_be_visible()
             expect(graph.get_by_text("Dependency · Inferred rationale")).to_be_visible()
             expect(graph.get_by_text("Support · Author-stated connection")).to_be_visible()

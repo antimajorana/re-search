@@ -4,7 +4,11 @@ mod common;
 use common::{raw_http, test_cfg};
 use desktop_server::{start_desktop_server, RunningDesktopServer};
 use ledger::Ledger;
-use research_tools::{ingest_bytes, investigation::record, IngestRequest, ResearchEnv};
+use research_tools::{
+    ingest_bytes,
+    investigation::{record, record_branch},
+    IngestRequest, ResearchEnv,
+};
 use serde_json::{json, Value};
 use std::sync::Mutex;
 
@@ -57,7 +61,17 @@ fn corrected_paper_claim_opens_fresh_research_with_its_evidence_and_assumptions(
     );
     let env = ResearchEnv::new(temp.path().to_path_buf());
     let ledger = Mutex::new(Ledger::open(temp.path()).unwrap());
-    let lines = ["Assume a fixed boundary.", "The boundary term vanishes."];
+    let lines = [
+        "Assume a fixed boundary.",
+        "The boundary term vanishes.",
+        "The endpoint variation equals zero.",
+    ];
+    let mut paper_text = lines.join("\n") + "\n";
+    for _ in 0..3000 {
+        paper_text
+            .push_str("The appendix records each of the boundary terms used in the calculation.\n");
+    }
+    paper_text.push_str("Appendix conclusion: the boundary term is zero.");
     let src = ingest_bytes(
         &env.sandbox(),
         &ledger,
@@ -65,13 +79,32 @@ fn corrected_paper_claim_opens_fresh_research_with_its_evidence_and_assumptions(
             session_id: sid,
             file_name: "boundary.txt",
             origin: "user upload",
-            raw_bytes: lines.join("\n").as_bytes(),
+            raw_bytes: paper_text.as_bytes(),
             source_id_hint: None,
             section_filter: None,
             title: None,
         },
     )
     .unwrap();
+    let passage = call(
+        &server,
+        "GET",
+        &format!(
+            "{path}/workspace/file?root=sources&path={}&start_line=3004&end_line=3004",
+            src.primary_path.as_ref().unwrap()
+        ),
+        Value::Null,
+        200,
+    );
+    assert_eq!(passage["first_line"], 2996);
+    assert_eq!(
+        passage["file_sha256"],
+        ledger::sha256_hex(paper_text.as_bytes())
+    );
+    assert!(passage["content"]
+        .as_str()
+        .unwrap()
+        .ends_with("Appendix conclusion: the boundary term is zero."));
     let ledger = ledger.into_inner().unwrap();
     ledger
         .append(
@@ -97,6 +130,35 @@ fn corrected_paper_claim_opens_fresh_research_with_its_evidence_and_assumptions(
     record(&env, &ledger, sid, &map).unwrap();
     let view = call(&server, "GET", &path, Value::Null, 200);
     let seq = view["investigation"]["map_seq"].as_u64().unwrap();
+    assert!(view["investigation"]["branches"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let branch = json!({"map_seq":seq,"source_id":src.source_id,"node_id":"b","question":"What is varied at the endpoints?"});
+    let request = ledger
+        .append(sid, "investigation.branch_requested", 1, &branch)
+        .unwrap();
+    record_branch(&env, &ledger, sid, &json!({"request_seq":request,"source_id":src.source_id,
+        "nodes":[{"id":"variation","kind":"result","main":false,"sentence":lines[2],"anchors":[anchor(3)]}],
+        "edges":[{"from":"variation","to":"b","kind":"depends_on","basis":"inferred","reason":"The endpoint contribution is zero when the variation vanishes.","anchor":anchor(3)}],
+        "limitations":[]})).unwrap();
+    let count = ledger.read_session(sid).unwrap().len();
+    let saved = call(
+        &server,
+        "POST",
+        &format!("{path}/investigation/branches"),
+        branch,
+        200,
+    );
+    assert_eq!(saved["status"], "built");
+    assert_eq!(ledger.read_session(sid).unwrap().len(), count);
+    let developed = call(&server, "GET", &path, Value::Null, 200);
+    assert_eq!(
+        developed["investigation"]["map"]["nodes"][2]["id"],
+        "variation"
+    );
+    assert_eq!(developed["investigation"]["branches"][0]["status"], "built");
+    assert_eq!(developed["investigation"]["map_seq"], seq);
     call(
         &server,
         "POST",
@@ -143,7 +205,7 @@ fn corrected_paper_claim_opens_fresh_research_with_its_evidence_and_assumptions(
         "The boundary condition applies to variations."
     );
     assert_eq!(origin["parent_session"], sid);
-    assert_eq!(origin["sources"].as_array().unwrap().len(), 2);
+    assert_eq!(origin["sources"].as_array().unwrap().len(), 3);
     assert_eq!(research["messages"], json!([]));
     assert_eq!(research["sources"][0]["source_id"], src.source_id);
     assert!(temp

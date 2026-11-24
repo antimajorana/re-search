@@ -85,7 +85,7 @@ mod tests {
     fn research_set_adds_the_research_tools_and_policy() {
         let set = core_tool_set(Some(Arc::new(ResearchEnv::new(std::env::temp_dir()))));
         let ids: Vec<&str> = set.defs.iter().map(|d| d.id.as_str()).collect();
-        for id in ["sympy_eval", "ledger_note", "fs_read", "fs_write", "arxiv_search", "literature_search", "tex_audit", "record_paper_map", "record_paper_summary"] {
+        for id in ["sympy_eval", "ledger_note", "fs_read", "fs_write", "arxiv_search", "literature_search", "tex_audit", "record_paper_map", "record_paper_summary", "record_paper_branch"] {
             assert!(ids.contains(&id), "{id} missing from {ids:?}");
         }
         assert_eq!(set.policy_version, research_tools::RESEARCH_POLICY_VERSION);

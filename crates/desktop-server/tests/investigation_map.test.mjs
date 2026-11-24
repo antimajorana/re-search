@@ -5,7 +5,7 @@ import test from 'node:test';
 const source = await readFile(new URL('../assets/investigation_map.js', import.meta.url), 'utf8');
 const graphSource = await readFile(new URL('../assets/investigation_graph.js', import.meta.url), 'utf8');
 const graphUrl = 'data:text/javascript;base64,' + Buffer.from(graphSource).toString('base64');
-const { mappedQuestionMatches, paperQuestionFocus, projectedPaperGraph } = await import(graphUrl);
+const { mappedQuestionMatches, paperQuestionFocus, projectedPaperGraph, resultDependencies, savedFocusMap } = await import(graphUrl);
 const local = source.replace("import { renderMathTextInto } from '/assets/math.js';", '').replace('/assets/investigation_graph.js', graphUrl);
 const { visibleMapNodes, claimNeighbors } = await import('data:text/javascript;base64,' + Buffer.from(local).toString('base64'));
 const nodes = [
@@ -72,4 +72,34 @@ test('model-selected answer IDs take precedence over lexical matches, including 
   assert.deepEqual([...paperQuestionFocus(map, question).keys()], ['words']);
   assert.deepEqual([...paperQuestionFocus({...map, answer_node_ids:['answer']}, question).keys()], ['answer']);
   assert.deepEqual([...paperQuestionFocus({...map, answer_node_ids:[]}, question).keys()], []);
+});
+
+test('a result branch excludes unrelated conclusions and keeps separately saved focuses independent', () => {
+  const node = id => ({id});
+  const edge = (from,to) => ({from,to,kind:'supports'});
+  const root = 'force';
+  const base = {seq: 6, kind: 'investigation.map', payload: {edges:[]}};
+  const branch = (seq, request_seq, edges) => ({seq,kind:'investigation.branch',payload:{node_id:root,map_seq:6,request_seq,edges}});
+  const one = branch(8,7,[edge('assumption','calibration'),edge('calibration',root)]);
+  const two = branch(10,9,[edge('assumption','control'),edge('control',root)]);
+  const map = {nodes:['assumption','calibration','control',root,'another'].map(node),
+    edges:[...one.payload.edges,...two.payload.edges,edge('control','another')]};
+  assert.deepEqual(resultDependencies(map, 'another').nodes.map(n => n.id), ['assumption','control','another']);
+  assert.deepEqual(savedFocusMap(map,root,6,7,[base,one,two]).nodes.map(n => n.id), ['assumption','calibration',root]);
+  assert.deepEqual(savedFocusMap(map,root,6,9,[base,one,two]).nodes.map(n => n.id), ['assumption','control',root]);
+});
+
+test('focus membership follows edges between existing statements, including a later focus that deepens an older route', () => {
+  const edge = (from, to) => ({from,to,kind:'supports'});
+  const base = {seq:1, kind:'investigation.map', payload:{edges:[edge('readout','result'), edge('control','result')]}};
+  const record = (seq, added) => ({seq, kind:'investigation.branch', payload:{map_seq:1, node_id:'result', request_seq:seq-1, nodes:[], edges:added}});
+  const one = record(3,[edge('unit','readout')]), two = record(5,[edge('unit','control')]);
+  const deepen = record(7,[edge('calibration','readout')]), limited = record(9,[]);
+  const events = [base,one,two,deepen,limited];
+  const map = { nodes:['unit','readout','control','calibration','result'].map(id => ({id})), edges:events.flatMap(e=>e.payload.edges) };
+  const pairs = seq => savedFocusMap(map,'result',1,seq,events).edges.map(e=>e.from+'→'+e.to).sort();
+  assert.deepEqual(pairs(2), ['readout→result','unit→readout']);
+  assert.deepEqual(pairs(4), ['control→result','unit→control']);
+  assert.deepEqual(pairs(6), ['calibration→readout','readout→result']);
+  assert.deepEqual(pairs(8), []);
 });

@@ -50,8 +50,17 @@ jobs:
           cargo test --locked --workspace --no-fail-fast
       - name: Exercise the workbench in Chromium
         run: |
+          $env:RESEARCH_GRAPH_SCREENSHOTS = Join-Path $env:RUNNER_TEMP 'research-graph-views'
           python -m pip install playwright
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python -m playwright install chromium --only-shell
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python crates/desktop-server/tests/workbench_browser.py
+      - name: Keep the tested graph views
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: research-graph-views
+          path: ${{ runner.temp }}/research-graph-views/*.png
+          if-no-files-found: ignore
+          retention-days: 7

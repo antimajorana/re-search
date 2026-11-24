@@ -36,6 +36,8 @@
 .investigation-index .investigation-node + .investigation-node { margin-top: .32rem; }
 .investigation-node:hover { border-color: var(--accent); background: var(--bg-hover); }
 .investigation-kind { font-size: .75rem; font-weight: 600; }
+.investigation-explore { color: var(--accent) !important; }
+.investigation-saved-focus { display: grid; gap: .35rem; margin: .6rem 0; font-weight: 600; }
 .investigation-selected { background: var(--bg-surface); padding: 1rem; border: 1px solid var(--border-subtle);
   border-left: 3px solid var(--accent); border-radius: var(--radius-md); margin-top: .8rem; }
 .investigation-inner .investigation-claim-title { font-size: 1.2rem; }

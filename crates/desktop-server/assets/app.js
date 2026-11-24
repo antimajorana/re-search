@@ -141,7 +141,11 @@ async function boot() {
   initLatexCanvas({ onNotify: showToast, ensureSession: ensureActiveSession, onPendingSave: recoverSaveApproval });
   initInvestigation({
     create: () => createAndSelectSession({ mode: 'investigation' }),
-    open: async (id) => { await refreshSessionList(); await selectSession(id, { focus: true }); },
+    open: async (id) => {
+      const navigation = navigationRevision;
+      await refreshSessionList();
+      if (navigation === navigationRevision) await selectSession(id, { focus: true });
+    },
     useQuestion: question => setComposerPrompt(question, true),
     requestOptions: () => {
       const choice = getModelChoice();

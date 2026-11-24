@@ -96,7 +96,9 @@ Run `python3 run_all_checks.py --verify-only` in the extracted bundle to check a
 
 ## Reading papers with Investigation
 
-Choose **New investigation** and add a searchable PDF, text or LaTeX source. An optional question focuses exploration after the model maps the paper. A physical page range scopes a PDF that contains multiple works. Scanned pages can be viewed in the PDF reader. Mapping requires readable source text and a connected model.
+Choose **New investigation**, add a searchable PDF, text or LaTeX file, and optionally enter a reading question. The first reading gives a short **What, Why and How** summary with passages you can open, followed by the paper’s main results. A physical page range lets you select the article within a PDF containing several works. The original PDF opens locally, including scanned pages. Generating the overview and developing a result require readable source text and a connected model.
+
+Open the result you care about to see its evidence. Keep the suggested reading question or enter your own, then choose **Develop this result**. The model traces the assumptions, derivations, methods or observations supporting that result for your question. Other results stay available for later. Reopen a saved branch immediately, develop a prerequisite in turn, or explore another question about the same result.
 
 An arrow points from a prerequisite, cited result or piece of evidence to the claim it supports. The map distinguishes explicit dependencies from inferred ones and records a reason and a passage for each edge. Open a claim to inspect the saved text, its file hash, and the original PDF page when available. The coverage indicator reports how much of the paper the model says it mapped. A checked source anchor verifies the excerpt against saved bytes.
 

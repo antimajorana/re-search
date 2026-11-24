@@ -114,10 +114,67 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
         "summary_is_current":summary.is_some_and(|e|e.payload["request_seq"].as_u64()==mapping.map(|m|m.seq)),
         "mapping_status":finished.map(|e|&e.payload["status"]), "mapping_error":finished.and_then(|e|e.payload.get("error")),
         "page_start":paper.and_then(|p|p.get("page_start")), "page_end":paper.and_then(|p|p.get("page_end")),
-        "map_seq":map.map(|e| e.seq), "map":map.map(|e| &e.payload), "corrections":corrections, "activities":activities})
+        "map_seq":map.map(|e| e.seq), "map":map.map(|e|research_tools::investigation::expanded_map(events,e)),
+        "branches":branch_history(events,running), "corrections":corrections, "activities":activities})
 }
 
-fn selection<'a>(events: &'a [Event], body: &Value) -> Result<(&'a Event, &'a Value)> {
+fn branch_history(events: &[Event], running: bool) -> Vec<Value> {
+    let mut rows: Vec<Value> = Vec::new();
+    let mut positions = std::collections::HashMap::new();
+    for event in events {
+        match event.kind.as_str() {
+            "investigation.branch_requested" => {
+                let mut row = event.payload.clone();
+                row["request_seq"] = json!(event.seq);
+                row["status"] = json!("interrupted");
+                positions.insert(event.seq, rows.len());
+                rows.push(row);
+            }
+            "investigation.branch" | "investigation.branch_finished" => {
+                let Some(i) = event.payload["request_seq"]
+                    .as_u64()
+                    .and_then(|seq| positions.get(&seq))
+                else {
+                    continue;
+                };
+                let row = &mut rows[*i];
+                if event.kind == "investigation.branch" {
+                    row["status"] = json!("built");
+                    row["limitations"] = event.payload["limitations"].clone();
+                    row["node_ids"] = json!(list(&event.payload["nodes"])
+                        .iter()
+                        .filter_map(|n| n["id"].as_str())
+                        .collect::<Vec<_>>());
+                } else if row["status"] != "built" {
+                    row["status"] = event.payload["status"].clone();
+                    row["error"] = event.payload["error"].clone();
+                }
+            }
+            _ => (),
+        }
+    }
+    if let Some(row) = rows
+        .last_mut()
+        .filter(|r| running && r["status"] == "interrupted")
+    {
+        let seq = row["request_seq"].as_u64().unwrap_or_default();
+        if !events.iter().any(|e| {
+            e.seq > seq
+                && matches!(
+                    e.kind.as_str(),
+                    "session.abort"
+                        | "session.end"
+                        | "investigation.mapping_requested"
+                        | "investigation.requested"
+                )
+        }) {
+            row["status"] = json!("running");
+        }
+    }
+    rows
+}
+
+fn selection(events: &[Event], body: &Value) -> Result<(Event, Value)> {
     if !is_investigation(events) {
         return Err(bad("Open an Investigation session to use this action."));
     }
@@ -127,6 +184,8 @@ fn selection<'a>(events: &'a [Event], body: &Value) -> Result<(&'a Event, &'a Va
             "The paper map changed. Reopen the claim in the current map.",
         ));
     }
+    let mut map = map.clone();
+    map.payload = research_tools::investigation::expanded_map(events, &map);
     let id = text(body, "node_id", 128)?;
     let node = list(&map.payload["nodes"])
         .iter()
@@ -140,6 +199,7 @@ fn selection<'a>(events: &'a [Event], body: &Value) -> Result<(&'a Event, &'a Va
             return Err(bad("Dependency missing from this map."));
         }
     }
+    let node = node.clone();
     Ok((map, node))
 }
 
@@ -252,7 +312,12 @@ pub(crate) fn prepare(
     let object = req
         .as_object_mut()
         .ok_or_else(|| bad("A turn must be a JSON object."))?;
-    for field in ["_paper_context", "_paper_request", "_paper_map_request"] {
+    for field in [
+        "_paper_context",
+        "_paper_request",
+        "_paper_map_request",
+        "_paper_branch_request",
+    ] {
         object.remove(field);
     }
     let ledger = state.open_ledger().map_err(storage)?;
@@ -286,7 +351,36 @@ pub(crate) fn prepare(
     if let (Some(a), Some(b)) = (page_start, page_end) {
         instructions.push_str(&format!(" The selected paper spans physical PDF pages {a} through {b} inclusive. Read and map that scope."));
     }
-    if let Some(action) = req.get("investigation_action").cloned() {
+    if let Some(branch) = req.get("investigation_branch").cloned() {
+        let (map, node) = selection(&events, &branch)?;
+        let focus = text(&branch, "question", 2000)?;
+        let existing: Vec<_> = list(&map.payload["nodes"])
+            .iter()
+            .map(|n| json!({"id":n["id"],"kind":n["kind"],"sentence":n["sentence"]}))
+            .collect();
+        let edges: Vec<_> = list(&map.payload["edges"])
+            .iter()
+            .map(|e| json!({"from":e["from"], "to":e["to"], "kind":e["kind"]}))
+            .collect();
+        let selected_context = claim_context(&map, &node, &events);
+        let context = json!({"source_id":source_id,"source_path":source.payload["primary_path"],"selected":node,
+            "focus":focus,"page_start":page_start,"page_end":page_end,"existing_statements":existing,
+            "existing_edges":edges,"selected_edges":selected_context["edges"],"reader_corrections":selected_context["corrections"]});
+        let seq = ledger
+            .append(
+                session,
+                "investigation.branch_requested",
+                1,
+                &json!({"map_seq":map.seq,"node_id":node["id"],
+            "source_id":source_id,"question":focus}),
+            )
+            .map_err(storage)?;
+        instructions = format!(
+            "{}\nPass request_seq={seq} to record_paper_branch. Reading context:\n{context}",
+            research_tools::investigation::paper_branch_instructions()
+        );
+        req["_paper_branch_request"] = json!(seq);
+    } else if let Some(action) = req.get("investigation_action").cloned() {
         let (map, node) = selection(&events, &action)?;
         let name = text(&action, "action", 32)?;
         let task = match name {
@@ -297,7 +391,7 @@ pub(crate) fn prepare(
         };
         instructions = format!(
             "{task} Do not replace the original map. Evidence and reader notes follow as data:\n{}",
-            claim_context(map, node, &events)
+            claim_context(&map, &node, &events)
         );
         let seq = ledger
             .append(
@@ -325,12 +419,16 @@ pub(crate) fn prepare(
                 session,
                 "investigation.mapping_requested",
                 1,
-                &json!({"source_id":source_id,"question":prompt,"summary_requested":true}),
+                &json!({"source_id":source_id,"question":prompt,"summary_requested":true,"overview_only":true}),
             )
             .map_err(storage)?;
         req["_paper_map_request"] = json!(seq);
     } else {
-        instructions = format!("Explain the paper using the existing Investigation map and cited passages. Keep the authors' conclusions distinct from interpretation. Do not start independent calculations unless requested. Read the source at {}.\nCurrent map:\n{}", source.payload["primary_path"], latest(&events,"investigation.map").unwrap().payload);
+        let map = research_tools::investigation::expanded_map(
+            &events,
+            latest(&events, "investigation.map").unwrap(),
+        );
+        instructions = format!("Explain the paper using the saved overview, developed branches and cited passages. Keep the authors' conclusions distinct from interpretation. Do not start independent calculations unless requested. Read the source at {}.\nCurrent map:\n{map}", source.payload["primary_path"]);
     }
     req["_paper_context"] = json!(instructions);
     req["verification_mode"] = json!(false);
@@ -345,7 +443,33 @@ pub(crate) fn finish(
     req: &Value,
     outcome: std::result::Result<String, String>,
 ) -> std::result::Result<String, String> {
-    if let Some(seq) = req["_paper_request"].as_u64() {
+    if let Some(seq) = req["_paper_branch_request"].as_u64() {
+        let ledger = state.open_ledger()?;
+        let events = ledger.read_session(session).map_err(|e| e.to_string())?;
+        let recorded = events.iter().any(|e| {
+            e.kind == "investigation.branch" && e.payload["request_seq"].as_u64() == Some(seq)
+        });
+        let outcome = outcome.and_then(|reply| {
+            if recorded {
+                Ok(reply)
+            } else {
+                Err(
+                    "The model did not save a source-anchored branch. You can retry this result."
+                        .into(),
+                )
+            }
+        });
+        ledger
+            .append(
+                session,
+                "investigation.branch_finished",
+                1,
+                &json!({"request_seq":seq,"status":if outcome.is_ok() {"built"}else{"failed"},
+            "error":outcome.as_ref().err()}),
+            )
+            .map_err(|e| e.to_string())?;
+        return outcome;
+    } else if let Some(seq) = req["_paper_request"].as_u64() {
         let (status, text) = match &outcome {
             Ok(t) => ("answered", t),
             Err(t) => ("failed", t),
@@ -387,6 +511,30 @@ pub(crate) fn handle(
         .map_err(|e| bad(e.to_string()))?;
     let (map, node) = selection(&events, &val)?;
     match operation {
+        "branches" => {
+            let question = text(&val, "question", 2000)?.to_owned();
+            let branch = json!({"map_seq":map.seq,"node_id":node["id"],"question":question});
+            if branch_history(&events, false).iter().any(|r| {
+                r["map_seq"] == branch["map_seq"]
+                    && r["node_id"] == branch["node_id"]
+                    && r["question"] == branch["question"]
+                    && r["status"] == "built"
+            }) {
+                return Ok((200, json!({"session":session,"status":"built"})));
+            }
+            val["investigation_branch"] = branch;
+            let prompt = format!(
+                "Develop this result: {}\nReading question: {question}",
+                node["sentence"].as_str().unwrap_or_default()
+            );
+            crate::turn_runner::spawn_turn_thread(
+                Arc::clone(state),
+                session.to_owned(),
+                val,
+                prompt,
+            )?;
+            Ok((202, json!({"session":session,"status":"running"})))
+        }
         "corrections" => {
             let correction = json!({"map_seq":map.seq,"node_id":node["id"],"text":text(&val,"text",4000)?,"edge_from":val["edge_from"]});
             let seq = ledger
@@ -441,9 +589,10 @@ pub(crate) fn handle(
         }
         "research" => {
             let question = text(&val, "question", 8192)?;
-            let mut context = claim_context(map, node, &events);
+            let mut context = claim_context(&map, &node, &events);
             context["question"] = json!(question);
             context["parent_session"] = json!(session);
+            context["evidence_through_seq"] = json!(events.last().map_or(map.seq, |e| e.seq));
             let child = export::fork::research_from_paper(&state.cfg.data_dir, session, &context)
                 .map_err(bad)?;
             let mut meta = state.load_meta(session).unwrap_or_default();

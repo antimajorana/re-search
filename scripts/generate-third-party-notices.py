@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 EXTRAS = ROOT / "scripts" / "third-party"
@@ -134,6 +135,12 @@ def native_notices(packages, target, dest):
         raise ValueError("review KaTeX licenses and font notices for the vendored version")
     copy(vendor / "LICENSE", dest / "KaTeX", "KaTeX-MIT.txt")
     copy(EXTRAS / "KaTeX-Fonts-OFL.txt", dest / "KaTeX")
+    with zipfile.ZipFile(ROOT / "crates/desktop-server/vendor/pdfjs/renderer.zip") as renderer:
+        for name in renderer.namelist():
+            if LEGAL_NAME.match(Path(name).name):
+                target_notice = dest / "PDF.js" / Path(name.replace("/", "-"))
+                target_notice.parent.mkdir(parents=True, exist_ok=True)
+                target_notice.write_bytes(renderer.read(name))
     for filename in ("NSIS-Zlib-License.txt", "zlib-License.txt"):
         copy(EXTRAS / filename, dest / "NSIS")
     return relative, expected
@@ -184,6 +191,8 @@ def main():
         "",
         "The standard library copyright report is in Rust-standard-library/.",
         "The KaTeX 0.19.1 JavaScript, CSS, and fonts are covered in KaTeX/.",
+        "Mozilla PDF.js 6.5.438, its fonts, character maps and image decoders are covered in PDF.js/.",
+        "PDF.js source: https://github.com/mozilla/pdf.js/tree/v6.5.438",
         "Notices for the NSIS installer stub and zlib are in NSIS/.",
         f"Microsoft.Web.WebView2 SDK {WEBVIEW2_SDK} notices are in WebView2Loader/.",
         f"Loader: {loader} (SHA-256: {checksum})",

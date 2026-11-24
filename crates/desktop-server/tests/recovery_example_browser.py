@@ -11,7 +11,7 @@ from playwright.sync_api import expect
 
 
 @contextmanager
-def open_install(browser, binary, root):
+def open_install(browser, binary, root, before_navigate=None):
     server = subprocess.Popen(
         [str(binary), "ui", "--data-dir", str(root / "data"), "--workspace", str(root / "paper"),
          "--port", "0", "--no-open", "true", "--print-url-json", "true", "--api-base", "http://127.0.0.1:9"],
@@ -20,6 +20,8 @@ def open_install(browser, binary, root):
     context = browser.new_context(viewport={"width": 1280, "height": 820})
     try:
         page = context.new_page()
+        if before_navigate:
+            before_navigate(page)
         page.goto(json.loads(server.stdout.readline())["url"])
         yield page
     finally:

@@ -459,7 +459,7 @@ function renderUsedSources(records, sessionId) {
     usedSourcesListEl.textContent = 'Citations and proof-linked sources will appear here.';
     return;
   }
-  for (const { paper, source, readers, steps, cited, paperClaims } of records) {
+  for (const { paper, source, readers, steps, cited, paperClaims, inSummary } of records) {
     const card = document.createElement('article');
     card.className = 'paper-card';
     const links = linksForPaper(paper);
@@ -473,6 +473,7 @@ function renderUsedSources(records, sessionId) {
       ${!links.length && paper.url && paper.url !== paper.title ? `<div class="mono">${escapeHtml(paper.url)}</div>` : ''}
       <div class="used-source-actions" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;">
         ${cited ? '<span class="badge">Cited in answer</span>' : ''}
+        ${inSummary ? '<span class="badge">Used in paper summary</span>' : ''}
         ${paperClaims?.size ? '<span class="badge">Paper map · ' + paperClaims.size + (paperClaims.size === 1 ? ' claim' : ' claims') + '</span>' : ''}
         ${renderSourceLinkChips(links)}
       </div>

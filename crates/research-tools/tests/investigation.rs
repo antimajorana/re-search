@@ -5,6 +5,139 @@ use serde_json::{json, Value};
 use std::sync::Mutex;
 
 const SID: &str = "investigate-map";
+
+#[test]
+fn branches_are_immutable_scoped_source_grounded_and_expand_recursively() {
+    use research_tools::investigation::{expanded_map, record_branch};
+    let tmp = tempfile::tempdir().unwrap();
+    let env = ResearchEnv::new(tmp.path());
+    let db = Mutex::new(Ledger::open(tmp.path()).unwrap());
+    let paper = upload(&env, &db, "Scaling.txt", PAPER);
+    let other = upload(&env, &db, "Earlier.txt", "An earlier measurement.");
+    let full = shape(&paper, &other);
+    let mut overview = full.clone();
+    overview["nodes"] = json!([full["nodes"][3]]);
+    overview["edges"] = json!([]);
+    overview["answer_node_ids"] = json!(["result"]);
+    let ledger = db.lock().unwrap();
+    let append = |kind, payload| ledger.append(SID, kind, 1, &payload).unwrap();
+    append("investigation.started", json!({}));
+    append("investigation.paper", json!({"source_id":paper.source_id}));
+    let req = append(
+        "investigation.mapping_requested",
+        json!({"source_id":paper.source_id,"overview_only":true}),
+    );
+    assert!(record(&env, &ledger, SID, &full)
+        .unwrap_err()
+        .contains("main results"));
+    let base_seq = record(&env, &ledger, SID, &overview).unwrap()["map_seq"]
+        .as_u64()
+        .unwrap();
+    append("investigation.mapping_finished", json!({"request_seq":req}));
+    let request_branch = |seq, target, question| {
+        append(
+            "investigation.branch_requested",
+            json!({"map_seq":seq,"node_id":target,"question":question,"source_id":paper.source_id}),
+        )
+    };
+    let mut branch = json!({"source_id":paper.source_id,"nodes":[full["nodes"][2]],"edges":[full["edges"][1]],"limitations":[]});
+    let save = |args: &Value| record_branch(&env, &ledger, SID, args);
+    assert!(save(&branch).is_err());
+    branch["request_seq"] = json!(request_branch(
+        base_seq + 1,
+        "result",
+        "Where is its evidence?"
+    ));
+    assert!(save(&branch).unwrap_err().contains("current paper map"));
+    branch["request_seq"] = json!(request_branch(
+        base_seq,
+        "unrecorded",
+        "Where is its evidence?"
+    ));
+    assert!(save(&branch).unwrap_err().contains("does not exist"));
+    let first_req = request_branch(base_seq, "result", "What evidence supports the conclusion?");
+    assert!(save(&branch).unwrap_err().contains("no longer active"));
+    branch["request_seq"] = json!(first_req);
+    assert!(record(&env, &ledger, SID, &overview).is_err());
+    let bad = |edit: fn(&mut Value)| {
+        let mut args = branch.clone();
+        edit(&mut args);
+        assert!(save(&args).is_err(), "{args}");
+    };
+    bad(|b| b["nodes"][0]["id"] = json!("result"));
+    bad(|b| b["nodes"][0]["main"] = json!(true));
+    bad(|b| b["source_id"] = json!("different"));
+    bad(|b| b["edges"][0]["anchor"]["excerpt"] = json!("Not in this paper."));
+    bad(|b| b["nodes"][0]["anchors"][0]["source_id"] = json!("different"));
+    bad(|b| b["edges"] = json!([]));
+    bad(|b| b["edges"] = json!([b["edges"][0], b["edges"][0]]));
+    bad(|b| {
+        let mut backwards = b["edges"][0].clone();
+        backwards["from"] = json!("result");
+        backwards["to"] = json!("obs");
+        b["edges"].as_array_mut().unwrap().push(backwards);
+    });
+    let receipt = save(&branch).unwrap();
+    assert_eq!(receipt["request_seq"], first_req);
+    assert_eq!(save(&branch).unwrap(), receipt);
+    let mut changed = branch.clone();
+    changed["limitations"] = json!(["Unresolved uncertainty"]);
+    assert!(save(&changed).unwrap_err().contains("already saved"));
+    append(
+        "investigation.branch_finished",
+        json!({"request_seq":first_req}),
+    );
+    assert!(save(&branch).is_err());
+    let next_req = request_branch(base_seq, "obs", "Which assumptions enter this measurement?");
+    let mut nested = json!({"source_id":paper.source_id,"request_seq":next_req,"nodes":[full["nodes"][0]],"edges":[full["edges"][0]],"limitations":["The paper does not quantify the resulting measurement uncertainty."]});
+    nested["edges"][0]["to"] = json!("obs");
+    save(&nested).unwrap();
+    let (_, events) = ledger.read_verified_session(SID).unwrap();
+    let base = events.iter().find(|e| e.seq == base_seq).unwrap();
+    assert_eq!(base.payload["nodes"].as_array().unwrap().len(), 1);
+    let expanded = expanded_map(&events, base);
+    assert_eq!(expanded["map_seq"], base_seq);
+    assert_eq!(expanded["answer_node_ids"], json!(["result"]));
+    assert_eq!(expanded["branches"].as_array().unwrap().len(), 2);
+    assert_eq!(expanded["branches"][0]["node_ids"], json!(["obs"]));
+    assert_eq!(expanded["branches"][1]["node_id"], "obs");
+    assert_eq!(expanded["branches"][1]["request_seq"], next_req);
+    assert_eq!(
+        expanded["nodes"][1]["anchors"][0]["source_seq"],
+        paper.event_seq
+    );
+    assert_eq!(expanded["edges"][1]["basis"], "inferred");
+    // A fresh focus on the original headline can add evidence for a previously mapped prerequisite.
+    let through_prior = request_branch(
+        base_seq,
+        "result",
+        "Which prediction enters the measurement?",
+    );
+    let mut support = json!({"source_id":paper.source_id,"request_seq":through_prior,"nodes":[full["nodes"][1]],"edges":[full["edges"][1]],"limitations":[]});
+    support["edges"][0]["from"] = json!("p");
+    support["edges"][0]["to"] = json!("obs");
+    save(&support).unwrap();
+    let final_req = request_branch(base_seq, "a", "Does the paper prove the assumption?");
+    let empty = json!({"source_id":paper.source_id,"request_seq":final_req,"nodes":[],"edges":[],"limitations":["The paper states positive mass as an assumption."]});
+    save(&empty).unwrap();
+    append("session.end", json!({}));
+    assert!(save(&empty).is_err());
+    append(
+        "investigation.mapping_requested",
+        json!({"source_id":paper.source_id,"overview_only":true}),
+    );
+    let mut two_results = overview.clone();
+    two_results["nodes"] = json!([full["nodes"][2], full["nodes"][3]]);
+    two_results["nodes"][0]["main"] = json!(true);
+    two_results["edges"] = json!([full["edges"][1]]);
+    two_results["edges"][0]["basis"] = json!("inferred");
+    assert!(record(&env, &ledger, SID, &two_results).is_err());
+    two_results["edges"][0]["basis"] = json!("explicit");
+    assert_eq!(
+        record(&env, &ledger, SID, &two_results).unwrap()["edges"],
+        1
+    );
+}
 const PAPER:&str="A test of scaling\nWe assume positive mass.\nEquation (1) predicts a constant period.\nFigure 2 reports the measured period.\nThe data support the scaling result [1].\n[1] An earlier experiment.\n";
 
 fn upload(

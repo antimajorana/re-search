@@ -52,6 +52,49 @@ export function projectedPaperGraph(map, shown) {
   return { rows, edges, neighbors };
 }
 
+export function resultDependencies(map, resultId) {
+  const { incoming, order } = paperTopology(map);
+  const keep = new Set([resultId]);
+  for (const id of [...order].reverse()) {
+    if (keep.has(id)) for (const edge of incoming.get(id)) keep.add(edge.from);
+  }
+  return { ...map, nodes: map.nodes.filter(n => keep.has(n.id)),
+    edges: (map.edges || []).filter(e => keep.has(e.from) && keep.has(e.to)),
+    answer_node_ids: map.answer_node_ids?.filter(id => keep.has(id)) };
+}
+
+export function savedFocusMap(map, root, mapSeq, requestSeq, events) {
+  const recorded = events.filter(e => e.kind === 'investigation.branch' && e.payload?.map_seq === mapSeq);
+  const selected = recorded.find(e => e.payload.request_seq === requestSeq && e.payload.node_id === root);
+  if (!selected) return resultDependencies(map, root);
+  const base = events.find(e => e.seq === mapSeq && e.kind === 'investigation.map');
+  const edges = new Map();
+  const key = e => JSON.stringify([e.from, e.to, e.kind]);
+  for (const e of base?.payload?.edges || []) edges.set(key(e), e);
+  for (const record of recorded) {
+    if (record.seq > selected.seq) continue;
+    for (const e of record.payload.edges || []) edges.set(key(e), e);
+  }
+  // A focus may connect two old statements or deepen an earlier dependency.
+  // Follow paths through its own edges, including their prior inputs and
+  // continuations to the result. Unrelated earlier focuses stay separate.
+  const snapshot = resultDependencies({ ...map, edges: [...edges.values()] }, root);
+  const { order, incoming, outgoing } = paperTopology(snapshot);
+  const focusedEdges = selected.payload.edges || [];
+  const retained = new Set(focusedEdges.map(key));
+  const upstream = new Set(focusedEdges.map(e => e.from));
+  const downstream = new Set(focusedEdges.map(e => e.to));
+  for (const id of [...order].reverse()) {
+    if (!upstream.has(id)) continue;
+    for (const e of incoming.get(id)) { retained.add(key(e)); upstream.add(e.from); }
+  }
+  for (const id of order) {
+    if (!downstream.has(id)) continue;
+    for (const e of outgoing.get(id)) { retained.add(key(e)); downstream.add(e.to); }
+  }
+  return resultDependencies({ ...map, edges: snapshot.edges.filter(e => retained.has(key(e))) }, root);
+}
+
 const questionStopWords = new Set(('a an the in on to and or of for with from which what how why when where ' +
   'does do did has have had is are was were be can could would should will this that these those it as by paper result results').split(' '));
 

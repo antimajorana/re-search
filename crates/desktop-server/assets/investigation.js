@@ -1,8 +1,9 @@
 import * as api from '/assets/api.js';
 import { arrayBufferToBase64 } from '/assets/composer.js';
 import { renderMathTextInto } from '/assets/math.js';
-import { createPaperMap } from '/assets/investigation_map.js';
+import { createPaperMap, DEFAULT_PAPER_REQUEST } from '/assets/investigation_map.js';
 import { openOriginalPdf } from '/assets/pdf_preview.js';
+import { citedPaperLinks } from '/assets/source_links.js';
 
 let callbacks, paperMap, sessionId, session, view, readRevision = 0, submitting = false;
 let summaryTimer = null;
@@ -12,6 +13,7 @@ const setupDrafts = new Map();
 export function initInvestigation(options) {
   callbacks = options;
   paperMap = createPaperMap(byId('investigation-map'), {
+    citedPaperLinks,
     openSource: anchor => callbacks.openSource(sessionId, anchor),
     openPdf: (anchor, probe) => {
       const source = session?.sources?.find(s => s.source_id === anchor.source_id && s.format === 'pdf');
@@ -74,7 +76,7 @@ function selectView(next) {
 
 function showStatus(text) {
   const el = byId('investigation-status');
-  el.textContent = text || '';
+  if (el.textContent !== (text || '')) el.textContent = text || '';
   el.hidden = !text;
 }
 
@@ -174,7 +176,7 @@ export function showInvestigationSession(id, data) {
   renderOrigin(data?.investigation?.origin);
   if (data?.mode !== 'investigation') return;
   const inv = data.investigation || {};
-  paperMap.updateSummary(inv.summary, Boolean(data.running), Boolean(inv.source_id || inv.map));
+  paperMap.updateSummary(inv.summary, Boolean(data.running), Boolean(inv.source_id || inv.map), inv.summary_is_current);
   scheduleSummaryRefresh();
   const select = byId('investigation-existing');
   const previous = select.value || setupDrafts.get(id)?.source || inv.source_id;
@@ -195,14 +197,19 @@ export function showInvestigationSession(id, data) {
   const setup = byId('investigation-setup');
   setup.hidden = Boolean(inv.map) || Boolean(data.running);
   setup.querySelector('button').disabled = submitting;
-  if (data.running) showStatus('The selected model is working. Open Conversation to follow its progress or approve a tool.');
-  else if (!submitting) showStatus(!inv.map && inv.source_id ? 'A paper map is not yet available. You can try building it again or read the conversation.' : '');
+  if (data.running) showStatus(inv.summary && !inv.map ? 'The paper overview is ready. The model is identifying the main results.' :
+    'The selected model is working. Open Conversation to follow its progress or approve a tool.');
+  else if (!submitting) {
+    if (inv.mapping_error) showStatus((inv.map ? 'Showing the saved main results. The latest reading failed. ' : '') + inv.mapping_error);
+    else showStatus(!inv.map && inv.source_id ? 'The main results are unavailable. Try again or read the conversation.' : '');
+  }
   if (!byId('investigation-question').value && inv.question) byId('investigation-question').value = inv.question;
   paperMap.update(inv, Boolean(data.running), data.events || []);
 }
 
 function scheduleSummaryRefresh() {
-  if (summaryTimer || session?.mode !== 'investigation' || !session.running || session.investigation?.summary) return;
+  if (summaryTimer || session?.mode !== 'investigation' || !session.running ||
+      (session.investigation?.summary && session.investigation.summary_is_current !== false)) return;
   const id = sessionId;
   summaryTimer = setTimeout(async () => {
     summaryTimer = null;
@@ -269,7 +276,7 @@ async function buildMap(event) {
       throw new Error('This PDF has no readable text layer. Open the original PDF, or choose a searchable PDF or TeX source to build a map.');
     }
     const options = callbacks.requestOptions();
-    await callbacks.send(id, readingQuestion || 'Map the main results and reasoning in this paper.', {
+    await callbacks.send(id, readingQuestion || DEFAULT_PAPER_REQUEST, {
       ...options, ...pageRange, investigation_source_id: sourceId,
     });
     if (sessionId === id) await refreshInvestigation(id);
@@ -294,6 +301,8 @@ async function handleClaimAction(action, target, text, edgeFrom) {
   }
   if (action === 'correction') {
     await api.correctInvestigation(id, { ...target, text, ...(edgeFrom ? { edge_from: edgeFrom } : {}) });
+  } else if (action === 'branch') {
+    await api.developInvestigation(id, { ...callbacks.requestOptions(), ...target, question: text });
   } else {
     await api.checkInvestigation(id, { ...callbacks.requestOptions(), ...target, action,
       ...(edgeFrom ? { edge_from: edgeFrom } : {}), ...(text ? { prompt: text } : {}) });

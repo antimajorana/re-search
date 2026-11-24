@@ -23,7 +23,7 @@ The **Verified** review mode asks a verifier to examine the reasoning in a fresh
 
 | When you want to… | Where to start |
 | --- | --- |
-| Understand a paper | Choose **New investigation**, add the paper and optionally a reading question. Read the main claims, expand their dependencies, and open the cited passage or PDF page. |
+| Understand a paper | Choose **New investigation** and add the paper. Read its What, Why and How summary, select a main result, and use **Develop this result** to trace the evidence for your question. |
 | Derive a field equation | Choose **Check a derivation**. Set the metric signature and units in **Research options → Conventions** so the agent uses your notation. |
 | Check a citation against a paper | Use **Attach** to add the paper to your message, then **Send**. Open **Canvas → Sources** to search the ingested text and read the cited lines in context. |
 | Carry a result into the next session | Open **Projects** to keep findings, open questions, and a bibliography together. Use **Experiments** to compare approaches or **Validation** to record a reference value and tolerances before running a calculation. |

@@ -199,7 +199,7 @@ fn check_tool_defs_drift(session: &str, payload: &Value, expected_defs: &[ToolDe
         // Existing research sessions can gain the discovery tools and paper-map recorder.
         // The recorder requires a matching Investigation paper in the verified session history.
         // Every recorded tool still has to match its original definition and order.
-        if !same_id && matches!(exp.id.as_str(), "search_formal_library" | "search_paper_passages" | "record_paper_map" | "record_paper_summary")
+        if !same_id && matches!(exp.id.as_str(), "search_formal_library" | "search_paper_passages" | "record_paper_map" | "record_paper_summary" | "record_paper_branch")
             && exp.effect == policy::EffectClass::ReadWorkspace
         {
             continue;

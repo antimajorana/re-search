@@ -32,7 +32,8 @@ pub fn research_from_paper(data_dir: &Path, parent: &str, context: &Value) -> Re
     for anchor in context["sources"].as_array().into_iter().flatten() {
         source_ids.insert(anchor["source_id"].as_str().ok_or("Source identifier missing from evidence.")?);
     }
-    let sources: Vec<_> = events.iter().filter(|e| e.kind == "source.ingested" && e.seq <= map.seq
+    let through = context["evidence_through_seq"].as_u64().unwrap_or(map.seq);
+    let sources: Vec<_> = events.iter().filter(|e| e.kind == "source.ingested" && e.seq <= through
         && e.payload["source_id"].as_str().is_some_and(|id| source_ids.contains(id))).cloned().collect();
     if source_ids.iter().any(|id| !sources.iter().any(|e| e.payload["source_id"].as_str() == Some(*id))) {
         return Err("A source required by this claim is missing from the Investigation.".into());
