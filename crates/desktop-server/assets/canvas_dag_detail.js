@@ -1,5 +1,5 @@
 // Rich readable node inspector for Tab 2 (Proof DAG).
-import { escapeHtml, renderRichInto } from '/assets/math.js';
+import { displayMathSource, escapeHtml, renderMathTextInto, renderRichInto } from '/assets/math.js';
 
 const TYPE_LABELS = {
   assumption: 'Assumption',
@@ -16,13 +16,6 @@ const TYPE_LABELS = {
 function formatTypeLabel(raw) {
   const key = String(raw || 'step').toLowerCase();
   return TYPE_LABELS[key] || key.replace(/_/g, ' ');
-}
-
-function wrapDisplayLatex(rawLatex) {
-  const trimmed = String(rawLatex || '').trim();
-  if (!trimmed) return '';
-  if (/^(\$\$|\\\[|\\begin\{)/.test(trimmed)) return trimmed;
-  return `$$\n${trimmed}\n$$`;
 }
 
 function statusBadgeTone(status) {
@@ -119,7 +112,8 @@ const CONVERGENCE_AXIS = {
 function addEvidenceText(parent, tag, value, className) {
   const node = document.createElement(tag);
   if (className) node.className = className;
-  node.textContent = value;
+  if (tag === 'pre' || tag === 'code') node.textContent = value;
+  else renderMathTextInto(node, value);
   parent.appendChild(node);
   return node;
 }
@@ -127,7 +121,11 @@ function addEvidenceText(parent, tag, value, className) {
 function addEvidenceField(parent, label, value, preformatted = false) {
   if (typeof value !== 'string' || !value.trim()) return;
   addEvidenceText(parent, 'div', label, 'dag-evidence-meta');
-  addEvidenceText(parent, preformatted ? 'pre' : 'p', value, preformatted ? 'trace-io' : '');
+  return addEvidenceText(parent, preformatted ? 'pre' : 'p', value, preformatted ? 'trace-io' : '');
+}
+
+function addEvidenceExcerpt(parent, label, value) {
+  renderMathTextInto(addEvidenceField(parent, label, value, true), value);
 }
 
 function addSourceReaderButton(parent, anchor, onOpenSource) {
@@ -289,9 +287,13 @@ function addEvidenceRecord(parent, entry, item, onSelectNode, onOpenSource) {
       if (validation.rows_omitted) addEvidenceText(section, 'p', 'Showing selected rows from the recorded report.', 'dag-evidence-meta');
     } else {
       addEvidenceField(section, 'Value', item.value, true);
-      addEvidenceField(section, 'LaTeX', item.latex, true);
+      if (typeof item.latex === 'string' && item.latex.trim()) {
+        addEvidenceText(section, 'div', 'LaTeX', 'dag-evidence-meta');
+        const formula = addEvidenceText(section, 'div', '', 'rich-prose');
+        renderRichInto(formula, displayMathSource(item.latex));
+      }
     }
-    addEvidenceField(section, 'Standard output', item.stdout, true);
+    addEvidenceExcerpt(section, 'Standard output', item.stdout);
     addEvidenceField(section, 'Standard error', item.stderr, true);
     if (item.worker_truncated) addEvidenceText(section, 'p', 'The worker truncated its recorded output.');
     if (item.validation_truncated) addEvidenceText(section, 'p', 'The structured report exceeded the worker’s recording limit.');
@@ -317,7 +319,7 @@ function addEvidenceRecord(parent, entry, item, onSelectNode, onOpenSource) {
     addEvidenceField(section, 'Source', item.source_title || item.source_id || 'No source selected');
     addEvidenceField(section, 'DOI', item.source_doi);
     addEvidenceField(section, 'Recorded location', item.location);
-    addEvidenceField(section, 'Researcher-entered quote', item.quote, true);
+    addEvidenceExcerpt(section, 'Researcher-entered quote', item.quote);
   }
   if (item.kind === 'validation_decision') {
     addEvidenceField(section, 'Plan', item.plan_id);
@@ -331,7 +333,7 @@ function addEvidenceRecord(parent, entry, item, onSelectNode, onOpenSource) {
     const lines = passage.start_line === passage.end_line ? `line ${passage.start_line}`
       : `lines ${passage.start_line}–${passage.end_line}`;
     addEvidenceField(section, passage.title || 'Source passage', `${passage.path} · ${lines}`);
-    addEvidenceField(section, 'Recorded excerpt', passage.excerpt, true);
+    addEvidenceExcerpt(section, 'Recorded excerpt', passage.excerpt);
     addEvidenceField(section, 'Source file SHA-256', passage.file_sha256, true);
     addSourceReaderButton(section, passage.reader, onOpenSource);
   }
@@ -347,7 +349,7 @@ function addEvidenceRecord(parent, entry, item, onSelectNode, onOpenSource) {
     if (label) addEvidenceText(section, 'p', label + warning);
   }
   addEvidenceSource(section, item.source, onOpenSource);
-  addEvidenceField(section, 'Recorded excerpt', item.excerpt, true);
+  addEvidenceExcerpt(section, 'Recorded excerpt', item.excerpt);
   addEvidenceField(section, 'Recorded error', item.error);
   parent.appendChild(section);
 }
@@ -451,7 +453,7 @@ export function renderDagNodeDetail(detailEl, entry, allEntries, opts = {}) {
     renderRichInto(detailEl.querySelector('.dag-summary-box'), summaryText);
   }
   if (rawLatex) {
-    renderRichInto(detailEl.querySelector('.dag-eq-box'), wrapDisplayLatex(rawLatex));
+    renderRichInto(detailEl.querySelector('.dag-eq-box'), displayMathSource(rawLatex));
     const copyBtn = detailEl.querySelector('#dag-copy-latex-btn');
     if (copyBtn) {
       copyBtn.addEventListener('click', async () => {

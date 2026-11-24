@@ -1,5 +1,5 @@
 import * as api from '/assets/api.js';
-import { renderRichInto } from '/assets/math.js';
+import { renderMathTextInto, renderRichInto } from '/assets/math.js';
 
 const axes = { resolution: 'Resolution', basis: 'Basis size', precision: 'Arithmetic precision' };
 const planStatus = { open: 'Awaiting candidate', accepted: 'Within frozen criteria', rejected: 'Outside frozen criteria' };
@@ -384,5 +384,7 @@ function option(value, text) {
 
 function addField(list, label, value) {
   if (value === null || value === undefined || value === '') return;
-  list.append(element('dt', label), element('dd', String(value)));
+  const detail = element('dd', '');
+  renderMathTextInto(detail, value);
+  list.append(element('dt', label), detail);
 }

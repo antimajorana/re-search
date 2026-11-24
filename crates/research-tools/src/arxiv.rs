@@ -106,6 +106,7 @@ pub fn run_arxiv_search(
                 "papers": papers.iter().map(|p| json!({
                     "id": p.id,
                     "base_id": p.base_id,
+                    "title": p.title,
                     "withdrawn": p.withdrawn,
                     "doi": p.doi,
                 })).collect::<Vec<_>>(),

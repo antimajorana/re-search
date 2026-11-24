@@ -14,7 +14,7 @@ const require = createRequire(import.meta.url);
 const katex = require(vendorKatexPath);
 
 const mathMod = await import(pathToFileURL(path.join(assetsDir, 'math.js')).href);
-const { escapeHtml, markdownToHtml, latexDocumentToHtml } = mathMod;
+const { displayMathSource, escapeHtml, markdownToHtml, latexDocumentToHtml, mathTextToHtml, renderMathTextInto } = mathMod;
 
 function unescapeHtml(s) {
   return s
@@ -70,6 +70,33 @@ function assertNoXss(html) {
 
 test('Vendored KaTeX is 0.19.1 offline build', () => {
   assert.equal(katex.version, '0.19.1');
+});
+
+test('math in plain labels preserves text, code literals, and escaped HTML', () => {
+  const prevWindow = globalThis.window;
+  try {
+    const node = { innerHTML: '', textContent: '' };
+    renderMathTextInto(node, String.raw`Without KaTeX: \(x\)`);
+    assert.equal(node.textContent, String.raw`Without KaTeX: \(x\)`);
+    globalThis.window = { katex };
+    const text = 'Cost $20, code `$foo$`, <script>x</script>, ' + String.raw`$x^2$, \(\alpha\), and \[\frac{1}{2}\]`;
+    renderMathTextInto(node, text);
+    assert.equal(node.innerHTML, mathTextToHtml(text));
+    assert.equal((node.innerHTML.match(/class="katex"/g) || []).length, 3);
+    assert.match(node.innerHTML, /Cost \$20, code `\$foo\$`, &lt;script&gt;x&lt;\/script&gt;/);
+    assert.match(node.innerHTML, /class="katex-display"/);
+    assertNoXss(node.innerHTML);
+  } finally {
+    globalThis.window = prevWindow;
+  }
+});
+
+test('structured LaTeX fields accept bare, inline, and display math', () => {
+  const tex = String.raw`\frac{a}{b}`;
+  for (const source of [tex, `$${tex}$`, `\\(${tex}\\)`, `$$${tex}$$`, `\\[${tex}\\]`]) {
+    const [formula] = assertAllKatexValid(markdownToHtml(displayMathSource(source)));
+    assert.deepEqual(formula, { tex, display: true });
+  }
 });
 
 test('CSS audit: starter-chip scoped to > span and no bare descendant span/div/* inside KaTeX containers', () => {
@@ -517,6 +544,14 @@ test('Stage 11 Workbench UI: pipeline stepper, rigor presets, conventions popove
     assert.match(sympyCard.innerHTML, /SymPy \/ Python Sandbox/);
     assert.match(sympyCard.innerHTML, /sc-result-row/);
     assertNoXss(sympyCard.innerHTML);
+
+    const mismatchCard = traceMod.buildStructuredTraceCard({
+      tool: 'check_expression_sanity',
+      status: 'ok',
+      output: JSON.stringify({ ok: false, numeric_match: false, samples_checked: 5, lhs: '<img src=x>', rhs: 'x' }),
+    });
+    assert.match(mismatchCard.innerHTML, /badge err">mismatch · 5 sampled points/);
+    assertNoXss(mismatchCard.innerHTML);
 
     const ledgerCard = traceMod.buildStructuredTraceCard({
       call_id: 'c2',

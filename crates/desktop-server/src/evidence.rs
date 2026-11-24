@@ -19,6 +19,67 @@ const MAX_REVIEWS: usize = 3;
 const TEXT_LIMIT: usize = 1_200;
 const VALIDATION_ROWS: usize = 8;
 
+pub(crate) fn linked_session_sources(state: &DesktopState, ledger: &Ledger, events: &[Event]) -> Vec<Value> {
+    if !events.iter().any(|event| event.kind == "proof.entry" && event.payload["tool_call_ref"].is_string()) {
+        return Vec::new();
+    }
+    let scrub = EvidenceText::from_state(state);
+    let evidence = SessionEvidence::new(ledger, events, None, &scrub);
+    let mut linked = Vec::new();
+    for event in events.iter().filter(|event| event.kind == "proof.entry") {
+        let Some(id) = event.payload["entry_id"].as_str() else { continue };
+        let Some(node) = evidence.nodes.get(id) else { continue };
+        if node.retired || node.reviews.back().is_some_and(|review| {
+            research_tools::effective_verification_verdict(&review.payload) == Some("rejected")
+        }) {
+            continue;
+        }
+        let Some(reference) = event.payload["tool_call_ref"].as_str() else { continue };
+        let Some(call) = evidence.resolve_call(reference.trim(), event.seq) else { continue };
+        if !matches!(
+            call.request.payload["tool"].as_str(),
+            Some("doc_ingest" | "fs_read" | "search_paper_passages" | "arxiv_search" | "literature_search")
+        ) {
+            continue;
+        }
+        let Some(item) = evidence.describe_tool(event) else { continue };
+        match item["kind"].as_str() {
+            Some("source_read") if item["root"] == "sources" && item["reader"].is_object() => {
+                linked.push(json!({ "entry_id": id, "reader": item["reader"] }));
+            }
+            Some("source_ingested") if item["source"]["source_id"].is_string() => {
+                linked.push(json!({
+                    "entry_id": id, "source_id": item["source"]["source_id"], "reader": item["source"]["reader"],
+                }));
+            }
+            Some("paper_passages") => {
+                let passages: Vec<_> = item["passages"].as_array().into_iter().flatten()
+                    .filter(|passage| passage["reader"]["source_id"].is_string()).collect();
+                let source_ids: HashSet<_> = passages.iter()
+                    .filter_map(|passage| passage["reader"]["source_id"].as_str()).collect();
+                let claim = ["summary", "details", "latex"].into_iter()
+                    .filter_map(|field| event.payload[field].as_str()).collect::<Vec<_>>().join("\n");
+                for passage in passages {
+                    let reader = &passage["reader"];
+                    if source_ids.len() == 1
+                        || reader["path"].as_str().is_some_and(|path| claim.contains(path))
+                        || reader["source_id"].as_str().is_some_and(|id| claim.contains(id))
+                    {
+                        linked.push(json!({ "entry_id": id, "reader": reader }));
+                    }
+                }
+            }
+            Some("literature") => {
+                if let Some(records) = item["records"].as_array().filter(|records| records.len() == 1) {
+                    linked.push(json!({ "entry_id": id, "paper": records[0] }));
+                }
+            }
+            _ => {}
+        }
+    }
+    linked
+}
+
 pub(crate) fn handle_session_evidence(
     state: &DesktopState,
     session_id: &str,
@@ -587,20 +648,23 @@ impl<'a> SessionEvidence<'a> {
         })
     }
 
+    fn resolve_call(&self, reference: &str, entry_seq: u64) -> Option<&ToolCall<'a>> {
+        self.tools.get(reference).or_else(|| {
+            self.tools.iter().find_map(|(id, call)| {
+                call.outcome
+                    .filter(|outcome| tool_reference_matches(reference, id, outcome.seq))
+                    .map(|_| call)
+            })
+        }).filter(|call| call.request.seq < entry_seq)
+    }
+
     fn describe_tool(&self, entry: &Event) -> Option<Value> {
         let reference = entry.payload["tool_call_ref"].as_str()?.trim();
         if reference.is_empty() {
             return None;
         }
         let via = self.scrub.field(&entry.payload["entry_id"], 200);
-        let call = self.tools.get(reference).or_else(|| {
-            self.tools.iter().find_map(|(id, call)| {
-                call.outcome
-                    .filter(|outcome| tool_reference_matches(reference, id, outcome.seq))
-                    .map(|_| call)
-            })
-        });
-        let Some(call) = call.filter(|call| call.request.seq < entry.seq) else {
+        let Some(call) = self.resolve_call(reference, entry.seq) else {
             return Some(json!({
                 "kind": "unavailable", "status": "unknown_reference", "via_entry_id": via,
                 "tool_call_ref": self.scrub.clean(reference, 200),
@@ -804,6 +868,9 @@ impl<'a> SessionEvidence<'a> {
                     .or_else(|| result["papers"].as_array());
                 let records: Vec<_> = hits.into_iter().flatten().take(4).map(|hit| json!({
                     "title": self.scrub.field(&hit["title"], 180),
+                    "id": self.scrub.field(&hit["id"], 180),
+                    "source": self.scrub.field(&hit["source"], 60),
+                    "url": self.scrub.field(&hit["url"], 256),
                     "arxiv_id": self.scrub.field(
                         if name == "arxiv_search" { &hit["id"] } else { &hit["arxiv_id"] }, 120
                     ),

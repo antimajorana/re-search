@@ -1,4 +1,5 @@
 import * as api from '/assets/api.js';
+import { renderMathTextInto } from '/assets/math.js';
 
 let ui;
 let callbacks;
@@ -14,7 +15,8 @@ const value = (form, name) => field(form, name).value;
 
 function el(tag, text = '', className = '') {
   const node = document.createElement(tag);
-  node.textContent = text;
+  if (tag === 'option' || tag === 'code') node.textContent = text;
+  else renderMathTextInto(node, text);
   if (className) node.className = className;
   return node;
 }
@@ -403,7 +405,7 @@ function branchCard(current, branch) {
       diff.textContent = 'Loading diff…';
       try {
         const report = await api.diffExperimentBranch(current.project_id, current.id, branch.session_id);
-        diff.textContent = report.summary_diff || 'No proof graph changes.';
+        renderMathTextInto(diff, report.summary_diff || 'No proof graph changes.');
       } catch (error) {
         diff.textContent = error.message;
       }

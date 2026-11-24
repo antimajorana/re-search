@@ -4,6 +4,7 @@
 use crate::session_summary::FinalAnswerVerification;
 use crate::sse::SseHub;
 use agent::EventSink;
+use agent::runner::SESSION_TITLE_EVENT;
 use ledger::AppendedEvent;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -12,6 +13,7 @@ use std::sync::Arc;
 pub(crate) struct SseEventSink {
     sse: Arc<SseHub>,
     session_id: String,
+    allow_model_title: bool,
     streamed_thinking_in_turn: bool,
     tool_calls: HashMap<String, (String, Value)>,
     verification: FinalAnswerVerification,
@@ -22,6 +24,7 @@ impl SseEventSink {
         Self {
             sse,
             session_id: session_id.to_string(),
+            allow_model_title: false,
             streamed_thinking_in_turn: false,
             tool_calls: HashMap::new(),
             verification: FinalAnswerVerification::default(),
@@ -30,6 +33,11 @@ impl SseEventSink {
 
     pub(crate) fn final_text(&self) -> &str {
         self.verification.answer()
+    }
+
+    pub(crate) fn with_model_title(mut self, allowed: bool) -> Self {
+        self.allow_model_title = allowed;
+        self
     }
 }
 
@@ -42,6 +50,10 @@ impl cli_route::EventSink for SseEventSink {
 }
 
 impl EventSink for SseEventSink {
+    fn wants_session_title(&self) -> bool {
+        self.allow_model_title
+    }
+
     fn on_text_delta(&mut self, delta: &str) {
         if !delta.is_empty() {
             self.sse
@@ -58,6 +70,9 @@ impl EventSink for SseEventSink {
     }
 
     fn on_event(&mut self, receipt: &AppendedEvent, kind: &str, data: &Value) -> Result<(), String> {
+        if kind == SESSION_TITLE_EVENT {
+            self.allow_model_title = false;
+        }
         let had_verdict = self.verification.status.is_some();
         let answer_verdict = self.verification.observe(kind, data);
         let verification_invalidated = had_verdict && self.verification.status.is_none();

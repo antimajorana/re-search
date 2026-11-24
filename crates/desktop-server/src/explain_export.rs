@@ -1,6 +1,6 @@
 //! Markdown and standalone HTML export for Explain (`sidetalk`) Q&A conversations.
 
-use crate::routes_session::{bad, internal};
+use crate::routes_session::{bad, internal, session_title};
 use crate::state::DesktopState;
 use agent::SideTalkTurn;
 use std::fmt::Write as _;
@@ -12,11 +12,8 @@ pub fn export_explain_conversation(
 ) -> Result<(String, &'static str, Vec<u8>), (u16, String)> {
     let ledger = state.open_ledger().map_err(internal)?;
     let turns = agent::read_sidetalk_thread(&ledger, session_id).map_err(internal)?;
-    let title = state
-        .load_meta(session_id)
-        .map(|m| m.title)
-        .filter(|t| !t.trim().is_empty())
-        .unwrap_or_else(|| session_id.to_string());
+    let events = ledger.read_session(session_id).map_err(|error| internal(error.to_string()))?;
+    let title = session_title(state.load_meta(session_id).as_ref(), &events, session_id);
 
     match format {
         "explain_md" => {

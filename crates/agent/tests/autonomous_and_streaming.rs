@@ -241,6 +241,9 @@ fn autonomous_loop_rejects_consults_strategist_revises_accepts_and_resumes_lossl
     // Solver Round 2 must have received Verifier issues + counterexample + Strategist advice!
     let solver_reqs = solver.seen_requests();
     assert_eq!(solver_reqs.len(), 2);
+    for request in &solver_reqs {
+        assert!(request.system.as_deref().unwrap().contains("automatically starts the full verifier review"));
+    }
     let round2_last_msg = serde_json::to_string(&solver_reqs[1].messages.last().unwrap()).unwrap();
     assert!(round2_last_msg.contains("Sign of excitation energy inverted"), "{round2_last_msg}");
     assert!(round2_last_msg.contains("Delta = 1 gives +2"), "{round2_last_msg}");
@@ -288,6 +291,7 @@ fn autonomous_loop_rejects_consults_strategist_revises_accepts_and_resumes_lossl
     // Alternating roles check on rehydrated history: User -> Assistant -> User (feedback) -> Assistant -> User (leg2).
     let leg2_reqs = solver_leg2.seen_requests();
     assert_eq!(leg2_reqs[0].messages.len(), 5);
+    assert!(leg2_reqs[0].system.as_deref().unwrap().contains("automatically starts the full verifier review"));
     ledger.verify_session(session).unwrap();
     assert_eq!(ledger.verify_all().unwrap().unreferenced_blobs, 0);
 }

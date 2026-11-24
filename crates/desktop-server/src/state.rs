@@ -19,12 +19,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 const UI_SETTINGS_FILE: &str = "ui_settings.json";
+pub(crate) const DEFAULT_SESSION_TITLE: &str = "Research Session";
 static UI_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionMeta {
     pub id: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_model_title: Option<bool>,
     pub workspace_root: Option<String>,
     pub pinned_conventions: Option<String>,
     #[serde(default)]
@@ -47,6 +50,12 @@ pub struct SessionMeta {
     pub archived: bool,
     #[serde(default)]
     pub deleted: bool,
+}
+
+impl SessionMeta {
+    pub(crate) fn allows_model_title(&self) -> bool {
+        self.allow_model_title.unwrap_or(self.title == DEFAULT_SESSION_TITLE)
+    }
 }
 
 /// Route value stored in [`SessionMeta::route`] (and accepted as `provider`) for the

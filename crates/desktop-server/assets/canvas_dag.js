@@ -1,6 +1,6 @@
 // Tab 2: Proof Graph & Ledger Canvas — zoomable/pannable SVG DAG, SHA-256 chain verify, fork, diff, and narration.
 import * as api from '/assets/api.js';
-import { escapeHtml } from '/assets/math.js';
+import { escapeHtml, renderMathTextInto } from '/assets/math.js';
 import { getModelChoice } from '/assets/model_picker.js';
 import { renderDagNodeDetail } from '/assets/canvas_dag_detail.js';
 import { openSessionSource } from '/assets/canvas_sources.js';
@@ -73,18 +73,6 @@ export function onDagTabShown() {
   if (!viewState.userAdjusted && currentDag && Array.isArray(currentDag.entries) && currentDag.entries.length > 0) {
     fitDagToView();
   }
-}
-
-function formatSvgSummary(raw) {
-  let s = String(raw || '')
-    .replace(/\\alpha/g, 'α').replace(/\\beta/g, 'β').replace(/\\gamma/g, 'γ')
-    .replace(/\\delta/g, 'δ').replace(/\\Delta/g, 'Δ').replace(/\\epsilon/g, 'ε')
-    .replace(/\\theta/g, 'θ').replace(/\\lambda/g, 'λ').replace(/\\mu/g, 'μ')
-    .replace(/\\pi/g, 'π').replace(/\\sigma/g, 'σ').replace(/\\phi/g, 'φ')
-    .replace(/\\psi/g, 'ψ').replace(/\\omega/g, 'ω').replace(/\\Omega/g, 'Ω')
-    .replace(/\\hbar/g, 'ħ').replace(/[$\\`{}]/g, '')
-    .replace(/\s+/g, ' ').trim();
-  return s.length > 24 ? `${s.slice(0, 23)}…` : s;
 }
 
 function clampScale(s) {
@@ -420,16 +408,19 @@ function renderDagSvg(dag, isNewSession = false) {
     t1.setAttribute('fill', pal.ink);
     t1.textContent = `${entry.entry_id} · ${entry.entry_type || 'step'}`;
 
-    const t2 = document.createElementNS(SVG_NS, 'text');
-    t2.setAttribute('x', '10');
-    t2.setAttribute('y', '39');
-    t2.setAttribute('font-size', '11.5');
-    t2.setAttribute('fill', 'var(--ink-primary)');
-    t2.textContent = formatSvgSummary(entry.summary);
+    const summaryBox = document.createElementNS(SVG_NS, 'foreignObject');
+    summaryBox.setAttribute('x', '10');
+    summaryBox.setAttribute('y', '25');
+    summaryBox.setAttribute('width', String(NODE_W - 20));
+    summaryBox.setAttribute('height', '27');
+    const summary = document.createElement('div');
+    summary.className = 'dag-node-summary';
+    renderMathTextInto(summary, entry.summary, { inlineOnly: true });
+    summaryBox.appendChild(summary);
 
     g.appendChild(rect);
     g.appendChild(t1);
-    g.appendChild(t2);
+    g.appendChild(summaryBox);
     g.addEventListener('click', () => {
       if (suppressNextNodeClick) return;
       selectNode(entry);

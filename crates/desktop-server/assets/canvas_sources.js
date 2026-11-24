@@ -1,10 +1,10 @@
 // Tabs 3 & 4: Literature & Sources Canvas (arXiv/INSPIRE/Crossref/S2) and isolated Explain Canvas.
 import * as api from '/assets/api.js';
-import { escapeHtml, renderLatexDocumentPreview, renderRichInto } from '/assets/math.js';
+import { escapeHtml, mathTextToHtml, renderLatexDocumentPreview, renderMathTextInto, renderRichInto } from '/assets/math.js';
 import { getModelChoice } from '/assets/model_picker.js';
 import {
   extractDoi, linksForIngestedSource, linksForPaper, renderSourceLinkChips,
-  resolveOriginInfo, resolveSourceTitle,
+  resolveOriginInfo, resolveSourceTitle, sessionPaperReferences, sessionSourcesUsed,
 } from '/assets/source_links.js';
 
 // The model picker's current {provider, model}. On the Claude subscription route the
@@ -21,6 +21,9 @@ let litFieldEl = null;
 let litIncludeEl = null;
 let litFilterEl = null;
 let litResultsEl = null;
+let sessionLiteratureEl = null;
+let sessionLiteratureListEl = null;
+let usedSourcesListEl = null;
 let sourcesListEl = null;
 let passageFormEl = null;
 let passageQueryEl = null;
@@ -56,6 +59,9 @@ export function initSourcesAndSidetalk(opts = {}) {
   litIncludeEl = document.getElementById('lit-include-source');
   litFilterEl = document.getElementById('lit-section-filter');
   litResultsEl = document.getElementById('literature-results');
+  sessionLiteratureEl = document.getElementById('session-literature');
+  sessionLiteratureListEl = document.getElementById('session-literature-list');
+  usedSourcesListEl = document.getElementById('used-sources-list');
   sourcesListEl = document.getElementById('sources-list');
   passageFormEl = document.getElementById('paper-passage-form');
   passageQueryEl = document.getElementById('paper-passage-query');
@@ -101,8 +107,12 @@ export async function refreshSourcesAndSidetalk(sessionId) {
   if (sessionId !== currentSessionId) {
     currentSessionId = sessionId;
     sessionRevision += 1;
-    for (const container of [sourcesListEl, sidetalkStreamEl, litResultsEl, passageStatusEl, passageResultsEl]) {
+    for (const container of [sourcesListEl, usedSourcesListEl, sidetalkStreamEl, litResultsEl, sessionLiteratureListEl, passageStatusEl, passageResultsEl]) {
       if (container) container.replaceChildren();
+    }
+    if (sessionLiteratureEl) {
+      sessionLiteratureEl.hidden = true;
+      sessionLiteratureEl.open = false;
     }
     if (passageQueryEl) passageQueryEl.value = '';
     if (sidetalkInputEl) sidetalkInputEl.value = '';
@@ -174,7 +184,7 @@ function renderPassage(passage, sessionId) {
   const result = document.createElement('article');
   result.className = 'paper-passage-result';
   const title = document.createElement('strong');
-  title.textContent = passage.title || passage.source_id;
+  renderMathTextInto(title, passage.title || passage.source_id);
   const location = document.createElement('div');
   location.className = 'paper-passage-meta';
   const lines = passage.start_line === passage.end_line
@@ -184,7 +194,7 @@ function renderPassage(passage, sessionId) {
   location.textContent = locator;
   const excerpt = document.createElement('pre');
   excerpt.className = 'source-raw-pre';
-  excerpt.textContent = passage.excerpt;
+  renderMathTextInto(excerpt, passage.excerpt);
 
   const provenance = document.createElement('details');
   provenance.className = 'paper-passage-meta';
@@ -296,16 +306,15 @@ async function handleLiteratureSearch() {
       litResultsEl.textContent = `Literature search failed. ${err.message}`;
     }
   } finally {
-    // An older search can still have ingested sources even when its results were replaced.
-    if (revision === sessionRevision && payload.include_source) await loadSessionSources(sessionId);
+    if (revision === sessionRevision) await loadSessionSources(sessionId);
   }
 }
 
-function renderLiteratureHits(items, sessionId, payload) {
-  if (!litResultsEl) return;
-  litResultsEl.innerHTML = '';
+function renderLiteratureHits(items, sessionId, payload, container = litResultsEl) {
+  if (!container) return;
+  container.replaceChildren();
   if (!items || items.length === 0) {
-    litResultsEl.innerHTML = '<div class="paper-card" style="color:var(--ink-muted)">No matching papers returned.</div>';
+    container.innerHTML = '<div class="paper-card" style="color:var(--ink-muted)">No matching papers returned.</div>';
     return;
   }
   for (const item of items) {
@@ -321,15 +330,15 @@ function renderLiteratureHits(items, sessionId, payload) {
     const activeSrc = typeof item.source === 'string' ? item.source : payload.source;
     const links = linksForPaper({ ...item, source: activeSrc });
     const titleHtml = links[0]
-      ? `<a class="paper-title-link" href="${escapeHtml(links[0].url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title || 'Untitled')} ↗</a>`
-      : escapeHtml(item.title || 'Untitled');
+      ? `<a class="paper-title-link" href="${escapeHtml(links[0].url)}" target="_blank" rel="noopener noreferrer">${mathTextToHtml(item.title || 'Untitled')} ↗</a>`
+      : mathTextToHtml(item.title || 'Untitled');
 
     card.innerHTML = `
       ${withdrawn ? '<div class="retraction-banner">Warning: Withdrawn or Retracted Publication — blocked from unflagged citation</div>' : ''}
       <div style="font-weight:600;margin-bottom:3px;">${titleHtml}</div>
       <div style="font-size:12px;color:var(--ink-secondary);margin-bottom:4px;">${escapeHtml(authors)}</div>
       <div style="font-size:11.5px;color:var(--ink-muted);margin-bottom:8px;">${escapeHtml(meta)}</div>
-      ${item.abstract_text ? `<div style="font-size:12px;color:var(--ink-secondary);margin-bottom:8px;">${escapeHtml(item.abstract_text.slice(0, 320))}${item.abstract_text.length > 320 ? '…' : ''}</div>` : ''}
+      ${item.abstract_text ? `<div style="font-size:12px;color:var(--ink-secondary);margin-bottom:8px;">${mathTextToHtml(item.abstract_text)}</div>` : ''}
       ${sections.length ? `<div style="font-size:11.5px;margin-bottom:8px;"><strong>TeX sections:</strong> ${sections.map((s) => `<code>${escapeHtml(s)}</code>`).join(' ')}</div>` : ''}
       ${payload.include_source && !withdrawn && !readable ? '<p class="paper-passage-meta">No readable TeX source was ingested for this result.</p>' : ''}
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
@@ -359,7 +368,7 @@ function renderLiteratureHits(items, sessionId, payload) {
         bibtex: bibtex || undefined,
       });
     }
-    litResultsEl.appendChild(card);
+    container.appendChild(card);
   }
 }
 
@@ -371,7 +380,16 @@ export async function loadSessionSources(sessionId) {
     const sess = await api.getSession(sessionId);
     if (revision !== sessionRevision || request !== sourcesRequest) return;
     const sources = Array.isArray(sess && sess.sources) ? sess.sources : [];
-    lastSourcesCount = sources.length;
+    const papers = sessionPaperReferences(sess?.events);
+    const used = sessionSourcesUsed(sess);
+    renderUsedSources(used, sessionId);
+    if (sessionLiteratureEl) {
+      sessionLiteratureEl.hidden = papers.length === 0;
+      sessionLiteratureEl.querySelector('summary').textContent = `Search History (${papers.length})`;
+      if (papers.length) renderLiteratureHits(papers, sessionId, {}, sessionLiteratureListEl);
+      else sessionLiteratureListEl?.replaceChildren();
+    }
+    lastSourcesCount = used.length;
     onCountsChange({ sources: lastSourcesCount, sidetalk: lastSidetalkCount });
     sourcesListEl.innerHTML = '';
     if (sources.length === 0) {
@@ -395,7 +413,7 @@ export async function loadSessionSources(sessionId) {
         : `<code>${escapeHtml(originInfo.text)}</code>`;
       card.innerHTML = `
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">
-          <strong class="source-card-title">${escapeHtml(titleText)}</strong>
+          <strong class="source-card-title">${mathTextToHtml(titleText)}</strong>
           <span class="badge">${escapeHtml(src.format || src.status || 'ingested')}</span>
         </div>
         ${originInfo.text ? `<div class="source-origin-row"><span>Origin:</span>${originValueHtml}</div>` : ''}
@@ -426,9 +444,54 @@ export async function loadSessionSources(sessionId) {
   } catch (error) {
     if (revision === sessionRevision && request === sourcesRequest) {
       sourcesListEl.textContent = `Could not load session sources. ${error.message}`;
+      if (usedSourcesListEl) usedSourcesListEl.textContent = 'Could not load sources used in this session.';
       lastSourcesCount = 0;
       onCountsChange({ sources: 0, sidetalk: lastSidetalkCount });
     }
+  }
+}
+
+function renderUsedSources(records, sessionId) {
+  if (!usedSourcesListEl) return;
+  usedSourcesListEl.replaceChildren();
+  if (!records.length) {
+    usedSourcesListEl.textContent = 'Citations and proof-linked sources will appear here.';
+    return;
+  }
+  for (const { paper, source, reader, steps, cited } of records) {
+    const card = document.createElement('article');
+    card.className = 'paper-card';
+    const links = linksForPaper(paper);
+    const title = mathTextToHtml(paper.title);
+    const titleHtml = links[0]
+      ? `<a class="paper-title-link" href="${escapeHtml(links[0].url)}" target="_blank" rel="noopener noreferrer">${title} ↗</a>`
+      : title;
+    card.innerHTML = `
+      ${paper.withdrawn || paper.retracted ? '<div class="retraction-banner">Withdrawn or retracted publication</div>' : ''}
+      <strong>${titleHtml}</strong>
+      <div class="used-source-actions" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;">
+        ${cited ? '<span class="badge">Cited in answer</span>' : ''}
+        ${renderSourceLinkChips(links)}
+      </div>
+    `;
+    const actions = card.querySelector('.used-source-actions');
+    const addButton = (label, onClick) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'pill-btn sm';
+      button.textContent = label;
+      button.addEventListener('click', onClick);
+      actions.appendChild(button);
+    };
+    if (reader || (source?.source_id && sourceFiles(source).length)) {
+      addButton(reader?.start_line ? 'Read cited lines' : 'Read source', () => {
+        openSessionSource(sessionId, reader?.source_id || source.source_id, reader?.path, reader);
+      });
+    }
+    for (const step of steps) {
+      if (step) addButton(`Proof ${step}`, () => onSelectStepRef(step));
+    }
+    usedSourcesListEl.appendChild(card);
   }
 }
 
@@ -663,7 +726,7 @@ async function openSourceReader(sessionId, source, files, links, anchor, opener 
   const title = document.getElementById('source-reader-title');
   const fileSelect = document.getElementById('source-reader-file');
   const linkContainer = document.getElementById('source-reader-ext-links');
-  if (title) title.textContent = resolveSourceTitle(source);
+  renderMathTextInto(title, resolveSourceTitle(source));
   if (linkContainer) linkContainer.innerHTML = renderSourceLinkChips(links);
   if (fileSelect) {
     fileSelect.replaceChildren(...files.map((file) => new Option(file, file)));

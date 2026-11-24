@@ -4,7 +4,7 @@ use crate::projects::{attach_session, list_projects, project_for_session, save_n
 use crate::session_lifecycle::{is_turn_running, list_session_grants};
 use crate::session_view::summarize_session_events;
 use crate::sse::stream_session_sse;
-use crate::state::{now_ms, update_provider_roles_from_ui, DesktopState, ForkInfo, SessionMeta};
+use crate::state::{now_ms, update_provider_roles_from_ui, DesktopState, ForkInfo, SessionMeta, DEFAULT_SESSION_TITLE};
 use crate::turn_runner::{reconstruct_session_view, spawn_turn_thread};
 use agent::{ProviderKeyStore, ProviderKind, RoleAssignment};
 use export::{compute_branch_diff, fork_session, ForkOptions};
@@ -69,6 +69,31 @@ fn session_fork_info(meta: Option<&SessionMeta>, events: &[ledger::Event]) -> Op
     })
 }
 
+pub(crate) fn model_session_title(events: &[ledger::Event]) -> Option<&str> {
+    events.iter()
+        .filter(|event| event.kind == agent::runner::SESSION_TITLE_EVENT)
+        .filter_map(|event| event.payload["title"].as_str())
+        .find(|title| !title.trim().is_empty())
+}
+
+pub(crate) fn session_title(meta: Option<&SessionMeta>, events: &[ledger::Event], id: &str) -> String {
+    if meta.is_some_and(SessionMeta::allows_model_title) {
+        if let Some(title) = model_session_title(events) {
+            return title.to_string();
+        }
+    }
+    meta.map(|meta| meta.title.as_str())
+        .filter(|title| !title.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            events.iter()
+                .filter(|event| matches!(event.kind.as_str(), "session.start" | "session.resume"))
+                .find_map(|event| event.payload["prompt"].as_str())
+                .map(|prompt| clip_title(prompt, 52))
+        })
+        .unwrap_or_else(|| id.to_string())
+}
+
 pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
     let ledger = state.open_ledger().map_err(internal)?;
     let ledger_ids = ledger.sessions().map_err(|e| internal(e.to_string()))?;
@@ -96,18 +121,8 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
         }
         let archived = meta.as_ref().is_some_and(|m| m.archived);
         let events = ledger.read_session(&id).unwrap_or_default();
-        let prompt_title = events
-            .iter()
-            .find(|e| e.kind == "session.start")
-            .and_then(|e| e.payload.get("prompt").and_then(Value::as_str))
-            .map(|p| clip_title(p, 52));
         let parent_session = session_fork_info(meta.as_ref(), &events).map(|fork| fork.parent_session);
-        let title = meta
-            .as_ref()
-            .map(|m| m.title.clone())
-            .filter(|t| !t.trim().is_empty())
-            .or(prompt_title)
-            .unwrap_or_else(|| id.clone());
+        let title = session_title(meta.as_ref(), &events, &id);
         let workspace_root = meta
             .as_ref()
             .and_then(|m| m.workspace_root.clone())
@@ -182,25 +197,26 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
     }
 
     let ui = state.load_ui_settings();
-    let title = val
+    let explicit_title = val
         .get("title")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+        .filter(|s| !s.is_empty());
+    let title = explicit_title.map(str::to_string)
         .or_else(|| {
             val.get("prompt")
                 .and_then(Value::as_str)
                 .map(|p| clip_title(p, 52))
                 .filter(|s| !s.is_empty())
         })
-        .unwrap_or_else(|| "Research Session".to_string());
+        .unwrap_or_else(|| DEFAULT_SESSION_TITLE.to_string());
 
     let provider = val.get("provider").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
     let meta = SessionMeta {
         route: provider.and_then(crate::cli_turn::CliRouteKind::from_provider).map(|k| k.provider_id().to_string()),
         id: id.clone(),
         title: title.clone(),
+        allow_model_title: Some(explicit_title.is_none()),
         workspace_root: workspace_root.clone(),
         pinned_conventions: val
             .get("pinned_conventions")
@@ -267,19 +283,9 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
         .read_session(session_id)
         .map_err(|e| internal(e.to_string()))?;
     let (messages, traces, sources) = reconstruct_session_view(&events);
+    let linked_sources = crate::evidence::linked_session_sources(state, &ledger, &events);
     let stats = summarize_session_events(&events);
-    let title = meta
-        .as_ref()
-        .map(|m| m.title.clone())
-        .filter(|t| !t.trim().is_empty())
-        .or_else(|| {
-            messages
-                .iter()
-                .find(|m| m["role"] == "user")
-                .and_then(|m| m["text"].as_str())
-                .map(|p| clip_title(p, 52))
-        })
-        .unwrap_or_else(|| session_id.to_string());
+    let title = session_title(meta.as_ref(), &events, session_id);
     let workspace_root = meta
         .as_ref()
         .and_then(|m| m.workspace_root.clone())
@@ -322,6 +328,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
             "messages": messages,
             "traces": traces,
             "sources": sources,
+            "linked_sources": linked_sources,
             "stats": stats,
             "archived": meta.as_ref().is_some_and(|m| m.archived),
             "running": is_turn_running(state, session_id),
@@ -429,13 +436,8 @@ pub fn handle_fork(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRe
     let parent_meta = state.load_meta(session_id);
     let child_meta = SessionMeta {
         id: receipt.new_session.clone(),
-        title: format!(
-            "Fork of {}",
-            parent_meta
-                .as_ref()
-                .map(|m| m.title.as_str())
-                .unwrap_or(session_id)
-        ),
+        title: format!("Fork of {}", session_title(parent_meta.as_ref(), &events, session_id)),
+        allow_model_title: Some(false),
         workspace_root: parent_meta.as_ref().and_then(|m| m.workspace_root.clone()),
         pinned_conventions: parent_meta.as_ref().and_then(|m| m.pinned_conventions.clone()),
         verification_mode: parent_meta.as_ref().is_some_and(|m| m.verification_mode),

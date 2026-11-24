@@ -401,6 +401,8 @@
         <!-- Tab 3: Literature & Sources Canvas -->
         <section id="panel-sources" class="canvas-panel" role="tabpanel" aria-labelledby="tab-sources">
           <div class="sources-layout">
+            <div class="rail-section-label" style="padding:2px 0;">Sources Used</div>
+            <div id="used-sources-list" style="display:flex;flex-direction:column;gap:8px;"></div>
             <details class="dag-detail-card formal-library">
               <summary>Formal library</summary>
               <form id="formal-library-form" autocomplete="off">
@@ -439,6 +441,10 @@
               </div>
             </form>
             <div id="literature-results" style="display:flex;flex-direction:column;gap:8px;"></div>
+            <details id="session-literature" class="dag-detail-card" hidden>
+              <summary>Search History</summary>
+              <div id="session-literature-list" style="display:flex;flex-direction:column;gap:8px;margin-top:8px;"></div>
+            </details>
             <div class="dag-detail-card paper-passage-search">
               <form id="paper-passage-form" autocomplete="off">
                 <label for="paper-passage-query">Search ingested paper passages</label>

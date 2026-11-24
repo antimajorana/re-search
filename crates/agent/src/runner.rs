@@ -18,6 +18,9 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = "Local re:Search core. `sympy_eval` runs
     note. Results are computations, not verified claims.";
 
 const RESULT_TEXT_LIMIT: usize = 4000;
+const SET_SESSION_TITLE: &str = "set_session_title";
+const MAX_SESSION_TITLE_CHARS: usize = 72;
+pub const SESSION_TITLE_EVENT: &str = "session.title";
 
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -41,6 +44,10 @@ pub enum SessionOutcome {
 
 pub trait EventSink {
     fn on_event(&mut self, receipt: &AppendedEvent, kind: &str, data: &Value) -> Result<(), String>;
+
+    fn wants_session_title(&self) -> bool {
+        false
+    }
 
     fn on_text_delta(&mut self, _delta: &str) {}
 
@@ -252,6 +259,34 @@ pub(crate) fn run_turn_leg(
     }
     let started = Instant::now();
     let mut messages = std::mem::take(&mut params.initial_messages);
+    let title_in_history = messages.iter().flat_map(|message| &message.content).any(|block| {
+        matches!(block, ContentBlock::ToolUse { name, .. } if name == SET_SESSION_TITLE)
+    });
+    let use_title_tool = !tool_specs.iter().any(|tool| tool.name == SET_SESSION_TITLE)
+        && (title_in_history || (params.max_turns > 1 && audit.sink.wants_session_title()));
+    let mut system = params.system_prompt.to_string();
+    if use_title_tool {
+        if !system.is_empty() {
+            system.push_str("\n\n");
+        }
+        system.push_str(
+            "Early in the research, once you can state the main question, call `set_session_title` \
+             once with a short, specific title in the user's language. Include it alongside your \
+             first research tool call when possible, then continue the research.",
+        );
+        tool_specs.push(ToolSpec {
+            name: SET_SESSION_TITLE.into(),
+            description: "Give this unnamed research session a concise title based on its main question.".into(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["title"],
+                "additionalProperties": false,
+                "properties": {
+                    "title": { "type": "string", "minLength": 1, "maxLength": MAX_SESSION_TITLE_CHARS }
+                },
+            }),
+        });
+    }
 
     for offset in 0..params.max_turns {
         let leg_turns = offset + 1;
@@ -269,7 +304,7 @@ pub(crate) fn run_turn_leg(
         };
         let req = ModelRequest {
             model: params.model.to_string(),
-            system: Some(params.system_prompt.to_string()),
+            system: Some(system.clone()),
             messages: outgoing_messages,
             tools: tool_specs.clone(),
             max_tokens: params.max_tokens,
@@ -392,7 +427,7 @@ pub(crate) fn run_turn_leg(
                     return Ok(LegResult { outcome, messages, last_turn: turn, last_text: String::new() });
                 }
                 messages.push(Message { role: Role::Assistant, content: resp.content.clone() });
-                let results = dispatch_tool_calls(audit, router, &caller, turn, &resp.content, &params)?;
+                let results = dispatch_tool_calls(audit, router, &caller, turn, &resp.content, &params, use_title_tool)?;
                 if params.cancel.is_some_and(CancelToken::is_cancelled) {
                     messages.push(Message { role: Role::User, content: results });
                     let outcome = abort_stopped(audit, leg_turns)?;
@@ -519,6 +554,7 @@ fn dispatch_tool_calls(
     turn: u32,
     content: &[ContentBlock],
     params: &LoopParams<'_>,
+    use_title_tool: bool,
 ) -> Result<Vec<ContentBlock>, String> {
     let mut results = Vec::new();
     for block in content {
@@ -527,6 +563,8 @@ fn dispatch_tool_calls(
         };
         let (is_error, content_text) = if params.cancel.is_some_and(CancelToken::is_cancelled) {
             (true, "DENIED: stopped by user".to_string())
+        } else if name == SET_SESSION_TITLE && use_title_tool {
+            record_session_title(audit, input)?
         } else if crate::interaction::is_human_tool(name) {
             crate::interaction::run_ask_user_tool(audit, params.human, id, input, params.cancel)?
         } else if crate::delegate::is_delegation_tool(name) {
@@ -562,6 +600,29 @@ fn dispatch_tool_calls(
         results.push(ContentBlock::ToolResult { tool_use_id: id.clone(), is_error, content: content_text });
     }
     Ok(results)
+}
+
+fn record_session_title(audit: &mut Audit<'_>, input: &Value) -> Result<(bool, String), String> {
+    if !audit.sink.wants_session_title()
+        || audit.ledger.read_session(audit.session).map_err(|error| error.to_string())?
+            .iter().any(|event| event.kind == SESSION_TITLE_EVENT)
+    {
+        return Ok((false, "The session title is already fixed.".into()));
+    }
+    let title = input["title"]
+        .as_str()
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if title.is_empty()
+        || title.chars().count() > MAX_SESSION_TITLE_CHARS
+        || title.chars().any(char::is_control)
+    {
+        return Ok((true, format!("Provide a title between 1 and {MAX_SESSION_TITLE_CHARS} characters.")));
+    }
+    audit.emit(SESSION_TITLE_EVENT, json!({ "title": title }))?;
+    Ok((false, "Session title set.".into()))
 }
 
 fn collect_text(content: &[ContentBlock]) -> String {

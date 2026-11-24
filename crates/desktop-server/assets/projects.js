@@ -1,7 +1,7 @@
 // Project notebook, session links, and research notes.
 import * as api from '/assets/api.js';
 import { wireTabKeys } from '/assets/connect.js';
-import { renderRichInto } from '/assets/math.js';
+import { renderMathTextInto, renderRichInto } from '/assets/math.js';
 import { reconcileEdits, showSavedValues } from '/assets/project_edits.js';
 import { focusProjectSource, initProjectLibrary, renderProjectLibrary } from '/assets/project_library.js';
 import { initProjectValidation, loadProjectValidation, setValidationProject } from '/assets/project_validation.js';
@@ -180,7 +180,7 @@ function displayProject(project) {
   setValidationProject(project);
   setExperimentProject(project);
   if (!project) return;
-  byId('title').textContent = project.title;
+  renderMathTextInto(byId('title'), project.title);
   renderRichInto(byId('question'), project.question || 'No research question recorded.');
   renderRichInto(byId('conventions'), project.conventions || 'No conventions pinned.');
   renderNotes(project, false);
@@ -311,6 +311,7 @@ export function refreshProjectSessions() {
     if (session) {
       const title = session.title || id;
       const link = action(title, () => callbacks.onOpenSession(id), 'project-session-link');
+      renderMathTextInto(link, title);
       link.title = title;
       li.append(link);
     } else {
@@ -386,7 +387,7 @@ function renderNotes(project, questions) {
     li.append(body);
     if (note.quote) {
       const quote = document.createElement('blockquote');
-      quote.textContent = note.quote;
+      renderMathTextInto(quote, note.quote);
       li.append(quote);
     }
     const actions = document.createElement('div');

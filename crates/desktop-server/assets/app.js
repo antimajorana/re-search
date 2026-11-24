@@ -1,6 +1,7 @@
 // Main entry controller: wires left rail (Active/Archived + Delete), Connect panel, model picker,
 // live pipeline bar, center stream, SSE live updates, resizable Canvas tabs, and postMessage bridge.
 import * as api from '/assets/api.js';
+import { renderMathTextInto } from '/assets/math.js';
 import {
   appendAssistantMessage, appendUserMessage, appendWarningLine, confirmOptimisticUserMessage,
   finalizeLiveAssistant, finalizeLiveOnError, finalizeLiveThinking, handleRoundReset,
@@ -49,6 +50,7 @@ let sessionSelection = 0;
 let turnRevision = 0;
 let submittedTurn = null;
 let sessionListRequest = 0;
+let sessionTitleRevision = 0;
 let navigationRevision = 0;
 let canvasManuallySet = false;
 
@@ -356,7 +358,10 @@ async function refreshSessionList() {
     if (request !== sessionListRequest) return;
     state.sessions = Array.isArray(data) ? data : data.sessions || [];
     const active = state.sessions.find((session) => session.id === state.activeSessionId);
-    if (active) syncProjectMembership(active.project_id);
+    if (active) {
+      syncProjectMembership(active.project_id);
+      renderMathTextInto(el.sessionTitle, active.title || active.id);
+    }
   } catch {
     if (request !== sessionListRequest) return;
   }
@@ -504,7 +509,7 @@ async function selectSession(id, { focus = false, adoptDraft = false } = {}) {
     closeSessionPopovers();
     resetLiveTurnState();
     const selected = state.sessions.find((s) => s.id === id);
-    if (el.sessionTitle) el.sessionTitle.textContent = selected?.title || id;
+    renderMathTextInto(el.sessionTitle, selected?.title || id);
     syncProjectMembership(selected?.project_id);
     renderSessionStream(id, { messages: [] });
     syncWorkspaceIndicators('');
@@ -523,6 +528,7 @@ async function selectSession(id, { focus = false, adoptDraft = false } = {}) {
   }
   const canvas = Promise.all([refreshWorkspaceFiles(id), refreshDag(id), refreshSourcesAndSidetalk(id)]);
   renderSessionList();
+  const titleRevision = sessionTitleRevision;
   connectSessionSse(id);
 
   try {
@@ -530,7 +536,7 @@ async function selectSession(id, { focus = false, adoptDraft = false } = {}) {
     if (selection !== sessionSelection) return;
     setComposerLoading(false);
     syncProjectMembership(sess.project_id);
-    if (el.sessionTitle) el.sessionTitle.textContent = sess.title || id;
+    if (titleRevision === sessionTitleRevision) renderMathTextInto(el.sessionTitle, sess.title || id);
     if (el.topbarArchiveBtn) {
       el.topbarArchiveBtn.hidden = false;
       el.topbarArchiveBtn.title = sess.archived ? 'Restore chat to Active' : 'Archive this chat';
@@ -579,9 +585,11 @@ function connectSessionSse(id) {
       if (!isAct() || !interrupted) return;
       interrupted = false;
       const revision = turnRevision;
+      const titleRevision = sessionTitleRevision;
       try {
         const sess = await api.getSession(id);
         if (!isAct() || interrupted || revision !== turnRevision) return;
+        if (titleRevision === sessionTitleRevision) renderMathTextInto(el.sessionTitle, sess.title || id);
         if (sess.running) {
           const approvals = sess.pending_approvals || [];
           const checkpoints = sess.pending_checkpoints || [];
@@ -662,10 +670,19 @@ function connectSessionSse(id) {
     dag_updated: (d) => { if (!isAct()) return; updatePipelineFromEvent('dag_updated', d); refreshDag(id); },
     session_event: (d) => {
       if (!isAct()) return;
+      if (d?.kind === 'session.title' && typeof d.data?.title === 'string') {
+        sessionTitleRevision += 1;
+        const session = state.sessions.find((candidate) => candidate.id === id);
+        if (session) session.title = d.data.title;
+        renderMathTextInto(el.sessionTitle, d.data.title);
+        renderSessionList();
+        refreshSessionList();
+      }
       if (d?.kind === 'session.start' || d?.kind === 'session.resume') {
         recoveredRevision = -1;
         latestPrompt = d.data?.prompt || '';
       }
+      if (d?.kind === 'literature.fetched' || d?.kind === 'source.ingested') loadSessionSources(id);
       updatePipelineFromEvent('session_event', d);
       if (d && d.kind === 'vendor.builtin_tool') appendWarningLine(formatBuiltinToolWarning(d.data || {}));
     },
