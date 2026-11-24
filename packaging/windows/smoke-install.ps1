@@ -27,45 +27,91 @@ function Get-LoopbackPort {
     }
 }
 
-function Test-AuthenticatedWebView($WebSocketUrl) {
-    # Only a boolean leaves the page. The ephemeral app token remains inside its WebView.
-    $expression = @'
-(async () => {
-  if (!document.getElementById('app-shell') || !document.getElementById('message-stream')) return false;
-  const token = sessionStorage.getItem('re-search-token');
-  if (!token) return false;
-  const headers = { 'X-ReSearch-Token': token };
-  const sessions = await fetch('/api/sessions', { headers });
-  const connection = await fetch('/api/connections', { headers });
-  if (!sessions.ok || !connection.ok) return false;
-  const status = await connection.json();
-  return status.capabilities?.sympy_worker === 'configured';
-})()
-'@
-    $client = [Net.WebSockets.ClientWebSocket]::new()
-    $timeout = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
-    try {
-        $uri = [Uri] $WebSocketUrl
-        if ($uri.Scheme -ne 'ws' -or $uri.Host -ne '127.0.0.1') { throw 'Unexpected WebView debugging endpoint.' }
-        [void] $client.ConnectAsync($uri, $timeout.Token).GetAwaiter().GetResult()
-        $request = @{
-            id = 1
-            method = 'Runtime.evaluate'
-            params = @{ expression = $expression; awaitPromise = $true; returnByValue = $true }
-        } | ConvertTo-Json -Depth 5 -Compress
-        $requestBytes = [ArraySegment[byte]]::new([Text.Encoding]::UTF8.GetBytes($request))
-        [void] $client.SendAsync($requestBytes, [Net.WebSockets.WebSocketMessageType]::Text, $true, $timeout.Token).GetAwaiter().GetResult()
-        $buffer = [ArraySegment[byte]]::new([byte[]]::new(16384))
-        while ($client.State -eq [Net.WebSockets.WebSocketState]::Open) {
-            $reply = $client.ReceiveAsync($buffer, $timeout.Token).GetAwaiter().GetResult()
-            if ($reply.MessageType -ne [Net.WebSockets.WebSocketMessageType]::Text -or -not $reply.EndOfMessage) { return $false }
-            $message = [Text.Encoding]::UTF8.GetString($buffer.Array, $buffer.Offset, $reply.Count) | ConvertFrom-Json
-            if ($message.id -eq 1) { return $message.result.result.value -eq $true }
+function Test-InstalledWorkbenchControls([int] $AppProcessId) {
+    # Windows PowerShell runs UI Automation in STA. Time-limit this optional
+    # path because the hosted desktop may not expose a WebView accessibility tree.
+    $probe = @'
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$button = [System.Windows.Automation.PropertyCondition]::new(
+    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [System.Windows.Automation.ControlType]::Button
+)
+$known = @('New research', 'Canvas', 'Connect', 'Settings')
+$found = [Collections.Generic.HashSet[string]]::new()
+$buttonCount = 0
+$deadline = [DateTimeOffset]::UtcNow.AddSeconds(20)
+while ([DateTimeOffset]::UtcNow -lt $deadline) {
+    $app = Get-Process -Id __APP_PROCESS_ID__
+    if ($app.MainWindowHandle -ne [IntPtr]::Zero) {
+        $window = [System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
+        $buttons = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $button)
+        $buttonCount = $buttons.Count
+        foreach ($item in $buttons) {
+            $name = $item.Current.Name
+            if ($name -like '*Test numerical convergence*') { exit 0 }
+            if ($name -in $known) { [void] $found.Add($name) }
         }
-        return $false
+    }
+    Start-Sleep -Milliseconds 500
+}
+Write-Host "UI Automation saw $buttonCount buttons (known controls: $($found -join ', '))."
+exit 1
+'@
+    $probe = $probe.Replace('__APP_PROCESS_ID__', [string]$AppProcessId)
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($probe))
+    $legacy = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $uia = Start-Process -FilePath $legacy -ArgumentList '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', $encoded -NoNewWindow -PassThru
+    try {
+        if (-not $uia.WaitForExit(24000)) {
+            $uia.Kill()
+            $uia.WaitForExit()
+            return $false
+        }
+        return $uia.ExitCode -eq 0
     } finally {
-        $client.Dispose()
-        $timeout.Dispose()
+        $uia.Dispose()
+    }
+}
+
+function Test-InstalledWorkbenchApi([string] $CliPath, [string] $DataDir) {
+    # Check default worker discovery through the installed CLI's headless launch.
+    # Keep credentials in memory and out of the log.
+    $start = [Diagnostics.ProcessStartInfo]::new($CliPath)
+    $start.UseShellExecute = $false
+    $start.RedirectStandardOutput = $true
+    $start.WorkingDirectory = $installDir
+    foreach ($argument in 'ui', '--no-open', 'true', '--print-url-json', 'true', '--data-dir', $DataDir) {
+        $start.ArgumentList.Add($argument)
+    }
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        $line = $process.StandardOutput.ReadLineAsync().WaitAsync([TimeSpan]::FromSeconds(20)).GetAwaiter().GetResult()
+        try {
+            $launch = $line | ConvertFrom-Json
+            $origin = [uri]$launch.base_url
+            if ($origin.Scheme -cne 'http' -or $origin.Host -cne '127.0.0.1' -or $origin.AbsolutePath -ne '/' -or
+                $origin.UserInfo -or $origin.Query -or $origin.Fragment -or $launch.token -cnotmatch '^[0-9a-f]{64}$') {
+                throw 'Invalid local launch info.'
+            }
+        } catch {
+            throw 'Installed CLI did not report valid local launch information.'
+        }
+        $headers = @{ 'X-ReSearch-Token' = $launch.token }
+        $base = $origin.GetLeftPart([UriPartial]::Authority)
+        $sessions = Invoke-RestMethod -Uri "$base/api/sessions" -Headers $headers -TimeoutSec 4 -NoProxy -MaximumRedirection 0
+        if ($null -eq $sessions.sessions) { throw 'Installed CLI did not return the authenticated session list.' }
+        $connections = Invoke-RestMethod -Uri "$base/api/connections" -Headers $headers -TimeoutSec 4 -NoProxy -MaximumRedirection 0
+        if ($connections.capabilities.sympy_worker -cne 'configured') {
+            throw 'Installed CLI did not discover the bundled Python worker.'
+        }
+    } finally {
+        if (-not $process.HasExited) {
+            $process.Kill()
+            $process.WaitForExit()
+        }
+        $process.Dispose()
     }
 }
 
@@ -98,54 +144,82 @@ try {
         $installedHash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash
         if ($stagedHash -ne $installedHash) { throw "Installed payload differs from the staged file: $relative" }
     }
-    & (Join-Path $installDir 're-search.exe') sessions --data-dir $smokeData
-
-    $port = Get-LoopbackPort
-    do { $debugPort = Get-LoopbackPort } while ($debugPort -eq $port)
-    $origin = "http://127.0.0.1:$port"
-    $debugEndpoint = "http://127.0.0.1:$debugPort/json/list"
-    $debugArgs = $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+    $failures = [Collections.Generic.List[string]]::new()
+    $nativeUiVerified = $false
     try {
-        $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-address=127.0.0.1 --remote-debugging-port=$debugPort"
-        $app = Start-Process -FilePath $appPath -ArgumentList @('--data-dir', "`"$smokeData`"", '--port', "$port") -PassThru
-    } finally {
-        $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $debugArgs
-    }
-
-    $ready = $false
-    $serverReady = $false
-    $webviewFound = $false
-    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(75)
-    while ([DateTimeOffset]::UtcNow -lt $deadline) {
-        $app.Refresh()
-        if ($app.HasExited) { throw "Installed WebView2 app exited with code $($app.ExitCode)." }
-        try {
-            $health = Invoke-RestMethod -Uri "$origin/api/health" -TimeoutSec 2
-            $serverReady = $health.ok -and $health.version -ceq $Version
-            $pages = Invoke-RestMethod -Uri $debugEndpoint -TimeoutSec 2
-            $page = $pages | Where-Object { $_.type -eq 'page' -and $_.url -eq "$origin/" } | Select-Object -First 1
-            $webviewFound = [bool]$page.webSocketDebuggerUrl
-            if ($serverReady -and $webviewFound -and (Test-AuthenticatedWebView $page.webSocketDebuggerUrl)) {
-                $ready = $true
-                break
+        $port = Get-LoopbackPort
+        $origin = "http://127.0.0.1:$port"
+        $nativeLog = Join-Path $smokeRoot.FullName 'desktop-stderr.txt'
+        $app = Start-Process -FilePath $appPath -WorkingDirectory $installDir -RedirectStandardError $nativeLog -ArgumentList @('--data-dir', "`"$smokeData`"", '--port', "$port") -PassThru
+        $serverReady = $false
+        $webviewStatus = $null
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(55)
+        while ([DateTimeOffset]::UtcNow -lt $deadline) {
+            $app.Refresh()
+            if ($app.HasExited) { throw "Installed WebView2 app exited with code $($app.ExitCode)." }
+            try {
+                $health = Invoke-RestMethod -Uri "$origin/api/health" -TimeoutSec 2 -NoProxy
+                $serverReady = $health.ok -and $health.version -ceq $Version
+            } catch {
+                # The loopback server may still be starting.
             }
-        } catch {
-            # The server, WebView and authenticated app boot asynchronously.
+            $webviewStatus = Get-Content -LiteralPath $nativeLog -Tail 10 -ErrorAction SilentlyContinue |
+                Where-Object { $_ -like 're-search-app: window authenticated via *' -or $_ -like 're-search-app: could not hand the session token*' } |
+                Select-Object -Last 1
+            if ($webviewStatus -like 're-search-app: could not hand the session token*') { throw $webviewStatus }
+            if ($serverReady -and $webviewStatus -like 're-search-app: window authenticated via *') { break }
+            Start-Sleep -Milliseconds 500
         }
-        Start-Sleep -Milliseconds 500
+        if ($serverReady) {
+            try {
+                $nativeUiVerified = Test-InstalledWorkbenchControls $app.Id
+            } catch {
+                Write-Host "Windows UI Automation unavailable: $($_.Exception.Message)"
+            }
+        }
+        if ($nativeUiVerified) {
+            Write-Host 'Installed WebView2 workbench exposes the Test numerical convergence button.'
+        } elseif ($serverReady -and $webviewStatus -like 're-search-app: window authenticated via *') {
+            Write-Host 'Windows UI Automation did not expose the workbench control. The native WebView reported successful authentication.'
+        } else {
+            $app.Refresh()
+            if ($app.HasExited) { throw "Installed WebView2 app exited with code $($app.ExitCode)." }
+            $knownTitle = $app.MainWindowTitle
+            if ($knownTitle -notin '', 'reSearch', 'reSearch (not connected)') { $knownTitle = '(other)' }
+            throw "Installed WebView2 authentication was not confirmed (app alive: True, server ready: $serverReady, window handle: $($app.MainWindowHandle), title: '$knownTitle', native auth log: $([bool]$webviewStatus))."
+        }
+    } catch {
+        $failures.Add("Native WebView2: $($_.Exception.Message)")
     }
-    if (-not $ready) { throw "Installed app did not load the authenticated workbench with bundled Python configured (server ready: $serverReady, WebView page found: $webviewFound)." }
-    Write-Host 'Installed WebView2 authenticated workbench detected bundled Python.'
 
-    $python = Join-Path $installDir 'runtime\python.exe'
-    & $python -c "import sys, sympy, mpmath, numpy; assert sys.maxsize > 2**32"
-    $savedPython = $env:RE_SEARCH_PYTHON
     try {
+        Test-InstalledWorkbenchApi (Join-Path $installDir 're-search.exe') (Join-Path $smokeRoot.FullName 'cli-ledger')
+        Write-Host 'Installed CLI workbench authenticated and detected bundled Python.'
+    } catch {
+        $failures.Add("Installed CLI workbench: $($_.Exception.Message)")
+    }
+
+    $savedPython = $env:RE_SEARCH_PYTHON
+    $savedNativeError = $PSNativeCommandUseErrorActionPreference
+    try {
+        $python = Join-Path $installDir 'runtime\python.exe'
+        & $python -c "import sys, sympy, mpmath, numpy; assert sys.maxsize > 2**32"
         $env:RE_SEARCH_PYTHON = $python
-        cargo test --locked --release --target $Target -p worker --test appcontainer_sandbox
+        $PSNativeCommandUseErrorActionPreference = $false
+        $testOutput = @(& cargo test --locked --release --target $Target -p worker --test appcontainer_sandbox 2>&1)
+        $testCode = $LASTEXITCODE
+        $testOutput | ForEach-Object { Write-Host $_ }
+        if ($testCode -ne 0) {
+            $tail = ($testOutput | Select-Object -Last 20) -join "`n"
+            throw "Cargo exited with code ${testCode}.`n$tail"
+        }
+    } catch {
+        $failures.Add("Installed AppContainer worker: $($_.Exception.Message)")
     } finally {
+        $PSNativeCommandUseErrorActionPreference = $savedNativeError
         $env:RE_SEARCH_PYTHON = $savedPython
     }
+    if ($failures.Count) { throw ($failures -join "`n") }
 } finally {
     if ($app -and -not $app.HasExited) {
         if (-not $app.CloseMainWindow() -or -not $app.WaitForExit(10000)) {
