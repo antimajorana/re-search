@@ -143,23 +143,42 @@ def check_workbench(browser, binary, width, height):
 
 
 def main():
+    import sys
+    import traceback
+
     cli = argparse.ArgumentParser(description=__doc__)
     executable = "re-search.exe" if os.name == "nt" else "re-search"
     cli.add_argument("--binary", type=Path, default=Path("target/debug") / executable)
     cli.add_argument("--chromium", help="Use a system Chromium executable")
     args = cli.parse_args()
+    binary = args.binary.resolve()
+    journeys = [
+        ("workbench 1440x900", lambda b: check_workbench(b, binary, 1440, 900)),
+        ("workbench 1024x768", lambda b: check_workbench(b, binary, 1024, 768)),
+        ("workbench 390x844", lambda b: check_workbench(b, binary, 390, 844)),
+        ("research display", check_research_display),
+        ("pdf preview", lambda b: check_pdf_preview(b, binary)),
+        ("recovery example", lambda b: check_recovery_example(b, binary)),
+        ("investigation", lambda b: check_investigation(b, binary)),
+        ("session folders", lambda b: check_session_folders(b, binary)),
+    ]
+    failures = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(executable_path=args.chromium)
         try:
-            for width, height in [(1440, 900), (1024, 768), (390, 844)]:
-                check_workbench(browser, args.binary.resolve(), width, height)
-            check_research_display(browser)
-            check_pdf_preview(browser, args.binary.resolve())
-            check_recovery_example(browser, args.binary.resolve())
-            check_investigation(browser, args.binary.resolve())
-            check_session_folders(browser, args.binary.resolve())
+            for index, (name, run) in enumerate(journeys, 1):
+                try:
+                    run(browser)
+                    print(f"[{index}/{len(journeys)}] PASS {name}", flush=True)
+                except Exception:
+                    failures.append((name, traceback.format_exc()))
+                    print(f"[{index}/{len(journeys)}] FAIL {name}", flush=True)
         finally:
             browser.close()
+    if failures:
+        for name, tb in failures:
+            print(f"\n=== FAIL: {name} ===\n{tb}", file=sys.stderr, end="", flush=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
