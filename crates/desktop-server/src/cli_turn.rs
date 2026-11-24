@@ -381,7 +381,7 @@ pub(crate) fn run_cli_turn(
     let (reasoning_effort, subagent) =
         crate::subagents::resolve_turn_options(state, session_id, req, meta);
     let research = Arc::new(state.research_env_for_session(session_id)?);
-    let project_context = crate::project_context::brief(state, session_id)?;
+    let project_context = crate::investigation::turn_context(crate::project_context::brief(state, session_id)?, req);
 
     let ledger = state.open_ledger()?;
     let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;

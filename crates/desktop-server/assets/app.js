@@ -1,6 +1,7 @@
 // Main entry controller: wires left rail (Active/Archived + Delete), Connect panel, model picker,
 // live pipeline bar, center stream, SSE live updates, resizable Canvas tabs, and postMessage bridge.
 import * as api from '/assets/api.js';
+import { initInvestigation, showInvestigationSession, refreshInvestigation } from '/assets/investigation.js';
 import { fileNewSession, initFolders, openFolderDialog, sessionFolderName, sessionsInFolder } from '/assets/session_folders.js';
 import { renderMathTextInto } from '/assets/math.js';
 import { attachAnswerTrace } from '/assets/claim_trace.js';
@@ -12,7 +13,7 @@ import {
   resolveApprovalCard, setStreamStatus,
 } from '/assets/stream.js';
 import {
-  discardComposerDraft, initComposer, reuseComposerPrompt, setComposerBusy, setComposerLoading, setComposerPrompt,
+  discardComposerDraft, getComposerOptions, initComposer, reuseComposerPrompt, setComposerBusy, setComposerLoading, setComposerPrompt,
   setComposerRoute, setComposerSession, setComposerVisible, submitComposerPrompt,
 } from '/assets/composer.js';
 import { applySession, getModelChoice, initModelPicker, loadModels, noModelReason, rememberForSession } from '/assets/model_picker.js';
@@ -120,6 +121,7 @@ async function boot() {
     },
     onOpenConnect: openConnect,
     onOpenProjects: () => openProjects(state.activeProjectId),
+    onOpenInvestigation: () => document.getElementById('new-investigation-btn').click(),
     getSetupInfo: getWorkbenchSnapshot,
   });
 
@@ -137,6 +139,20 @@ async function boot() {
   });
 
   initLatexCanvas({ onNotify: showToast, ensureSession: ensureActiveSession, onPendingSave: recoverSaveApproval });
+  initInvestigation({
+    create: () => createAndSelectSession({ mode: 'investigation' }),
+    open: async (id) => { await refreshSessionList(); await selectSession(id, { focus: true }); },
+    useQuestion: question => setComposerPrompt(question, true),
+    requestOptions: () => {
+      const choice = getModelChoice();
+      if (choice) return getComposerOptions(choice);
+      openConnect('providers');
+      throw new Error(noModelReason() || 'Connect a model to run the investigation.');
+    },
+    send: handleSendPrompt,
+    openSource: (id, anchor) => openSessionSource(id, anchor.source_id, anchor.path, anchor),
+    onNotify: showToast,
+  });
   initDagCanvas({
     onDagCount: (n) => { state.tabCounts.dag = n; updateCanvasTabCounts(state.tabCounts); },
     onForkCreated: async (newId, open) => {
@@ -407,6 +423,7 @@ function resetToBlankState() {
   setComposerLoading(false);
   closeSse();
   state.activeSessionId = null;
+  showInvestigationSession(null, null);
   setComposerSession(null);
   syncProjectMembership(null);
   resetLiveTurnState();
@@ -517,6 +534,7 @@ async function selectSession(id, { focus = false, adoptDraft = false } = {}) {
   closeProjects();
   setComposerLoading(true);
   if (changed) {
+    showInvestigationSession(id, null);
     closeSessionPopovers();
     resetLiveTurnState();
     const selected = state.sessions.find((s) => s.id === id);
@@ -545,6 +563,7 @@ async function selectSession(id, { focus = false, adoptDraft = false } = {}) {
   try {
     const sess = await api.getSession(id);
     if (selection !== sessionSelection) return;
+    showInvestigationSession(id, sess);
     setComposerLoading(false);
     syncProjectMembership(sess.project_id);
     if (titleRevision === sessionTitleRevision) renderMathTextInto(el.sessionTitle, sess.title || id);
@@ -619,6 +638,7 @@ function connectSessionSse(id) {
       try {
         const sess = await api.getSession(id);
         if (!isAct() || interrupted || revision !== turnRevision) return;
+        showInvestigationSession(id, sess);
         if (titleRevision === sessionTitleRevision) renderMathTextInto(el.sessionTitle, sess.title || id);
         if (sess.running || sess.pending_approvals?.length || sess.pending_checkpoints?.length) {
           const approvals = sess.pending_approvals || [];
@@ -723,6 +743,7 @@ function connectSessionSse(id) {
         latestPrompt = d.data?.prompt || '';
       }
       if (d?.kind === 'literature.fetched' || d?.kind === 'source.ingested') loadSessionSources(id);
+      if (d?.kind?.startsWith('investigation.') || d?.kind === 'source.ingested') refreshInvestigation(id);
       updatePipelineFromEvent('session_event', d);
       if (d && d.kind === 'vendor.builtin_tool') appendWarningLine(formatBuiltinToolWarning(d.data || {}));
     },
@@ -736,6 +757,7 @@ function connectSessionSse(id) {
         const sess = await api.getSession(id);
         if (!isAct()) return;
         const msgs = Array.isArray(sess?.messages) ? sess.messages : [];
+        showInvestigationSession(id, sess);
         const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
         renderSessionGrantsPill(el.grantsPill, sess.session_grants || []);
         if (d && d.text) {
@@ -776,6 +798,7 @@ function connectSessionSse(id) {
       latestPrompt = '';
       refreshSessionList();
       refreshSessionRoute(id);
+      refreshInvestigation(id);
     },
   });
   state.eventSource = source;

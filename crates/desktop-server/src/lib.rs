@@ -2,6 +2,7 @@
 //! embedded Gemini-inspired research UI.
 
 pub mod agent_models;
+mod investigation;
 pub mod antigravity;
 pub mod approver;
 pub mod assets;
@@ -20,6 +21,7 @@ pub mod http_srv;
 pub mod launcher;
 mod manuscript_drafts;
 pub mod model_catalog;
+mod original_pdf;
 mod projects;
 pub mod routes_session;
 pub mod routes_subagents;

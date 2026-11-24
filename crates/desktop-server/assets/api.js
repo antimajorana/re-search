@@ -175,6 +175,18 @@ export function createSession(opts = {}) {
   return rawJson('POST', '/api/sessions', opts);
 }
 
+export function correctInvestigation(id, change) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/corrections`, change);
+}
+
+export function checkInvestigation(id, request) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/rechecks`, request);
+}
+
+export function openInvestigationResearch(id, request) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/research`, request);
+}
+
 export function getSession(id) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}`);
 }

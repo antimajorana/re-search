@@ -198,6 +198,20 @@ fn dispatch_api(
     let method = req.method.as_str();
 
     match (method, segs.as_slice()) {
+        ("GET", ["api", "sessions", sid, "sources", source, "original-pdf"]) => {
+            let path = req.query.get("path").map(String::as_str);
+            let line = req.query.get("line").and_then(|s| s.parse::<usize>().ok());
+            match crate::original_pdf::read(state, sid, source, path, line) {
+                Ok(pdf) => {
+                    let page = pdf.page.map(|p| p.to_string()).unwrap_or_default();
+                    write_bytes(&mut stream, 200, "application/pdf", &pdf.bytes, &[
+                        ("Cache-Control", "no-store"), ("X-Content-Type-Options", "nosniff"),
+                        ("Content-Security-Policy", "sandbox"), ("X-ReSearch-Pdf-Page", &page),
+                    ]);
+                }
+                Err(e) => write_api_res(&mut stream, Err(e)),
+            }
+        }
         ("GET", ["api", "projects"]) => write_api_res(&mut stream, crate::projects::handle_list(state)),
         ("POST", ["api", "projects"]) => {
             write_api_res(&mut stream, crate::projects::handle_create(state, &req.body));
@@ -397,6 +411,9 @@ fn dispatch_api(
         }
         ("POST", ["api", "sessions", id, "claim-review"]) => {
             write_api_res(&mut stream, crate::claim_review::handle_review(state, id, &req.body));
+        }
+        ("POST", ["api", "sessions", id, "investigation", operation]) => {
+            write_api_res(&mut stream, crate::investigation::handle(state, id, operation, &req.body));
         }
         ("POST", ["api", "sessions", id, "fork"]) => {
             write_api_res(&mut stream, handle_fork(state, id, &req.body));

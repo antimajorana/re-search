@@ -364,20 +364,24 @@ fn check_backlinks(
     } else {
         Vec::new()
     };
+    check_event_links(&session_events, entry_id, source_id)
+}
+
+fn check_event_links(session_events: &[Event], entry_id: Option<&str>, source_id: Option<&str>) -> Result<()> {
     let has = |events: &[Event], kind: &str, field: &str, id: &str| {
         events
             .iter()
             .any(|event| event.kind == kind && event.payload[field].as_str() == Some(id))
     };
     if let Some(entry) = entry_id {
-        if !has(&session_events, "proof.entry", "entry_id", entry) {
+        if !has(session_events, "proof.entry", "entry_id", entry) {
             return Err(bad(format!(
                 "proof entry `{entry}` was not found in the linked session"
             )));
         }
     }
     if let Some(source) = source_id {
-        if !has(&session_events, "source.ingested", "source_id", source) {
+        if !has(session_events, "source.ingested", "source_id", source) {
             return Err(bad(format!(
                 "source `{source}` was not found in the linked session"
             )));

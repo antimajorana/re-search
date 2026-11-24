@@ -77,6 +77,7 @@ pub enum Error {
     BadHash(String),
     LegacyUnchainedSchema,
     UnknownSession(String),
+    SessionChanged(String),
     Tamper(String),
 }
 
@@ -91,6 +92,7 @@ impl fmt::Display for Error {
                 write!(f, "ledger uses legacy unchained v0 schema without hash chain columns")
             }
             Error::UnknownSession(s) => write!(f, "unknown ledger session: {s}"),
+            Error::SessionChanged(s) => write!(f, "session `{s}` changed while validating the record; retry using its latest state"),
             Error::Tamper(msg) => write!(f, "ledger tamper detected: {msg}"),
         }
     }
@@ -310,6 +312,19 @@ impl Ledger {
         schema_version: u32,
         payload: &Value,
     ) -> Result<AppendedEvent> {
+        self.append_after(session, kind, schema_version, payload, None)
+    }
+
+    /// Atomically append a record that was validated against a particular session head.
+    pub fn append_at_head(
+        &self, session: &str, kind: &str, schema_version: u32, payload: &Value, expected_head: &str,
+    ) -> Result<AppendedEvent> {
+        self.append_after(session, kind, schema_version, payload, Some(expected_head))
+    }
+
+    fn append_after(
+        &self, session: &str, kind: &str, schema_version: u32, payload: &Value, expected_head: Option<&str>,
+    ) -> Result<AppendedEvent> {
         if self.legacy_unchained {
             return Err(Error::LegacyUnchainedSchema);
         }
@@ -322,6 +337,9 @@ impl Ledger {
             )
             .optional()?
             .unwrap_or_else(|| (0, GENESIS_HASH.to_string()));
+        if expected_head.is_some_and(|head| head != prev_hash) {
+            return Err(Error::SessionChanged(session.to_string()));
+        }
         let seq = last_seq
             .checked_add(1)
             .ok_or_else(|| Error::Tamper(format!("next sequence number overflows for session `{session}`")))?;

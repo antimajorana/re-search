@@ -7,9 +7,35 @@ pub struct StaticAsset {
 
 pub const INDEX_HTML: &str = include_str!("../assets/index.html");
 
+fn pdf_renderer_asset(name: &str) -> Option<StaticAsset> {
+    const BUNDLE: &[u8] = include_bytes!("../vendor/pdfjs/renderer.zip");
+    let mut assets = zip::ZipArchive::new(std::io::Cursor::new(BUNDLE)).ok()?;
+    let file = assets.by_name(name).ok()?;
+    let start = usize::try_from(file.data_start()?).ok()?;
+    let size = usize::try_from(file.size()).ok()?;
+    let content_type = match name.rsplit('.').next() {
+        Some("mjs" | "js") => "text/javascript; charset=utf-8",
+        Some("wasm") => "application/wasm",
+        Some("ttf") => "font/ttf",
+        _ => "application/octet-stream",
+    };
+    Some(StaticAsset { content_type, bytes: BUNDLE.get(start..start.checked_add(size)?)? })
+}
+
 pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
     let clean = path.split('?').next().unwrap_or(path);
+    if let Some(name) = clean.strip_prefix("/vendor/pdfjs/") {
+        return pdf_renderer_asset(name);
+    }
     match clean {
+        "/assets/pdf_preview.js" => Some(StaticAsset {
+            content_type: "text/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/pdf_preview.js"),
+        }),
+        "/assets/pdf_preview.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/pdf_preview.css"),
+        }),
         "/assets/re-search-icon.png" => Some(StaticAsset {
             content_type: "image/png",
             bytes: include_bytes!("../assets/re-search-icon.png"),
@@ -53,6 +79,18 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
         "/assets/experiments.css" => Some(StaticAsset {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../assets/experiments.css"),
+        }),
+        "/assets/investigation.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation.css"),
+        }),
+        "/assets/investigation.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation.js"),
+        }),
+        "/assets/investigation_map.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_map.js"),
         }),
         "/assets/api.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",

@@ -38,6 +38,7 @@ let attachClaimTrace = null;
 let onRecoveryAction = null;
 let onOpenConnect = null;
 let onOpenProjects = null;
+let onOpenInvestigation = null;
 let getSetupInfo = null;
 let liveStreamText = '';
 let liveRenderPending = false;
@@ -57,6 +58,7 @@ export function initStream(opts = {}) {
   onRecoveryAction = opts.onRecoveryAction || null;
   onOpenConnect = opts.onOpenConnect || null;
   onOpenProjects = opts.onOpenProjects || null;
+  onOpenInvestigation = opts.onOpenInvestigation || null;
   getSetupInfo = opts.getSetupInfo || null;
   initWorkedExample();
 }
@@ -185,6 +187,7 @@ function renderEmptyHero(inner) {
     </div>`}
     <button type="button" class="pill-btn example-launch">Try a worked example offline</button>
     <div class="starter-grid" aria-label="Example research questions"></div>
+    <button type="button" class="project-shortcut investigation-shortcut">Investigate a paper <span aria-hidden="true">→</span></button>
     <button type="button" class="project-shortcut">Open a research project <span aria-hidden="true">→</span></button>
   `;
   hero.querySelector('.hero-connect-btn')?.addEventListener('click', () => onOpenConnect?.('providers'));
@@ -193,7 +196,8 @@ function renderEmptyHero(inner) {
     dialog.showModal();
     renderMathInContainer(dialog);
   });
-  hero.querySelector('.project-shortcut')?.addEventListener('click', () => onOpenProjects?.());
+  hero.querySelector('.investigation-shortcut')?.addEventListener('click', () => onOpenInvestigation?.());
+  hero.querySelector('.project-shortcut:not(.investigation-shortcut)')?.addEventListener('click', () => onOpenProjects?.());
 
   const grid = hero.querySelector('.starter-grid');
   for (const item of STARTER_PROMPTS) {

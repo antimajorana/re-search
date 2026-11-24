@@ -438,7 +438,19 @@ fn validate(data: &Manifest, objects: &Objects) -> Result<()> {
     {
         return Err(invalid("folder assignment outside project"));
     }
+    super::check_text(project.title.clone(), "title", 256)?;
+    super::check_text(project.question.clone(), "question", 16_000)?;
+    super::check_text(project.conventions.clone(), "conventions", 2000)?;
+    let session_events = |id: Option<&str>| id.and_then(|id| data.ledgers.get(id)).map(Vec::as_slice).unwrap_or(&[]);
+    for item in &project.items {
+        let ingested = item.source_id.as_deref().filter(|id| !project.sources.iter().any(|paper| paper.id == *id));
+        super::check_event_links(session_events(item.session_id.as_deref()), item.entry_id.as_deref(), ingested)?;
+    }
     for source in &project.sources {
+        super::check_event_links(session_events(source.session_id.as_deref()), None, source.source_id.as_deref())?;
+        if let Some(doi) = &source.doi {
+            super::validated_doi(doi.clone())?;
+        }
         if let Some(url) = &source.url {
             super::validated_url(url.clone())?;
         }

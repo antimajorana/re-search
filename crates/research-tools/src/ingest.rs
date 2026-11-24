@@ -170,6 +170,7 @@ struct PreparedIngestion {
     assembled_rel: Option<String>,
     skipped_binary: Vec<String>,
     page_count: Option<usize>,
+    page_lines: Vec<(usize, usize, usize)>,
     warning: Option<String>,
     excerpt: String,
 }
@@ -244,6 +245,7 @@ pub fn ingest_bytes(
                     "files": written_files,
                     "files_sha256": files_sha256,
                     "page_count": prepared.page_count,
+                    "pdf_page_lines": prepared.page_lines,
                 }),
             )
             .map_err(|e| format!("source.ingested append failed: {e}"))?;
@@ -361,6 +363,7 @@ fn prepare_ingestion(
                 assembled_rel: section_filter.filter(|_| ext == "tex").map(|_| "__filtered__.tex".into()),
                 skipped_binary: Vec::new(),
                 page_count: None,
+                page_lines: Vec::new(),
                 warning: None,
                 excerpt: take_chars(&display_text, MAX_EXCERPT_CHARS),
             })
@@ -411,6 +414,7 @@ fn prepare_ingestion(
                         assembled_rel,
                         skipped_binary: Vec::new(),
                         page_count: None,
+                        page_lines: Vec::new(),
                         warning: None,
                         excerpt: take_chars(&display, MAX_EXCERPT_CHARS),
                     })
@@ -438,6 +442,7 @@ fn prepare_pdf_ingestion(file_name: &str, pdf_bytes: &[u8]) -> Result<PreparedIn
         assembled_rel: None,
         skipped_binary: Vec::new(),
         page_count: Some(extracted.page_count),
+        page_lines: extracted.page_lines,
         warning: extracted.warning,
         excerpt: take_chars(&extracted.text, MAX_EXCERPT_CHARS),
     })
@@ -518,6 +523,7 @@ fn prepare_archive_files(
         assembled_rel,
         skipped_binary,
         page_count: None,
+        page_lines: Vec::new(),
         warning: None,
         excerpt: take_chars(&excerpt_src, MAX_EXCERPT_CHARS),
     })

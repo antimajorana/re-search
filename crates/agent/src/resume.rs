@@ -196,9 +196,10 @@ fn check_tool_defs_drift(session: &str, payload: &Value, expected_defs: &[ToolDe
     let mut prior = recorded.iter().peekable();
     for exp in expected_defs {
         let same_id = prior.peek().and_then(|rec| rec["id"].as_str()) == Some(exp.id.as_str());
-        // Existing research sessions can gain these two read-only discovery tools.
+        // Existing research sessions can gain the discovery tools and paper-map recorder.
+        // The recorder requires a matching Investigation paper in the verified session history.
         // Every recorded tool still has to match its original definition and order.
-        if !same_id && matches!(exp.id.as_str(), "search_formal_library" | "search_paper_passages")
+        if !same_id && matches!(exp.id.as_str(), "search_formal_library" | "search_paper_passages" | "record_paper_map")
             && exp.effect == policy::EffectClass::ReadWorkspace
         {
             continue;

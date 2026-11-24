@@ -235,12 +235,19 @@ pub(crate) fn backup_experiments(state: &DesktopState, id: &str) -> Result<Vec<E
 pub(crate) fn check_backup_anchors(rows: &[Experiment], ledgers: &std::collections::BTreeMap<String, Vec<Event>>) -> Result<()> {
     let events = |id: &str| ledgers.get(id).map(Vec::as_slice).ok_or_else(|| bad("missing experiment session"));
     for experiment in rows {
+        if experiment.branches.len() > MAX_BRANCHES || !experiment.budget.limit.is_finite() || experiment.budget.limit <= 0.0 {
+            return Err(bad("invalid branch count or experiment budget in backup"));
+        }
+        let mut branch_sessions = std::collections::HashSet::new();
         let base = &experiment.baseline;
         let anchor = event_at(events(&base.session_id)?, base.at_seq)?;
         if anchor.event_hash != base.event_hash || entry_id(anchor) != base.entry_id {
             return Err(bad("experiment baseline does not match its saved ledger"));
         }
         for branch in &experiment.branches {
+            if branch.observations.len() > MAX_OBSERVATIONS || !branch_sessions.insert(&branch.session_id) {
+                return Err(bad("invalid observations or duplicate experiment branch in backup"));
+            }
             let trace = events(&branch.session_id)?;
             let fork = event_at(trace, branch.fork_seq)?;
             if fork.kind != "session.fork" || fork.event_hash != branch.fork_event_hash
@@ -250,6 +257,12 @@ pub(crate) fn check_backup_anchors(rows: &[Experiment], ledgers: &std::collectio
                 return Err(bad("experiment branch does not match its saved fork"));
             }
             for item in &branch.observations {
+                if !item.actual_budget.is_finite() || item.actual_budget < 0.0
+                    || item.within_budget != (item.actual_budget <= experiment.budget.limit)
+                    || item.score.is_some_and(|score| !score.is_finite())
+                    || (matches!(item.status, Outcome::Completed) && item.score.is_none()) {
+                    return Err(bad("invalid experimental observation in backup"));
+                }
                 let reference = &item.evidence;
                 let anchor = event_at(trace, reference.seq)?;
                 if reference.seq < fork.seq || anchor.event_hash != reference.event_hash || entry_id(anchor) != reference.entry_id {
@@ -318,6 +331,7 @@ fn event_at(events: &[Event], seq: u64) -> Result<&Event> {
     let index = seq.checked_sub(1).and_then(|n| usize::try_from(n).ok());
     index
         .and_then(|i| events.get(i))
+        .filter(|event| event.seq == seq)
         .ok_or_else(|| bad("the ledger sequence does not exist"))
 }
 

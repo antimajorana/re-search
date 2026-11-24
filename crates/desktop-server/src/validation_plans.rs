@@ -255,7 +255,11 @@ pub(crate) fn restore_plans(root: &Path, project: &Project, rows: &[StoredPlan],
             return Err(bad("invalid validation plan in backup"));
         }
         validate_session_id(&row.id).map_err(|e| bad(e.to_string()))?;
-        if row.commit(&verified_events(ledger, &row.protocol.session_id)?)?.is_none() {
+        let comparator = Comparator::new(row)?;
+        if !comparator.known_pass_passed || !comparator.planted_fail_rejected {
+            return Err(bad("archived validation controls do not straddle the committed tolerance"));
+        }
+        if snapshot_plan(row, &verified_events(ledger, &row.protocol.session_id)?)?.is_none() {
             return Err(bad("backup validation plan is missing its ledger commitment"));
         }
     }

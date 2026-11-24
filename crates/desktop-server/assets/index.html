@@ -14,10 +14,12 @@
   <link rel="stylesheet" href="/assets/workbench.css">
   <link rel="stylesheet" href="/assets/modals.css">
   <link rel="stylesheet" href="/assets/dag.css">
+  <link rel="stylesheet" href="/assets/pdf_preview.css">
   <link rel="stylesheet" href="/assets/projects.css">
   <link rel="stylesheet" href="/assets/project_validation.css">
   <link rel="stylesheet" href="/assets/project_library.css">
   <link rel="stylesheet" href="/assets/experiments.css">
+  <link rel="stylesheet" href="/assets/investigation.css">
 </head>
 <body>
   <div id="app-shell" data-rail-open="true" data-canvas-open="false">
@@ -36,6 +38,7 @@
           <span aria-hidden="true">+</span>
           <span>New research</span>
         </button>
+        <button id="new-investigation-btn" type="button" class="pill-btn wide" title="Read a paper and trace its argument">New investigation</button>
       </div>
       <div class="rail-search-wrap">
         <input id="session-search" class="text-input" type="search" placeholder="Filter sessions (Ctrl+K)..." aria-label="Filter sessions">
@@ -218,6 +221,40 @@
         </div>
       </div>
 
+      <div id="investigation-nav" class="investigation-nav" hidden>
+        <div class="segmented-group" role="group" aria-label="Investigation view">
+          <button id="show-paper-map" type="button" class="seg-btn" aria-controls="investigation-panel" aria-pressed="true">Paper map</button>
+          <button id="show-investigation-chat" type="button" class="seg-btn" aria-controls="message-stream" aria-pressed="false">Conversation</button>
+        </div>
+      </div>
+      <div id="investigation-origin" class="investigation-origin" hidden></div>
+      <section id="investigation-panel" aria-label="Paper investigation" hidden>
+        <div class="investigation-inner">
+          <form id="investigation-setup" class="investigation-setup">
+            <h2>Investigate a paper</h2>
+            <p>Trace the authors’ main results back to their assumptions, methods and evidence.</p>
+            <label for="investigation-file">Primary paper</label>
+            <input id="investigation-file" type="file" accept=".tex,.pdf,.md,.txt,.zip,.tgz,.gz" aria-describedby="investigation-formats">
+            <small id="investigation-formats">PDF, TeX, Markdown, plain text or a TeX archive. Up to 10 MiB.</small>
+            <div id="investigation-existing-wrap" hidden>
+              <label for="investigation-existing">Or choose a paper already in this session</label>
+              <select id="investigation-existing" class="compact-select"></select>
+            </div>
+            <fieldset id="investigation-pages" hidden>
+              <legend>Paper pages <span>(optional)</span></legend>
+              <small>Leave both blank for the whole PDF. Use the page numbers in the PDF viewer.</small>
+              <div><label>First page <input id="investigation-page-start" type="number" min="1" step="1" class="text-input"></label>
+              <label>Last page <input id="investigation-page-end" type="number" min="1" step="1" class="text-input"></label></div>
+            </fieldset>
+            <label for="investigation-question">Reading question <span>(optional)</span></label>
+            <textarea id="investigation-question" class="text-input" rows="2" placeholder="Which assumptions does the main result need?"></textarea>
+            <button type="submit" class="pill-btn primary">Build paper map</button>
+          </form>
+          <button id="investigation-original" type="button" class="pill-btn sm" hidden>Open original PDF</button>
+          <div id="investigation-status" role="status" hidden></div>
+          <div id="investigation-map"></div>
+        </div>
+      </section>
       <section id="message-stream" aria-live="polite" aria-label="Research conversation stream"></section>
 
       <div class="composer-dock">
