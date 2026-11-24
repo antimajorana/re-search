@@ -139,8 +139,19 @@ function paperKeys(paper) {
   return [
     doi && `doi:${doi.toLowerCase()}`,
     arxiv && `arxiv:${arxiv.toLowerCase()}`,
+    paper.url && citationAddress(paper.url),
     ...linksForPaper(paper).map(link => link.url.toLowerCase()),
   ].filter(Boolean);
+}
+
+function citationAddress(raw) {
+  if (typeof raw !== 'string' || raw.length > 2048 || !/^https?:\/\//i.test(raw) || /[\s\\]/.test(raw)) return null;
+  try {
+    const url = new URL(raw);
+    return url.hostname && !url.username && !url.password ? url.href : null;
+  } catch {
+    return null;
+  }
 }
 
 function citationToken(raw) {
@@ -164,6 +175,15 @@ function explicitPaperCitations(text) {
   }
   for (const [, arxiv_id] of text.matchAll(/(?:\barxiv\s*:\s*|\barxiv\.org\/(?:abs|pdf|e-print)\/)(\d{4}\.\d{4,5}(?:v\d+)?|[a-z-]+(?:\.[a-z-]+)?\/\d{7}(?:v\d+)?)/gi)) {
     papers.push({ arxiv_id, source: 'arxiv', title: `arXiv:${arxiv_id}` });
+  }
+  for (const [, label, address] of text.matchAll(/(?:\[([^\]\n]+)\]\()?((?:https?):\/\/[^\s"'<>{}\[\]]+)/gi)) {
+    const url = citationAddress(citationToken(address));
+    if (!url) continue;
+    const parsed = new URL(url);
+    const canonicalArxiv = /^(?:export\.)?arxiv\.org$/.test(parsed.hostname)
+      && /^\/(?:abs|pdf|e-print)\//.test(parsed.pathname) && extractArxivId(parsed.pathname);
+    if (canonicalArxiv || /\b10\.\d{4,9}\/[^\s/]+/i.test(url)) continue;
+    papers.push({ url, title: label?.trim() || url });
   }
   return papers;
 }

@@ -406,6 +406,7 @@ button, input, select, textarea { font-family: inherit; color: inherit; }
 .dag-node.is-selected rect { stroke-width: 2.5px; }
 
 .dag-detail-card, .paper-card, .source-card {
+  overflow-wrap: anywhere;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);

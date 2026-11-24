@@ -470,6 +470,7 @@ function renderUsedSources(records, sessionId) {
     card.innerHTML = `
       ${paper.withdrawn || paper.retracted ? '<div class="retraction-banner">Withdrawn or retracted publication</div>' : ''}
       <strong>${titleHtml}</strong>
+      ${!links.length && paper.url && paper.url !== paper.title ? `<div class="mono">${escapeHtml(paper.url)}</div>` : ''}
       <div class="used-source-actions" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;">
         ${cited ? '<span class="badge">Cited in answer</span>' : ''}
         ${renderSourceLinkChips(links)}

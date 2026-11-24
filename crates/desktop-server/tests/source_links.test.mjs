@@ -128,6 +128,15 @@ test('Sources Used keeps final-answer citations and active proof evidence scoped
   ] });
   assert.deepEqual(bracketed.map(record => record.paper.doi), [doi]);
   assert.equal(linksForPaper(bracketed[0].paper)[0].url, `https://doi.org/${doi}`);
+  const citedPage = 'https://science.nasa.gov/mission/Euclid';
+  const direct = sessionSourcesUsed({ events: [
+    event('model.text', { text: `See [Euclid mission](${citedPage}), ${citedPage} and https://inspirehep.net/literature/123.` }),
+    event('session.end', { outcome: 'completed' }),
+  ] });
+  assert.deepEqual(direct.map(({ paper }) => paper.title), ['Euclid mission', 'https://inspirehep.net/literature/123']);
+  assert.equal(direct[0].paper.url, citedPage);
+  assert.deepEqual(linksForPaper(direct[0].paper), []);
+  assert.equal(linksForPaper(direct[1].paper)[0].url, direct[1].paper.url);
 });
 
 test('Project library normalizes citations and finds excerpts across session sources', async () => {
