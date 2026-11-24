@@ -202,6 +202,9 @@ fn dispatch_api(
         ("POST", ["api", "projects"]) => {
             write_api_res(&mut stream, crate::projects::handle_create(state, &req.body));
         }
+        ("POST", ["api", "projects", "restore"]) => {
+            write_api_res(&mut stream, crate::projects::backup::restore(state, &req.body));
+        }
         ("GET", ["api", "projects", id]) => write_api_res(&mut stream, crate::projects::handle_get(state, id)),
         ("PUT", ["api", "projects", id]) => {
             write_api_res(&mut stream, crate::projects::handle_put(state, id, &req.body));
@@ -234,6 +237,15 @@ fn dispatch_api(
         }
         ("POST", ["api", "projects", id, "validation-plans", plan, "evaluate"]) => {
             write_api_res(&mut stream, crate::validation_plans::handle_evaluate(state, id, plan, &req.body));
+        }
+        ("GET", ["api", "projects", id, "export"]) if req.query.get("format").is_some_and(|v| v == "backup") => {
+            match crate::projects::backup::export(state, id) {
+                Ok(bytes) => write_bytes(&mut stream, 200, "application/zip", &bytes, &[
+                    ("Content-Disposition", &format!("attachment; filename=\"{id}.research-backup.zip\"")),
+                    ("Cache-Control", "no-store"),
+                ]),
+                Err((status, message)) => write_json(&mut stream, status, json!({ "error": message }), &[]),
+            }
         }
         ("GET", ["api", "projects", id, "export"]) => {
             match crate::projects::export_bibtex(state, id, req.query.get("format").map(String::as_str)) {
@@ -334,6 +346,10 @@ fn dispatch_api(
         ("POST", ["api", "sessions", id, "latex", "patch"]) => {
             write_api_res(&mut stream, handle_latex_patch(state, id, &req.body));
         }
+        ("GET" | "PUT", ["api", "sessions", id, "manuscript-drafts"]) => {
+            let update = (method == "PUT").then_some(req.body.as_slice());
+            write_api_res(&mut stream, crate::manuscript_drafts::handle(state, id, update));
+        }
         ("POST", ["api", "sessions", id, "tex-audit"]) => {
             write_api_res(&mut stream, handle_tex_audit(state, id, &req.body));
         }
@@ -364,6 +380,9 @@ fn dispatch_api(
         }
         ("POST", ["api", "sessions", id, "verify"]) => {
             write_api_res(&mut stream, handle_verify(state, id));
+        }
+        ("POST", ["api", "sessions", id, "claim-review"]) => {
+            write_api_res(&mut stream, crate::claim_review::handle_review(state, id, &req.body));
         }
         ("POST", ["api", "sessions", id, "fork"]) => {
             write_api_res(&mut stream, handle_fork(state, id, &req.body));

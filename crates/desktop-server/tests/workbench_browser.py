@@ -11,6 +11,7 @@ from zipfile import ZipFile
 
 from playwright.sync_api import expect, sync_playwright
 from research_display_browser import check_research_display
+from recovery_example_browser import check_recovery_example
 
 
 def check_workbench(browser, binary, width, height):
@@ -141,6 +142,7 @@ def main():
             for width, height in [(1440, 900), (1024, 768), (390, 844)]:
                 check_workbench(browser, args.binary.resolve(), width, height)
             check_research_display(browser)
+            check_recovery_example(browser, args.binary.resolve())
         finally:
             browser.close()
 

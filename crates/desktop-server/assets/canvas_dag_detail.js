@@ -18,6 +18,58 @@ function formatTypeLabel(raw) {
   return TYPE_LABELS[key] || key.replace(/_/g, ' ');
 }
 
+// Breadth-first discovery reports the shortest recorded dependency distance.
+export function assumptionDependents(entries, root) {
+  const children = new Map();
+  for (const entry of entries) {
+    for (const parent of entry.depends_on || []) {
+      if (!children.has(parent)) children.set(parent, []);
+      children.get(parent).push(entry);
+    }
+  }
+  const ancestors = new Map([[root, null]]);
+  const queue = [root];
+  const affected = [];
+  for (let i = 0; i < queue.length; i++) {
+    const parent = queue[i];
+    for (const entry of children.get(parent) || []) {
+      if (ancestors.has(entry.entry_id)) continue;
+      ancestors.set(entry.entry_id, parent);
+      queue.push(entry.entry_id);
+      affected.push({ entry, parent, direct: parent === root });
+    }
+  }
+  return affected;
+}
+
+export function renderAssumptionImpact(host, entries, assumption, jump) {
+  if (!host) return;
+  host.replaceChildren();
+  host.hidden = assumption?.entry_type !== 'assumption';
+  if (host.hidden) return;
+  const affected = assumptionDependents(entries, assumption.entry_id);
+  const heading = document.createElement('strong');
+  heading.textContent = 'If this assumption changes';
+  const description = document.createElement('p');
+  description.textContent = affected.length
+    ? 'Recheck these downstream steps. The list follows the dependencies recorded in this proof.'
+    : 'No downstream step records a dependency on this assumption.';
+  host.append(heading, description);
+  for (const { entry, parent, direct } of affected) {
+    const line = document.createElement('div');
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.className = 'dag-dep-chip';
+    renderMathTextInto(link, entry.entry_id + ' · ' + (entry.summary || formatTypeLabel(entry.entry_type)));
+    link.addEventListener('click', () => jump(entry.entry_id));
+    const retired = ['superseded', 'rejected'].includes(String(entry.status).toLowerCase()) ? ' · ' + entry.status : '';
+    const relation = document.createElement('small');
+    relation.textContent = (direct ? 'Direct dependency' : 'Through ' + parent) + retired;
+    line.append(link, relation);
+    host.append(line);
+  }
+}
+
 function statusBadgeTone(status) {
   const s = String(status || 'pending').toLowerCase();
   if (s === 'accepted') return 'ok';
@@ -438,11 +490,13 @@ export function renderDagNodeDetail(detailEl, entry, allEntries, opts = {}) {
       <div class="dag-section-title">Dependency Links</div>
       <div id="dag-deps-rows"></div>
     </div>
+    <div class="dag-section assumption-impact" id="dag-assumption-impact" hidden></div>
     <div class="dag-section">
       <div class="dag-section-title">Linked Evidence</div>
       <div id="dag-evidence" aria-live="polite"></div>
     </div>
     <div class="dag-detail-actions">
+      ${typeof opts.onReviewStep === 'function' && !entry.superseded_by && statusText !== 'superseded' ? '<button id="node-review-btn" type="button" class="pill-btn sm" title="Ask the configured verifier model to review this step and its dependencies">Review this step</button>' : ''}
       <button id="node-explain-btn" type="button" class="pill-btn sm primary">Explain in Detail</button>
       <button id="node-fork-step-btn" type="button" class="pill-btn sm">Fork from Here</button>
       ${typeof opts.onPromoteStep === 'function' ? '<button id="node-promote-btn" type="button" class="pill-btn sm">Save Finding</button>' : ''}
@@ -487,6 +541,7 @@ export function renderDagNodeDetail(detailEl, entry, allEntries, opts = {}) {
     }
   }
 
+  renderAssumptionImpact(detailEl.querySelector('#dag-assumption-impact'), entries, entry, (id) => opts.onSelectNode?.(id));
   const evidence = detailEl.querySelector('#dag-evidence');
   if (evidence && opts.loadEvidence) {
     evidence.textContent = 'Loading linked evidence…';
@@ -505,6 +560,20 @@ export function renderDagNodeDetail(detailEl, entry, allEntries, opts = {}) {
 
   detailEl.querySelector('#node-explain-btn')?.addEventListener('click', () => {
     if (typeof opts.onExplainStep === 'function') opts.onExplainStep(entry);
+  });
+  const review = detailEl.querySelector('#node-review-btn');
+  review?.addEventListener('click', async () => {
+    review.disabled = true;
+    review.textContent = 'Reviewing…';
+    try {
+      await opts.onReviewStep(entry.entry_id);
+      opts.onNotify?.(`Review recorded for ${entry.entry_id}. Open Linked Evidence to inspect the verdict.`);
+    } catch (error) {
+      opts.onNotify?.(error.message || 'The review could not be completed.');
+    } finally {
+      review.disabled = false;
+      review.textContent = 'Review this step';
+    }
   });
   detailEl.querySelector('#node-fork-step-btn')?.addEventListener('click', () => {
     if (typeof opts.onForkAtStep === 'function') opts.onForkAtStep(entry);

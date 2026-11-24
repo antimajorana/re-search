@@ -238,6 +238,14 @@ export function patchLatex(id, payload) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/latex/patch`, payload);
 }
 
+export function getManuscriptDrafts(id) {
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/manuscript-drafts`);
+}
+
+export function putManuscriptDraft(id, payload) {
+  return rawJson('PUT', `/api/sessions/${encodeURIComponent(id)}/manuscript-drafts`, payload);
+}
+
 export function runTexAudit(id, payload = {}) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/tex-audit`, payload);
 }
@@ -264,6 +272,10 @@ export function getProofEvidence(id, entryId) {
 
 export function verifySession(id) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/verify`, {});
+}
+
+export function reviewClaim(id, target) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/claim-review`, target);
 }
 
 export function forkSession(id, payload) {
@@ -360,6 +372,8 @@ export function openSessionEvents(id, handlers) {
     'checkpoint_resolved',
     'steer_queued',
     'dag_updated',
+    'claim_review_started',
+    'claim_review_finished',
     'turn_complete',
     'turn_error',
   ];

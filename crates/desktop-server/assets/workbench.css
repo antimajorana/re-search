@@ -525,3 +525,25 @@
 #panel-latex[data-latex-view="preview"] .tex-pane-editor {
   display: none;
 }
+
+.claim-trace-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 0; }
+.claim-trace-help, .assumption-impact small { color: var(--ink-secondary); font-size: 12px; }
+.claim-choice {
+  display: block; width: 100%; text-align: left; font: inherit; color: inherit;
+  background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm);
+  padding: 4px 8px; white-space: pre-wrap; overflow-wrap: anywhere; cursor: pointer;
+}
+.claim-choice:hover, .claim-choice:focus-visible, .claim-choice[aria-pressed="true"] {
+  border-color: var(--accent); background: var(--accent-soft);
+}
+.claim-trace-panel {
+  margin: 8px 0; padding: 12px 14px; border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md); background: var(--bg-surface); overflow-wrap: anywhere;
+}
+.claim-trace-panel h4, .claim-trace-panel p { margin: 0 0 .5em; }
+.claim-trace-panel blockquote { border-left: 2px solid var(--accent); padding-left: 10px; margin: 8px 0; }
+.claim-trace-source, .claim-step-evidence, .claim-review-result { margin: 7px 0; }
+.claim-step-evidence > summary { cursor: pointer; }
+.claim-step-evidence > button { margin: 6px 0; }
+.assumption-impact > div { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; margin: 4px 0; }
+.assumption-impact .dag-dep-chip { height: auto; text-align: left; white-space: normal; overflow-wrap: anywhere; }

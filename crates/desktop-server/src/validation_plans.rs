@@ -64,7 +64,7 @@ struct PrivateValues {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct StoredPlan {
+pub(crate) struct StoredPlan {
     id: String,
     project_id: String,
     protocol: Protocol,
@@ -240,6 +240,38 @@ fn verified_events(ledger: &Ledger, session: &str) -> Result<Vec<Event>> {
             "could not verify validation session `{session}`: {error}"
         ))),
     }
+}
+
+pub(crate) fn backup_plans(root: &Path, id: &str) -> Result<Vec<StoredPlan>> {
+    Ok(read_store(root)?.into_iter().filter(|plan| plan.project_id == id).collect())
+}
+
+pub(crate) fn restore_plans(root: &Path, project: &Project, rows: &[StoredPlan], ledger: &Ledger, apply: bool) -> Result<()> {
+    let mut plans = read_store(root)?;
+    let mut ids = HashSet::new();
+    for row in rows {
+        if row.project_id != project.id || !ids.insert(&row.id) || rows.len() > MAX_PROJECT_PLANS
+            || !project.session_ids.contains(&row.protocol.session_id) {
+            return Err(bad("invalid validation plan in backup"));
+        }
+        validate_session_id(&row.id).map_err(|e| bad(e.to_string()))?;
+        if row.commit(&verified_events(ledger, &row.protocol.session_id)?)?.is_none() {
+            return Err(bad("backup validation plan is missing its ledger commitment"));
+        }
+    }
+    let matches: Vec<_> = plans.iter().filter(|row| row.project_id == project.id).collect();
+    if !matches.is_empty() {
+        if json!(matches) == json!(rows) { return Ok(()); }
+        return Err(conflict("validation records already exist for this project"));
+    }
+    if rows.is_empty() { return Ok(()); }
+    let imported = serde_json::from_value::<Vec<StoredPlan>>(json!(rows)).map_err(|e| bad(e.to_string()))?;
+    plans.extend(imported);
+    if serde_json::to_vec(&plans).map_err(|e| bad(e.to_string()))?.len() > MAX_STORE_BYTES {
+        return Err(conflict("validation plan storage size limit exceeded"));
+    }
+    if apply { write_store(root, &plans)?; }
+    Ok(())
 }
 
 fn snapshot_plan(plan: &StoredPlan, events: &[Event]) -> Result<Option<Value>> {

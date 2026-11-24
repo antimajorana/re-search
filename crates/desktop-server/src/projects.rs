@@ -1,5 +1,8 @@
 //! Local research projects and their user-maintained records.
 
+#[path = "project_backup.rs"]
+pub(crate) mod backup;
+
 use crate::routes_session::{bad, conflict, internal, not_found, parse_json_body, ApiResult};
 use crate::state::{DesktopState, SessionMeta};
 use ledger::Event;

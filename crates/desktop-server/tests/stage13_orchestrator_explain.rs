@@ -447,6 +447,73 @@ fn per_agent_models_explain_export_and_narrator_lifecycle() {
 }
 
 #[test]
+fn explicit_claim_reviews_stay_with_the_original_answer_and_step() {
+    let mock = ScriptedMock::start(Box::new(|_, req| {
+        let input = req.to_string();
+        let text = if input.contains("<selected_claim>no verdict</selected_claim>") {
+            "I cannot provide the requested result."
+        } else {
+            r#"{"verdict":"accepted","summary":"Follows under the stated assumption.","counterexample":null,"issues":[]}"#
+        };
+        openai_text("gpt-4.1-mini", text)
+    }));
+    let temp = TempDir::new().unwrap();
+    let server = start_desktop_server(test_cfg(temp.path(), None, None, None)).unwrap();
+    let auth = [("X-ReSearch-Token", server.info.token.as_str())];
+    let call = |method: &str, path: &str, data: Value| {
+        let (code, _, bytes) = raw_http(server.addr.port(), method, path, &auth, &serde_json::to_vec(&data).unwrap());
+        (code, serde_json::from_slice::<Value>(&bytes).unwrap())
+    };
+    let (_, session) = call("POST", "/api/sessions", json!({"title":"Two turns"}));
+    let sid = session["id"].as_str().unwrap();
+    let route = format!("/api/sessions/{sid}/claim-review");
+    let ledger = Ledger::open(temp.path()).unwrap();
+    let rec = |kind: &str, data: Value| ledger.append_with_hash(sid, kind, 1, &data).unwrap().seq;
+    rec("session.start", json!({"prompt":"FIRST_PROBLEM","pinned_conventions":"x>0"}));
+    rec("proof.entry", json!({"entry_id":"e-1","entry_type":"assumption","summary":"x>0","depends_on":[]}));
+    rec("model.response", json!({"stop_reason":"end_turn"}));
+    let seq = rec("model.text", json!({"text":"The result:"}));
+    rec("model.text", json!({"text":"x is positive. no verdict"}));
+    rec("session.end", json!({"outcome":"completed"}));
+    rec("session.resume", json!({"prompt":"LATER_UNRELATED_PROBLEM","pinned_conventions":"x<0"}));
+    rec("model.text", json!({"text":"x is negative."}));
+    rec("session.end", json!({"outcome":"completed"}));
+    assert_eq!(call("POST", &route, json!({"claim":"x is negative.","answer_seq":seq})).0,400);
+    assert_eq!(call("POST", &route, json!({"claim":"x is positive.","answer_seq":seq,"entry_id":"e-1"})).0,400);
+    assert_eq!(call("POST", &route, json!({"entry_id":"e-missing"})).0,404);
+    assert!(mock.captured().is_empty());
+    assert_eq!(call("PUT", "/api/settings/providers", json!({
+        "keys":{"openai":"sk-claim-test"},"base_urls":{"openai":mock.base_url},
+        "agent_models":{"step_verifier":{"provider":"openai","model":"gpt-4.1-mini"}}
+    })).0,200);
+    let (code, claim) = call("POST", &route, json!({"claim":"x is positive.","answer_seq":seq}));
+    assert_eq!(code, 200, "{claim}");
+    assert_eq!(claim["scope"], "claim");
+    assert_eq!(claim["verdict"], "accepted");
+    let (code, step) = call("POST", &route, json!({"entry_id":"e-1"}));
+    assert_eq!(code, 200, "{step}");
+    assert_eq!(step["scope"], "step");
+    assert_eq!(step["verdict"], "accepted");
+    for (_, request) in mock.captured() {
+        let message = request.to_string();
+        assert!(message.contains("FIRST_PROBLEM"));
+        assert!(!message.contains("LATER_UNRELATED_PROBLEM"));
+    }
+    assert_eq!(call("POST", &route, json!({"claim":"no verdict","answer_seq":seq})).0,400);
+    let reopened = call("GET", &format!("/api/sessions/{sid}"), Value::Null).1;
+    assert!(reopened["messages"].as_array().unwrap().iter().all(|m| m["verified_status"] != "verified"));
+    let events = reopened["events"].as_array().unwrap();
+    let selections = events.iter().filter(|e| e["kind"] == "claim.review").collect::<Vec<_>>();
+    assert_eq!(selections.len(), 1);
+    assert_eq!(selections[0]["payload"]["answer_seq"], seq);
+    assert_eq!(selections[0]["payload"]["claim"], "x is positive.");
+    assert_eq!(selections[0]["payload"]["answer_sha256"], ledger::sha256_hex(b"The result:\nx is positive. no verdict"));
+    assert_eq!(reopened["stats"]["step_checks"], 1);
+    assert!(ledger.verify_session(sid).is_ok());
+    server.shutdown();
+}
+
+#[test]
 fn prestart_upload_does_not_brick_turn1_and_turn2_verifier_sees_new_question() {
     clear_provider_env();
     let mock = ScriptedMock::start(Box::new(|_path, body| {

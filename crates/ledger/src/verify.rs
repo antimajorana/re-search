@@ -28,6 +28,53 @@ pub struct VerifyAllReport {
 }
 
 impl Ledger {
+    /// Snapshot a session together with precisely the content-addressed objects it uses.
+    pub fn backup_session(&self, session: &str) -> Result<(Vec<Event>, HashSet<String>)> {
+        if self.legacy_unchained {
+            return Err(Error::LegacyUnchainedSchema);
+        }
+        let mut events = Vec::new();
+        let mut blobs = HashSet::new();
+        self.in_read_tx(|| {
+            self.verify_session_inner(session, &mut blobs, Some(&mut events))?;
+            self.verify_schema_triggers()
+        })?;
+        Ok((events, blobs))
+    }
+
+    /// Import exact event records, preserving every timestamp and receipt. A conflict or a
+    /// verification error rolls back all sessions together. Exact retries are idempotent.
+    pub fn restore_sessions(&self, sessions: &std::collections::BTreeMap<String, Vec<Event>>) -> Result<()> {
+        if self.legacy_unchained {
+            return Err(Error::LegacyUnchainedSchema);
+        }
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)?;
+        self.verify_schema_triggers()?;
+        for (session, events) in sessions {
+            let existing = self.read_session(session)?;
+            if !existing.is_empty() && &existing != events {
+                return Err(Error::Tamper(format!("session `{session}` already contains different events")));
+            }
+            if existing.is_empty() {
+                for event in events {
+                    if &event.session != session {
+                        return Err(Error::Tamper("backup event belongs to another session".into()));
+                    }
+                    tx.execute(
+                        "INSERT INTO event (session,seq,ts_ms,kind,schema_version,payload,prev_hash,event_hash) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                        params![session, event.seq, event.ts_ms, event.kind, event.schema_version,
+                            canonical_json(&event.payload), event.prev_hash, event.event_hash],
+                    )?;
+                }
+            }
+            if !events.is_empty() {
+                self.verify_session_inner(session, &mut HashSet::new(), None)?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Verify one session's hash chain, canonical payloads, and fixed blob slots.
     pub fn verify_session(&self, session: &str) -> Result<SessionVerifyReport> {
         self.verify_session_collect(session, None)

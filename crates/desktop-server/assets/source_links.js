@@ -248,7 +248,7 @@ function activeSourceSteps(events) {
   return used;
 }
 
-export function sessionSourcesUsed(session) {
+export function sessionSourcesUsed(session, claimText) {
   const events = session?.events || [];
   const sourceSteps = activeSourceSteps(events);
   const byKey = new Map();
@@ -311,6 +311,10 @@ export function sessionSourcesUsed(session) {
     }
     for (const paper of explicitPaperCitations(text)) mark(addPaper(paper));
   };
+  if (typeof claimText === 'string') {
+    useText(claimText);
+    return [...known].filter(record => record.cited);
+  }
   for (const answer of finalAnswerTexts(events)) useText(answer);
 
   for (const payload of sourceSteps.values()) {

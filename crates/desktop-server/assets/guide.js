@@ -31,7 +31,8 @@ const GUIDE_SECTIONS = [
     title: 'Proof graph and sources',
     items: [
       'Select a step in <em>Proof DAG</em> to see its assumptions, dependencies, recorded checks, and any individual verdict. The full-solution verdict applies to the answer as a whole.',
-      'Use <em>Verify Chain</em> to check the integrity of the saved record. Choose <em>Narrate Proof</em> for a walkthrough of the reasoning.',
+      'Choose <em>Trace a claim</em> under an answer, then select a statement to inspect its recorded support or request an individual model review. Select an assumption in the proof graph to see which later results depend on it.',
+      'Use <em>Check record integrity</em> to check the saved events and files. Choose <em>Narrate Proof</em> for a walkthrough of the reasoning.',
       'Open <em>Sources Used</em> in the Sources tab to see citations and proof links. Choose a proof step to see where a paper enters the argument, or <em>Read cited lines</em> to inspect a recorded passage. Other search results are in <em>Search History</em>.',
     ],
   },

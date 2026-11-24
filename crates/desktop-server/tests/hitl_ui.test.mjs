@@ -109,7 +109,7 @@ test('Proof graph supports keyboard inspection and forks at the displayed sequen
       "'/assets/model_picker.js'": assetStub('export const getModelChoice = () => null;'),
       "'/assets/canvas_sources.js'": assetStub('export const openSessionSource = () => {};'),
       "'/assets/canvas_dag_detail.js'": assetStub(
-        "export const renderDagNodeDetail = (element, entry) => { element.textContent = entry?.entry_id || ''; };",
+        "export const renderAssumptionImpact = () => {}; export const renderDagNodeDetail = (element, entry) => { element.textContent = entry?.entry_id || ''; };",
       ),
     });
     const el = (id) => doc.getElementById(id);

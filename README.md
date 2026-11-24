@@ -17,7 +17,7 @@ How quickly does the sum of the first $N$ inverse squares approach $\pi^2/6$? Th
 2. Open **Canvas → Proof DAG** and select the numerical check. Check the reported errors against 0.03077, 0.01550, and 0.00778. Each doubling roughly halves the error. You can see why by comparing the omitted tail with the integral of $1/x^2$ from $N$ to infinity, which gives the upper bound $1/N$.
 3. Open **Canvas → LaTeX → Reproducible ZIP** to share the calculation. The archive includes the report, bibliography, recorded computation, and replay instructions.
 
-The **Verified** review mode asks a verifier to examine the reasoning in a fresh context. **Verify Chain** checks the integrity of the session record. With Lean 4 installed, ask the Lean worker to type-check a precise statement. For a proof using Physlib, attach a Lean workspace with the library already built.
+The **Verified** review mode asks a verifier to examine the reasoning in a fresh context. Choose **Trace a claim** beneath an answer to inspect the evidence for one statement or request an individual review. Select an assumption in the proof graph to see its downstream conclusions. **Check record integrity** checks the saved events and files. With Lean 4 installed, ask the Lean worker to type-check a precise statement. For a proof using Physlib, attach a Lean workspace with the library already built.
 
 ## Bring your own research
 

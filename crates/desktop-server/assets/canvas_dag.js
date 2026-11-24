@@ -2,7 +2,7 @@
 import * as api from '/assets/api.js';
 import { escapeHtml, renderMathTextInto } from '/assets/math.js';
 import { getModelChoice } from '/assets/model_picker.js';
-import { renderDagNodeDetail } from '/assets/canvas_dag_detail.js';
+import { renderAssumptionImpact, renderDagNodeDetail } from '/assets/canvas_dag_detail.js';
 import { openSessionSource } from '/assets/canvas_sources.js';
 
 function sideModelPayload() {
@@ -205,6 +205,9 @@ function openForkBarForSeq(seqOverride) {
   }
   const atSeq = Number(seqOverride ?? selectedEntry?.seq ?? latestSeq()) || undefined;
   forkPoint = { atSeq };
+  const entries = currentDag?.entries || [];
+  renderAssumptionImpact(document.getElementById('fork-assumption-impact'), entries,
+    entries.find(entry => entry.seq === atSeq), id => selectNodeById(id));
   forkBarEl.hidden = false;
   if (forkSeqEl) forkSeqEl.textContent = String(atSeq ?? 'latest');
 }
@@ -478,6 +481,10 @@ function renderDetailForEntry(entry) {
   const sid = currentSessionId;
   renderDagNodeDetail(detailEl, entry, entries, {
     loadEvidence: sid && ((id) => api.getProofEvidence(sid, id)),
+    onReviewStep: sid && (async (entryId) => {
+      await api.reviewClaim(sid, { entry_id: entryId });
+      if (sid === currentSessionId) await refreshDag(sid);
+    }),
     onNotify: callbacks.onNotify,
     onSelectNode: (id) => {
       if (selectNodeById(id)) detailEl?.focus();

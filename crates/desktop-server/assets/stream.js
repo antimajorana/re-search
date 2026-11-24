@@ -34,6 +34,7 @@ let currentSessionId = null;
 let onPromptPick = null;
 let onNotify = null;
 let onInspectStep = null;
+let attachClaimTrace = null;
 let onRecoveryAction = null;
 let onOpenConnect = null;
 let onOpenProjects = null;
@@ -52,10 +53,50 @@ export function initStream(opts = {}) {
   onPromptPick = opts.onPromptPick || null;
   onNotify = opts.onNotify || null;
   onInspectStep = opts.onInspectStep || null;
+  attachClaimTrace = opts.attachClaimTrace || null;
   onRecoveryAction = opts.onRecoveryAction || null;
   onOpenConnect = opts.onOpenConnect || null;
   onOpenProjects = opts.onOpenProjects || null;
   getSetupInfo = opts.getSetupInfo || null;
+  initWorkedExample();
+}
+
+function initWorkedExample() {
+  const dialog = document.getElementById('worked-example');
+  if (!dialog) return;
+  const check = dialog.querySelector('#example-check');
+  const result = dialog.querySelector('#example-result');
+  const feedback = dialog.querySelector('#example-feedback');
+  const choices = [...dialog.querySelectorAll('[data-prediction]')];
+  function reset() {
+    check.hidden = false;
+    result.hidden = true;
+    result.querySelector('details').open = false;
+    feedback.textContent = '';
+    choices.forEach(choice => choice.setAttribute('aria-pressed', 'false'));
+  }
+  choices.forEach(choice => choice.addEventListener('click', () => {
+    choices.forEach(other => other.setAttribute('aria-pressed', String(choice === other)));
+    feedback.textContent = 'Run the calculation to test your prediction.';
+    result.hidden = true;
+    check.hidden = false;
+  }));
+  check.addEventListener('click', () => {
+    const force = (a, b) => [2 * a - b, -a + 2 * b];
+    const [u, v] = force(2, -1);
+    const [p, q] = force(2, 1);
+    dialog.querySelector('#example-values').textContent = `The proposed signs give (${u}/3, ${v}/3). Neither component matches the applied force (1, 0).`;
+    dialog.querySelector('#example-calculation').textContent = `(2, −1) → (${u}, ${v})\n(2, 1) → (${p}, ${q})\nAll entries are in thirds.`;
+    const prediction = choices.find(choice => choice.getAttribute('aria-pressed') === 'true')?.dataset.prediction;
+    feedback.textContent = prediction === 'no' ? 'Your prediction was correct.' :
+      prediction === 'yes' ? 'The computed forces disagree with that prediction.' : '';
+    check.hidden = true;
+    result.hidden = false;
+    result.querySelector('h3').focus();
+  });
+  dialog.querySelector('#example-again').addEventListener('click', () => { reset(); choices[0].focus(); });
+  dialog.addEventListener('close', reset);
+  reset();
 }
 
 export function setStreamStatus(text, tone = '') {
@@ -143,9 +184,15 @@ function renderEmptyHero(inner) {
       <button type="button" class="pill-btn primary hero-connect-btn">Connect model</button>
     </div>`}
     <div class="starter-grid" aria-label="Example research questions"></div>
+    <button type="button" class="pill-btn example-launch">Try a worked example offline</button>
     <button type="button" class="project-shortcut">Open a research project <span aria-hidden="true">→</span></button>
   `;
   hero.querySelector('.hero-connect-btn')?.addEventListener('click', () => onOpenConnect?.('providers'));
+  hero.querySelector('.example-launch')?.addEventListener('click', () => {
+    const dialog = document.getElementById('worked-example');
+    dialog.showModal();
+    renderMathInContainer(dialog);
+  });
   hero.querySelector('.project-shortcut')?.addEventListener('click', () => onOpenProjects?.());
 
   const grid = hero.querySelector('.starter-grid');
@@ -247,6 +294,7 @@ export function appendAssistantMessage(text, thinkingText = '', toolTraces = [],
     `;
     renderRichInto(wrap.querySelector('.msg-assistant-body'), text);
     row.appendChild(wrap);
+    if (msgMeta?.seq) attachClaimTrace?.(row, text, msgMeta, currentSessionId);
   }
 
   const verdictCard = buildVerificationVerdictCard(msgMeta, onInspectStep, onRecoveryAction);
@@ -408,6 +456,7 @@ export function finalizeLiveAssistant(finalText, msgMeta = null) {
     if (text && text.trim()) {
       const body = liveRow.querySelector('.msg-assistant-body');
       if (body) renderRichInto(body, text);
+      if (msgMeta?.seq && msgMeta.text === text) attachClaimTrace?.(liveRow, text, msgMeta, currentSessionId);
       const verdictCard = buildVerificationVerdictCard(msgMeta, onInspectStep, onRecoveryAction);
       if (verdictCard) liveRow.appendChild(verdictCard);
       if (msgMeta && msgMeta.honesty && msgMeta.honesty.passed === false && Array.isArray(msgMeta.honesty.findings) && msgMeta.honesty.findings.length > 0) {

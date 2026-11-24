@@ -173,9 +173,8 @@ pub fn handle_delete_session(state: &DesktopState, session_id: &str) -> ApiResul
                 let _ = fs::remove_dir_all(&p);
             }
         }
-        let sidetalk = sdir.join("sidetalk.jsonl");
-        if sidetalk.exists() {
-            let _ = fs::remove_file(&sidetalk);
+        for name in ["sidetalk.jsonl", "manuscript-drafts.json"] {
+            let _ = fs::remove_file(sdir.join(name));
         }
     }
 

@@ -2,6 +2,7 @@
 // live pipeline bar, center stream, SSE live updates, resizable Canvas tabs, and postMessage bridge.
 import * as api from '/assets/api.js';
 import { renderMathTextInto } from '/assets/math.js';
+import { attachAnswerTrace } from '/assets/claim_trace.js';
 import {
   appendAssistantMessage, appendUserMessage, appendWarningLine, confirmOptimisticUserMessage,
   finalizeLiveAssistant, finalizeLiveOnError, finalizeLiveThinking, handleRoundReset,
@@ -107,6 +108,10 @@ async function boot() {
     onPromptPick: (prompt) => setComposerPrompt(prompt, true),
     onNotify: showToast,
     onInspectStep: inspectStepInCanvas,
+    attachClaimTrace: (row, text, meta, id) => attachAnswerTrace(row, text, meta.seq, id, {
+      inspectStep: inspectStepInCanvas,
+      openSource: (reader) => openSessionSource(id, reader.source_id, reader.path, reader),
+    }),
     onRecoveryAction: (action, ctx) => {
       const prompt = buildRecoveryPrompt(action, ctx);
       if (action === 'explain') { activateCanvasTab('tab-sidetalk'); askInExplain(prompt); }
@@ -665,6 +670,16 @@ function connectSessionSse(id) {
       setComposerBusy(true);
       setStreamStatus('Awaiting Input', 'warn');
       renderCheckpointCard(document.getElementById('message-stream'), id, d, checkpointOpts(id));
+    },
+    claim_review_started: () => {
+      if (!isAct()) return;
+      setComposerBusy(true);
+      setStreamStatus('Reviewing claim…', 'accent');
+    },
+    claim_review_finished: () => {
+      if (!isAct()) return;
+      setComposerBusy(false);
+      setStreamStatus('Ready', 'ok');
     },
     checkpoint_resolved: (d) => {
       if (!isAct() || !d) return;

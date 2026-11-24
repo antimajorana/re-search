@@ -22,7 +22,7 @@ const MAX_TOOL_RECEIPTS: usize = 32;
 type Result<T> = std::result::Result<T, ApiError>;
 
 #[derive(Serialize, Deserialize)]
-struct Experiment {
+pub(crate) struct Experiment {
     id: String,
     project_id: String,
     question: String,
@@ -226,6 +226,36 @@ fn read_body<T: DeserializeOwned>(body: &[u8]) -> Result<T> {
 
 fn get_project(state: &DesktopState, id: &str) -> Result<Project> {
     load_project(state, id)?.ok_or_else(|| not_found(format!("project `{id}` not found")))
+}
+
+pub(crate) fn backup_experiments(state: &DesktopState, id: &str) -> Result<Vec<Experiment>> {
+    Ok(Store::open(state)?.experiments.into_iter().filter(|row| row.project_id == id).collect())
+}
+
+pub(crate) fn restore_experiments(state: &DesktopState, project: &Project, rows: &[Experiment], apply: bool) -> Result<()> {
+    let mut store = Store::open(state)?;
+    let mut ids = std::collections::HashSet::new();
+    for row in rows {
+        if row.project_id != project.id || !ids.insert(&row.id) || rows.len() > MAX_EXPERIMENTS {
+            return Err(bad("invalid experiment in backup"));
+        }
+        validate_session_id(&row.id).map_err(|e| bad(e.to_string()))?;
+        linked_session(project, &row.baseline.session_id)?;
+        for branch in &row.branches { linked_session(project, &branch.session_id)?; }
+    }
+    let matches: Vec<_> = store.experiments.iter().filter(|row| row.project_id == project.id).collect();
+    if !matches.is_empty() {
+        if json!(matches) == json!(rows) { return Ok(()); }
+        return Err(conflict("experiment records already exist for this project"));
+    }
+    if rows.is_empty() { return Ok(()); }
+    let imported = serde_json::from_value::<Vec<Experiment>>(json!(rows)).map_err(|e| bad(e.to_string()))?;
+    store.experiments.extend(imported);
+    if serde_json::to_vec(&store.experiments).map_err(|e| bad(e.to_string()))?.len() > MAX_STORE_BYTES {
+        return Err(conflict("experiment storage size limit exceeded"));
+    }
+    if apply { store.save()?; }
+    Ok(())
 }
 
 fn linked_session(project: &Project, session_id: &str) -> Result<()> {
