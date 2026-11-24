@@ -1,0 +1,9 @@
+# WebView2 bindings and source-built loader
+
+The generated COM interfaces in `src/bindings.rs` and `src/declared_interfaces.rs` are byte-for-byte from [webview2-com-sys 0.39.1](https://crates.io/crates/webview2-com-sys/0.39.1), upstream [edc2caf](https://github.com/wravery/webview2-rs/tree/edc2caf886175ccaebe86078c9cfe1ae2a187328/crates/bindings). The published crate archive has SHA-256 `b3a07132775117d6065853d9d1178157b8c90e228de47129d6bce2c7edebedfb`. Its MIT notice is in LICENSE-BINDINGS.
+
+The local binding macro routes the five loader declarations directly to Rust functions in `src/loader.rs`. Runtime discovery and the internal environment-creation ABI are adapted from the [webview project's MIT-licensed loader](https://github.com/webview/webview/blob/f244320ab0d82fdab98a094e02996fc26d0ffd0c/core/include/webview/detail/platform/windows/webview2/loader.hh). Its notice is in LICENSE-LOADER. Cargo compiles these sources directly. This patch has no native build script or binary inputs.
+
+On Windows, reSearch locates the installed stable Evergreen runtime in the machine or user EdgeUpdate registry. A configured absolute fixed-runtime folder and the `WEBVIEW2_USER_DATA_FOLDER` override are also supported. The loader reads the actual DLL version, loads the runtime from its absolute path, and keeps it loaded for the lifetime of asynchronous callbacks. Missing runtimes and unavailable entry points return failure to Wry. The optional non-default release-channel query is unsupported. Wry 0.57.3 uses the ordinary version query and create-with-options functions.
+
+The internal creation entry point is provided by the installed Microsoft runtime. Its compatibility is checked by launching the packaged native app on Windows. On dependency updates, review upstream source changes and repeat the native test.

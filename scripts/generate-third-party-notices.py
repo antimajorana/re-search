@@ -18,11 +18,7 @@ LEGACY_LICENSES = ROOT / "licenses" / "legacy"
 RELEASE_PACKAGES = {"desktop-app", "cli", "mcp-server"}
 LEGAL_NAME = re.compile(r"^(licen[cs]e|copying|copyright|notice|unlicense|authors|patents|third.party)([_.-]|$)", re.I)
 WEBVIEW2_CRATE = "0.39.1"
-WEBVIEW2_SDK = "1.0.3800.47"
-WEBVIEW2_HASHES = {
-    "x86_64-pc-windows-msvc": ("x64/WebView2LoaderStatic.lib", "89c6b872783b8f6c3cedbff618adb42082d455c615453ae10cfc753f1e8f25d8"),
-    "x86_64-pc-windows-gnu": ("x64/WebView2Loader.dll", "86545b66cdb0603bc26b626fb9ad610cb6e71f28d468f5ea66df23b03dda96d5"),
-}
+WINDOWS_TARGETS = ("x86_64-pc-windows-msvc", "x86_64-pc-windows-gnu")
 # crates.io archives omit these license files. Match exact locked versions so
 # that an upgrade cannot accidentally reuse this attribution.
 WEBVIEW2_BINDINGS = {
@@ -122,14 +118,14 @@ def package_notices(package, dest):
 
 def native_notices(packages, target, dest):
     webview = next((p for p in packages if p["name"] == "webview2-com-sys"), None)
-    if webview is None or webview["version"] != WEBVIEW2_CRATE:
-        raise ValueError("review WebView2 SDK redistribution files for the locked binding version")
-    relative, expected = WEBVIEW2_HASHES[target]
-    loader = Path(webview["manifest_path"]).parent / relative
-    if digest(loader) != expected:
-        raise ValueError(f"the locked WebView2 Loader does not match SDK {WEBVIEW2_SDK}")
-    for suffix in ("LICENSE", "NOTICE"):
-        copy(EXTRAS / f"WebView2Loader-{suffix}.txt", dest / "WebView2Loader")
+    local = ROOT / "vendor" / "webview2-com-sys"
+    if (not webview or webview["version"] != WEBVIEW2_CRATE or webview["source"] is not None
+            or Path(webview["manifest_path"]).resolve() != (local / "Cargo.toml").resolve()):
+        raise ValueError("the release must resolve the source-built WebView2 loader from this checkout")
+    if any(p.suffix.lower() in {".lib", ".dll", ".a", ".obj"} for p in local.rglob("*")) or (local / "build.rs").exists():
+        raise ValueError("unexpected binary input or build script in the WebView2 loader")
+    for name in ("LICENSE-BINDINGS", "LICENSE-LOADER", "README.md"):
+        copy(local / name, dest / "WebView2Loader")
     vendor = ROOT / "crates" / "desktop-server" / "vendor" / "katex"
     if b'version:"0.19.1"' not in (vendor / "katex.min.js").read_bytes():
         raise ValueError("review KaTeX licenses and font notices for the vendored version")
@@ -143,12 +139,12 @@ def native_notices(packages, target, dest):
                 target_notice.write_bytes(renderer.read(name))
     for filename in ("NSIS-Zlib-License.txt", "zlib-License.txt"):
         copy(EXTRAS / filename, dest / "NSIS")
-    return relative, expected
+    return "vendor/webview2-com-sys/src/loader.rs", digest(local / "src" / "loader.rs")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", choices=sorted(WEBVIEW2_HASHES), required=True)
+    parser.add_argument("--target", choices=WINDOWS_TARGETS, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--source-url", help="Published source archive for this build, including downstream changes")
     parser.add_argument("--cargo", default=os.getenv("CARGO", "cargo"))
@@ -194,8 +190,8 @@ def main():
         "Mozilla PDF.js 6.5.438, its fonts, character maps and image decoders are covered in PDF.js/.",
         "PDF.js source: https://github.com/mozilla/pdf.js/tree/v6.5.438",
         "Notices for the NSIS installer stub and zlib are in NSIS/.",
-        f"Microsoft.Web.WebView2 SDK {WEBVIEW2_SDK} notices are in WebView2Loader/.",
-        f"Loader: {loader} (SHA-256: {checksum})",
+        "Source-built WebView2 runtime loader and upstream MIT notices: WebView2Loader/.",
+        f"Loader source in project archive: {loader} (SHA-256: {checksum})",
         "",
         "Normal locked Cargo dependencies of re-search-app.exe, re-search.exe, and core.exe",
         "",

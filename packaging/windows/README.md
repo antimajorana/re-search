@@ -12,7 +12,7 @@ The installed `LICENSE` contains GPLv3 for reSearch. The `licenses/legacy/` dire
 
 ### Windows binary release review
 
-Version 0.1.4 was released under the earlier license terms. The Windows MSVC build statically links `WebView2LoaderStatic.lib`. Microsoft supplies that loader as a prebuilt library in its SDK. Before publishing a GPLv3 installer, resolve how to meet the corresponding-source requirements for the linked loader or use an implementation buildable from published source. The separately installed Edge WebView2 Runtime is a different component. [Microsoft’s static-linking documentation](https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/static)
+Version 0.1.4 was released under the earlier license terms. Current Windows builds compile the runtime loader from the project's source archive and locate the separately installed Edge WebView2 Runtime. The release job checks the resolved loader source, the native link map, and successful startup of the installed WebView2 application. [Loader source and provenance](../../vendor/webview2-com-sys/README.md)
 
 ## Build
 
@@ -31,7 +31,7 @@ python/
   symbolic_validation.py
 ```
 
-Stage `WebView2Loader.dll` from the matching WebView2 SDK dependency for a GNU build and pass `-DRE_SEARCH_WEBVIEW2_LOADER`. MSVC builds link the loader statically. For a bundled Python build, stage the full `runtime/` tree, including package notices, and pass `-DRE_SEARCH_BUNDLED_PYTHON`.
+For a bundled Python build, stage the full `runtime/` tree, including package notices, and pass `-DRE_SEARCH_BUNDLED_PYTHON`.
 
 Generate `licenses/` from the same checkout and toolchain as the binaries. In GitHub Actions the generator uses the checked-out commit and workflow repository. Outside Actions, or when packaging local modifications, pass `--source-url` with the URL of the exact source archive for those binaries. [Notice generator](../../scripts/third-party/SOURCES.md)
 
@@ -48,7 +48,7 @@ On Windows the helper runs the worker's symbolic identity check and a NumPy eige
 makensis -WX -DRE_SEARCH_VERSION=0.1.0 \
   -DRE_SEARCH_STAGE=/absolute/path/to/stage \
   -DRE_SEARCH_INSTALLER=/absolute/path/to/reSearch-Setup-Windows-x64.exe \
-  -DRE_SEARCH_WEBVIEW2_LOADER -DRE_SEARCH_BUNDLED_PYTHON \
+  -DRE_SEARCH_BUNDLED_PYTHON \
   packaging/windows/re-search.nsi
 ```
 
