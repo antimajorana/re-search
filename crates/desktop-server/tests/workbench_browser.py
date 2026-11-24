@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 from zipfile import ZipFile
@@ -99,7 +100,7 @@ def check_workbench(browser, binary, width, height):
             expect(manuscript).to_have_value(r"\section{Revised boundary conditions}")
             page.evaluate("async () => (await import('/assets/api.js')).updateProviderSettings({auto_approve_tools:false})")
             page.locator("#latex-save-btn").click()
-            decision = page.locator(".approval-card").get_by_role("button", name="Approve & Run")
+            decision = page.locator(".approval-card").get_by_role("button", name=re.compile(r"^Approve (Once|& Run)$"))
             expect(decision).to_be_in_viewport()
             decision.click()
             expect(page.locator("#stream-status-pill")).to_have_text("Ready")
