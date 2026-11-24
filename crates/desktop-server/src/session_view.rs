@@ -301,8 +301,14 @@ pub(crate) fn reconstruct_session_view(events: &[ledger::Event]) -> (Vec<Value>,
                 }
             }
             "proof.verification" => {
-                let verdict = ev.payload.get("verdict").and_then(Value::as_str).unwrap_or("");
-                let summary = ev.payload.get("summary").and_then(Value::as_str).unwrap_or("");
+                let recorded = ev.payload["verdict"].as_str().unwrap_or_default();
+                let verdict = research_tools::effective_verification_verdict(&ev.payload).unwrap_or_default();
+                let summary = ev.payload["summary"].as_str().unwrap_or_default();
+                let summary = if verdict != recorded {
+                    format!("The verifier recorded acceptance alongside blocking issues. {summary}")
+                } else {
+                    summary.to_string()
+                };
                 let target = ev.payload.get("target_entry_id").and_then(Value::as_str).unwrap_or("");
                 let kind = ev.payload["kind"].as_str().unwrap_or("");
                 let scope = if kind == "step" { "Step Verifier" } else { "Verifier" };
@@ -521,6 +527,27 @@ mod tests {
             prev_hash: "0".repeat(64),
             event_hash: "1".repeat(64),
         }
+    }
+
+    #[test]
+    fn saved_acceptance_with_blocking_issues_is_unverified() {
+        let events = vec![
+            ev(1, "session.start", json!({ "prompt": "Prove a claim" })),
+            ev(2, "proof.entry", json!({ "entry_id": "e-1", "entry_type": "final_answer" })),
+            ev(3, "model.text", json!({ "text": "The claim follows." })),
+            ev(4, "proof.verification", json!({
+                "kind": "full", "target_entry_id": "e-1", "verdict": "accepted",
+                "issues": [{ "severity": "error", "message": "A required hypothesis is unstated." }],
+            })),
+            ev(5, "session.end", json!({ "outcome": "completed", "verified_entry_id": "e-1" })),
+        ];
+        let stats = summarize_session_events(&events);
+        assert_eq!(stats["verified_status"], "unverified");
+        assert_eq!(stats["accepted_entries"], 0);
+        let (messages, _, _) = reconstruct_session_view(&events);
+        assert_eq!(messages[1]["verified_status"], "unverified");
+        assert!(messages[1]["verifications"][0]["summary"].as_str().unwrap().contains("recorded acceptance"));
+        assert_eq!(events[3].payload["verdict"], "accepted");
     }
 
     #[test]

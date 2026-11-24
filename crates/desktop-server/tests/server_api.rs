@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::{launch_cookie, raw_http, test_cfg, MockHttp, MockReply};
+use common::{launch_cookie, raw_http, raw_http_with_read_timeout, test_cfg, MockHttp, MockReply};
 use desktop_server::start_desktop_server;
 use ledger::Ledger;
 use research_tools::{preview_workspace_edit, ResearchEnv};
@@ -52,12 +52,14 @@ fn json_upload_accepts_five_files_at_the_advertised_limit() {
     }
     body.push_str("]}");
 
-    let (status, _, result) = raw_http(
+    // Decoding and hashing the maximum-size request can exceed the normal test timeout in debug builds.
+    let (status, _, result) = raw_http_with_read_timeout(
         port,
         "POST",
         &format!("/api/sessions/{sid}/upload"),
         &headers,
         body.as_bytes(),
+        Duration::from_secs(60),
     );
     assert_eq!(status, 200);
     let result: Value = serde_json::from_slice(&result).unwrap();

@@ -214,7 +214,7 @@ fn lint_with_results(
             let answer_hash = ledger::sha256_hex(candidate_text.as_bytes());
             let Some(verification) = &entry.verification else { return false };
             verification["kind"].as_str() == Some("full")
-                && verification["verdict"].as_str() == Some("accepted")
+                && research_tools::effective_verification_verdict(verification) == Some("accepted")
                 && verification["answer_sha256"].as_str() == Some(answer_hash.as_str())
         })
     );

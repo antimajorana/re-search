@@ -566,7 +566,7 @@ impl<'a> SessionEvidence<'a> {
                         Some("full") => "full",
                         _ => "unknown",
                     },
-                    "verdict": match data["verdict"].as_str() {
+                    "verdict": match research_tools::effective_verification_verdict(data) {
                         Some("accepted") => "accepted",
                         Some("rejected") => "rejected",
                         _ => "unknown",

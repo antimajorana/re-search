@@ -298,6 +298,7 @@ fn drive_turn_stream<R: BufRead>(
     proc: &mut dyn TurnProcess,
 ) -> Result<TurnReport, String> {
     let mut init_ok = false;
+    let mut result_received = false;
     let mut abort: Option<String> = None;
     let (mut last_text, mut result_text) = (String::new(), String::new());
     let mut bytes: Vec<u8> = Vec::new();
@@ -349,7 +350,16 @@ fn drive_turn_stream<R: BufRead>(
         for (kind, data) in vendor.map_line(&value) {
             match kind.as_str() {
                 "model.text" => last_text = data["text"].as_str().unwrap_or("").to_string(),
-                "cli.result" => result_text = data["result"].as_str().unwrap_or("").to_string(),
+                "cli.result" => {
+                    result_received = true;
+                    result_text = data["result"].as_str().unwrap_or("").to_string();
+                    if data["is_error"].as_bool() == Some(true) && abort.is_none() {
+                        abort = Some(data["error"].as_str()
+                            .filter(|error| !error.trim().is_empty())
+                            .unwrap_or("CLI reported a failed turn")
+                            .to_string());
+                    }
+                }
                 _ => {}
             }
             rec.emit_into(sink, &kind, data, Some(&raw))?;
@@ -371,12 +381,18 @@ fn drive_turn_stream<R: BufRead>(
         return Ok(TurnReport { end: TurnEnd::Stopped, final_text });
     }
     let exit_code = proc.wait()?;
-    if stop.is_stopped() && exit_code != Some(0) {
+    if stop.is_stopped() && (exit_code != Some(0) || !init_ok || !result_received) {
         rec.emit_into(sink, "session.abort", json!({ "reason": "stopped by the user", "stopped": true }), None)?;
         return Ok(TurnReport { end: TurnEnd::Stopped, final_text });
     }
-    if !init_ok {
-        let reason = "CLI exited without a verified init handshake".to_string();
+    let incomplete = match (init_ok, exit_code, result_received) {
+        (false, _, _) => Some("CLI exited without a verified init handshake".to_string()),
+        (true, Some(0), false) => Some("CLI exited without a terminal result".to_string()),
+        (true, Some(0), true) => None,
+        (true, Some(code), _) => Some(format!("CLI exited with code {code}")),
+        (true, None, _) => Some("CLI exited without an exit code".to_string()),
+    };
+    if let Some(reason) = incomplete {
         rec.emit_into(sink, "session.abort", json!({ "reason": reason, "cli_exit_code": exit_code }), None)?;
         return Ok(TurnReport { end: TurnEnd::Aborted(reason), final_text });
     }

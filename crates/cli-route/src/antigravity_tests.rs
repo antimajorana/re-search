@@ -21,7 +21,7 @@ fn flags_are_pinned_and_the_settings_deny_every_builtin_kind() {
     assert!(!args.iter().any(|a| a.contains("dangerously") || a == "--mode" || a == "--continue" || a == "-c"), "{args:?}");
     assert_eq!(args.len(), 10);
     let settings: Value = serde_json::from_str(pair("--settings").unwrap()).unwrap();
-    assert_eq!(settings["agentMode"], "default");
+    assert_eq!(settings["agentMode"].as_str(), Some(""));
     assert_eq!(settings["toolPermission"], "request-review");
     assert_eq!(settings["enableTerminalSandbox"], true);
     assert_eq!(settings["permissions"]["allow"], json!(["mcp(core/*)"]));
@@ -154,6 +154,11 @@ fn result_and_other_events_are_mapped() {
     assert_eq!((r[0].1["result"].as_str(), r[0].1["is_error"].as_bool()), (Some("42"), Some(false)));
     let r = a.map_line(&json!({ "event": "result", "result": { "status": "ERROR" } }));
     assert_eq!(r[0].1["is_error"], true);
+    let r = a.map_line(&json!({ "event": "result", "result": {
+        "status": "SUCCESS", "response": "partial", "finished_reason": "print_timeout", "error": " ",
+    } }));
+    assert_eq!(r[0].1["is_error"], true);
+    assert!(r[0].1["error"].as_str().unwrap().contains("timed out"));
     assert_eq!(a.map_line(&json!({ "event": "x" }))[0].0, "cli.other");
     let s = a.map_line(&step(0, "DONE", "user_input", json!({})));
     assert_eq!(s[0].0, "cli.step");

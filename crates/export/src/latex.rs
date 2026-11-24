@@ -193,10 +193,7 @@ pub(crate) fn collect_proof_items(events: &[Event]) -> Vec<ProofItem> {
                 if let Some(id) = ev.payload.get("target_entry_id").and_then(Value::as_str) {
                     if let Some(item) = map.get_mut(id) {
                         if item.status != "superseded" {
-                            item.status = ev
-                                .payload
-                                .get("verdict")
-                                .and_then(Value::as_str)
+                            item.status = research_tools::effective_verification_verdict(&ev.payload)
                                 .unwrap_or("pending")
                                 .to_string();
                         }

@@ -432,26 +432,34 @@ pub fn read_proof_dag(ledger: &Ledger, session: &str) -> Result<ProofDag, String
                 }
                 latest_full_verification_accepted = false;
             }
-            "proof.verification_attempt" => {
+            "session.start" | "session.resume" | "autonomous.feedback" | "session.abort" => {
+                latest_full_verification_accepted = false;
+            }
+            "proof.verification_attempt" if p["kind"].as_str() == Some("full") => {
                 latest_full_verification_accepted = false;
             }
             "proof.verification" => {
                 let kind = p.get("kind").and_then(Value::as_str).unwrap_or("");
-                let verdict = p.get("verdict").and_then(Value::as_str).unwrap_or("");
-                if let Some(target_id) = p.get("target_entry_id").and_then(Value::as_str) {
+                let verdict = effective_verification_verdict(p);
+                let target_id = p.get("target_entry_id").and_then(Value::as_str);
+                if let Some(target_id) = target_id {
                     if let Some(&idx) = index_by_id.get(target_id) {
                         entries[idx].verification = Some(p.clone());
                         if entries[idx].status != ProofStatus::Superseded {
                             entries[idx].status = match verdict {
-                                "accepted" => ProofStatus::Accepted,
-                                "rejected" => ProofStatus::Rejected,
+                                Some("accepted") => ProofStatus::Accepted,
+                                Some("rejected") => ProofStatus::Rejected,
                                 _ => ProofStatus::Pending,
                             };
                         }
                     }
                 }
                 if kind == "full" {
-                    latest_full_verification_accepted = verdict == "accepted";
+                    let mut active = entries.iter().rev().filter(|entry| entry.status != ProofStatus::Superseded);
+                    let target = active.clone().find(|entry| entry.entry_type == "final_answer")
+                        .or_else(|| active.next());
+                    latest_full_verification_accepted = verdict == Some("accepted")
+                        && target.is_some_and(|entry| Some(entry.entry_id.as_str()) == target_id);
                 }
             }
             _ => {}
@@ -463,14 +471,14 @@ pub fn read_proof_dag(ledger: &Ledger, session: &str) -> Result<ProofDag, String
     });
     let mut references = BTreeSet::new();
     for entry in interpretations {
-        references.extend(entry.tool_call_ref.as_deref());
+        references.extend(entry.tool_call_ref.as_deref().map(|reference| (reference, entry.seq)));
         for dep in &entry.depends_on {
             if let Some(&idx) = index_by_id.get(dep) {
                 let dependency = &entries[idx];
                 if is_active_evidence(dependency)
                     && matches!(dependency.entry_type.as_str(), "symbolic_computation" | "numerical_computation")
                 {
-                    references.extend(dependency.tool_call_ref.as_deref());
+                    references.extend(dependency.tool_call_ref.as_deref().map(|reference| (reference, dependency.seq)));
                 }
             }
         }
@@ -478,7 +486,9 @@ pub fn read_proof_dag(ledger: &Ledger, session: &str) -> Result<ProofDag, String
     let unverified_computations: Vec<u64> = sympy_result_seqs
         .into_iter()
         .filter_map(|(cid, seq)| {
-            let cited = references.iter().any(|reference| tool_reference_matches(reference, &cid, seq));
+            let cited = references.iter().any(|(reference, entry_seq)| {
+                seq < *entry_seq && tool_reference_matches(reference, &cid, seq)
+            });
             (!cited).then_some(seq)
         })
         .collect();
@@ -494,6 +504,23 @@ pub fn read_proof_dag(ledger: &Ledger, session: &str) -> Result<ProofDag, String
 
 fn is_active_evidence(entry: &ProofEntry) -> bool {
     !matches!(entry.status, ProofStatus::Superseded | ProofStatus::Rejected)
+}
+
+/// Interpret stored reviews conservatively while preserving their original ledger payloads.
+pub fn effective_verification_verdict(payload: &Value) -> Option<&str> {
+    let recorded = payload["verdict"].as_str()?;
+    let has_counterexample = payload["counterexample"].as_str().is_some_and(|text| !text.trim().is_empty());
+    let has_blocker = payload["issues"].as_array().is_some_and(|issues| {
+        issues.iter().any(|issue| issue["severity"].as_str().is_some_and(|severity| {
+            let severity = severity.trim();
+            severity.eq_ignore_ascii_case("error") || severity.eq_ignore_ascii_case("blocker")
+        }))
+    });
+    if recorded == "accepted" && (has_counterexample || has_blocker) {
+        Some("rejected")
+    } else {
+        Some(recorded)
+    }
 }
 
 fn successful_sympy_result(ledger: &Ledger, payload: &Value) -> bool {

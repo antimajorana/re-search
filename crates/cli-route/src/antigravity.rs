@@ -72,7 +72,8 @@ pub const DENIED_KINDS: [&str; 5] = ["command", "read_file", "write_file", "read
 /// matches, so core tools could never run in print mode.
 pub fn session_settings() -> Value {
     json!({
-        "agentMode": "default",
+        // Antigravity represents Default mode with an explicit empty string.
+        "agentMode": "",
         "toolPermission": EXPECTED_PERMISSION_MODE,
         "enableTerminalSandbox": true,
         "allowNonWorkspaceAccess": false,
@@ -352,13 +353,19 @@ impl Antigravity {
 fn map_result(line: &Value) -> (String, Value) {
     let line = body(line, "result");
     let status = line["status"].as_str().unwrap_or("");
+    let timed_out = line["finished_reason"].as_str() == Some("print_timeout");
+    let error = if timed_out && line["error"].as_str().is_none_or(|text| text.trim().is_empty()) {
+        json!("Antigravity CLI timed out with an incomplete response")
+    } else {
+        line["error"].clone()
+    };
     (
         "cli.result".to_string(),
         json!({
             "status": status,
-            "is_error": status != "SUCCESS",
+            "is_error": status != "SUCCESS" || timed_out,
             "result": line["response"],
-            "error": line["error"],
+            "error": error,
             "finished_reason": line["finished_reason"],
             "num_turns": line["num_turns"],
             "duration_seconds": line["duration_seconds"],

@@ -130,11 +130,10 @@ export function updatePipelineFromEvent(kind, payload = {}) {
     const nextRound = (Number(payload.round) || activeRound) + 1;
     activeRound = nextRound;
     setStageState('verifier', 'warn');
-    setStageState('strategist', 'done');
     setStageState('solver', 'active');
     updatePipelineMeta(`Revising · Round ${activeRound}/${maxRounds}`, null);
   } else if (kind === 'session_event' && payload.kind === 'strategist.consult') {
-    setStageState('strategist', 'active');
+    setStageState('strategist', 'done');
   }
 }
 
@@ -166,6 +165,8 @@ export function applySessionTelemetry(stats, hasMessages = false) {
   const s = stats || {};
   const proofCount = Number(s.proof_entries) || 0;
   const rounds = Number(s.verification_rounds) || 0;
+  const stepChecks = Number(s.step_checks) || 0;
+  const strategistConsultations = Number(s.strategist_consultations) || 0;
   const delegCount = Number(s.delegation_count) || 0;
   const honestyWarn = Number(s.honesty_warnings) || 0;
   const vStatus = String(s.verified_status || 'none');
@@ -173,7 +174,7 @@ export function applySessionTelemetry(stats, hasMessages = false) {
   const workerTok = (Number(s.worker_input_tokens) || 0) + (Number(s.worker_output_tokens) || 0);
   const allTok = tokTotal + workerTok;
 
-  if (!hasMessages && proofCount === 0 && rounds === 0 && delegCount === 0 && honestyWarn === 0) {
+  if (!hasMessages && proofCount === 0 && rounds === 0 && stepChecks === 0 && delegCount === 0 && honestyWarn === 0) {
     bar.hidden = true;
     return;
   }
@@ -182,18 +183,19 @@ export function applySessionTelemetry(stats, hasMessages = false) {
   setStageState('ledger', proofCount > 0 ? 'done' : 'idle');
   setStageState(
     'verifier',
-    vStatus === 'verified' ? 'done' : vStatus === 'unverified' ? 'warn' : 'idle'
+    vStatus === 'verified' || vStatus === 'proof_reviewed' ? 'done' : vStatus === 'unverified' ? 'warn' : 'idle'
   );
-  setStageState('strategist', rounds > 1 ? 'done' : 'idle');
+  setStageState('strategist', strategistConsultations > 0 ? 'done' : 'idle');
 
   const metaParts = [];
-  if (vStatus === 'verified') metaParts.push('✓ Verified');
+  if (vStatus === 'verified') metaParts.push('✓ Full solution accepted');
   else if (vStatus === 'unverified') metaParts.push('⚠ Unverified');
   else if (vStatus === 'proof_reviewed') metaParts.push('Proof graph reviewed');
   if (proofCount > 0) metaParts.push(`${proofCount} DAG step${proofCount === 1 ? '' : 's'}`);
   if (delegCount > 0) metaParts.push(`${delegCount} worker${delegCount === 1 ? '' : 's'}`);
   if (honestyWarn > 0) metaParts.push(`⚠ ${honestyWarn} honesty`);
-  if (rounds > 0) metaParts.push(`${rounds} check${rounds === 1 ? '' : 's'}`);
+  if (rounds > 0) metaParts.push(`${rounds} full review${rounds === 1 ? '' : 's'}`);
+  if (rounds > 0 || stepChecks > 0) metaParts.push(`${stepChecks} separate step check${stepChecks === 1 ? '' : 's'}`);
   if (allTok > 0) {
     const tokFmt = allTok >= 1000 ? `${(allTok / 1000).toFixed(1)}k tok` : `${allTok} tok`;
     metaParts.push(workerTok > 0 ? `${tokFmt} (+${workerTok >= 1000 ? `${(workerTok / 1000).toFixed(1)}k` : workerTok} w)` : tokFmt);

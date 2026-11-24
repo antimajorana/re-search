@@ -113,21 +113,20 @@ pub fn builtin_agents_json() -> Vec<Value> {
         }),
         json!({
             "id": "step-verifier",
-            "role_key": "step_verifier",
             "name": "Step Verifier",
             "role": "Single-Step Audit Agent",
-            "when": "Audits individual Proof-DAG entries against their `depends_on` ancestors.",
+            "when": "Available through the Rust library for individual Proof DAG reviews.",
             "category": "research",
-            "summary": "Stateless independent reviewer that validates mathematical soundness and deterministic `tex_audit` reports for a targeted derivation step."
+            "summary": "Issues a separate verdict for one proof entry using its dependencies and a TeX audit. The desktop app runs the Full Solution Verifier."
         }),
         json!({
             "id": "full-verifier",
             "role_key": "full_verifier",
             "name": "Full Solution Verifier",
             "role": "Independent End-of-Round Auditor",
-            "when": "Runs automatically after Orchestrator finishes a round in Verified and Deep modes (up to 3 rounds).",
+            "when": "Runs after each round in Verified, Deep, and Interactive modes on in-core research routes.",
             "category": "research",
-            "summary": "Starts with clean context (only problem statement, active Proof DAG, and `tex_audit` XML) to approve (`verified`) or reject with counterexamples."
+            "summary": "Reviews the current request, delivered answer, active Proof DAG, and linked evidence. It records one verdict for the solution."
         }),
         json!({
             "id": "strategist",

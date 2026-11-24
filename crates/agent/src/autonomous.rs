@@ -373,7 +373,7 @@ fn drive_autonomous_rounds(
             ));
         }
 
-        if auto_cfg.guardrails.calculation_mode {
+        if auto_cfg.guardrails.calculation_mode || auto_cfg.guardrails.verification_mode {
             if let Err(calc_err) = check_computation_interpretation(audit.ledger, audit.session) {
                 if !calc_repair_attempted {
                     calc_repair_attempted = true;
@@ -469,7 +469,11 @@ fn drive_autonomous_rounds(
                 audit.emit("session.abort", json!({ "reason": reason }))?;
                 return Ok(SessionOutcome::Aborted { turns: turns_used, reason });
             }
-            check_final_answer_gate(audit.ledger, audit.session, true)?;
+            if let Err(reason) = check_final_answer_gate(audit.ledger, audit.session, true) {
+                audit.emit("guardrail.blocked", json!({ "reason": reason }))?;
+                audit.emit("session.abort", json!({ "reason": reason }))?;
+                return Ok(SessionOutcome::Aborted { turns: turns_used, reason });
+            }
             if honesty.findings.iter().any(|finding| finding.severity == "warning") {
                 let events = audit.ledger.read_session(audit.session).map_err(|e| e.to_string())?;
                 let confirmed = lint_honesty_with_ledger(&leg.last_text, &current, &events, audit.ledger);

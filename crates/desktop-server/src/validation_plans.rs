@@ -594,7 +594,7 @@ fn candidates<'a>(
             }
             "proof.verification" => {
                 if let Some(entry) = event.payload["target_entry_id"].as_str() {
-                    match event.payload["verdict"].as_str() {
+                    match research_tools::effective_verification_verdict(&event.payload) {
                         Some("rejected") => {
                             rejected.insert(entry);
                         }

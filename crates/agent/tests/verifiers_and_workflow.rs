@@ -240,6 +240,20 @@ fn guardrails_masking_conventions_computation_and_final_answer_gates() {
     let ver_p = json!({"target_entry_id":"e-2","kind":"full","verdict":"accepted","summary":"ok","issues":[],"raw_blob":b});
     ledger.append_with_hash(session, "proof.verification", 1, &ver_p).unwrap();
     assert!(check_final_answer_gate(&ledger, session, true).is_ok());
+    ledger.append(session, "proof.verification_attempt", 1, &json!({ "target_entry_id": "e-1", "kind": "step" })).unwrap();
+    assert!(research_tools::read_proof_dag(&ledger, session).unwrap().latest_full_verification_accepted);
+    let mut conflicting = ver_p.clone();
+    conflicting["issues"] = json!([{ "severity": "error", "message": "Missing hypothesis." }]);
+    ledger.append(session, "proof.verification", 1, &conflicting).unwrap();
+    assert!(check_final_answer_gate(&ledger, session, true).is_err());
+    ledger.append(session, "proof.verification", 1, &ver_p).unwrap();
+    ledger.append(session, "session.resume", 1, &json!({ "prompt": "New problem" })).unwrap();
+    assert!(check_final_answer_gate(&ledger, session, true).is_err());
+    ledger.append(session, "proof.entry", 1, &json!({
+        "entry_id": "e-3", "entry_type": "final_answer", "summary": "New answer", "details": "New answer",
+    })).unwrap();
+    ledger.append(session, "proof.verification", 1, &ver_p).unwrap();
+    assert!(check_final_answer_gate(&ledger, session, true).is_err());
     assert_eq!(ledger.verify_all().unwrap().unreferenced_blobs, 0);
 
     // run_research_loop blocks EndTurn without accepted full verification when verification_mode=true.
@@ -261,6 +275,9 @@ fn guardrails_masking_conventions_computation_and_final_answer_gates() {
     )
     .unwrap();
     assert!(matches!(out, SessionOutcome::Aborted { .. }), "expected Aborted, got {out:?}");
+    let events = l_loop.read_session(s_loop).unwrap();
+    assert_eq!(events.last().unwrap().kind, "session.abort");
+    assert!(!events.iter().any(|event| event.kind == "session.end"));
     assert_eq!(l_loop.verify_all().unwrap().unreferenced_blobs, 0);
 }
 
@@ -279,6 +296,11 @@ fn verifiers_reject_unstructured_and_incomplete_verdicts() {
         (StopReason::EndTurn, "Rejected. This should never be called \"accepted\".", VerificationVerdict::Rejected),
         (StopReason::MaxTokens, r#"{"verdict":"accepted","summary":"Start"#, VerificationVerdict::Rejected),
         (StopReason::MaxTokens, r#"{"verdict":"accepted","summary":"Sound."}"#, VerificationVerdict::Rejected),
+        (StopReason::EndTurn, r#"{"verdict":"accepted","issues":[{}]}"#, VerificationVerdict::Rejected),
+        (StopReason::EndTurn, r#"{"verdict":"accepted","counterexample":"","issues":["A factor is missing."]}"#, VerificationVerdict::Rejected),
+        (StopReason::EndTurn, r#"{"verdict":"accepted","issues":[{"severity":"BLOCKER","message":"Unsupported limit."}]}"#, VerificationVerdict::Rejected),
+        (StopReason::EndTurn, r#"{"verdict":"accepted","counterexample":"n=0"}"#, VerificationVerdict::Rejected),
+        (StopReason::EndTurn, r#"{"verdict":"accepted","issues":[{"severity":"warning","message":"Clarify notation."}]}"#, VerificationVerdict::Accepted),
         (StopReason::EndTurn, "```json\n{\"verdict\":\"accepted\",\"summary\":\"Sound.\"}", VerificationVerdict::Rejected),
         (StopReason::EndTurn, "```json\n{\"verdict\":\"accepted\",\"summary\":\"Sound.\"}\n```", VerificationVerdict::Accepted),
     ] {

@@ -878,7 +878,7 @@ note, start event and session API identify the route as vendor-sandboxed.
   needs an approval it cannot get (documented), which fails closed. `--mode` is not
   passed: its values are `accept-edits`, `auto` and `plan` (the Settings page: `plan`
   prepends `/plan` to the prompt; the others approve edits), none stricter than
-  Default; `agentMode: "default"` in `--settings` selects Default, in which file edits
+  Default; `agentMode: ""` in `--settings` selects Default, in which file edits
   need review and commands follow `toolPermission`. If `agentMode` were unset,
   headless runs use `auto` where available, which auto-approves workspace edits.
   `toolPermission: strict` is not used: it prompts even when an allow rule matches,

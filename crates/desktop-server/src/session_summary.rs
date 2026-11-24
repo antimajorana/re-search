@@ -75,7 +75,7 @@ impl FinalAnswerVerification {
             "session.abort" => self.status = None,
             "proof.verification" if is_full => {
                 if payload["target_entry_id"].as_str().is_some_and(|id| self.current_entry_id() == Some(id)) {
-                    self.status = match payload["verdict"].as_str() {
+                    self.status = match research_tools::effective_verification_verdict(payload) {
                         Some("accepted") => match payload.get("answer_sha256") {
                             None => Some("proof_reviewed"),
                             Some(hash)
@@ -106,6 +106,8 @@ pub(crate) fn summarize_session_events(events: &[ledger::Event]) -> Value {
     let mut proof_entries = 0u64;
     let mut entry_acceptance = HashMap::new();
     let mut verification_rounds = 0u64;
+    let mut step_checks = 0u64;
+    let mut strategist_consultations = 0u64;
     let mut input_tokens = 0u64;
     let mut output_tokens = 0u64;
     let mut worker_input_tokens = 0u64;
@@ -163,14 +165,17 @@ pub(crate) fn summarize_session_events(events: &[ledger::Event]) -> Value {
             "proof.verification" => {
                 if ev.payload["kind"].as_str() == Some("full") {
                     verification_rounds += 1;
+                } else if ev.payload["kind"].as_str() == Some("step") {
+                    step_checks += 1;
                 }
                 if let Some(accepted) = ev.payload["target_entry_id"]
                     .as_str()
                     .and_then(|id| entry_acceptance.get_mut(id))
                 {
-                    *accepted = ev.payload["verdict"].as_str() == Some("accepted");
+                    *accepted = research_tools::effective_verification_verdict(&ev.payload) == Some("accepted");
                 }
             }
+            "strategist.consult" => strategist_consultations += 1,
             _ => {}
         }
     }
@@ -180,6 +185,8 @@ pub(crate) fn summarize_session_events(events: &[ledger::Event]) -> Value {
         "proof_entries": proof_entries,
         "accepted_entries": entry_acceptance.values().filter(|&&accepted| accepted).count(),
         "verification_rounds": verification_rounds,
+        "step_checks": step_checks,
+        "strategist_consultations": strategist_consultations,
         "verified_status": verification.status.unwrap_or("none"),
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,

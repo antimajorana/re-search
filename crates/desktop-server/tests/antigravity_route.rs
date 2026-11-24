@@ -125,6 +125,35 @@ fn model_list_comes_from_agy_models_and_carries_the_label() {
 
 #[cfg(windows)]
 #[test]
+fn incomplete_antigravity_turns_record_an_abort() {
+    clear_agy_env_auth();
+    let h = CliHarness::start_agy();
+    acknowledge(&h);
+    let timeout = json!({
+        "event": "result",
+        "result": { "status": "SUCCESS", "response": "partial", "finished_reason": "print_timeout" },
+    }).to_string();
+    for (terminal_events, reason) in [
+        (vec![timeout, agy_result("SUCCESS", "late result")], "timed out with an incomplete response"),
+        (vec![], "without a terminal result"),
+    ] {
+        let sid = create_agy_session(&h);
+        let mut script = vec![agy_init(&builtins_and_core(&h), "request-review")];
+        script.extend(terminal_events);
+        h.fake.script(&script);
+        let mut sse = h.sse(&sid);
+        send_agy(&h, &sid, "Research request");
+        let outcome = sse.wait_turn_end(TURN).expect_err("incomplete output should abort");
+        assert!(outcome["error"].as_str().unwrap().contains(reason), "{outcome}");
+        let kinds = kinds(&h.data, &sid);
+        assert_eq!(kinds.last().map(String::as_str), Some("session.abort"));
+        assert!(!kinds.iter().any(|kind| kind == "session.end"));
+    }
+    h.srv.shutdown();
+}
+
+#[cfg(windows)]
+#[test]
 fn turn_runs_core_tool_with_a_persons_approval_and_cleans_up() {
     clear_agy_env_auth();
     let h = CliHarness::start_agy();
@@ -194,10 +223,14 @@ fn turn_runs_core_tool_with_a_persons_approval_and_cleans_up() {
     // Prompt on stdin, not argv; flags as pinned; the CLI ran in the per-session `agy` folder.
     let argv = h.fake.argv().unwrap();
     assert!(!argv.iter().any(|a| a.contains("AGY-PROMPT-MARKER")), "{argv:?}");
-    // One stream-json `user` event carrying the prompt, and the ledger keeps those exact bytes.
+    // The ledger keeps the original prompt and the exact stream-json bytes sent to the CLI.
     let stdin = h.fake.stdin().unwrap();
     let user: Value = serde_json::from_str(stdin.trim_end()).unwrap();
-    assert_eq!(user, json!({ "event": "user", "message": { "content": prompt } }));
+    assert_eq!(start.payload["prompt"], prompt);
+    assert_eq!(user["event"], "user");
+    let sent = user["message"]["content"].as_str().unwrap();
+    assert!(sent.contains("`search_paper_passages`") && sent.contains("`search_formal_library`"), "{sent}");
+    assert!(sent.ends_with(&format!("\n\n{prompt}")), "{sent}");
     assert_eq!(start.payload["prompt_via"], "stdin (stream-json user event)");
     let blob = ledger.get_blob(start.payload["raw_blob"].as_str().unwrap()).unwrap();
     assert_eq!(blob, stdin.as_bytes());
