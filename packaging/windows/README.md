@@ -6,6 +6,10 @@ The installer uses `%LOCALAPPDATA%\Programs\reSearch`. The desktop app, `re-sear
 
 Close reSearch and its command-line processes before upgrading or uninstalling. Upgrades replace the packaged files and retain `re-search-app.json` beside the executables. Uninstall removes the packaged files, Start menu shortcut and installed-apps entry. Research sessions and other user data stay in `%LOCALAPPDATA%\re-search` by default. A user-provided config file stays in the installation directory.
 
+## License and source
+
+The installed `LICENSE` contains GPLv3 for reSearch. `LICENSE-MIT` and `LICENSE-APACHE` preserve notices from earlier releases. `licenses/THIRD-PARTY-NOTICES.txt` identifies the exact project source archive for an official installer and the source packages for its Rust dependencies. The bundled Python distribution and numerical libraries carry their own notices under `runtime/`.
+
 ## Build
 
 Use NSIS 3.11 or later. Build the Rust binaries in release mode for a single Windows x64 target. Stage the following files and directories at an absolute path.
@@ -25,6 +29,8 @@ python/
 ```
 
 Stage `WebView2Loader.dll` from the matching WebView2 SDK dependency for a GNU build and pass `-DRE_SEARCH_WEBVIEW2_LOADER`. MSVC builds link the loader statically. For a bundled Python build, stage the full `runtime/` tree, including package notices, and pass `-DRE_SEARCH_BUNDLED_PYTHON`.
+
+Generate `licenses/` from the same checkout and toolchain as the binaries. For a downstream build, pass `--source-url` with the URL of your exact source archive, including any local modifications. The default uses the checked-out commit and the GitHub Actions repository. [Notice generator](../../scripts/third-party/SOURCES.md)
 
 Build the runtime from the repository root with the Python standard library. The build helper verifies the pinned Python Software Foundation Windows x64 NuGet archive and all three PyPI wheels by SHA-256. Keep the cache to reproduce the runtime offline in a new output directory.
 

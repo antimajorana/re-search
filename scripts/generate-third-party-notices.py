@@ -142,9 +142,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", choices=sorted(WEBVIEW2_HASHES), required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--source-url", help="Published source archive for this build, including downstream changes")
     parser.add_argument("--cargo", default=os.getenv("CARGO", "cargo"))
     parser.add_argument("--rustc", default=os.getenv("RUSTC", "rustc"))
     args = parser.parse_args()
+
+    source_url = args.source_url
+    if not source_url:
+        server = os.getenv("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
+        repository = os.getenv("GITHUB_REPOSITORY", "antimajorana/reSearch")
+        revision = capture("git", "rev-parse", "HEAD").strip()
+        source_url = f"{server}/{repository}/archive/{revision}.tar.gz"
 
     packages = rust_packages(args.cargo, args.target)
     dest = args.output_dir
@@ -157,7 +165,13 @@ def main():
     for path in sorted((rust_doc / "licenses").glob("*.txt")):
         copy(path, stdlib / "licenses")
     inventory = [
-        "reSearch Windows installer third-party notices",
+        "reSearch Windows installer source and third-party notices",
+        "",
+        "reSearch: GNU General Public License, version 3 only (see ../LICENSE).",
+        f"Project source archive: {source_url}",
+        "Build and installation scripts are in the archive. Run cargo fetch --locked",
+        "in the source tree to retrieve the dependency versions and checksums pinned in Cargo.lock.",
+        "Earlier MIT and Apache-2.0 grants are recorded in ../LICENSE-MIT and ../LICENSE-APACHE.",
         "",
         f"Target: {args.target}",
         f"Cargo.lock SHA-256: {digest(ROOT / 'Cargo.lock')}",
@@ -177,7 +191,10 @@ def main():
         directory = f"Rust-components/{name}-{version}"
         package_notices(package, dest / directory)
         declared = package["license"] or "see upstream license text"
-        inventory.append(f"{name} {version}  |  {declared}  |  {directory}/")
+        location = package["source"]
+        if location == "registry+https://github.com/rust-lang/crates.io-index":
+            location = f"https://crates.io/api/v1/crates/{name}/{version}/download"
+        inventory.append(f"{name} {version}  |  {declared}  |  {directory}/  |  {location}")
     (dest / "THIRD-PARTY-NOTICES.txt").write_bytes(("\n".join(inventory) + "\n").encode("utf-8"))
     print(f"Collected notices for {len(packages)} locked Rust dependencies and bundled assets.")
 
