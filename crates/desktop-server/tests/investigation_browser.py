@@ -28,6 +28,11 @@ def check_investigation(browser, binary):
         root = Path(directory)
         (root / "paper").mkdir()
         def mock_provider(page):
+            page.add_init_script("""const listen = EventSource.prototype.addEventListener;
+                EventSource.prototype.addEventListener = function(name, ...args) {
+                  if (name === 'turn_complete') window.fixtureEventStream = this;
+                  return listen.call(this, name, ...args);
+                };""")
             page.route("**/api/models*", lambda r: r.fulfill(json={"providers": [
                 {"id": "antigravity", "label": "Antigravity", "route": "antigravity",
                  "models": [{"id": "gemini-carbon-fixture", "label": "Gemini fixture", "default": True}]}]}))
@@ -91,7 +96,13 @@ def check_investigation(browser, binary):
                     "what":{"text":"The paper studies the acceleration of a unit mass.", "anchors":[anchor(1)]},
                     "why":{"unstated":True},
                     "how":{"text":"The authors measure a unit force.", "anchors":[anchor(2)]}})
-                state.update(map=None, map_seq=None)
+                scenario["conventions"] = {"source_id":source, "coverage":"partial", "limitations":[], "done":False, "items":[
+                    {"id":"unit-mass", "category":"notation", "label":"$m$", "meaning":"Mass equals one in the chosen units.",
+                     "scope":"The force calculation", "basis":"explicit", "anchors":[anchor(0)]},
+                    {"id":"calibration", "category":"normalization", "label":"Calibration units", "meaning":"The sensor uses the same mass unit.",
+                     "scope":"Sensor observations", "basis":"inferred", "rationale":"The calibration sentence links the unit convention to the sensor.",
+                     "anchors":[anchor(4)]}]}
+                state.update(map=None, map_seq=None, conventions_requested=True)
                 route.fulfill(status=202, json={"status": "running"})
 
             def upload(route):
@@ -115,6 +126,12 @@ def check_investigation(browser, binary):
                 scenario["running"] = True
                 route.fulfill(status=202, json={"status": "running"})
 
+            def conventions(route):
+                receipts["conventions"] = route.request.post_data_json
+                scenario["running"] = True
+                state["conventions_requested"] = True
+                route.fulfill(status=202, json={"status": "running"})
+
             def linked(route):
                 request = route.request.post_data_json
                 origin.update(parent_session=parent, question=request["question"], claim=lines[1], node_id="force", map_seq=11,
@@ -126,6 +143,7 @@ def check_investigation(browser, binary):
             page.route("**/" + parent + "/investigation/corrections", correct)
             page.route("**/" + parent + "/investigation/rechecks", check)
             page.route("**/" + parent + "/investigation/branches", develop)
+            page.route("**/" + parent + "/investigation/conventions", conventions)
             page.route("**/" + parent + "/investigation/research", linked)
             paper_file = page.get_by_label("Primary paper", exact=True)
             paper_file.set_input_files({"name": "range.pdf", "mimeType": "application/pdf", "buffer": b"%PDF-"})
@@ -141,18 +159,51 @@ def check_investigation(browser, binary):
             expect(brief.get_by_role("heading", name="What, Why, and How")).to_be_visible()
             expect(brief).to_contain_text("Reading the paper")
             state["summary"] = scenario["summary"]
+            state["conventions"] = scenario["conventions"]
             expect(brief).to_contain_text("The paper studies the acceleration of a unit mass.", timeout=15000)
             expect(brief).to_contain_text("The reviewed passages do not state this explicitly.")
             expect(page.locator("#investigation-map")).to_be_empty()
+            catalog = page.locator("#investigation-conventions")
+            expect(catalog.locator(":scope > summary")).to_contain_text("2 found so far")
+            catalog.locator(":scope > summary").click()
+            expect(catalog.get_by_role("heading", name="Notation")).to_be_visible()
+            expect(catalog.locator('[data-entry="unit-mass"] .katex')).to_be_visible()
+            inferred = catalog.locator('[data-entry="calibration"]')
+            inferred.locator(":scope > summary").click()
+            expect(inferred).to_contain_text("Inferred from use")
+            expect(inferred).to_contain_text("The calibration sentence")
+            expect(inferred).to_contain_text("Scope · Sensor observations")
+            inferred.locator("[data-anchor] > summary").click()
+            capture_graph_screen(page, "investigation-conventions-desktop", catalog)
+            inferred.get_by_role("button", name="Open cited lines").click()
+            expect(page.locator("#source-reader-status")).to_contain_text("Line 5")
+            page.keyboard.press("Escape")
+            catalog.locator(":scope > summary").click()
             brief.locator(".investigation-summary-part").first.locator("summary").first.click()
             scenario["running"] = False
             completed = scenario["completed"]
             state.update(map={**completed, "edges":[], "nodes":[n for n in completed["nodes"] if n["main"]]}, map_seq=11)
-            page.evaluate("async id => (await import('/assets/investigation.js')).refreshInvestigation(id)", parent)
+            page.evaluate("() => window.fixtureEventStream.dispatchEvent(new MessageEvent('turn_complete',{data:'{}'}))")
             expect(page.get_by_role("heading", name="Dynamics of a unit mass")).to_be_visible()
+            expect(page.locator("#stream-status-pill")).to_have_text("Ready")
             expect(brief.locator("details").first).to_have_attribute("open", "")
             brief.locator(".investigation-summary-part").first.locator("summary").first.click()
             capture_graph_screen(page, "investigation-summary-desktop", brief)
+            catalog.locator(":scope > summary").click()
+            catalog.get_by_role("button", name="Continue conventions review").click()
+            expect(catalog.locator(":scope > summary")).to_contain_text("2 found so far")
+            assert receipts["conventions"]["map_seq"] == 11 and receipts["conventions"]["provider"] == "antigravity"
+            for index in range(5):
+                state["conventions"]["items"].append({**scenario["conventions"]["items"][0], "id":"note-"+str(index),
+                    "label":"Reading "+str(index), "meaning":"A separate fixture convention."})
+            state["conventions"].update(done=True, coverage="partial", limitations=["The appendix was outside the selected pages."])
+            scenario["running"] = False
+            expect(catalog.locator(":scope > summary")).to_contain_text("7 entries · partial coverage", timeout=15000)
+            expect(catalog).to_contain_text("The appendix was outside the selected pages.")
+            catalog.get_by_role("searchbox").fill("sensor observations")
+            expect(catalog.locator("[data-entry]")).to_have_count(1)
+            catalog.get_by_role("searchbox").fill("")
+            catalog.locator(":scope > summary").click()
             assert receipts["send"]["provider"] == "antigravity"
             assert "investigation_page_start" not in receipts["send"]
             assert receipts["send"]["model"] == "gemini-carbon-fixture"
@@ -253,5 +304,17 @@ def check_investigation(browser, binary):
             banner.get_by_role("button", name="Open original claim").click()
             expect(graph.locator(".investigation-claim-title")).to_have_text(lines[1])
             expect(brief).to_contain_text("The authors measure a unit force.")
+            expect(catalog.locator(":scope > summary")).to_contain_text("7 entries · partial coverage")
+            # Earlier versions stored result maps before catalogs existed.
+            state.update(conventions=None, conventions_requested=False)
+            page.evaluate("async id => (await import('/assets/investigation.js')).refreshInvestigation(id)", parent)
+            catalog.locator(":scope > summary").click()
+            catalog.get_by_role("button", name="Find paper conventions").click()
+            expect(catalog.locator(":scope > summary")).to_contain_text("Reading the paper")
+            state.update(conventions={"done":True,"coverage":"paper","items":[],"limitations":["The paper did not establish an explicit convention."]})
+            scenario["running"] = False
+            page.evaluate("async id => (await import('/assets/investigation.js')).refreshInvestigation(id)", parent)
+            expect(catalog.locator(":scope > summary")).to_contain_text("None reported in the paper")
+            expect(graph.locator(".investigation-claim-title")).to_have_text(lines[1])
             assert not errors, errors
     print("Investigation upload, provider selection, focused map, exact passages, correction, recheck and linked Research passed")

@@ -233,6 +233,7 @@ pub fn all_research_tool_defs() -> Vec<ToolDef> {
         investigation::def(),
         investigation::summary_def(),
         investigation::branch_def(),
+        investigation::conventions_def(),
         proof_dag::ledger_append_def(),
         proof_dag::ledger_supersede_def(),
         proof_dag::ledger_query_def(),

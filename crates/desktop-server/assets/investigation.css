@@ -28,6 +28,15 @@
 .investigation-summary-part { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: .65rem; margin: .75rem 0; }
 .investigation-summary-part h3, .investigation-summary-part p { margin: 0; }
 .investigation-summary-part .investigation-anchor { padding: .22rem 0; }
+#investigation-conventions { margin: -.3rem 0 1.3rem; padding: .45rem .7rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); }
+#investigation-conventions summary { cursor: pointer; }
+#investigation-conventions > summary { font-weight: 600; font-size: .9rem; }
+#investigation-conventions > .text-input { width: 100%; margin-top: .6rem; }
+#investigation-conventions h3 { font-size: .88rem; margin: .8rem 0 .15rem; }
+.investigation-convention { padding: .4rem 0; border-bottom: 1px solid var(--border-subtle); }
+.investigation-convention:last-child { border: 0; }
+.investigation-convention > summary small { display: block; margin-left: 1rem; }
+.investigation-basis { font-size: .8rem; }
 .investigation-map-tools, .investigation-actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: .8rem 0; }
 .investigation-map-tools input { flex: 1 1 12rem; min-width: 0; }
 .investigation-node { appearance: none; display: grid; color: var(--ink-primary); text-align: start; cursor: pointer;

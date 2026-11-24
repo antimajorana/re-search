@@ -377,6 +377,121 @@ fn concurrent_request_closure_prevents_a_stale_map_commit() {
 }
 
 #[test]
+fn conventions_prioritize_summary_and_resume_the_original_source_grounded_batches() {
+    use research_tools::investigation::{paper_conventions, record_conventions, record_summary};
+    let tmp = tempfile::tempdir().unwrap();
+    let env = ResearchEnv::new(tmp.path());
+    let db = Mutex::new(Ledger::open(tmp.path()).unwrap());
+    let content="Throughout, intervals denote one standard deviation.\nWe denote frequency by f.\nIn Appendix B, f denotes force.\nFor this model we assume positive mass.";
+    let paper = upload(&env, &db, "report.txt", content);
+    let other = upload(&env, &db, "foreign.txt", "Different source.");
+    let ledger = db.lock().unwrap();
+    let add = |kind: &str, value: Value| ledger.append(SID, kind, 1, &value).unwrap();
+    add("investigation.started", json!({}));
+    add("investigation.paper", json!({"source_id":paper.source_id}));
+    let request = add(
+        "investigation.mapping_requested",
+        json!({"source_id":paper.source_id,"conventions_requested":true,"summary_requested":true}),
+    );
+    let a = anchor(
+        &paper,
+        1,
+        "Throughout, intervals denote one standard deviation.",
+        "passage",
+    );
+    let f = anchor(&paper, 2, "We denote frequency by f.", "passage");
+    let force = anchor(&paper, 3, "In Appendix B, f denotes force.", "passage");
+    let one = json!({"id":"interval","category":"reporting","label":"Intervals","meaning":"One standard deviation.","scope":"Throughout the paper","basis":"explicit","anchors":[a]});
+    let item = json!({"id":"frequency","category":"notation","label":"$f$","meaning":"Frequency.","scope":"Main text","basis":"explicit","anchors":[f]});
+    let first = json!({"source_id":paper.source_id,"request_seq":request,"batch_index":1,"done":false,"coverage":"partial","limitations":[],"items":[one,item]});
+    let save = |args: &Value| record_conventions(&env, &ledger, SID, args);
+    assert!(save(&first).unwrap_err().contains("record_paper_summary"));
+    let summary = json!({"source_id":paper.source_id,"what":{"text":"The paper states how intervals are reported.","anchors":[a]},"why":{"unstated":true},"how":{"unstated":true}});
+    record_summary(&env, &ledger, SID, &summary).unwrap();
+    let bad = |change: fn(&mut Value)| {
+        let mut val = first.clone();
+        change(&mut val);
+        assert!(save(&val).is_err());
+    };
+    bad(|v| v["batch_index"] = json!(2));
+    bad(|v| v["coverage"] = json!("paper"));
+    bad(|v| v["items"][0]["category"] = json!("physical_hypothesis"));
+    bad(|v| v["items"][0]["scope"] = json!(""));
+    bad(|v| v["items"][0]["basis"] = json!("inferred"));
+    bad(|v| v["items"][1]["id"] = json!("interval"));
+    bad(|v| {
+        v["items"][0]["anchors"][0]["excerpt"] =
+            json!("Intervals indicate two standard deviations.")
+    });
+    let mut foreign = first.clone();
+    foreign["items"][0]["anchors"] = json!([anchor(&other, 1, "Different source.", "passage")]);
+    assert!(save(&foreign).unwrap_err().contains("selected paper"));
+    let first_receipt = save(&first).unwrap();
+    assert_eq!(save(&first).unwrap(), first_receipt);
+    let mut changed = first.clone();
+    changed["items"][0]["meaning"] = json!("Changed");
+    assert!(save(&changed).unwrap_err().contains("already saved"));
+    let map = json!({"source_id":paper.source_id,"title":"Reported intervals","coverage":"paper","limitations":[],"nodes":[{"id":"result","sentence":"The paper defines how it reports intervals.","kind":"result","main":true,"anchors":[a]}],"edges":[]});
+    record(&env, &ledger, SID, &map).unwrap();
+    add(
+        "investigation.mapping_finished",
+        json!({"request_seq":request}),
+    );
+    let mut last = json!({"source_id":paper.source_id,"request_seq":request,"batch_index":2,"done":true,"coverage":"paper","limitations":[],"items":[{"id":"local_force","category":"notation","label":"$f$","meaning":"Force.","scope":"Appendix B","basis":"inferred","rationale":"The meaning changes in the appendix.","anchors":[force]}]});
+    assert!(save(&last).is_err());
+    let wrong = add(
+        "investigation.conventions_resumed",
+        json!({"source_id":paper.source_id,"for_request_seq":request+1}),
+    );
+    assert!(save(&last).is_err());
+    add(
+        "investigation.conventions_finished",
+        json!({"for_request_seq":request+1,"resume_seq":wrong}),
+    );
+    add(
+        "investigation.conventions_resumed",
+        json!({"source_id":paper.source_id,"for_request_seq":request}),
+    );
+    assert!(record(&env, &ledger, SID, &map).is_err());
+    assert!(record_summary(&env, &ledger, SID, &summary).is_err());
+    last["items"][0]["scope"] = json!("Main text");
+    assert!(save(&last).is_err());
+    last["items"][0]["scope"] = json!("Appendix B");
+    let final_receipt = save(&last).unwrap();
+    assert_eq!(save(&first).unwrap(), first_receipt);
+    assert_eq!(save(&last).unwrap(), final_receipt);
+    let all = ledger.read_verified_session(SID).unwrap().1;
+    let result = paper_conventions(&all, request).unwrap();
+    assert_eq!(result["items"].as_array().unwrap().len(), 3);
+    assert_eq!(result["conventions_seq"], final_receipt["conventions_seq"]);
+    assert_eq!(result["coverage_basis"], "model_reported");
+    assert_eq!(result["done"], true);
+    assert_eq!(
+        result["items"][2]["anchors"][0]["source_seq"],
+        paper.event_seq
+    );
+    last["batch_index"] = json!(3);
+    assert!(save(&last).unwrap_err().contains("finalized"));
+    add(
+        "investigation.conventions_finished",
+        json!({"for_request_seq":request}),
+    );
+    assert!(save(&first).is_err());
+    let retry = add(
+        "investigation.mapping_requested",
+        json!({"source_id":paper.source_id}),
+    );
+    assert!(save(&first)
+        .unwrap_err()
+        .contains("current paper mapping request"));
+    assert!(paper_conventions(&ledger.read_session(SID).unwrap(), retry).is_none());
+    let mut empty = json!({"source_id":paper.source_id,"request_seq":retry,"batch_index":1,"done":true,"coverage":"partial","items":[],"limitations":[]});
+    assert!(save(&empty).is_err());
+    empty["limitations"] = json!(["No convention could be read from the inspected material."]);
+    assert_eq!(save(&empty).unwrap()["done"], true);
+}
+
+#[test]
 fn selected_pdf_pages_apply_to_every_primary_anchor_and_allow_a_linked_reference() {
     let tmp = tempfile::tempdir().unwrap();
     let env = ResearchEnv::new(tmp.path());
@@ -418,6 +533,13 @@ fn selected_pdf_pages_apply_to_every_primary_anchor_and_allow_a_linked_reference
         .unwrap();
     let valid = shape(&paper, &external);
     let outside = anchor(&paper, 1, "A test of scaling", "passage");
+    let mapping_seq = ledger.read_session(SID).unwrap().last().unwrap().seq;
+    let out_of_scope = json!({"source_id":paper.source_id,"request_seq":mapping_seq,"batch_index":1,"coverage":"paper","done":true,"limitations":[],"items":[{"id":"labels","label":"Illustration labels","category":"notation","meaning":"The paper numbers its figures.","scope":"Figures in this section","basis":"inferred","rationale":"The passage uses a numbered figure.","anchors":[outside.clone()]}]});
+    assert!(
+        research_tools::investigation::record_conventions(&env, &ledger, SID, &out_of_scope)
+            .unwrap_err()
+            .contains("within selected PDF pages")
+    );
     let mut summary = json!({"source_id":paper.source_id,"what":{"text":"The paper reports a scaling result.","anchors":[outside.clone()]},
         "why":{"unstated":true},"how":{"unstated":true}});
     assert!(

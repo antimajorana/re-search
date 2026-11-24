@@ -181,9 +181,20 @@ fn arxiv_cover_stamp(prepared: &PreparedIngestion) -> Option<String> {
     let file = prepared.materialized.get(prepared.primary_rel.as_ref()?)?;
     let cover = file.lines().skip(first.saturating_sub(1)).take(last.saturating_sub(*first) + 1)
         .collect::<Vec<_>>().join(" ");
+    cover_identifier(&cover)
+}
+
+fn cover_identifier(cover: &str) -> Option<String> {
+    // PDF text extraction can join the vertical arXiv stamp to the preceding word.
     static STAMP: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let pattern = STAMP.get_or_init(|| regex::Regex::new(r"(?i)\barxiv\s*:\s*([0-9]{4}\.[0-9]{4,5}v[0-9]+)\s*\[[a-z][a-z0-9.\-]+\]").unwrap());
-    pattern.captures(&cover).and_then(|m| m.get(1)).map(|m|m.as_str().to_ascii_lowercase())
+    let pattern = STAMP.get_or_init(|| regex::Regex::new(r"(?i)arxiv\s*:\s*([0-9]{4}\.[0-9]{4,5}v[0-9]+)\s*\[[a-z][a-z0-9.\-]+\]").unwrap());
+    pattern.captures(cover).and_then(|m| m.get(1)).map(|m|m.as_str().to_ascii_lowercase())
+}
+
+#[test]
+fn identifies_a_version_stamp_joined_to_the_article_text() {
+    assert_eq!(cover_identifier("andarXiv:2510.25994v2  [cond-mat.str-el]  15 Apr 2026").as_deref(), Some("2510.25994v2"));
+    assert_eq!(cover_identifier("See arXiv:2510.25994v1 for related work."), None);
 }
 
 /// Validates and extracts `req.raw_bytes`, materializes clean UTF-8 files under

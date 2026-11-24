@@ -239,7 +239,13 @@ export function renderPaperGraph(host, map, shown, questionMatches, makeCard, ex
       let d = 'M ' + x1 + ' ' + y1 + ' C ' + x1 + ' ' + middle + ' ' + x2 + ' ' + middle + ' ' + x2 + ' ' + y2;
       let labelX = (x1+x2)/2, labelY = middle;
       if (levels.get(edge.to) > levels.get(edge.from) + 1) {
-        const lane = x1+x2 < stage.clientWidth ? 6 + index%4 * 3 : stage.clientWidth - 6 - index%4 * 3;
+        const between = [...rects].filter(([id]) => levels.get(id) > levels.get(edge.from) && levels.get(id) < levels.get(edge.to))
+          .map(([,r]) => [r.left - bounds.left, r.right - bounds.left]);
+        const gap = 10 + index%3 * 2;
+        const lanes = [x1, x2, ...between.flatMap(([left,right]) => [left-gap,right+gap])].filter(x =>
+          x >= 5 && x <= stage.clientWidth-5 && between.every(([left,right]) => x <= left-6 || x >= right+6));
+        const distance = x => Math.abs(x-x1) + Math.abs(x-x2);
+        const lane = lanes.sort((a,b) => distance(a)-distance(b))[0] ?? 6;
         const startLane = y1+15, endLane = y2-15;
         d = 'M '+x1+' '+y1+' V '+startLane+' H '+lane+' V '+endLane+' H '+x2+' V '+y2;
         labelX = lane; labelY = middle;

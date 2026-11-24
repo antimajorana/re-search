@@ -187,6 +187,10 @@ export function developInvestigation(id, request) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/branches`, request);
 }
 
+export function findInvestigationConventions(id, request) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/conventions`, request);
+}
+
 export function openInvestigationResearch(id, request) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/research`, request);
 }

@@ -3,9 +3,10 @@ import { arrayBufferToBase64 } from '/assets/composer.js';
 import { renderMathTextInto } from '/assets/math.js';
 import { createPaperMap, DEFAULT_PAPER_REQUEST } from '/assets/investigation_map.js';
 import { openOriginalPdf } from '/assets/pdf_preview.js';
+import { createConventionCatalog } from '/assets/investigation_conventions.js';
 import { citedPaperLinks } from '/assets/source_links.js';
 
-let callbacks, paperMap, sessionId, session, view, readRevision = 0, submitting = false;
+let callbacks, paperMap, conventionCatalog, sessionId, session, view, readRevision = 0, submitting = false;
 let summaryTimer = null;
 const byId = id => document.getElementById(id);
 const setupDrafts = new Map();
@@ -22,6 +23,12 @@ export function initInvestigation(options) {
         label: anchor.label || source.title || source.origin });
     },
     act: handleClaimAction,
+  });
+  conventionCatalog = createConventionCatalog(byId('investigation-conventions'), paperMap.renderAnchors, async mapSeq => {
+    const id = sessionId;
+    if (!id || session?.investigation?.map_seq !== mapSeq) throw new Error('The active paper changed. Open its conventions again.');
+    await api.findInvestigationConventions(id, { ...callbacks.requestOptions(), map_seq: mapSeq });
+    if (id === sessionId) await refreshInvestigation(id);
   });
   byId('new-investigation-btn').addEventListener('click', async event => {
     const button = event.currentTarget;
@@ -162,6 +169,7 @@ export function showInvestigationSession(id, data) {
     view = 'map';
     submitting = false;
     paperMap.reset();
+    conventionCatalog.reset();
     byId('investigation-setup').reset();
     byId('investigation-existing').replaceChildren();
     byId('investigation-question').value = setupDrafts.get(id)?.question || '';
@@ -177,6 +185,7 @@ export function showInvestigationSession(id, data) {
   if (data?.mode !== 'investigation') return;
   const inv = data.investigation || {};
   paperMap.updateSummary(inv.summary, Boolean(data.running), Boolean(inv.source_id || inv.map), inv.summary_is_current);
+  conventionCatalog.update(inv, Boolean(data.running));
   scheduleSummaryRefresh();
   const select = byId('investigation-existing');
   const previous = select.value || setupDrafts.get(id)?.source || inv.source_id;
@@ -208,8 +217,11 @@ export function showInvestigationSession(id, data) {
 }
 
 function scheduleSummaryRefresh() {
-  if (summaryTimer || session?.mode !== 'investigation' || !session.running ||
-      (session.investigation?.summary && session.investigation.summary_is_current !== false)) return;
+  if (summaryTimer || session?.mode !== 'investigation' || !session.running) return;
+  const inv = session.investigation || {};
+  const summaryPending = !inv.summary || inv.summary_is_current === false;
+  const conventionsPending = inv.conventions_requested && (!inv.conventions?.done || inv.conventions_is_current === false);
+  if (!summaryPending && !conventionsPending) return;
   const id = sessionId;
   summaryTimer = setTimeout(async () => {
     summaryTimer = null;

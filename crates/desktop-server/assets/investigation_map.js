@@ -115,6 +115,7 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
   function sources(parent, anchors) {
     for (const anchor of anchors || []) {
       const box = element('details', 'investigation-anchor');
+      box.dataset.anchor = JSON.stringify([anchor.source_id,anchor.path,anchor.start_line,anchor.end_line]);
       const location = anchor.start_line === anchor.end_line ? 'line ' + anchor.start_line :
         'lines ' + anchor.start_line + '–' + anchor.end_line;
       const title = element('summary', '', [anchor.label || nameOf(anchor.kind), location].join(' · '));
@@ -520,5 +521,5 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
     }
     return true;
   }
-  return { reset, update, updateSummary, openNode };
+  return { reset, update, updateSummary, openNode, renderAnchors: sources };
 }

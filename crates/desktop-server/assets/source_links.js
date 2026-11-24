@@ -268,7 +268,7 @@ export function sessionSourcesUsed(session, claimText) {
     const titleMatch = !keys.length && titleKey && byKey.get(titleKey);
     const existing = keys.map(key => byKey.get(key)).find(Boolean)
       || (titleMatch && (!sourceId || !titleMatch.source || titleMatch.source.source_id === sourceId) && titleMatch);
-    const record = existing || { paper, cited: false, steps: new Set(), readers: new Map(), paperClaims: new Set(), inSummary: false };
+    const record = existing || { paper, cited: false, steps: new Set(), readers: new Map(), paperClaims: new Set(), inSummary: false, inConventions:false };
     for (const key of keys) {
       byKey.set(key, record);
       if (key.startsWith('arxiv:')) {
@@ -334,6 +334,12 @@ export function sessionSourcesUsed(session, claimText) {
   }
   // Count only the papers supporting claims in the selected map revision or its Research handoff.
   const paperEvent = events.findLast(event => event.kind === 'investigation.map' || event.kind === 'investigation.handoff');
+  for (const item of session?.investigation?.conventions?.items || paperEvent?.payload?.paper_conventions || []) {
+    for (const anchor of item.anchors || []) {
+      const record = bySourceId.get(anchor.source_id);
+      if (record) record.inConventions = true;
+    }
+  }
   const currentMap = session?.investigation?.map || paperEvent?.payload;
   const mapNodes = paperEvent?.kind === 'investigation.map' ? currentMap?.nodes
     : paperEvent?.payload?.dependencies;
@@ -351,7 +357,7 @@ export function sessionSourcesUsed(session, claimText) {
   for (const payload of sourceSteps.values()) {
     useText([payload.summary, payload.details, payload.latex].filter(Boolean).join('\n'), payload.entry_id);
   }
-  return [...known].filter(record => record.cited || record.steps.size || record.paperClaims.size || record.inSummary);
+  return [...known].filter(record => record.cited || record.steps.size || record.paperClaims.size || record.inSummary || record.inConventions);
 }
 
 export function linksForIngestedSource(src) {

@@ -6,7 +6,7 @@ use desktop_server::{start_desktop_server, RunningDesktopServer};
 use ledger::Ledger;
 use research_tools::{
     ingest_bytes,
-    investigation::{record, record_branch},
+    investigation::{record, record_branch, record_conventions},
     IngestRequest, ResearchEnv,
 };
 use serde_json::{json, Value};
@@ -65,9 +65,10 @@ fn corrected_paper_claim_opens_fresh_research_with_its_evidence_and_assumptions(
         "Assume a fixed boundary.",
         "The boundary term vanishes.",
         "The endpoint variation equals zero.",
+        "Throughout, d denotes the exterior derivative.",
     ];
     let mut paper_text = lines.join("\n") + "\n";
-    for _ in 0..3000 {
+    for _ in 1..3000 {
         paper_text
             .push_str("The appendix records each of the boundary terms used in the calculation.\n");
     }
@@ -114,7 +115,7 @@ fn corrected_paper_claim_opens_fresh_research_with_its_evidence_and_assumptions(
             &json!({"source_id":src.source_id,"question":"What follows?"}),
         )
         .unwrap();
-    ledger
+    let reading = ledger
         .append(
             sid,
             "investigation.mapping_requested",
@@ -128,9 +129,28 @@ fn corrected_paper_claim_opens_fresh_research_with_its_evidence_and_assumptions(
                  {"id":"b","kind":"result","main":true,"sentence":lines[1],"anchors":[anchor(2)]}],
         "edges":[{"from":"a","to":"b","kind":"depends_on","basis":"inferred","reason":"The argument uses the fixed endpoints.","anchor":anchor(2)}]});
     record(&env, &ledger, sid, &map).unwrap();
+    record_conventions(&env,&ledger,sid,&json!({"request_seq":reading,"source_id":src.source_id,"batch_index":1,"done":true,"coverage":"paper","limitations":[],
+        "items":[{"id":"exterior-d","category":"notation","label":"d","meaning":"Exterior derivative","scope":"Throughout the paper","basis":"explicit","anchors":[anchor(4)]}]})).unwrap();
     let view = call(&server, "GET", &path, Value::Null, 200);
     assert_eq!(view["title"], "Boundary terms");
     let seq = view["investigation"]["map_seq"].as_u64().unwrap();
+    assert_eq!(
+        view["investigation"]["conventions"]["items"][0]["label"],
+        "d"
+    );
+    assert_eq!(view["investigation"]["conventions_is_current"], true);
+    let before_review = ledger.read_session(sid).unwrap().len();
+    assert_eq!(
+        call(
+            &server,
+            "POST",
+            &format!("{path}/investigation/conventions"),
+            json!({"map_seq":seq}),
+            200
+        )["status"],
+        "complete"
+    );
+    assert_eq!(ledger.read_session(sid).unwrap().len(), before_review);
     assert!(view["investigation"]["branches"]
         .as_array()
         .unwrap()
@@ -206,6 +226,10 @@ fn corrected_paper_claim_opens_fresh_research_with_its_evidence_and_assumptions(
         "The boundary condition applies to variations."
     );
     assert_eq!(origin["parent_session"], sid);
+    assert_eq!(
+        origin["paper_conventions"][0]["meaning"],
+        "Exterior derivative"
+    );
     assert_eq!(origin["sources"].as_array().unwrap().len(), 3);
     assert_eq!(research["messages"], json!([]));
     assert_eq!(research["sources"][0]["source_id"], src.source_id);
