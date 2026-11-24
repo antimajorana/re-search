@@ -1,9 +1,9 @@
 # Installer notice sources
 
-Run the generator after the release build, using the same Cargo and Rust toolchain. The toolchain's `rust-docs` component supplies the standard library copyright report.
+Run the generator after the release build, using the same Cargo and Rust toolchain. GitHub Actions supplies its repository identity. For a local build, supply the URL of your published source archive with `--source-url`. The toolchain's `rust-docs` component supplies the standard library copyright report.
 
 ```text
-python scripts/generate-third-party-notices.py --target x86_64-pc-windows-msvc --output-dir path/to/staging/licenses
+python scripts/generate-third-party-notices.py --target x86_64-pc-windows-msvc --output-dir path/to/staging/licenses --source-url URL_OF_THIS_BUILD_SOURCE_ARCHIVE
 ```
 
 - The WebView2 Loader license and notice come from the official Microsoft.Web.WebView2 1.0.3800.47 NuGet archive. The x64 import library, DLL, and static library in locked `webview2-com-sys` 0.39.1 matched the NuGet archive byte for byte. [Microsoft.Web.WebView2](https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.3800.47)

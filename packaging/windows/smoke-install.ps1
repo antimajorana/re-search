@@ -136,6 +136,16 @@ try {
     $appPath = Join-Path $installDir 're-search-app.exe'
     if ($shortcutTarget -ne $appPath) { throw 'The Start menu shortcut does not launch the installed app.' }
 
+    $license = Get-FileHash -LiteralPath (Join-Path $PSScriptRoot '..\..\LICENSE') -Algorithm SHA256
+    if ((Get-FileHash -LiteralPath (Join-Path $installDir 'LICENSE') -Algorithm SHA256).Hash -ne $license.Hash) {
+        throw 'The installed reSearch license differs from the project license.'
+    }
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        $commit = git -C $PSScriptRoot rev-parse HEAD
+        $sourceLine = "Project source archive: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/archive/$commit.tar.gz"
+        $inventory = Get-Content -LiteralPath (Join-Path $installDir 'licenses\THIRD-PARTY-NOTICES.txt')
+        if ($inventory -cnotcontains $sourceLine) { throw 'The installed source link differs from the build commit.' }
+    }
     foreach ($file in Get-ChildItem -LiteralPath $Stage -File -Recurse -Force) {
         $relative = [IO.Path]::GetRelativePath($Stage, $file.FullName)
         $installed = Join-Path $installDir $relative

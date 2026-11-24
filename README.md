@@ -30,4 +30,8 @@ The **Verified** review mode asks a verifier to examine the reasoning in a fresh
 
 See the in-app **Settings → User Guide** for more workflows. For command-line use, model providers, approvals, and development commands, see the [reference](docs/reference.md). The [threat model](THREAT-MODEL.md) describes how reSearch handles local files and isolates Python calculations on Windows.
 
-Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
+## License
+
+reSearch is licensed under the GNU General Public License, version 3 only (`GPL-3.0-only`). You may use it commercially. If you distribute a modified version, you must license it under GPLv3 and provide its recipients access to the corresponding source. [Full license](LICENSE)
+
+Earlier versions released under MIT or Apache-2.0 retain those grants. Their license texts are preserved in [the MIT notice](licenses/legacy/LICENSE-MIT) and [the Apache-2.0 notice](licenses/legacy/LICENSE-APACHE). Bundled third-party components retain their own licenses. The Windows installer includes those notices and the source link for its build. [Windows packaging](packaging/windows/README.md)
