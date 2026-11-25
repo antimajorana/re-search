@@ -155,6 +155,7 @@ async function boot() {
     },
     send: handleSendPrompt,
     openSource: (id, anchor) => openSessionSource(id, anchor.source_id, anchor.path, anchor),
+    setBusy: setComposerBusy,
     onNotify: showToast,
   });
   initDagCanvas({
@@ -691,6 +692,7 @@ function connectSessionSse(id) {
     approval_requested: (d) => {
       if (!isAct()) return;
       showPendingApproval(d);
+      document.dispatchEvent(new CustomEvent('research:approvals', { detail: { sessionId: id, waiting: true } }));
     },
     approval_resolved: async (d) => {
       if (!isAct() || !d || d.auto_approved) return;
@@ -699,6 +701,7 @@ function connectSessionSse(id) {
       const running = d.running !== false;
       setComposerBusy(Boolean(waiting) || running);
       setStreamStatus(waiting || (running ? 'Running...' : 'Ready'), waiting ? 'warn' : running ? 'accent' : 'ok');
+      document.dispatchEvent(new CustomEvent('research:approvals', { detail: { sessionId: id, waiting: Boolean(d.pending_approvals) } }));
       if (d.approve_for_session) {
         try {
           const s = await api.getSession(id);
