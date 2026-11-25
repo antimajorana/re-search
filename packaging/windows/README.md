@@ -8,7 +8,7 @@ Close reSearch and its command-line processes before upgrading or uninstalling. 
 
 ## License and source
 
-The installed `LICENSE` contains GPLv3 for reSearch. The `licenses/legacy/` directory preserves notices from earlier releases. `licenses/THIRD-PARTY-NOTICES.txt` identifies the exact project source archive for an official installer and the source packages for its Rust dependencies. The bundled Python distribution and numerical libraries carry their own notices under `runtime/`.
+The installed `LICENSE` contains AGPLv3 for reSearch. Builds published under GPLv3 before the license change on 2026-11-25 remain available under it. The `licenses/legacy/` directory preserves notices from earlier releases. `licenses/THIRD-PARTY-NOTICES.txt` identifies the exact project source archive for an official installer and the source packages for its Rust dependencies. The bundled Python distribution and numerical libraries carry their own notices under `runtime/`.
 
 ### Windows binary release review
 
