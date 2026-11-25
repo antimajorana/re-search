@@ -1,6 +1,7 @@
 // Offline LaTeX document preview renderer.
 import { escapeHtml } from './code_highlight.js';
 import { extractMath, findMatchingEnvEnd, formatMathTokenHtml } from './math_scan.js';
+import { createMathState, renderFormulaHtml } from './math_katex.js';
 
 const TEX_STRUCT_ENVS = new Set(
   'abstract theorem lemma proposition corollary definition remark example proof conjecture assumption claim note'.split(' ')
@@ -37,13 +38,17 @@ function extractTexCommand(src, cmdName) {
   return grp ? grp.content.trim() : '';
 }
 
-function renderTexInline(src, mathTokens) {
+function renderTexInline(src, mathTokens, renderCtx) {
   let out = '';
   let i = 0;
   while (i < src.length) {
     if (src[i] === '\u0000') {
       const m = src.slice(i).match(/^\u0000M(\d+)\u0000/);
-      if (m) { out += formatMathTokenHtml(mathTokens[Number(m[1])]); i += m[0].length; continue; }
+      if (m) {
+        const tok = mathTokens[Number(m[1])];
+        out += renderCtx ? renderFormulaHtml(tok, renderCtx) : formatMathTokenHtml(tok);
+        i += m[0].length; continue;
+      }
     }
     if (src[i] === '~') { out += '&nbsp;'; i += 1; continue; }
     if (src.startsWith('``', i)) { out += '&ldquo;'; i += 2; continue; }
@@ -70,8 +75,8 @@ function renderTexInline(src, mathTokens) {
         if (src[pos] === '[') { const opt = readBalancedGroup(src, pos, '[', ']'); if (opt) { optArg = opt.content; pos = opt.end; } }
         const grp = src[pos] === '{' ? readBalancedGroup(src, pos) : null;
         if (grp) {
-          if (cmd === 'textbf') { out += `<strong>${renderTexInline(grp.content, mathTokens)}</strong>`; i = grp.end; continue; }
-          if (cmd === 'textit' || cmd === 'emph') { out += `<em>${renderTexInline(grp.content, mathTokens)}</em>`; i = grp.end; continue; }
+          if (cmd === 'textbf') { out += `<strong>${renderTexInline(grp.content, mathTokens, renderCtx)}</strong>`; i = grp.end; continue; }
+          if (cmd === 'textit' || cmd === 'emph') { out += `<em>${renderTexInline(grp.content, mathTokens, renderCtx)}</em>`; i = grp.end; continue; }
           if (cmd === 'texttt') { out += `<code>${escapeHtml(grp.content)}</code>`; i = grp.end; continue; }
           if (cmd === 'cite') { out += `<code>[cite:${escapeHtml(grp.content + (optArg ? `, ${optArg}` : ''))}]</code>`; i = grp.end; continue; }
           if (/^(?:eq|auto|c|C|page)?ref$/.test(cmd)) { out += `<code>[ref:${escapeHtml(grp.content)}]</code>`; i = grp.end; continue; }
@@ -84,12 +89,12 @@ function renderTexInline(src, mathTokens) {
   return out;
 }
 
-function renderTexBlocks(src, mathTokens) {
+function renderTexBlocks(src, mathTokens, renderCtx) {
   const out = [];
   let para = [];
   const flushPara = () => {
     const joined = para.map((l) => l.trim()).filter(Boolean).join(' ');
-    if (joined) out.push(`<p>${renderTexInline(joined, mathTokens)}</p>`);
+    if (joined) out.push(`<p>${renderTexInline(joined, mathTokens, renderCtx)}</p>`);
     para = [];
   };
   let i = 0;
@@ -105,12 +110,12 @@ function renderTexBlocks(src, mathTokens) {
         if (env === 'itemize' || env === 'enumerate') {
           const tag = env === 'itemize' ? 'ul' : 'ol';
           const items = inner.split(/\\item(?:\[[^\]]*\])?/).slice(1)
-            .map((it) => `<li>${renderTexInline(it.trim().replace(/\n+/g, ' '), mathTokens)}</li>`).join('');
+            .map((it) => `<li>${renderTexInline(it.trim().replace(/\n+/g, ' '), mathTokens, renderCtx)}</li>`).join('');
           out.push(`<${tag}>${items}</${tag}>`);
         } else {
           const label = env[0].toUpperCase() + env.slice(1);
-          const suffix = envOpen[2] ? ` (${renderTexInline(envOpen[2], mathTokens)})` : '';
-          out.push(`<div class="tex-env tex-env-${escapeHtml(env)}"><div class="tex-env-title">${escapeHtml(label)}${suffix}</div>${renderTexBlocks(inner, mathTokens)}</div>`);
+          const suffix = envOpen[2] ? ` (${renderTexInline(envOpen[2], mathTokens, renderCtx)})` : '';
+          out.push(`<div class="tex-env tex-env-${escapeHtml(env)}"><div class="tex-env-title">${escapeHtml(label)}${suffix}</div>${renderTexBlocks(inner, mathTokens, renderCtx)}</div>`);
         }
         i = endPos; continue;
       }
@@ -121,7 +126,7 @@ function renderTexBlocks(src, mathTokens) {
       if (grp) {
         flushPara();
         const lvl = { section: 2, subsection: 3, subsubsection: 4, paragraph: 5 }[secMatch[1]];
-        out.push(`<h${lvl}>${renderTexInline(grp.content, mathTokens)}</h${lvl}>`);
+        out.push(`<h${lvl}>${renderTexInline(grp.content, mathTokens, renderCtx)}</h${lvl}>`);
         i = grp.end; continue;
       }
     }
@@ -131,12 +136,15 @@ function renderTexBlocks(src, mathTokens) {
     const mMatch = line.match(/^\s*\u0000M(\d+)\u0000\s*$/);
     if (mMatch && mathTokens[Number(mMatch[1])]?.display) {
       flushPara();
-      out.push(`<div class="math-block">$$\n${escapeHtml(mathTokens[Number(mMatch[1])].tex)}\n$$</div>`);
+      const tok = mathTokens[Number(mMatch[1])];
+      out.push(renderCtx
+        ? renderFormulaHtml(tok, renderCtx)
+        : `<div class="math-block">$$\n${escapeHtml(tok.tex)}\n$$</div>`);
       continue;
     }
     if (!line.trim() || /^\s*\\par\b/.test(line)) { flushPara(); continue; }
     if (/^\s*\\(?:maketitle|tableofcontents|documentclass|usepackage|bibliographystyle|bibliography|date|title|author|label)\b/.test(line)) {
-      if (renderTexInline(line, mathTokens).trim()) para.push(line);
+      if (renderTexInline(line, mathTokens, renderCtx).trim()) para.push(line);
       continue;
     }
     para.push(line);
@@ -145,7 +153,7 @@ function renderTexBlocks(src, mathTokens) {
   return out.join('\n');
 }
 
-export function latexDocumentToHtml(texSource) {
+function buildTexDocumentHtml(texSource, renderCtx) {
   const cleaned = stripTexComments(String(texSource ?? '').replace(/\u0000/g, '').replace(/\r\n?/g, '\n'));
   if (!cleaned.trim()) return '';
   const beginDoc = cleaned.indexOf('\\begin{document}');
@@ -163,11 +171,20 @@ export function latexDocumentToHtml(texSource) {
 
   const parts = [];
   if (titleMarked || authorMarked) {
-    const h1 = titleMarked ? `<h1>${renderTexInline(titleMarked, mathTokens)}</h1>` : '';
-    const auth = authorMarked ? `<p class="tex-doc-author">${renderTexInline(authorMarked, mathTokens)}</p>` : '';
+    const h1 = titleMarked ? `<h1>${renderTexInline(titleMarked, mathTokens, renderCtx)}</h1>` : '';
+    const auth = authorMarked ? `<p class="tex-doc-author">${renderTexInline(authorMarked, mathTokens, renderCtx)}</p>` : '';
     parts.push(`<header class="tex-doc-header">${h1}${auth}</header>`);
   }
-  const bodyHtml = renderTexBlocks(bodyMarked, mathTokens);
+  const bodyHtml = renderTexBlocks(bodyMarked, mathTokens, renderCtx);
   if (bodyHtml) parts.push(bodyHtml);
   return parts.join('\n');
+}
+
+export function latexDocumentToHtml(texSource) {
+  return buildTexDocumentHtml(texSource, null);
+}
+
+export function latexDocumentToRenderedHtml(texSource, opts = {}) {
+  const state = opts.state ?? createMathState();
+  return buildTexDocumentHtml(texSource, { katex: opts.katex, state });
 }

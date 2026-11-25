@@ -1,6 +1,7 @@
 // Offline Markdown parser and HTML renderer with math placeholder protection.
 import { escapeHtml } from './code_highlight.js';
 import { extractMath, formatMathTokenHtml, isEscapedAt } from './math_scan.js';
+import { renderFormulaHtml } from './math_katex.js';
 
 export function applyEmphasis(escapedText) {
   return escapedText
@@ -11,7 +12,7 @@ export function applyEmphasis(escapedText) {
     .replace(/(^|[^\w])_(?=\S)([^_\n]*?\S)_(?=[^\w]|$)/g, '$1<em>$2</em>');
 }
 
-function renderInlineMarkdown(text, mathTokens) {
+function renderInlineMarkdown(text, mathTokens, renderCtx) {
   const codeTokens = [];
   const linkTokens = [];
   let s = String(text ?? '')
@@ -28,7 +29,10 @@ function renderInlineMarkdown(text, mathTokens) {
     .replace(/\u0000L(\d+)\u0000/g, (_, i) => linkTokens[Number(i)] || '')
     .replace(/\u0000C(\d+)\u0000/g, (_, i) => codeTokens[Number(i)] || '')
     .replace(/\u0000D\u0000/g, '$')
-    .replace(/\u0000M(\d+)\u0000/g, (_, i) => formatMathTokenHtml(mathTokens[Number(i)]));
+    .replace(/\u0000M(\d+)\u0000/g, (_, i) => {
+      const tok = mathTokens[Number(i)];
+      return renderCtx ? renderFormulaHtml(tok, renderCtx) : formatMathTokenHtml(tok);
+    });
 }
 
 function extractFencedCodeBlocks(src, codeBlocks) {
@@ -70,26 +74,26 @@ function isTableDelimiterLine(line) {
   return cells.length >= 1 && cells.every((c) => /^:?-{3,}:?$/.test(c));
 }
 
-function renderParagraphLines(paraLines, mathTokens) {
+function renderParagraphLines(paraLines, mathTokens, renderCtx) {
   let html = '';
   for (let k = 0; k < paraLines.length; k++) {
     const raw = paraLines[k];
     const hasNext = k < paraLines.length - 1;
-    if (hasNext && / {2,}$/.test(raw)) html += `${renderInlineMarkdown(raw.replace(/ {2,}$/, ''), mathTokens)}<br>\n`;
-    else if (hasNext && raw.endsWith('\\') && !isEscapedAt(raw, raw.length - 1)) html += `${renderInlineMarkdown(raw.slice(0, -1), mathTokens)}<br>\n`;
-    else html += renderInlineMarkdown(raw, mathTokens) + (hasNext ? ' ' : '');
+    if (hasNext && / {2,}$/.test(raw)) html += `${renderInlineMarkdown(raw.replace(/ {2,}$/, ''), mathTokens, renderCtx)}<br>\n`;
+    else if (hasNext && raw.endsWith('\\') && !isEscapedAt(raw, raw.length - 1)) html += `${renderInlineMarkdown(raw.slice(0, -1), mathTokens, renderCtx)}<br>\n`;
+    else html += renderInlineMarkdown(raw, mathTokens, renderCtx) + (hasNext ? ' ' : '');
   }
   return `<p>${html}</p>`;
 }
 
-function renderMarkdownBlocks(lines, codeBlocks, mathTokens) {
+function renderMarkdownBlocks(lines, codeBlocks, mathTokens, renderCtx) {
   const out = [];
   let para = [];
   let quote = [];
   const lists = [];
 
-  const flushPara = () => { if (para.length) { out.push(renderParagraphLines(para, mathTokens)); para = []; } };
-  const flushQuote = () => { if (quote.length) { out.push(`<blockquote>${renderMarkdownBlocks(quote, codeBlocks, mathTokens)}</blockquote>`); quote = []; } };
+  const flushPara = () => { if (para.length) { out.push(renderParagraphLines(para, mathTokens, renderCtx)); para = []; } };
+  const flushQuote = () => { if (quote.length) { out.push(`<blockquote>${renderMarkdownBlocks(quote, codeBlocks, mathTokens, renderCtx)}</blockquote>`); quote = []; } };
   const closeLists = () => { while (lists.length) out.push(`</li></${lists.pop().tag}>`); };
   const flushAll = () => { flushPara(); flushQuote(); closeLists(); };
 
@@ -100,7 +104,10 @@ function renderMarkdownBlocks(lines, codeBlocks, mathTokens) {
     const mMatch = line.match(/^\s*\u0000M(\d+)\u0000\s*$/);
     if (mMatch && mathTokens[Number(mMatch[1])]?.display) {
       flushAll();
-      out.push(`<div class="math-block">$$\n${escapeHtml(mathTokens[Number(mMatch[1])].tex)}\n$$</div>`);
+      const tok = mathTokens[Number(mMatch[1])];
+      out.push(renderCtx
+        ? renderFormulaHtml(tok, renderCtx)
+        : `<div class="math-block">$$\n${escapeHtml(tok.tex)}\n$$</div>`);
       continue;
     }
     if (!line.trim()) { flushAll(); continue; }
@@ -108,17 +115,17 @@ function renderMarkdownBlocks(lines, codeBlocks, mathTokens) {
     flushQuote();
 
     const hMatch = line.match(/^(#{1,6})\s+(.+)$/);
-    if (hMatch) { flushPara(); closeLists(); out.push(`<h${hMatch[1].length}>${renderInlineMarkdown(hMatch[2], mathTokens)}</h${hMatch[1].length}>`); continue; }
+    if (hMatch) { flushPara(); closeLists(); out.push(`<h${hMatch[1].length}>${renderInlineMarkdown(hMatch[2], mathTokens, renderCtx)}</h${hMatch[1].length}>`); continue; }
     if (/^[ \t]*(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(line)) { flushPara(); closeLists(); out.push('<hr>'); continue; }
     if (line.includes('|') && i + 1 < lines.length && isTableDelimiterLine(lines[i + 1])) {
       flushPara(); closeLists();
       const headers = splitTableRow(line);
       const aligns = splitTableRow(lines[i + 1]).map((c) => (c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : 'left'));
-      const ths = headers.map((c, idx) => `<th style="text-align:${aligns[idx] || 'left'}">${renderInlineMarkdown(c, mathTokens)}</th>`).join('');
+      const ths = headers.map((c, idx) => `<th style="text-align:${aligns[idx] || 'left'}">${renderInlineMarkdown(c, mathTokens, renderCtx)}</th>`).join('');
       const rows = [];
       for (i += 2; i < lines.length && lines[i].trim() && lines[i].includes('|') && !/^\s*\u0000B\d+\u0000\s*$/.test(lines[i]); i++) {
         const cols = splitTableRow(lines[i]);
-        rows.push(`<tr>${headers.map((_, idx) => `<td style="text-align:${aligns[idx] || 'left'}">${renderInlineMarkdown(cols[idx] ?? '', mathTokens)}</td>`).join('')}</tr>`);
+        rows.push(`<tr>${headers.map((_, idx) => `<td style="text-align:${aligns[idx] || 'left'}">${renderInlineMarkdown(cols[idx] ?? '', mathTokens, renderCtx)}</td>`).join('')}</tr>`);
       }
       i -= 1;
       out.push(`<table><thead><tr>${ths}</tr></thead><tbody>${rows.join('')}</tbody></table>`);
@@ -130,7 +137,7 @@ function renderMarkdownBlocks(lines, codeBlocks, mathTokens) {
       flushPara();
       const tag = ulMatch ? 'ul' : 'ol';
       const indent = (ulMatch ? ulMatch[1] : olMatch[1]).replace(/\t/g, '  ').length;
-      const body = renderInlineMarkdown(ulMatch ? ulMatch[3] : olMatch[2], mathTokens);
+      const body = renderInlineMarkdown(ulMatch ? ulMatch[3] : olMatch[2], mathTokens, renderCtx);
       while (lists.length && indent < lists[lists.length - 1].indent) out.push(`</li></${lists.pop().tag}>`);
       if (lists.length && indent === lists[lists.length - 1].indent && lists[lists.length - 1].tag !== tag) {
         out.push(`</li></${lists.pop().tag}>`);
@@ -156,5 +163,18 @@ export function markdownToHtml(raw) {
   const afterFences = extractFencedCodeBlocks(src, codeBlocks);
   const mathTokens = [];
   const text = extractMath(afterFences, mathTokens, { protectInlineCode: true });
-  return renderMarkdownBlocks(text.split('\n'), codeBlocks, mathTokens);
+  return renderMarkdownBlocks(text.split('\n'), codeBlocks, mathTokens, null);
+}
+
+export function markdownToRenderedHtml(raw, opts = {}) {
+  const src = String(raw ?? '').replace(/\u0000/g, '').replace(/\r\n?/g, '\n');
+  const codeBlocks = [];
+  const afterFences = extractFencedCodeBlocks(src, codeBlocks);
+  const mathTokens = [];
+  const text = extractMath(afterFences, mathTokens, { protectInlineCode: true });
+  return renderMarkdownBlocks(text.split('\n'), codeBlocks, mathTokens, {
+    katex: opts.katex,
+    state: opts.state,
+    inlineOnly: Boolean(opts.inlineOnly),
+  });
 }

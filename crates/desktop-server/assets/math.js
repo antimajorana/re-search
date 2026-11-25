@@ -1,43 +1,21 @@
 // Safe offline Markdown, LaTeX document preview, and KaTeX math rendering helpers.
 import { escapeHtml, highlightPython, highlightUnifiedDiff } from './code_highlight.js';
-import {
-  DELIMITERS, DELIMITERS_NO_DOLLAR, extractMath, findClosingDelim,
-  findClosingInlineDollar, normalizeMathTex,
-} from './math_scan.js';
-import { markdownToHtml } from './markdown.js';
-import { latexDocumentToHtml } from './tex_preview.js';
+import { extractMath, findClosingDelim, findClosingInlineDollar } from './math_scan.js';
+import { clearMathCache, katexOptions, renderFormulaHtml, resetMathMacros } from './math_katex.js';
+import { markdownToHtml, markdownToRenderedHtml } from './markdown.js';
+import { latexDocumentToHtml, latexDocumentToRenderedHtml } from './tex_preview.js';
 
-export { escapeHtml, highlightPython, highlightUnifiedDiff, latexDocumentToHtml, markdownToHtml };
+export {
+  clearMathCache, escapeHtml, highlightPython, highlightUnifiedDiff, katexOptions,
+  latexDocumentToHtml, latexDocumentToRenderedHtml, markdownToHtml, markdownToRenderedHtml,
+  renderFormulaHtml, resetMathMacros,
+};
 
-export function renderMathInContainer(el, opts = {}) {
-  if (!el || typeof window === 'undefined') return;
-  const allowSingleDollar = opts.allowSingleDollar !== false;
-  const delimiters = allowSingleDollar ? DELIMITERS : DELIMITERS_NO_DOLLAR;
-  if (typeof window.renderMathInElement === 'function') {
-    window.renderMathInElement(el, { delimiters, throwOnError: false, strict: false, preProcess: (t) => normalizeMathTex(t, true) });
-    return;
-  }
-  if (window.katex && typeof window.katex.renderToString === 'function') {
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    const nodes = [];
-    for (let cur = walker.nextNode(); cur; cur = walker.nextNode()) {
-      const p = cur.parentElement;
-      if (p && !/^(CODE|PRE|SCRIPT|STYLE|TEXTAREA)$/.test(p.tagName) && /(\$\$|\$|\\\(|\\\[|\\begin\{)/.test(cur.nodeValue || '')) {
-        nodes.push(cur);
-      }
-    }
-    for (const node of nodes) {
-      const span = document.createElement('span');
-      span.innerHTML = renderInlineMathFallback(node.nodeValue || '', { allowSingleDollar });
-      node.parentNode.replaceChild(span, node);
-    }
-  }
-}
-
-function renderInlineMathFallback(text, opts = {}) {
+function renderMathTextInternal(text, opts = {}) {
   const tokens = [];
   const marked = extractMath(String(text ?? '').replace(/\u0000/g, ''), tokens, {
-    protectInlineCode: opts.protectInlineCode === true, allowSingleDollar: opts.allowSingleDollar !== false,
+    protectInlineCode: opts.protectInlineCode === true,
+    allowSingleDollar: opts.allowSingleDollar !== false,
   });
   let out = '';
   let last = 0;
@@ -45,31 +23,52 @@ function renderInlineMathFallback(text, opts = {}) {
     out += escapeHtml(marked.slice(last, m.index));
     const tok = tokens[Number(m[1])];
     if (tok) {
-      try { out += window.katex.renderToString(tok.tex, { displayMode: tok.display && !opts.inlineOnly, throwOnError: false, strict: false }); }
-      catch { out += escapeHtml(tok.display ? `$$${tok.tex}$$` : `\\(${tok.tex}\\)`); }
+      out += renderFormulaHtml(tok, { katex: opts.katex, inlineOnly: Boolean(opts.inlineOnly) });
     }
     last = m.index + m[0].length;
   }
   return out + escapeHtml(marked.slice(last));
 }
 
-function hasRenderableMath(text) {
-  return typeof globalThis.window?.katex?.renderToString === 'function'
+export function renderMathInContainer(el, opts = {}) {
+  if (!el || typeof window === 'undefined' || typeof document === 'undefined') return;
+  const katexImpl = opts.katex ?? window.katex;
+  if (!katexImpl || typeof katexImpl.renderToString !== 'function') return;
+  const allowSingleDollar = opts.allowSingleDollar !== false;
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  for (let cur = walker.nextNode(); cur; cur = walker.nextNode()) {
+    const p = cur.parentElement;
+    if (p && !/^(CODE|PRE|SCRIPT|STYLE|TEXTAREA)$/.test(p.tagName) && /(\$\$|\$|\\\(|\\\[|\\begin\{)/.test(cur.nodeValue || '')) {
+      nodes.push(cur);
+    }
+  }
+  for (const node of nodes) {
+    const span = document.createElement('span');
+    span.innerHTML = renderMathTextInternal(node.nodeValue || '', { allowSingleDollar, katex: katexImpl });
+    node.parentNode.replaceChild(span, node);
+  }
+}
+
+function hasRenderableMath(text, katexImpl = globalThis.window?.katex) {
+  return typeof katexImpl?.renderToString === 'function'
     && /\$|\\[\[(]|\\begin\{/.test(text);
 }
 
 // Math with literal surrounding text, for labels, excerpts, and activity logs.
-export function mathTextToHtml(rawText, { inlineOnly = false } = {}) {
+export function mathTextToHtml(rawText, { inlineOnly = false, katex = undefined } = {}) {
   const text = String(rawText ?? '');
-  return hasRenderableMath(text)
-    ? renderInlineMathFallback(text, { protectInlineCode: true, inlineOnly })
+  const katexImpl = katex ?? globalThis.window?.katex;
+  return hasRenderableMath(text, katexImpl)
+    ? renderMathTextInternal(text, { protectInlineCode: true, inlineOnly, katex: katexImpl })
     : escapeHtml(text);
 }
 
 export function renderMathTextInto(el, rawText, opts) {
   if (!el) return;
   const text = String(rawText ?? '');
-  if (hasRenderableMath(text)) el.innerHTML = mathTextToHtml(text, opts);
+  const katexImpl = opts?.katex ?? globalThis.window?.katex;
+  if (hasRenderableMath(text, katexImpl)) el.innerHTML = mathTextToHtml(text, opts);
   else el.textContent = text;
 }
 
@@ -94,16 +93,14 @@ export function displayMathSource(rawLatex) {
   return `$$\n${tex}\n$$`;
 }
 
-export function renderRichInto(el, rawText) {
+export function renderRichInto(el, rawText, opts = {}) {
   if (!el) return;
-  el.innerHTML = markdownToHtml(rawText);
-  renderMathInContainer(el, { allowSingleDollar: false });
+  el.innerHTML = markdownToRenderedHtml(rawText, opts);
 }
 
-export function renderLatexDocumentPreview(el, texSource) {
+export function renderLatexDocumentPreview(el, texSource, opts = {}) {
   if (!el) return;
-  const html = latexDocumentToHtml(texSource);
+  const html = latexDocumentToRenderedHtml(texSource, opts);
   if (!html) { el.innerHTML = '<p style="color:var(--ink-muted)">Empty TeX buffer.</p>'; return; }
   el.innerHTML = html;
-  renderMathInContainer(el, { allowSingleDollar: false });
 }

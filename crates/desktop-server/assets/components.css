@@ -178,7 +178,21 @@ button, input, select, textarea { font-family: inherit; color: inherit; }
 .rich-prose h4 { font-size: 0.98em; }
 .rich-prose h5 { font-size: 0.93em; }
 .rich-prose h6 { font-size: 0.88em; color: var(--ink-secondary); }
-.rich-prose .math-block { margin: 0.75em 0; overflow-x: auto; overflow-y: hidden; }
+/* Math rendering: ported in part from Kandinsky (github.com/antimajorana/kandinsky, 833a95f), the same author's project. */
+.rich-prose .katex { font-size: 1.08em; direction: ltr; unicode-bidi: isolate; }
+.rich-prose .math-display, .rich-prose .math-block, .math-display {
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.55em 0;
+  margin: 0.7em 0;
+  text-align: center;
+}
+.math-display > .katex-display { margin: 0; padding: 0; overflow: visible; }
+.math-glue { white-space: nowrap; }
+.katex .katex-error { color: var(--status-err) !important; }
+.math-error { color: var(--status-err); font-family: var(--font-mono); font-size: 0.88em; }
+.math-pending { font-family: var(--font-mono); font-size: 0.88em; color: var(--ink-muted); }
 .rich-prose .tex-doc-header { margin-bottom: 1em; padding-bottom: 0.75em; border-bottom: 1px solid var(--border-subtle); }
 .rich-prose .tex-doc-author { margin: 0.25em 0 0; font-size: 0.92em; color: var(--ink-secondary); }
 .rich-prose .tex-env { margin: 0.85em 0; padding: 10px 14px; border-left: 3px solid var(--accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--bg-subtle); }
