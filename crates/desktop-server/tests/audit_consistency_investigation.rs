@@ -39,27 +39,15 @@ impl LoopbackApi {
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
                     let mut reader = BufReader::new(stream);
                     let mut req_line = String::new();
-                    if reader.read_line(&mut req_line).unwrap_or(0) == 0 {
-                        return;
-                    }
-                    let path = req_line
-                        .split_whitespace()
-                        .nth(1)
-                        .unwrap_or("")
-                        .split('?')
-                        .next()
-                        .unwrap_or("")
-                        .to_string();
+                    if reader.read_line(&mut req_line).unwrap_or(0) == 0 { return; }
+                    let path = req_line.split_whitespace().nth(1).unwrap_or("")
+                        .split('?').next().unwrap_or("").to_string();
                     let mut len = 0usize;
                     loop {
                         let mut line = String::new();
-                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
-                            break;
-                        }
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() { break; }
                         if let Some((k, v)) = line.split_once(':') {
-                            if k.eq_ignore_ascii_case("content-length") {
-                                len = v.trim().parse().unwrap_or(0);
-                            }
+                            if k.eq_ignore_ascii_case("content-length") { len = v.trim().parse().unwrap_or(0); }
                         }
                     }
                     let mut buf = vec![0u8; len];
@@ -68,20 +56,14 @@ impl LoopbackApi {
                     s_inner.lock().unwrap().push((path.clone(), body.clone()));
                     let bytes = serde_json::to_vec(&h(&path, &body)).unwrap();
                     let mut s = reader.into_inner();
-                    let hdr = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        bytes.len()
-                    );
+                    let hdr = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", bytes.len());
                     let _ = s.write_all(hdr.as_bytes());
                     let _ = s.write_all(&bytes);
                     let _ = s.flush();
                 });
             }
         });
-        Self {
-            base_url: format!("http://{addr}"),
-            seen,
-        }
+        Self { base_url: format!("http://{addr}"), seen }
     }
 
     fn captured(&self) -> Vec<(String, Value)> {
@@ -584,5 +566,29 @@ fn review_consistency_turn_req_cannot_override_paper_readers_enabled() {
             expect_tool,
             "turn req paper_readers_enabled={req_val} overrode saved ui.paper_readers_enabled={saved}"
         );
+    }
+}
+
+#[test]
+fn review3_open_research_rejects_failed_or_stopped_answer() {
+    let mock = LoopbackApi::start(Box::new(|_, _| ant_text("Unused.")));
+    let boot = InvBoot::start(&mock.base_url);
+    for (sid, status) in [("s-handoff-failed", "failed"), ("s-handoff-stopped", "stopped")] {
+        let src = boot.new_session(sid, "flat.txt", b"Line 1: Fixed endpoints.\n");
+        let ledger = Ledger::open(&boot.data_dir).unwrap();
+        ledger.append(sid, "investigation.paper", 1, &json!({ "source_id": src.source_id, "question": "What?" })).unwrap();
+        let q_seq = ledger.append(sid, "investigation.question_requested", 1, &json!({ "source_id": src.source_id, "question": "What?" })).unwrap();
+        let ans_seq = ledger.append(sid, "investigation.answer", 1, &json!({
+            "request_seq": q_seq, "status": status, "text": null, "error": status, "cites": []
+        })).unwrap();
+        for body in [
+            json!({ "answer_seq": ans_seq, "question": "Follow up" }),
+            json!({ "answer_seq": q_seq, "question": "Follow up" }),
+            json!({ "question": "Follow up" }),
+        ] {
+            let (st, resp) = req(&boot.srv, "POST", &format!("/api/sessions/{sid}/investigation/research"), Some(&body));
+            assert_eq!(st, 400, "status={status} body={body} resp={resp}");
+            assert_eq!(resp["error"], "Answer a question first.", "status={status} body={body} resp={resp}");
+        }
     }
 }

@@ -42,8 +42,25 @@ pub(crate) fn map_base_instructions(
     text
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConventionsResumeMode<'a> {
+    Paper,
+    ExpandToPaper,
+    Section(&'a str),
+}
+
+impl From<bool> for ConventionsResumeMode<'_> {
+    fn from(expanding: bool) -> Self {
+        if expanding {
+            Self::ExpandToPaper
+        } else {
+            Self::Paper
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn conventions_resume_instructions(
+pub(crate) fn conventions_resume_instructions<'a>(
     route: PaperRoute,
     source_id: &str,
     primary_path: &Value,
@@ -51,8 +68,14 @@ pub(crate) fn conventions_resume_instructions(
     next_batch: u64,
     catalog: &Value,
     prior: &str,
-    expanding: bool,
+    mode: impl Into<ConventionsResumeMode<'a>>,
 ) -> String {
+    let mode = mode.into();
+    let expanding = matches!(mode, ConventionsResumeMode::ExpandToPaper);
+    let section_scope = match mode {
+        ConventionsResumeMode::Section(s) => Some(s),
+        _ => None,
+    };
     let pending: Vec<&str> = catalog["pending_items"]
         .as_array()
         .into_iter()
@@ -74,11 +97,14 @@ pub(crate) fn conventions_resume_instructions(
         "Continue only the paper's conventions review."
     };
     out.push_str(&format!(
-        "{lead} Preserve the saved summary, results and branches. Read the selected paper at {primary_path} (source_id={source_id}) using read_paper_lines and search_paper_passages. Search throughout the selected pages for notation, definitions that set notation, units, scales, signs, coordinate and indexing choices, orientation, statistical reporting, local overrides and exceptions. Distinguish a reader's convention from a physical hypothesis or result. Cite every anchor with {{source_id, start_line, end_line, quote, kind}} (omit path for the primary paper; never use bare section headings as label; the app fills in the exact cited lines). Record source-grounded batches using record_paper_conventions, request_seq={request_seq}, starting at batch_index={next_batch}. Finish with done=true and report any gaps in coverage."
+        "{lead} Preserve the saved summary, results and branches. Read the selected paper at {primary_path} (source_id={source_id}) using read_paper_lines and search_paper_passages. Search throughout the selected pages for notation, definitions that set notation, units, scales, signs, coordinate and indexing choices, orientation, statistical reporting, local overrides and exceptions. Distinguish a reader's convention from a physical hypothesis or result. Cite every anchor with {{source_id, start_line, end_line, quote, kind}} (omit path for the primary paper; never use bare section headings as label; the app fills in the exact cited lines). Record source-grounded batches using record_paper_conventions, request_seq={request_seq}, starting at batch_index={next_batch}. Finish with done=true and report any gaps in coverage. If a pending item cannot be cited from the text, finish with done=true, coverage=\"partial\", and a limitation naming that item's id to drop it."
     ));
     if route == PaperRoute::InCore {
         out.push(' ');
         out.push_str(PAPER_READING_NO_DELEGATION_NOTE);
+    }
+    if let Some(scope_suffix) = section_scope {
+        out.push_str(scope_suffix);
     }
     out.push_str(&format!("\nPrior batches follow as data:\n{prior}"));
     out

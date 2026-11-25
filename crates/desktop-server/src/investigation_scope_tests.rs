@@ -432,3 +432,161 @@ fn question_turn_writes_scope_and_injects_outline() {
     assert_eq!(v["scope"]["status"], "resolved");
     assert_eq!(v["answers"][0]["status"], "running");
 }
+
+fn build_pdf(pages: &[&[&str]]) -> Vec<u8> {
+    use std::io::Write;
+    let n = pages.len();
+    let kids: String = (0..n).map(|i| format!("{} 0 R", 4 + n + i)).collect::<Vec<_>>().join(" ");
+    let mut objs: Vec<(usize, Vec<u8>)> = vec![
+        (1, b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()),
+        (2, format!("<< /Type /Pages /Kids [{kids}] /Count {n} >>").into_bytes()),
+        (3, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec()),
+    ];
+    for (i, lines) in pages.iter().enumerate() {
+        let mut s = String::from("BT /F1 12 Tf 72 720 Td 14 TL ");
+        for (j, line) in lines.iter().enumerate() {
+            if j > 0 { s.push_str("T* "); }
+            s.push_str(&format!("({line}) Tj "));
+        }
+        s.push_str("ET");
+        objs.push((4 + i, format!("<< /Length {} >>\nstream\n{s}\nendstream", s.len()).into_bytes()));
+    }
+    for i in 0..n {
+        let content_id = 4 + i;
+        objs.push((4 + n + i, format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents {content_id} 0 R >>").into_bytes()));
+    }
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = vec![0usize; objs.len() + 1];
+    for (id, body) in &objs {
+        offsets[*id] = out.len();
+        writeln!(out, "{id} 0 obj").unwrap();
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref_pos = out.len();
+    let total = objs.len() + 1;
+    writeln!(out, "xref\n0 {total}\n0000000000 65535 f ").unwrap();
+    for off in offsets.iter().skip(1) {
+        writeln!(out, "{off:010} 00000 n ").unwrap();
+    }
+    writeln!(out, "trailer\n<< /Size {total} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF").unwrap();
+    out
+}
+
+#[test]
+fn review3_consistency_front_matter_clipped_to_selected_pages() {
+    let (_tmp, state, env) = test_state();
+    let sid = "s-fm-clip";
+    let pdf_bytes = build_pdf(&[
+        &["Title: Boundary Effects", "Abstract", "We study boundary terms on page one.", "1. INTRODUCTION", "Intro on page one."],
+        &["2. BOUNDARY TERMS", "Theorem 2 on page two."],
+        &["3. CONCLUSION", "Conclusion on page three."],
+    ]);
+    let db = Mutex::new(state.open_ledger().unwrap());
+    let src = ingest_bytes(
+        &env.sandbox(),
+        &db,
+        &IngestRequest {
+            session_id: sid,
+            file_name: "three_page.pdf",
+            origin: "upload",
+            raw_bytes: &pdf_bytes,
+            source_id_hint: None,
+            section_filter: None,
+            title: None,
+        },
+    )
+    .unwrap();
+    let ledger = db.into_inner().unwrap();
+    ledger.append(sid, "investigation.started", 1, &json!({})).unwrap();
+    let events = ledger.read_session(sid).unwrap();
+    let source_ev = events
+        .iter()
+        .find(|e| e.kind == "source.ingested" && e.payload["source_id"] == src.source_id)
+        .unwrap();
+
+    // Sanity: full PDF has page-1 front matter before clipping.
+    let unclipped = super::compute_scope(
+        &state,
+        &ledger,
+        sid,
+        source_ev,
+        "Help me understand section 2",
+        (None, None),
+    )
+    .unwrap();
+    assert!(
+        matches!(
+            unclipped.resolution,
+            research_tools::investigation_outline::ScopeResolution::Resolved {
+                front_matter: Some(_),
+                ..
+            }
+        ),
+        "expected front_matter on full PDF: {:?}",
+        unclipped.resolution
+    );
+
+    // Selecting pages 2..=3 excludes page 1 front matter completely.
+    let clipped = super::compute_scope(
+        &state,
+        &ledger,
+        sid,
+        source_ev,
+        "Help me understand section 2",
+        (Some(2), Some(3)),
+    )
+    .unwrap();
+    assert!(
+        matches!(
+            clipped.resolution,
+            research_tools::investigation_outline::ScopeResolution::Resolved {
+                front_matter: None,
+                ..
+            }
+        ),
+        "expected front_matter=None when page 1 is excluded: {:?}",
+        clipped.resolution
+    );
+    let q_suffix = clipped.question_instructions_suffix();
+    let m_suffix = clipped.mapping_instructions_suffix();
+    assert!(!q_suffix.contains("front matter lines 1-"), "{q_suffix}");
+    assert!(!m_suffix.contains("front matter lines 1-"), "{m_suffix}");
+}
+
+#[test]
+fn review3_section_conventions_resume_includes_scope_and_map_does_not() {
+    let (_tmp, state, env) = test_state();
+    let sid = "s-sec-conv-prompt";
+    let src = seed_paper(&state, &env, sid);
+
+    let mut map_req = json!({"investigation_source_id": src.source_id});
+    prepare(&state, sid, &mut map_req, "Help me understand section II.A.1", PaperRoute::InCore)
+        .unwrap();
+    let map_ctx = map_req["_paper_context"].as_str().unwrap();
+    assert!(
+        !map_ctx.contains("record conventions for the scope plus global notation"),
+        "first-pass map prompt must not ask for conventions: {map_ctx}"
+    );
+
+    let ledger = state.open_ledger().unwrap();
+    let map_seq = record_summary_and_map(&env, &ledger, sid, &src);
+    finish(&state, sid, &map_req, Ok("Mapped section II.A.1.".into())).unwrap();
+
+    let mut conv_req = json!({"investigation_conventions": {"map_seq": map_seq}});
+    prepare(&state, sid, &mut conv_req, "Complete conventions", PaperRoute::InCore).unwrap();
+    let conv_ctx = conv_req["_paper_context"].as_str().unwrap();
+    assert!(conv_ctx.contains("Question scope:"), "{conv_ctx}");
+    assert!(conv_ctx.contains("Section II.A.1"), "{conv_ctx}");
+    assert!(
+        conv_ctx.contains("record conventions for the scope plus global notation"),
+        "{conv_ctx}"
+    );
+    assert!(
+        conv_ctx.contains(
+            "If a pending item cannot be cited from the text, finish with done=true, coverage=\"partial\", and a limitation naming that item's id to drop it."
+        ),
+        "{conv_ctx}"
+    );
+    assert!(!conv_ctx.contains("(lines 13–15) (lines 13-15)"), "{conv_ctx}");
+}

@@ -300,13 +300,20 @@ pub(crate) fn prepare(
             }
             let resume_scope =
                 crate::investigation_scope::conventions_resume_scope(&events, seq, &catalog);
-            let expanding =
-                crate::investigation_scope::conventions_expanding_to_paper(&events, seq, &catalog);
+            let expanding = crate::investigation_scope::conventions_expanding_to_paper(&catalog);
+            let section_scope = (resume_scope == Some("section"))
+                .then(|| crate::investigation_scope::section_conventions_scope_suffix(&events, seq))
+                .flatten();
+            let mode = match (expanding, section_scope.as_deref()) {
+                (true, _) => prompts::ConventionsResumeMode::ExpandToPaper,
+                (false, Some(s)) => prompts::ConventionsResumeMode::Section(s),
+                (false, None) => prompts::ConventionsResumeMode::Paper,
+            };
             let prior = context_text(&catalog);
             let next_batch = catalog["batch_index"].as_u64().unwrap_or(0) + 1;
             let text = prompts::conventions_resume_instructions(
                 route, &source_id, &source.payload["primary_path"], seq, next_batch, &catalog,
-                &prior, expanding,
+                &prior, mode,
             );
             let mut resumed_payload =
                 json!({"for_request_seq":seq,"source_id":source_id,"map_seq":map.seq});
@@ -513,6 +520,7 @@ fn open_research(
         let answer = if let Some(aseq) = val["answer_seq"].as_u64() {
             events.iter().rev().find(|e| {
                 e.kind == "investigation.answer"
+                    && e.payload["status"] == "answered"
                     && (e.seq == aseq || e.payload["request_seq"].as_u64() == Some(aseq))
             })
         } else {
@@ -520,9 +528,8 @@ fn open_research(
                 .iter()
                 .rev()
                 .find(|e| e.kind == "investigation.answer" && e.payload["status"] == "answered")
-                .or_else(|| latest(events, "investigation.answer"))
         }
-        .ok_or_else(|| bad("Map the paper first."))?;
+        .ok_or_else(|| bad("Answer a question first."))?;
         let q_req = answer.payload["request_seq"].as_u64().and_then(|seq| {
             events.iter().find(|e| e.seq == seq && e.kind == "investigation.question_requested")
         });
