@@ -291,9 +291,13 @@ fn run_session_turn(
             .or(ui.pinned_conventions),
         ..GuardrailConfig::default()
     };
+    let ledger = state.open_ledger()?;
+    let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
+    let is_investigation = crate::investigation::is_investigation(&existing);
     let paper_reading_turn = req.get("_paper_map_request").is_some()
         || req.get("_paper_branch_request").is_some()
-        || req.get("_paper_conventions_request").is_some();
+        || req.get("_paper_conventions_request").is_some()
+        || req.get("_paper_question_request").is_some();
     let delegation_cfg = DelegationConfig {
         compute_worker: if paper_reading_turn { None } else { compute_built.as_ref().map(|b| {
             make_worker_spec(
@@ -319,7 +323,7 @@ fn run_session_turn(
                 "Literature Worker",
                 b,
                 "You are the isolated Literature Worker for reSearch. Use `arxiv_search`, `literature_search`, and `doc_ingest` to find or ingest papers. \
-                 Use `search_paper_passages` to find supporting passages in ingested papers and `fs_read` to inspect surrounding context. \
+                 Use `search_paper_passages` to find supporting passages in ingested papers, `read_paper_lines` for numbered line ranges, and `fs_read` to inspect surrounding context. \
                  Return exact passages, source paths, line ranges and tool references alongside terms, conventions, and arXiv IDs or DOIs.",
                 literature_worker_tools(),
                 DEFAULT_WORKER_MAX_TURNS,
@@ -371,6 +375,7 @@ fn run_session_turn(
                 .collect()
         },
         pinned_conventions: guardrails.pinned_conventions.clone(),
+        is_investigation,
     };
     let interactive_plan_mode = req.get("interactive_plan_mode").and_then(Value::as_bool).unwrap_or(false);
     let pause_after_explore = req.get("pause_after_explore").and_then(Value::as_bool).unwrap_or(false);
@@ -390,8 +395,6 @@ fn run_session_turn(
         ..AutonomousConfig::default()
     };
 
-    let ledger = state.open_ledger()?;
-    let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
     let mut sink = SseEventSink::new(Arc::clone(&state.sse), session_id).with_model_title(
         meta.as_ref().is_some_and(crate::state::SessionMeta::allows_model_title)
             && crate::routes_session::model_session_title(&existing).is_none(),

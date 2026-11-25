@@ -64,6 +64,7 @@ pub struct DelegationConfig<'a> {
     pub paper_reader: Option<PaperReaderConfig<'a>>,
     pub custom_subagents: Vec<CustomSubagentDelegation<'a>>,
     pub pinned_conventions: Option<String>,
+    pub is_investigation: bool,
 }
 
 pub(crate) struct CancelOnlyObserver<'a>(pub(crate) Option<&'a CancelToken>);
@@ -116,7 +117,7 @@ pub fn compute_worker_tools() -> Vec<String> {
 }
 
 pub fn literature_worker_tools() -> Vec<String> {
-    ["arxiv_search", "literature_search", "search_paper_passages", "doc_ingest", "fs_list", "fs_read", "ledger_query", "ledger_note"]
+    ["arxiv_search", "literature_search", "search_paper_passages", "read_paper_lines", "doc_ingest", "fs_list", "fs_read", "ledger_query", "ledger_note"]
         .into_iter().map(str::to_string).collect()
 }
 
@@ -131,7 +132,7 @@ pub fn allowed_tools_for_profile(profile: &str, router: &Router) -> Vec<String> 
         ids.iter().filter(|id| available.contains(**id)).map(|id| (*id).to_string()).collect()
     };
     match profile.trim().to_ascii_lowercase().as_str() {
-        "read_only" => keep(&["fs_list", "fs_read", "arxiv_search", "literature_search", "search_paper_passages", "search_formal_library", "doc_ingest", "ledger_query", "tex_audit"]),
+        "read_only" => keep(&["fs_list", "fs_read", "read_paper_lines", "arxiv_search", "literature_search", "search_paper_passages", "search_formal_library", "doc_ingest", "ledger_query", "tex_audit"]),
         "compute" => keep(&["sympy_eval", "check_expression_sanity", "fs_list", "fs_read", "ledger_append", "ledger_query", "ledger_note"]),
         _ => available.into_iter().filter(|id| !is_delegation_tool(id)).map(str::to_string).collect(),
     }
@@ -187,27 +188,34 @@ pub fn delegation_tool_specs(cfg: &DelegationConfig<'_>) -> Vec<ToolSpec> {
 }
 
 pub fn format_delegation_prompt_section(cfg: &DelegationConfig<'_>) -> String {
-    let mut lines = vec![
-        "Orchestrator -> Worker Delegation:".to_string(),
-        "- Act as the high-level Orchestrator: plan derivations, interpret computation outputs (`ledger_append` \
-         with `entry_type: \"result\"` / `\"derivation\"`), and synthesize the `final_answer`.".to_string(),
-    ];
+    let mut workers = Vec::new();
     if let Some(w) = &cfg.compute_worker {
-        lines.push(format!("- Prefer `{DELEGATE_COMPUTE}` ({}) for iterative `sympy_eval` scripts, traceback retries, and `check_expression_sanity`.", w.model));
+        workers.push(format!("- Prefer `{DELEGATE_COMPUTE}` ({}) for iterative `sympy_eval` scripts, traceback retries, and `check_expression_sanity`.", w.model));
     }
     if let Some(w) = &cfg.literature_worker {
-        lines.push(format!("- Prefer `{DELEGATE_LITERATURE}` ({}) for `arxiv_search`, `literature_search`, `doc_ingest`, and bulky `.tex` reading.", w.model));
+        workers.push(format!("- Prefer `{DELEGATE_LITERATURE}` ({}) for `arxiv_search`, `literature_search`, `doc_ingest`, and bulky `.tex` reading.", w.model));
     }
     if let Some(w) = &cfg.lean_worker {
-        lines.push(format!("- Prefer `{DELEGATE_LEAN}` ({}) for Lean 4 formalization and `lean_check` machine-checked proofs.", w.model));
+        workers.push(format!("- Prefer `{DELEGATE_LEAN}` ({}) for Lean 4 formalization and `lean_check` machine-checked proofs.", w.model));
     }
     if let Some(w) = &cfg.explorer_worker {
-        lines.push(format!("- Prefer `{DELEGATE_EXPLORE}` ({}) to test 2..=4 independent approaches concurrently before committing to one.", w.model));
+        workers.push(format!("- Prefer `{DELEGATE_EXPLORE}` ({}) to test 2..=4 independent approaches concurrently before committing to one.", w.model));
     }
     if !cfg.custom_subagents.is_empty() {
         let ids = cfg.custom_subagents.iter().map(|sa| format!("`{}` ({})", sa.id, sa.name)).collect::<Vec<_>>().join(", ");
-        lines.push(format!("- Use `{DELEGATE_SUBAGENT}` when a task matches a custom specialist: {ids}."));
+        workers.push(format!("- Use `{DELEGATE_SUBAGENT}` when a task matches a custom specialist: {ids}."));
     }
+    if cfg.is_investigation && workers.is_empty() {
+        return String::new();
+    }
+    let lead = if cfg.is_investigation {
+        "- Delegate only to locate candidate passages, then read the cited lines yourself."
+    } else {
+        "- Act as the high-level Orchestrator: plan derivations, interpret computation outputs (`ledger_append` \
+         with `entry_type: \"result\"` / `\"derivation\"`), and synthesize the `final_answer`."
+    };
+    let mut lines = vec!["Orchestrator -> Worker Delegation:".to_string(), lead.to_string()];
+    lines.extend(workers);
     lines.join("\n")
 }
 
@@ -279,7 +287,7 @@ fn build_worker_system_prompt(base: &str, conventions: Option<&str>) -> String {
     parts.join("\n\n")
 }
 
-fn build_worker_user_prompt(tool_name: &str, task: &str, input: &Value) -> String {
+fn build_worker_user_prompt(tool_name: &str, task: &str, input: &Value, is_investigation: bool) -> String {
     let mut msg = format!("Task:\n{task}");
     if let Some(ctx) = input.get("context").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
         msg.push_str(&format!("\n\nRelevant Context:\n{ctx}"));
@@ -291,7 +299,7 @@ fn build_worker_user_prompt(tool_name: &str, task: &str, input: &Value) -> Strin
         }
     } else if tool_name == DELEGATE_LEAN {
         msg.push_str("\n\nWhen Lean verifies the statement, record the checked statement in a `verification` proof entry with the Lean result's `tool_call_ref`. Return the proof entry ID alongside the scope of the check and any axioms.");
-    } else if tool_name == DELEGATE_LITERATURE {
+    } else if tool_name == DELEGATE_LITERATURE && !is_investigation {
         msg.push_str("\n\nRecord each source-backed result as a `reference_lookup` proof entry linked to the source record's `tool_call_ref`. Include the page, section, equation, or recorded line range when known and return the proof entry ID.");
     }
     msg
@@ -409,7 +417,7 @@ pub(crate) fn run_delegation_call(
     let worker_info = worker.transport.info();
     let worker_caller = format!("worker:{}:{}:{}", worker.role, worker_info.provider, audit.session);
     let sys_prompt = build_worker_system_prompt(&worker.system_prompt, cfg.pinned_conventions.as_deref());
-    let mut messages = vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: build_worker_user_prompt(tool_name, task, input) }] }];
+    let mut messages = vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: build_worker_user_prompt(tool_name, task, input, cfg.is_investigation) }] }];
 
     audit.emit("delegate.start", json!({
         "call_id": tool_use_id, "role": worker.role, "worker_name": worker.display_name,
