@@ -115,6 +115,7 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
             events,
             request.seq,
             conventions.as_ref(),
+            running,
         )
     });
     json!({"source_id":paper.and_then(|p| p.get("source_id")), "question":paper.and_then(|p| p.get("question")),
@@ -140,7 +141,17 @@ fn mark_last_running(rows: &mut [Value], events: &[Event]) {
     {
         let seq = row["seq"].as_u64().unwrap_or_default();
         if !events.iter().any(|ev| {
-            ev.seq > seq && matches!(ev.kind.as_str(), "session.end" | "session.abort")
+            ev.seq > seq
+                && matches!(
+                    ev.kind.as_str(),
+                    "session.end"
+                        | "session.abort"
+                        | "investigation.mapping_requested"
+                        | "investigation.conventions_resumed"
+                        | "investigation.branch_requested"
+                        | "investigation.question_requested"
+                        | "investigation.requested"
+                )
         }) {
             row["status"] = json!("running");
         }

@@ -373,16 +373,31 @@ pub(crate) fn conventions_view_expanding(
     events: &[Event],
     mapping_seq: u64,
     catalog: Option<&Value>,
+    running: bool,
 ) -> bool {
-    let paper_requested = events
-        .iter()
-        .rev()
-        .find(|e| {
-            e.kind == "investigation.conventions_resumed"
-                && e.payload["for_request_seq"].as_u64() == Some(mapping_seq)
+    if !running || catalog.is_some_and(|c| c["coverage_scope"] == "paper") {
+        return false;
+    }
+    let Some(resumed) = events.iter().rev().find(|e| {
+        e.kind == "investigation.conventions_resumed"
+            && e.payload["for_request_seq"].as_u64() == Some(mapping_seq)
+    }) else {
+        return false;
+    };
+    resumed.payload["scope"] == "paper"
+        && !events.iter().any(|e| {
+            e.seq > resumed.seq
+                && matches!(
+                    e.kind.as_str(),
+                    "investigation.conventions_finished"
+                        | "session.end"
+                        | "session.abort"
+                        | "investigation.mapping_requested"
+                        | "investigation.branch_requested"
+                        | "investigation.question_requested"
+                        | "investigation.requested"
+                )
         })
-        .is_some_and(|e| e.payload["scope"] == "paper");
-    paper_requested && catalog.is_none_or(|c| c["coverage_scope"] != "paper")
 }
 
 /// Prepare a Scope::Map turn: pin paper if needed, compute outline/scope, append mapping_requested & scope.

@@ -309,7 +309,7 @@ fn investigation_turn_system_prompt_excludes_final_answer_and_research_workers()
         .expect("session.start must be recorded");
     let frozen_sys = start.payload["system_prompt"].as_str().unwrap_or("");
     assert!(
-        !frozen_sys.contains("final_answer") && !frozen_sys.contains("ledger_append"),
+        !frozen_sys.contains("final_answer") && !frozen_sys.contains("`ledger_append` with `entry_type") && !frozen_sys.contains("delegate_compute") && !frozen_sys.contains("delegate_lean") && !frozen_sys.contains("delegate_explore"),
         "Investigation session.start froze Research Proof-DAG/final_answer synthesis instructions into system_prompt: {frozen_sys}"
     );
 }
