@@ -366,6 +366,8 @@ fn record_document(
                     | "investigation.branch_finished"
                     | "investigation.conventions_resumed"
                     | "investigation.conventions_finished"
+                    | "investigation.question_requested"
+                    | "investigation.answer"
                     | "investigation.requested"
                     | "investigation.result"
                     | "session.end"
