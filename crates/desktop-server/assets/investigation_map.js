@@ -7,18 +7,11 @@ function element(tag, className, text) {
   if (text) el.textContent = text;
   return el;
 }
-
 function math(tag, text, className) {
-  const el = element(tag, className);
-  renderMathTextInto(el, String(text || ''));
-  return el;
+  const el = element(tag, className); renderMathTextInto(el, String(text || '')); return el;
 }
-
 function button(text, handler, cls = 'pill-btn sm') {
-  const el = element('button', cls, text);
-  el.type = 'button';
-  el.addEventListener('click', handler);
-  return el;
+  const el = element('button', cls, text); el.type = 'button'; el.addEventListener('click', handler); return el;
 }
 
 function foldWithIndexMap(raw) {
@@ -34,10 +27,14 @@ function foldWithIndexMap(raw) {
 }
 
 function isEscaped(text, pos) {
-  let bs = 0;
-  for (let i = pos - 1; i >= 0 && text[i] === '\\'; i--) bs++;
-  return bs % 2 === 1;
+  let bs = 0; for (let i = pos - 1; i >= 0 && text[i] === '\\'; i--) bs++; return bs % 2 === 1;
 }
+
+const MATH_ENVS = new Set((
+  'equation equation* align align* aligned gather gather* gathered multline multline* eqnarray eqnarray* ' +
+  'alignat alignat* flalign flalign* split cases dcases rcases matrix pmatrix bmatrix Bmatrix vmatrix Vmatrix ' +
+  'smallmatrix array subequations CD'
+).split(' '));
 
 function mathSpans(text) {
   const spans = [];
@@ -58,9 +55,24 @@ function mathSpans(text) {
           spans.push([i, j + 1]); i = j; break;
         }
       }
-    } else if (text[i] === '\\' && !isEscaped(text, i) && (text[i + 1] === '(' || text[i + 1] === '[')) {
-      const c = text.indexOf(text[i + 1] === '(' ? '\\)' : '\\]', i + 2);
-      if (c !== -1) { spans.push([i, c + 2]); i = c + 1; }
+    } else if (text[i] === '\\' && !isEscaped(text, i)) {
+      if (text[i + 1] === '(' || text[i + 1] === '[') {
+        const c = text.indexOf(text[i + 1] === '(' ? '\\)' : '\\]', i + 2);
+        if (c !== -1) { spans.push([i, c + 2]); i = c + 1; }
+      } else if (text.startsWith('\\begin{', i)) {
+        const bEnd = text.indexOf('}', i + 7), env = bEnd !== -1 ? text.slice(i + 7, bEnd) : '';
+        if (MATH_ENVS.has(env)) {
+          const openTag = `\\begin{${env}}`, closeTag = `\\end{${env}}`;
+          let depth = 1, p = bEnd + 1;
+          while (p < text.length && depth > 0) {
+            const o = text.indexOf(openTag, p), c = text.indexOf(closeTag, p);
+            if (c === -1 || /\n[ \t]{0,3}#{1,6}(?:[ \t]|$)/m.test(text.slice(p, o !== -1 && o < c ? o : c))) { depth = -1; break; }
+            if (o !== -1 && o < c) { depth++; p = o + openTag.length; }
+            else { depth--; p = c + closeTag.length; }
+          }
+          if (depth === 0) { spans.push([i, p]); i = p - 1; }
+        }
+      }
     }
   }
   return spans;
@@ -114,13 +126,9 @@ const readingQuestion = inv => [DEFAULT_PAPER_REQUEST, 'Map the main results and
 
 export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act }) {
   let inv = {}, busy = false, full = false, query = '', selected = '', signature = '', generation = 0;
-  const forms = new Map();
-  const savedFocus = new Map();
-  const expanded = new Set();
+  const forms = new Map(), savedFocus = new Map(), expanded = new Set();
   let layout = 'graph', highlight = true, disconnectGraph = () => {};
-  let indexScroll = 0, actionPending = false, notice = '', formType = '', resultId = '';
-  let runEvents = [];
-  let summarySignature = '';
+  let indexScroll = 0, actionPending = false, notice = '', formType = '', resultId = '', runEvents = [], summarySignature = '';
   const panel = document.getElementById('investigation-panel');
 
   function reset(sessionChanged = true) {
@@ -184,14 +192,11 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
     let first = true;
     for (const anchor of anchors || []) {
       const box = element('details', 'investigation-anchor');
-      if (openFirst && first) box.open = true;
-      first = false;
+      if (openFirst && first) box.open = true; first = false;
       box.dataset.anchor = JSON.stringify([anchor.source_id,anchor.path,anchor.start_line,anchor.end_line]);
-      const location = anchor.start_line === anchor.end_line ? 'line ' + anchor.start_line :
-        'lines ' + anchor.start_line + '–' + anchor.end_line;
+      const location = anchor.start_line === anchor.end_line ? 'line ' + anchor.start_line : 'lines ' + anchor.start_line + '–' + anchor.end_line;
       const title = element('summary', '', [anchor.label || nameOf(anchor.kind), location].join(' · '));
-      const quote = element('blockquote');
-      renderAnchorExcerptInto(quote, anchor.excerpt, anchor.quote);
+      const quote = element('blockquote'); renderAnchorExcerptInto(quote, anchor.excerpt, anchor.quote);
       const open = button('Open cited lines', () => openSource(anchor));
       box.append(title, quote, element('small', '', anchor.path));
       if (Array.isArray(anchor.cited_range) && anchor.cited_range.length === 2) {
@@ -203,8 +208,7 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
       if (openPdf?.(anchor, true)) box.append(button('Open original PDF page', () => openPdf(anchor, false)));
       if (anchor.kind === 'reference') {
         for (const link of citedPaperLinks?.(anchor.excerpt) || []) {
-          const external = Object.assign(element('a', 'pill-btn sm', link.label), { href: link.url, target: '_blank', rel: 'noopener noreferrer' });
-          box.append(external);
+          box.append(Object.assign(element('a', 'pill-btn sm', link.label), { href: link.url, target: '_blank', rel: 'noopener noreferrer' }));
         }
       }
       parent.append(box);
@@ -218,28 +222,19 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
     summarySignature = signature;
     const before = host.getBoundingClientRect().top;
     const preserve = !panel.hidden && panel.scrollTop > 0 && before <= panel.getBoundingClientRect().top;
-    box.hidden = !(summary || running || hasPaper);
-    box.replaceChildren();
+    box.hidden = !(summary || running || hasPaper); box.replaceChildren();
     if (box.hidden) return;
-    const heading = element('h2', '', 'What, Why, and How');
-    heading.id = 'investigation-summary-title';
-    box.append(heading);
+    const heading = element('h2', '', 'What, Why, and How'); heading.id = 'investigation-summary-title'; box.append(heading);
     if (summary && current === false) box.append(element('p', 'investigation-meta', 'Saved overview from an earlier reading of this paper.'));
     if (!summary) {
       box.append(element('p', 'investigation-meta', running ? 'Reading the paper for a source-backed overview…' :
         'A source-backed overview is unavailable for this paper.'));
     } else {
       for (const [key, title] of [['what','What'], ['why','Why'], ['how','How']]) {
-        const part = summary[key];
-        const row = element('section', 'investigation-summary-part');
+        const part = summary[key], row = element('section', 'investigation-summary-part'), body = element('div');
         row.append(element('h3', '', title));
-        const body = element('div');
-        if (part?.text && part.anchors?.length) {
-          body.append(math('p', part.text));
-          sources(body, part.anchors);
-        } else {
-          body.append(element('p', 'investigation-meta', part?.unstated ? 'The reviewed passages do not state this explicitly.' : 'No source-backed statement is available.'));
-        }
+        if (part?.text && part.anchors?.length) { body.append(math('p', part.text)); sources(body, part.anchors); }
+        else body.append(element('p', 'investigation-meta', part?.unstated ? 'The reviewed passages do not state this explicitly.' : 'No source-backed statement is available.'));
         row.append(body); box.append(row);
       }
     }
