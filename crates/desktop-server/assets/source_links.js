@@ -325,6 +325,18 @@ export function sessionSourcesUsed(session, claimText) {
   }
   for (const answer of finalAnswerTexts(events)) useText(answer);
 
+  const invAnswers = [
+    ...(Array.isArray(session?.investigation?.answers) ? session.investigation.answers : []),
+    ...events.filter(event => event?.kind === 'investigation.answer').map(event => event.payload),
+  ];
+  for (const ans of invAnswers) {
+    for (const cite of ans?.cites || []) {
+      if (cite?.read !== true) continue;
+      const record = bySourceId.get(cite.source_id || ans?.source_id || session?.investigation?.source_id);
+      if (record) record.cited = true;
+    }
+  }
+
   const summary = session?.investigation?.summary || events.findLast(event => event.kind === 'investigation.summary')?.payload;
   for (const part of ['what', 'why', 'how']) {
     for (const anchor of summary?.[part]?.anchors || []) {

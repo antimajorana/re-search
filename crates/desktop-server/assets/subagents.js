@@ -394,30 +394,46 @@ function renderSubagentsPanel() {
           const optRow = document.createElement('div');
           optRow.className = 'form-row';
           optRow.style.marginTop = '6px';
-          const cb = document.createElement('input');
-          cb.type = 'checkbox';
-          cb.id = 'paper-readers-enabled';
-          cb.checked = paperReadersEnabled === true;
-          const cbLabel = document.createElement('label');
-          cbLabel.htmlFor = cb.id;
-          cbLabel.style.cssText = 'font-size:11px;color:var(--ink-muted);display:flex;gap:6px;align-items:center;';
-          cbLabel.append(cb, document.createTextNode('Always enable parallel paper readers (opt-in)'));
-          cb.addEventListener('change', async () => {
-            cb.disabled = true;
+          const optLabel = document.createElement('label');
+          optLabel.htmlFor = 'paper-readers-enabled';
+          optLabel.style.cssText = 'font-size:11px;color:var(--ink-muted);';
+          optLabel.textContent = 'Parallel paper readers';
+          const sel = document.createElement('select');
+          sel.id = 'paper-readers-enabled';
+          sel.className = 'compact-select';
+          const initVal = paperReadersEnabled === true ? 'true' : paperReadersEnabled === false ? 'false' : '';
+          for (const [val, text] of [
+            ['', 'Automatic (smaller model or section-scoped)'],
+            ['true', 'Always on'],
+            ['false', 'Off'],
+          ]) {
+            const opt = new Option(text, val);
+            if (val === initVal) opt.selected = true;
+            sel.append(opt);
+          }
+          sel.value = initVal;
+          sel.addEventListener('change', async () => {
+            sel.disabled = true;
             const prev = paperReadersEnabled;
-            const next = cb.checked ? true : null;
+            const next = sel.value === 'true' ? true : sel.value === 'false' ? false : null;
             try {
               await api.updateProviderSettings({ paper_readers_enabled: next });
               paperReadersEnabled = next;
-              notify(next ? 'Parallel paper readers enabled for Investigation turns.' : 'Parallel paper readers set to automatic (smaller model or section-scoped).');
+              notify(
+                next === true
+                  ? 'Parallel paper readers enabled for Investigation turns.'
+                  : next === false
+                    ? 'Parallel paper readers turned off.'
+                    : 'Parallel paper readers set to automatic (smaller model or section-scoped).'
+              );
             } catch (err) {
-              cb.checked = prev === true;
+              sel.value = prev === true ? 'true' : prev === false ? 'false' : '';
               notify(`Could not update paper reader setting: ${err.message}`);
             } finally {
-              cb.disabled = false;
+              sel.disabled = false;
             }
           });
-          optRow.append(cbLabel);
+          optRow.append(optLabel, sel);
 
           const parRow = document.createElement('div');
           parRow.className = 'form-row';

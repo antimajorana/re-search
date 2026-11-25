@@ -13,7 +13,7 @@ const GUIDE_SECTIONS = [
   {
     title: 'Research agents and recovery',
     items: [
-      '<strong>Specialist Workers:</strong> Orchestrator delegates heavy work to isolated <em>Compute</em> (SymPy), <em>Literature</em> (arXiv/Crossref/INSPIRE/S2), <em>Lean Prover</em> (anti-cheat checked), and <em>Parallel Explorer</em> workers, configurable per role in <em>Agents &amp; Models</em>.',
+      '<strong>Specialist Workers:</strong> Orchestrator delegates heavy work to isolated <em>Compute</em> (SymPy), <em>Literature</em> (arXiv/Crossref/INSPIRE/S2), <em>Lean Prover</em> (anti-cheat checked), <em>Parallel Explorer</em>, and Investigation <em>Paper Reader</em> workers. Compute, Literature, Lean, and Explorer favor smaller connected models by default; Paper Reader defaults to an isolated primary model at <code>low</code> effort, with Automatic/Always on/Off and max-parallel controls in <em>Agents &amp; Models</em>.',
       'The Windows installer includes the isolated Python worker and its SymPy and NumPy libraries. Select a computation in the proof graph to inspect its recorded inputs and output.',
       'To create a specialist, describe its task in <em>Agents &amp; Models</em>, choose <em>Draft instructions</em>, then review and save.',
       '<strong>Constructive Rejection Recovery:</strong> If verification cannot accept a draft, the Verifier verdict card summarizes what is already solid, shows recovery options, and offers one-click <code>Try Another Approach</code>, <code>Fix Flagged Issues</code>, or <code>Discuss in Explain</code>.',

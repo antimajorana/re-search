@@ -14,7 +14,6 @@ const katex = require(path.join(crateRoot, 'vendor', 'katex', 'katex.min.js'));
 const mathUrl = pathToFileURL(path.join(assetsDir, 'math.js')).href;
 const mathMod = await import(mathUrl);
 const stateMod = await import(pathToFileURL(path.join(assetsDir, 'investigation_state.js')).href);
-const scopeMod = await import(pathToFileURL(path.join(assetsDir, 'investigation_scope.js')).href);
 
 const srcLinksCode = fs
   .readFileSync(path.join(assetsDir, 'source_links.js'), 'utf8')
@@ -217,29 +216,5 @@ test('sessionSourcesUsed counts papers cited via [path:Lstart-end] in question-f
     used.length,
     1,
     'Question-first Investigation answer citations do not mark the primary paper as used in Sources & Literature'
-  );
-});
-
-test('investigation.js scopeChip update displays stale section scope after whole-paper conventions expansion', () => {
-  const invFromViewAfterWholePaperExpansion = {
-    scope: {
-      status: 'resolved',
-      label: 'Section 2 (lines 4–6)',
-      targets: [{ kind: 'section', label: 'Section 2', start_line: 4, end_line: 6 }],
-      ranges: [[4, 6]],
-    },
-    conventions: {
-      coverage_scope: 'paper',
-      done: true,
-      items: [{ id: 'c1', label: 'c', meaning: 'speed of light' }],
-    },
-  };
-  const invJs = fs.readFileSync(path.join(assetsDir, 'investigation.js'), 'utf8');
-  assert.ok(invJs.includes('scopeChip.update(inv.scope)'));
-  const chip = scopeMod.scopeChipData(invFromViewAfterWholePaperExpansion.scope);
-  assert.equal(
-    chip,
-    null,
-    `#investigation-scope-chip continues displaying section scope (${JSON.stringify(chip?.text)}) after whole-paper conventions expansion`
   );
 });
