@@ -690,7 +690,7 @@ With no model connected the mode still delivers stages A to C, F, G, J, K and L.
 | langextract | Apache-2.0 | Every extraction aligned to the source, the rest flagged | Already the app's anchor rule; extended to per-item acceptance |
 | INSPIRE-HEP, arXiv, Crossref, Semantic Scholar | services | Reference resolution and search | Existing tools and allow-list |
 | re:Search itself | own | Anchor verification, recorder gating, golden def_hash tests, `read_paper_lines`, question turn, graph layering, TeX scanners | Reused |
-| Kandinsky (the owner's notes app) | AGPL-3.0, own | Papers kept as files with a derived `refs.bib`; PDFs used in place; first-page metadata for PDFs with no identifier; PDF text cached per file with page breaks; column geometry; Tesseract in a local helper for scans | Approach now; code if the owner allows (overview 8.3, question 2). Shared packages F13 and F14 |
+| Kandinsky (the owner's notes app) | AGPL-3.0, own | Papers kept as files with a derived `refs.bib`; PDFs used in place; first-page metadata for PDFs with no identifier; PDF text cached per file with page breaks; column geometry; Tesseract in a local helper for scans | Approach and ported code (decided; overview 2.11, "Porting"). Shared packages F13 and F14 |
 
 Not taken: texlab and tree-sitter-latex (a small own scanner avoids a C grammar build on Windows;
 revisit only if the fixtures show it failing); latexml-oxide (needs a TeX installation); Docling and

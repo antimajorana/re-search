@@ -8,8 +8,12 @@ durations are planning estimates.
 **Revised 2026-11-25 after the owner's scope decisions.** Section 0.1 lists what was added, cut and
 deferred. Where an older passage of this document or of the three mode documents disagrees with
 section 0.1, section 0.1 wins. Kandinsky (`github.com/antimajorana/kandinsky`, the owner's own
-notes app, AGPL-3.0) was read at commit `353368b` for the library design in 2.11; none of its code
-was run.
+notes app, AGPL-3.0-or-later) was read at commit `353368b` for the library design in 2.11; none of
+its code was run.
+
+**Licence, decided the same day:** re:Search is AGPL-3.0. `main` already carries it (PR 5, merged
+on 2026-11-25: `Cargo.toml` says `AGPL-3.0-only`); the work branches cut before that merge pick it
+up from `main`. So Kandinsky's code may be ported directly where it helps (2.11, "Porting").
 
 Package ids: `V..` Investigate, `X..` Explore, `S..` Solve (as in the three documents), `F..` shared
 foundation (new in this document). `F0` to `F12` are the original thirteen; `F13` to `F16` were
@@ -362,12 +366,36 @@ files itself.
 identifier (Crossref by title) is a request the app composes, so it needs the approval card (2.4),
 states how many lookups and to which host, passes the gate of F3, and is off by default.
 
-**Licence.** Kandinsky is AGPL-3.0 and the owner's own work; this repository's `Cargo.toml` says
-GPL-3.0-only, and the mode documents assume a move to AGPL-3.0. Porting the owner's own Kandinsky
-code was allowed for the maths rendering (investigation-2026-11 README). Whether that also covers the
-papers engine (`firstpage.rs`, `pdf_meta.rs`, `inbox_dedupe.rs`, `scan_roots.rs`, `zotero_import.rs`,
-`external.rs`) is question 2 of 8.3. Until it is answered the adapters are re-coded from behaviour.
-Third-party code inside Kandinsky is not copied either way.
+**Porting (decided 2026-11-25: re:Search is AGPL-3.0, so Kandinsky's code is ported directly where
+useful).** Kandinsky is AGPL-3.0-or-later; re:Search is AGPL-3.0-only on `main` (PR 5). Code under
+"version 3 or later" may be used under version 3, so the direction Kandinsky to re:Search is
+allowed. The reverse is not automatic: code first written here is "3.0 only" unless the owner
+licenses it otherwise.
+
+| Kandinsky file (at `353368b`) | Lines | Port into | Note |
+|---|---|---|---|
+| `plugins/beta/catalog-papers/engine/src/firstpage.rs` | 257 | `pdf_firstpage.rs` (F14a) | Title, authors, year from the first page by shape. Nearly self-contained |
+| `.../pdf_meta.rs` | 441 | `pdf_firstpage.rs` or beside it (F14a) | DOI, arXiv id, ISBN in the first pages. No Kandinsky helper used |
+| `.../entry.rs` | 393 | `source_kandinsky.rs` (F13a) | Reads a reference's note and the older `info.yaml`. Only the reading half is ported |
+| `.../external.rs` and `crates/kandinsky-core/src/external_roots.rs` | 499, 410 | `source_kandinsky.rs`, `source_folder.rs` (F13a) | Resolving a PDF inside a listed folder with no way out of it. The annotation sidecar parts are left out |
+| `.../scan_roots.rs` | 1337 | `source_folder.rs`, `source_sync.rs` (F13a) | The folder scan, moved-file detection by hash, the dry-run report. Split on the way in |
+| `.../inbox_dedupe.rs` | 912 | `source_dedupe.rs` (F13a) | The five duplicate signals. The inbox and the merge that rewrites notes are left out |
+| `.../zotero_import.rs` | 982 | `source_zotero.rs` (F13b) | Read-only access to `zotero.sqlite`, citation keys, attachment paths. The parts that write notes and annotations are left out |
+| `crates/kandinsky-core/src/pdf_text.rs` | - | `pdf_pages.rs` (F14a) | Per-file text cache with page breaks, if F14a chooses `pdf_oxide` |
+| `crates/kandinsky-core/src/pdf_columns.rs` | - | `pdf_pages.rs` (F14a) | Column geometry, only if F14a finds that it is needed |
+
+Rules for a port:
+
+1. Every ported file starts with the header already used for the maths rendering, with the commit: `// Ported in part from Kandinsky (github.com/antimajorana/kandinsky, 353368b), the same author's project.`
+2. Kandinsky's `docs/THIRD-PARTY.md` says Kandinsky is based on Atlas by Alneb. Whether any file in the table carries Atlas code was not checked. Each port checks its file's history first and keeps any notice it finds; a file with another author's notice is ported with that notice or re-coded.
+3. Not copied: vendored libraries, anything under `plugins/obsidian/`, the plugin SDK glue. The engine uses two Kandinsky helper crates (`kandinsky-text` for note properties and safe paths, `kandinsky-plugin` for its host calls); the port replaces those calls with re:Search's own sandbox helpers and a small front-matter reader. Kandinsky is not added as a dependency.
+4. Three of the files are over this repository's 600-line limit. They are split on the way in; the limit is not waived.
+5. New dependencies a port brings are named in its package and need the owner's yes as any other: `pdf_oxide` (only if F14a picks it), `serde_yaml` or another YAML reader for note properties. `rusqlite`, `tar`, `flate2` and `sha2` are already in the workspace.
+6. What is ported is the reading side. Everything in Kandinsky that writes into the library stays there (the table of "What Kandinsky does" above).
+7. A port keeps Kandinsky's tests for the part it takes.
+
+Effect on size: F13a and F13b are mostly adaptation, not new design, which makes the one-week
+estimate for F13a more believable. It is still an estimate.
 
 **Rules and tests.** Fixtures: a small self-made vault, a folder and a `.bib` file with self-made
 PDFs. Syncing twice changes nothing; a moved file keeps its item; an edited note updates the
@@ -393,7 +421,7 @@ ingestion; one logged run took 34 to 138 s per paper.
 - Each page gets a basis: `text_layer`, `scan_text_layer` (a full-page image with text behind it, which is how publishers ship most scanned old papers) or `none`. When the detection is unsure the page counts as a scan. The detection rule is fixed on the fixtures.
 - Matching a quote against PDF text ignores what PDF extraction adds: ligatures, soft hyphens, a hyphen at a line end. The stored text is never changed; only the comparison is normalised (`pdf_match.rs`), and the chip shows the text as stored.
 - Two-column pages: if the chosen extractor mixes the columns, the page is split by column geometry before the text is written (Kandinsky's `pdf_columns.rs` shows the method on character boxes).
-- First-page metadata by shape: title, authors, year, DOI, arXiv id, ISBN.
+- First-page metadata by shape: title, authors, year, DOI, arXiv id, ISBN. Ported from Kandinsky's `firstpage.rs` and `pdf_meta.rs` (2.11, "Porting").
 - The 16 MiB limit is too small for many scans. It is raised for files the user supplies, to a value set from measurement. A file over the page limit is opened by a page range the user picks.
 - Extraction is a background job with page progress, and its result is kept once per file in the library (`paper_text`), not once per session.
 
@@ -794,6 +822,7 @@ Set I is frozen as recorded responses so "open as far as known" cannot change un
 | Cadabra2 and FORM | Defer | 0.1; solve.md S22 |
 | V14, Investigate's own prior-work check | Defer; "Search wider in Explore" is the path | 0.1, 4.2; investigate.md |
 | Version tracking (set P2) | Defer | 0.1; investigate.md V10 |
+| Licence | re:Search is AGPL-3.0. Already on `main` (PR 5). Kandinsky's code may be ported directly where useful | 2.11 "Porting" |
 
 ### 8.2 Still open, from the first version
 
@@ -817,7 +846,7 @@ Set I is frozen as recorded responses so "open as far as known" cannot change un
 | # | Question | Recommended |
 |---|---|---|
 | 1 | The revised two-month order puts PDF and the library first and moves Explore's first screen about two weeks later. Accept? | Yes. Both were asked for, and Explore reads better once paywalled papers from the library can be read. |
-| 2 | May code from Kandinsky's papers engine be ported (the owner's own work, AGPL-3.0), as was allowed for the maths rendering? And which licence does this repository carry: `Cargo.toml` says GPL-3.0-only, the mode documents assume AGPL-3.0. | Allow porting with the same attribution header; settle the licence line first. Until then the adapters are re-coded from behaviour. |
+| 2 | Porting Kandinsky's code and the licence of this repository | Decided on 2026-11-25, see 8.1: AGPL-3.0, port directly. Left open inside it: Kandinsky is "3.0 or later" and this repository "3.0 only", so code flows from Kandinsky to here but not back unless the owner says so. Should this repository say "or later" too? Recommended: yes, if code written here should ever go back into Kandinsky. |
 | 3 | May a "judged" status in Explore and a Cited step in Solve rest on a quote matched in OCR text? | Yes, always tagged "OCR", with the page image one click away. Formulas from OCR are never drawn as mathematics. |
 | 4 | Own OCR (F14b): Tesseract in a local helper, language models downloaded once from Settings, and a page renderer added as a dependency? | Yes, but decide after F14a has measured how many pages of set P6 really have no text. If publishers' text layers cover the owner's old papers, F14b can wait. |
 | 5 | Sync direction | The app only reads the user's libraries. Sending a paper back goes through Kandinsky's own entry point or a BibTeX file the user picks; the app never writes vault files. |
@@ -855,6 +884,8 @@ documents were edited again; each carries a "Scope revision" line under its titl
 - Passages of the three documents that describe the review of the earlier proposals (their
   sections 0 and appendix) still mention Lean, Cadabra2 and FORM as history. They were not rewritten.
 - Settled by the revision: the `independence` function is built with S14, its only user for now.
+- Licence: the passages that said "GPL-3.0 only, AGPL assumed" were replaced after the owner's
+  decision; `main` was merged into this branch so that `Cargo.toml` and `LICENSE` here say AGPL-3.0.
 - For the briefs already in work: the S2 brief was changed (no Lean-checked tier; the word
   "verified" in no table of on-screen words). The F3 brief needs no change (2.4). The V1 brief still
   lists a two-version fixture; it is harmless and unused until version tracking returns.

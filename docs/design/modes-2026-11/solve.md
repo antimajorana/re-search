@@ -683,7 +683,7 @@ Nothing in the free column calls a paid service. The number of model calls is sh
 | Lean 4 REPL | Apache-2.0 | not used (Lean cut) | - |
 | Jupyter nbformat 4.5 | BSD-3-Clause (schema) | file format only | notebook written directly as JSON |
 | Cadabra2, FORM | GPL-3.0 | deferred | optional engines, separate programs, only if native Windows builds run in the sandbox |
-| Kandinsky (the owner's notes app) | AGPL-3.0 | approach; code if the owner allows (overview 8.3, question 2) | the user's own paper library as a source of cited papers, citation keys kept for the write-up, PDF text with pages (overview 2.11, 2.12) |
+| Kandinsky (the owner's notes app) | AGPL-3.0 | approach and ported code (decided; overview 2.11, "Porting") | the user's own paper library as a source of cited papers, citation keys kept for the write-up, PDF text with pages (overview 2.11, 2.12) |
 | re:Search Investigation mode | own code | pattern | session marker event, frozen definitions with golden tests, deterministic content before any model call |
 
 ---

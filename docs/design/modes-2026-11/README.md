@@ -38,6 +38,9 @@ numerics ahead of Lean; cut Lean and physlib; defer Cadabra2, FORM, V14 and vers
 revision" block under their titles. For briefs in work: S2 has no Lean-checked tier (brief updated);
 F3 and V1 are unaffected.
 
+Licence: re:Search is AGPL-3.0 (owner decision of 2026-11-25; on `main` since PR 5). Kandinsky's
+code may be ported directly; the rules and the list of files are in overview 2.11, "Porting".
+
 ## Owner decisions
 
 The scope decisions are recorded in section 8.1 of the overview. Sections 8.2 (the first questions)

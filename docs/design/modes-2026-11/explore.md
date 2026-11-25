@@ -804,8 +804,8 @@ The app says plainly which service was "not configured"; this never blocks a ver
 | Gerby / Stacks Project | MIT | idea | Permanent node tags independent of numbering |
 | Solver agent / re-Solve | AGPL-3.0 | lesson | Rules checked per call and returned as errors; prompt-only reminders are ignored |
 | TheoremSearch | no licence | optional public service only, never its code | Off by default |
-| Kandinsky (the owner's notes app) | AGPL-3.0, own | approach; code if the owner allows (overview 8.3, question 2) | The user's papers as files with a derived `refs.bib`; PDFs used in place; scan with a dry-run report; moved files recognised by hash; duplicates by DOI, arXiv id, file hash, ISBN and fuzzy title; citation keys kept; PDF text cached per file |
-| re:Search itself | GPL-3.0 -> AGPL-3.0 | code | Ledger, Router, policy, approver, ingest, quote verification, outline, passage search, mode-marker and legacy-defs patterns |
+| Kandinsky (the owner's notes app) | AGPL-3.0, own | approach and ported code (decided; overview 2.11, "Porting") | The user's papers as files with a derived `refs.bib`; PDFs used in place; scan with a dry-run report; moved files recognised by hash; duplicates by DOI, arXiv id, file hash, ISBN and fuzzy title; citation keys kept; PDF text cached per file |
+| re:Search itself | AGPL-3.0 (on `main` since PR 5) | code | Ledger, Router, policy, approver, ingest, quote verification, outline, passage search, mode-marker and legacy-defs patterns |
 
 ---
 
