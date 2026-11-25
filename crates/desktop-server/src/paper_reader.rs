@@ -169,116 +169,146 @@ pub fn plan_slices(
     scope_lines: Option<(usize, usize)>,
     n_max: usize,
 ) -> Vec<PaperReaderSlice> {
+    let ranges: Vec<(usize, usize)> = scope_lines.into_iter().collect();
+    plan_slices_for_ranges(text, page_lines, selected_pages, &ranges, n_max)
+}
+
+pub fn plan_slices_for_ranges(
+    text: &str,
+    page_lines: &[(usize, usize, usize)],
+    selected_pages: Option<(usize, usize)>,
+    scope_ranges: &[(usize, usize)],
+    n_max: usize,
+) -> Vec<PaperReaderSlice> {
     let lines: Vec<&str> = text.split('\n').collect();
-    let total_lines = if text.ends_with('\n') {
-        lines.len().saturating_sub(1).max(1)
-    } else {
-        lines.len().max(1)
-    };
+    let total_lines = if text.ends_with('\n') { lines.len().saturating_sub(1).max(1) } else { lines.len().max(1) };
     let n_max = n_max.clamp(MIN_MAX_PARALLEL, MAX_MAX_PARALLEL);
 
-    let selected_bounds: Option<(usize, usize)> = match selected_pages {
+    let selected_bounds = match selected_pages {
         Some((p_lo, p_hi)) if !page_lines.is_empty() => {
-            let bounds = page_lines
+            let Some((s_lo, s_hi)) = page_lines
                 .iter()
                 .copied()
                 .filter(|&(p, _, _)| (p_lo..=p_hi).contains(&p))
                 .fold(None::<(usize, usize)>, |acc, (_, a, b)| {
-                    Some(match acc {
-                        Some((lo, hi)) => (lo.min(a), hi.max(b)),
-                        None => (a, b),
-                    })
-                });
-            let Some((s_lo, s_hi)) = bounds else {
+                    Some(acc.map_or((a, b), |(lo, hi)| (lo.min(a), hi.max(b))))
+                })
+            else {
                 return Vec::new();
             };
-            let lo = s_lo.clamp(1, total_lines);
-            let hi = s_hi.min(total_lines);
-            if lo > hi {
-                return Vec::new();
-            }
+            let (lo, hi) = (s_lo.clamp(1, total_lines), s_hi.min(total_lines));
+            if lo > hi { return Vec::new(); }
             Some((lo, hi))
         }
         _ => None,
     };
 
-    let active_pages: Vec<(usize, usize, usize)> = if scope_lines.is_none() && !page_lines.is_empty() {
-        page_lines
+    if scope_ranges.is_empty() && !page_lines.is_empty() {
+        let active_pages: Vec<(usize, usize, usize)> = page_lines
             .iter()
             .copied()
             .filter(|&(p, _, _)| selected_pages.is_none_or(|(a, b)| (a..=b).contains(&p)))
-            .collect()
-    } else {
-        Vec::new()
-    };
+            .collect();
+        if !active_pages.is_empty() {
+            let (rs, re) = (active_pages.first().unwrap().1, active_pages.last().unwrap().2.min(total_lines));
+            let n = range_char_count(&lines, rs, re).div_ceil(CHARS_PER_SLICE).clamp(1, n_max);
+            let chunks = n.min(active_pages.len());
+            return (0..chunks)
+                .map(|i| {
+                    let p0 = i * active_pages.len() / chunks;
+                    let p1 = ((i + 1) * active_pages.len() / chunks).saturating_sub(1).max(p0);
+                    let (first, last) = (active_pages[p0], active_pages[p1]);
+                    PaperReaderSlice {
+                        start_line: first.1,
+                        end_line: last.2.min(total_lines),
+                        goal: format!("Read PDF pages {}–{}", first.0, last.0),
+                    }
+                })
+                .collect();
+        }
+    }
 
-    let (range_start, range_end) = if let Some((a, b)) = scope_lines {
-        let mut lo = a.clamp(1, total_lines);
-        let mut hi = b.clamp(lo, total_lines);
-        if let Some((s_lo, s_hi)) = selected_bounds {
-            lo = lo.max(s_lo);
-            hi = hi.min(s_hi);
-            if lo > hi {
-                return Vec::new();
+    let merged: Vec<(usize, usize)> = if scope_ranges.is_empty() {
+        vec![(1, total_lines)]
+    } else {
+        let mut clipped: Vec<(usize, usize)> = scope_ranges
+            .iter()
+            .filter_map(|&(a, b)| {
+                let mut lo = a.clamp(1, total_lines);
+                let mut hi = b.clamp(lo, total_lines);
+                if let Some((s_lo, s_hi)) = selected_bounds {
+                    lo = lo.max(s_lo);
+                    hi = hi.min(s_hi);
+                }
+                (lo <= hi).then_some((lo, hi))
+            })
+            .collect();
+        if clipped.is_empty() { return Vec::new(); }
+        clipped.sort_unstable();
+        let mut out: Vec<(usize, usize)> = Vec::with_capacity(clipped.len());
+        for (lo, hi) in clipped {
+            if let Some(last) = out.last_mut().filter(|last| lo <= last.1.saturating_add(1)) {
+                last.1 = last.1.max(hi);
+            } else {
+                out.push((lo, hi));
             }
         }
-        (lo, hi)
-    } else if !active_pages.is_empty() {
-        (active_pages.first().unwrap().1, active_pages.last().unwrap().2.min(total_lines))
-    } else {
-        (1, total_lines)
+        out
     };
 
-    let active_chars: usize = lines
-        .get(range_start.saturating_sub(1)..range_end.min(lines.len()))
+    let stats: Vec<(usize, usize)> = merged
+        .iter()
+        .map(|&(lo, hi)| {
+            let chars = range_char_count(&lines, lo, hi);
+            (chars, chars.div_ceil(CHARS_PER_SLICE).max(1))
+        })
+        .collect();
+    let mut alloc = vec![1usize; merged.len()];
+    let mut total_chunks = alloc.len();
+    while total_chunks < n_max {
+        let Some(idx) = (0..merged.len())
+            .filter(|&i| alloc[i] < stats[i].1)
+            .max_by_key(|&i| stats[i].0 / alloc[i])
+        else {
+            break;
+        };
+        alloc[idx] += 1;
+        total_chunks += 1;
+    }
+
+    let mut out = Vec::with_capacity(total_chunks);
+    for (&(lo, hi), chunks) in merged.iter().zip(alloc) {
+        split_line_range(&lines, lo, hi, chunks, &mut out);
+    }
+    out
+}
+
+fn range_char_count(lines: &[&str], start_line: usize, end_line: usize) -> usize {
+    lines
+        .get(start_line.saturating_sub(1)..end_line.min(lines.len()))
         .unwrap_or(&[])
         .iter()
         .map(|l| l.chars().count() + 1)
-        .sum();
-    let n = active_chars.div_ceil(CHARS_PER_SLICE).clamp(1, n_max);
+        .sum()
+}
 
-    if !active_pages.is_empty() {
-        let chunks = n.min(active_pages.len());
-        let mut out = Vec::with_capacity(chunks);
-        for i in 0..chunks {
-            let p0 = i * active_pages.len() / chunks;
-            let p1 = ((i + 1) * active_pages.len() / chunks).saturating_sub(1).max(p0);
-            let first = active_pages[p0];
-            let last = active_pages[p1];
-            out.push(PaperReaderSlice {
-                start_line: first.1,
-                end_line: last.2.min(total_lines),
-                goal: format!("Read PDF pages {}–{}", first.0, last.0),
-            });
-        }
-        return out;
-    }
-
+fn split_line_range(lines: &[&str], range_start: usize, range_end: usize, n: usize, out: &mut Vec<PaperReaderSlice>) {
     let span = range_end.saturating_sub(range_start) + 1;
     let chunks = n.min(span);
     let mut splits = Vec::with_capacity(chunks + 1);
     splits.push(range_start);
     for i in 1..chunks {
         let target = range_start + i * span / chunks;
-        let snapped = snap_to_blank_line(&lines, target, range_start + 1, range_end.saturating_sub(1));
-        let prev = *splits.last().unwrap();
-        splits.push(snapped.max(prev + 1).min(range_end));
+        let snapped = snap_to_blank_line(lines, target, range_start + 1, range_end.saturating_sub(1));
+        splits.push(snapped.max(*splits.last().unwrap() + 1).min(range_end));
     }
     splits.push(range_end + 1);
-
-    let mut out = Vec::with_capacity(chunks);
     for w in splits.windows(2) {
-        let a = w[0];
-        let b = w[1].saturating_sub(1);
+        let (a, b) = (w[0], w[1].saturating_sub(1));
         if a <= b {
-            out.push(PaperReaderSlice {
-                start_line: a,
-                end_line: b,
-                goal: format!("Read lines {a}–{b}"),
-            });
+            out.push(PaperReaderSlice { start_line: a, end_line: b, goal: format!("Read lines {a}–{b}") });
         }
     }
-    out
 }
 
 fn snap_to_blank_line(lines: &[&str], target: usize, min_ln: usize, max_ln: usize) -> usize {
@@ -369,6 +399,19 @@ fn active_marker(events: &[Event]) -> Option<(&Event, &Event)> {
     Some((paper, marker))
 }
 
+fn reader_provider_configured(state: &DesktopState, provider: ProviderKind) -> bool {
+    if provider == ProviderKind::ChatGpt {
+        return state.chatgpt.ready();
+    }
+    let store = agent::ProviderKeyStore::load_from_data_dir(&state.cfg.data_dir).unwrap_or_default();
+    let has_key = crate::connections::own_key(state, provider, &store).is_ok_and(|k| k.is_some());
+    if provider == ProviderKind::Ollama {
+        has_key || state.catalog.has_ok_entry(provider.cli_name())
+    } else {
+        has_key
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_for_turn(
     state: &Arc<DesktopState>,
@@ -394,6 +437,18 @@ pub fn prepare_for_turn(
     else {
         return Ok(None);
     };
+    let reader_provider = ProviderKind::parse(&built.provider).unwrap_or(primary_provider);
+    let explicit_enabled = req
+        .get("paper_readers_enabled")
+        .and_then(Value::as_bool)
+        .or(ui.paper_readers_enabled);
+    if explicit_enabled.is_none()
+        && !is_section_scoped(req, Some(&marker.payload))
+        && (built.routing_reason == "isolated_primary_model"
+            || !reader_provider_configured(state, reader_provider))
+    {
+        return Ok(None);
+    }
     let source_id = paper.payload["source_id"]
         .as_str()
         .ok_or("Investigation paper missing source_id")?
@@ -407,10 +462,7 @@ pub fn prepare_for_turn(
         .as_str()
         .ok_or("Primary source missing primary_path")?
         .to_string();
-    let selected_pages = match (
-        paper.payload["page_start"].as_u64(),
-        paper.payload["page_end"].as_u64(),
-    ) {
+    let selected_pages = match (paper.payload["page_start"].as_u64(), paper.payload["page_end"].as_u64()) {
         (Some(a), Some(b)) => Some((a as usize, b as usize)),
         _ => None,
     };
@@ -428,32 +480,28 @@ pub fn prepare_for_turn(
     } else {
         Vec::new()
     };
-    let parse_scope_lines = |s: &Value| -> Option<(usize, usize)> {
-        if let (Some(a), Some(b)) = (
-            s.get("start_line").and_then(Value::as_u64),
-            s.get("end_line").and_then(Value::as_u64),
-        ) {
-            let (a, b) = (a as usize, b as usize);
-            return (a >= 1 && b >= a).then_some((a, b));
-        }
-        let ranges = s.get("ranges").and_then(Value::as_array)?;
-        let mut min_s = usize::MAX;
-        let mut max_e = 0usize;
-        for r in ranges {
-            let arr = r.as_array()?;
-            let a = arr.first()?.as_u64()? as usize;
-            let b = arr.get(1)?.as_u64()? as usize;
-            if a >= 1 && b >= a {
-                min_s = min_s.min(a);
-                max_e = max_e.max(b);
+    let parse_scope_ranges = |s: &Value| -> Option<Vec<(usize, usize)>> {
+        if let Some(ranges) = s.get("ranges").and_then(Value::as_array) {
+            let mut out = Vec::with_capacity(ranges.len());
+            for r in ranges {
+                let arr = r.as_array()?;
+                let (a, b) = (arr.first()?.as_u64()? as usize, arr.get(1)?.as_u64()? as usize);
+                if a >= 1 && b >= a {
+                    out.push((a, b));
+                }
+            }
+            if !out.is_empty() {
+                return Some(out);
             }
         }
-        (min_s != usize::MAX && max_e >= min_s).then_some((min_s, max_e))
+        let a = s.get("start_line").and_then(Value::as_u64)? as usize;
+        let b = s.get("end_line").and_then(Value::as_u64)? as usize;
+        (a >= 1 && b >= a).then(|| vec![(a, b)])
     };
-    let scope_lines = req
+    let scope_ranges = req
         .get("_paper_scope")
-        .and_then(parse_scope_lines)
-        .or_else(|| marker.payload.get("scope").and_then(parse_scope_lines))
+        .and_then(parse_scope_ranges)
+        .or_else(|| marker.payload.get("scope").and_then(parse_scope_ranges))
         .or_else(|| {
             if marker.kind != "investigation.conventions_resumed"
                 || marker.payload["scope"].as_str() != Some("section")
@@ -464,24 +512,13 @@ pub fn prepare_for_turn(
                 .payload
                 .get("for_request_seq")
                 .and_then(Value::as_u64)
-                .and_then(|seq| {
-                    events
-                        .iter()
-                        .find(|e| e.seq == seq && e.kind == "investigation.mapping_requested")
-                })
-                .or_else(|| {
-                    events
-                        .iter()
-                        .rev()
-                        .find(|e| e.kind == "investigation.mapping_requested")
-                })?;
-            map_req.payload.get("scope").and_then(parse_scope_lines)
-        });
+                .and_then(|seq| events.iter().find(|e| e.seq == seq && e.kind == "investigation.mapping_requested"))
+                .or_else(|| events.iter().rev().find(|e| e.kind == "investigation.mapping_requested"))?;
+            map_req.payload.get("scope").and_then(parse_scope_ranges)
+        })
+        .unwrap_or_default();
 
-    let Some(expected_sha) = receipt.payload["files_sha256"]
-        .get(&primary_path)
-        .and_then(Value::as_str)
-    else {
+    let Some(expected_sha) = receipt.payload["files_sha256"].get(&primary_path).and_then(Value::as_str) else {
         return Ok(None);
     };
     let resolved = env
@@ -503,8 +540,9 @@ pub fn prepare_for_turn(
     }
     let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
     let total_lines = text.lines().count().max(1);
-    let max_parallel = effective_max_parallel(ui, req, primary_provider);
-    let default_slices = plan_slices(&text, &page_lines, selected_pages, scope_lines, max_parallel);
+    let max_parallel = effective_max_parallel(ui, req, reader_provider);
+    let default_slices =
+        plan_slices_for_ranges(&text, &page_lines, selected_pages, &scope_ranges, max_parallel);
     if default_slices.is_empty() {
         return Ok(None);
     }
