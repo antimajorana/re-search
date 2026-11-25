@@ -11,6 +11,8 @@ let builtinList = [];
 let customList = [];
 let providerGroups = [];
 let agentModels = {};
+let paperReadersEnabled = null;
+let paperReaderMaxParallel = null;
 let activeSubagentId = null;
 let callbacks = {};
 
@@ -57,6 +59,12 @@ export async function loadSubagents() {
     agentModels = (setRes.value.agent_models && typeof setRes.value.agent_models === 'object')
       ? setRes.value.agent_models
       : {};
+    paperReadersEnabled = typeof setRes.value.paper_readers_enabled === 'boolean'
+      ? setRes.value.paper_readers_enabled
+      : null;
+    paperReaderMaxParallel = Number.isInteger(setRes.value.paper_reader_max_parallel)
+      ? setRes.value.paper_reader_max_parallel
+      : null;
   }
   if (modRes.status === 'fulfilled' && modRes.value) {
     providerGroups = Array.isArray(modRes.value.providers) ? modRes.value.providers : [];
@@ -342,7 +350,9 @@ function renderSubagentsPanel() {
         const allowCli = b.role_key === 'orchestrator';
         const defaultLabel = allowCli
           ? 'Default (Composer Choice)'
-          : (WORKER_ROLE_KEYS.has(b.role_key) ? 'Default (Auto Smaller Model)' : 'Default (Follow Orchestrator)');
+          : (b.role_key === 'paper_reader'
+            ? 'Default (Primary Model)'
+            : (WORKER_ROLE_KEYS.has(b.role_key) ? 'Default (Auto Smaller Model)' : 'Default (Follow Orchestrator)'));
         let lastSaved = agentModels[b.role_key] && agentModels[b.role_key].provider && agentModels[b.role_key].model
           ? agentModels[b.role_key]
           : null;
@@ -380,6 +390,70 @@ function renderSubagentsPanel() {
         });
         row.append(label, select);
         card.append(row);
+        if (b.role_key === 'paper_reader') {
+          const optRow = document.createElement('div');
+          optRow.className = 'form-row';
+          optRow.style.marginTop = '6px';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.id = 'paper-readers-enabled';
+          cb.checked = paperReadersEnabled === true;
+          const cbLabel = document.createElement('label');
+          cbLabel.htmlFor = cb.id;
+          cbLabel.style.cssText = 'font-size:11px;color:var(--ink-muted);display:flex;gap:6px;align-items:center;';
+          cbLabel.append(cb, document.createTextNode('Always enable parallel paper readers (opt-in)'));
+          cb.addEventListener('change', async () => {
+            cb.disabled = true;
+            const prev = paperReadersEnabled;
+            const next = cb.checked ? true : null;
+            try {
+              await api.updateProviderSettings({ paper_readers_enabled: next });
+              paperReadersEnabled = next;
+              notify(next ? 'Parallel paper readers enabled for Investigation turns.' : 'Parallel paper readers set to automatic (smaller model or section-scoped).');
+            } catch (err) {
+              cb.checked = prev === true;
+              notify(`Could not update paper reader setting: ${err.message}`);
+            } finally {
+              cb.disabled = false;
+            }
+          });
+          optRow.append(cbLabel);
+
+          const parRow = document.createElement('div');
+          parRow.className = 'form-row';
+          parRow.style.marginTop = '4px';
+          const parLabel = document.createElement('label');
+          parLabel.htmlFor = 'paper-reader-max-parallel';
+          parLabel.style.cssText = 'font-size:11px;color:var(--ink-muted);';
+          parLabel.textContent = 'Max parallel readers';
+          const parSel = document.createElement('select');
+          parSel.id = 'paper-reader-max-parallel';
+          parSel.className = 'compact-select';
+          parSel.append(new Option('Default (2 ChatGPT / 4 API)', ''));
+          for (let n = 1; n <= 8; n++) {
+            const opt = new Option(String(n), String(n));
+            if (paperReaderMaxParallel === n) opt.selected = true;
+            parSel.append(opt);
+          }
+          if (!paperReaderMaxParallel) parSel.value = '';
+          parSel.addEventListener('change', async () => {
+            parSel.disabled = true;
+            const prev = paperReaderMaxParallel;
+            const next = parSel.value ? Number(parSel.value) : null;
+            try {
+              await api.updateProviderSettings({ paper_reader_max_parallel: next });
+              paperReaderMaxParallel = next;
+              notify(next ? `Max parallel paper readers set to ${next}.` : 'Max parallel paper readers reset to default.');
+            } catch (err) {
+              parSel.value = prev ? String(prev) : '';
+              notify(`Could not update reader parallelism: ${err.message}`);
+            } finally {
+              parSel.disabled = false;
+            }
+          });
+          parRow.append(parLabel, parSel);
+          card.append(optRow, parRow);
+        }
       }
       builtinBox.append(card);
     }

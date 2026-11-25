@@ -456,6 +456,7 @@ fn record_document(
         .filter(|e| e.kind == "source.ingested")
         .filter_map(|e| Some((e.payload["source_id"].as_str()?, e)))
         .collect();
+    reject_app_only_fields(args)?;
     let primary = receipts
         .get(source_id)
         .copied()
@@ -469,6 +470,8 @@ fn record_document(
         receipts,
         files: BTreeMap::new(),
         bytes_left: MAX_TOTAL_BYTES,
+        history,
+        active_marker_seq: Some(marker.seq),
     };
     let mut report = AnchorReport::default();
     let (mut payload, event_kind, previous, seq_field) = match document {

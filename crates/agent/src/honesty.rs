@@ -273,7 +273,7 @@ pub fn infer_campaign_phase(events: &[Event]) -> CampaignPhase {
             "explore.start" | "explore.branch" | "explore.end" => return CampaignPhase::Explore,
             "delegate.start" => match ev.payload.get("role").and_then(Value::as_str) {
                 Some("compute_worker" | "lean_worker") => return CampaignPhase::Compute,
-                Some("literature_worker") => return CampaignPhase::Ingest,
+                Some("literature_worker" | "paper_reader") => return CampaignPhase::Ingest,
                 _ => {}
             },
             "tool.request" => match ev.payload.get("tool").and_then(Value::as_str) {
@@ -432,6 +432,7 @@ mod tests {
         assert_eq!(infer_campaign_phase(&[ev(1, "source.ingested", json!({}))]), CampaignPhase::Ingest);
         assert_eq!(infer_campaign_phase(&[ev(1, "tool.request", json!({"tool": "arxiv_search"}))]), CampaignPhase::Ingest);
         assert_eq!(infer_campaign_phase(&[ev(1, "delegate.start", json!({"role": "literature_worker"}))]), CampaignPhase::Ingest);
+        assert_eq!(infer_campaign_phase(&[ev(1, "delegate.start", json!({"role": "paper_reader"}))]), CampaignPhase::Ingest);
         assert_eq!(infer_campaign_phase(&[ev(1, "delegate.start", json!({"role": "lean_worker"}))]), CampaignPhase::Compute);
         assert_eq!(infer_campaign_phase(&[ev(1, "tool.request", json!({"tool": "sympy_eval"}))]), CampaignPhase::Compute);
         assert_eq!(infer_campaign_phase(&[ev(1, "explore.start", json!({}))]), CampaignPhase::Explore);

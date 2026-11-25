@@ -21,6 +21,7 @@ pub const AGENT_ROLE_KEYS: &[&str] = &[
     "literature_worker",
     "lean_worker",
     "explorer_worker",
+    "paper_reader",
     "step_verifier",
     "full_verifier",
     "strategist",
@@ -327,6 +328,33 @@ pub fn resolve_worker_transport(
         }
     }
     resolve_smaller_or_primary(state, primary_provider, primary_model)
+}
+
+/// Resolves the `paper_reader` transport per Decision 4: uses the primary provider/model
+/// (`isolated_primary_model`) unless explicitly assigned in settings or request overrides.
+pub fn resolve_paper_reader_transport(
+    state: &DesktopState,
+    ui: &UiSettings,
+    req: &Value,
+    primary_provider: ProviderKind,
+    primary_model: &str,
+) -> Option<BuiltWorkerTransport> {
+    if let Some((p, m)) = req.get("paper_reader").and_then(parse_role_obj) {
+        if let Some(built) = build_worker_entry(state, p, m, "request_override") {
+            return Some(built);
+        }
+    }
+    if let Some((p, m)) = role_in_core_model(ui, "paper_reader") {
+        if let Some(built) = build_worker_entry(state, p, m, "assigned_in_settings") {
+            return Some(built);
+        }
+    }
+    build_worker_entry(
+        state,
+        primary_provider,
+        primary_model.to_string(),
+        "isolated_primary_model",
+    )
 }
 
 pub fn resolve_custom_subagent_transport(

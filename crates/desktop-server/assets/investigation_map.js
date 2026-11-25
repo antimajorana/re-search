@@ -198,6 +198,9 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
         const cited = a === b ? String(a) : a + '–' + b;
         box.append(element('small', 'investigation-anchor-note', 'lines corrected by the app (cited ' + cited + ')'));
       }
+      if (anchor.excerpt_basis === 'evidence') {
+        box.append(element('small', 'investigation-anchor-basis', 'located by reader'));
+      }
       box.append(open);
       const original = openPdf?.(anchor, true);
       if (original) box.append(button('Open original PDF page', () => openPdf(anchor, false)));
