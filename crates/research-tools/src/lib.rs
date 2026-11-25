@@ -30,6 +30,7 @@ pub mod run_budget;
 pub mod sandbox;
 pub mod sanity;
 pub mod session_activity;
+pub mod skeleton;
 pub mod tex_audit;
 mod tex_audit_sources;
 pub mod tex_bundle;
