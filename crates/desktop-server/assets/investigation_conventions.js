@@ -126,8 +126,9 @@ export function createConventionCatalog(host, renderAnchors, find) {
     signature = next;
     catalog = inv.conventions || null;
     mapSeq = inv.map_seq;
-    const sectionDone = Boolean(catalog?.done && catalog.coverage_scope === 'section' && inv.conventions_is_current !== false);
-    resume.hidden = running || mapSeq == null || (catalog?.done && !sectionDone && inv.conventions_is_current !== false);
+    const pendingCount = inv.conventions_is_current !== false && Array.isArray(catalog?.pending_items) ? catalog.pending_items.length : 0;
+    const sectionDone = Boolean(catalog?.done && !pendingCount && catalog.coverage_scope === 'section' && inv.conventions_is_current !== false);
+    resume.hidden = running || mapSeq == null || (catalog?.done && !pendingCount && !sectionDone && inv.conventions_is_current !== false);
     resume.disabled = pending;
     resume.textContent = sectionDone ? 'Catalog all conventions'
       : (catalog || inv.conventions_requested ? 'Continue conventions review' : 'Find paper conventions');
@@ -139,10 +140,9 @@ export function createConventionCatalog(host, renderAnchors, find) {
     title.textContent = 'Conventions · ' + conventionStatus(catalog, inv.conventions_requested, running, inv.page_start, inv.conventions_is_current !== false);
     notes.replaceChildren();
     if (catalog && inv.conventions_is_current === false) notes.append(textElement('p', 'Saved catalog from an earlier reading of this paper.'));
-    if (inv.conventions_error && !running && (!catalog?.done || inv.conventions_is_current === false)) {
+    if (inv.conventions_error && !running && (!catalog?.done || pendingCount > 0 || inv.conventions_is_current === false)) {
       notes.append(textElement('p', 'Conventions review stopped. ' + inv.conventions_error));
     }
-    const pendingCount = inv.conventions_is_current !== false && Array.isArray(catalog?.pending_items) ? catalog.pending_items.length : 0;
     if (pendingCount) notes.append(textElement('p', pendingCitationsLabel(pendingCount), 'investigation-meta'));
     for (const limitation of catalog?.limitations || []) notes.append(mathElement('p', limitation));
     search.hidden = (catalog?.items?.length || 0) < 7;

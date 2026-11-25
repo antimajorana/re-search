@@ -78,12 +78,40 @@ fn batches(events: &[Event], request_seq: u64) -> impl Iterator<Item = &Event> {
     })
 }
 
+fn pending_items_note(pending_items: &[String]) -> String {
+    let noun = if pending_items.len() == 1 {
+        "item"
+    } else {
+        "items"
+    };
+    format!(
+        "{} {noun} awaiting valid citations: {}",
+        pending_items.len(),
+        pending_items.join(", ")
+    )
+    .chars()
+    .take(500)
+    .collect()
+}
+
+fn is_pending_items_note(s: &str) -> bool {
+    let Some((count, rest)) = s.split_once(' ') else {
+        return false;
+    };
+    !count.is_empty()
+        && count.bytes().all(|b| b.is_ascii_digit())
+        && (rest.starts_with("item awaiting valid citations: ")
+            || rest.starts_with("items awaiting valid citations: "))
+}
+
 /// Present accepted batches for one run. Later requests do not inherit the coverage claim.
 pub fn paper_conventions(events: &[Event], request_seq: u64) -> Option<Value> {
     let mut items = Vec::new();
     let mut accepted_ids = BTreeSet::new();
     let mut rejected_order = Vec::new();
     let mut rejected_seen = BTreeSet::new();
+    let mut limitations = Vec::new();
+    let mut limitations_seen = BTreeSet::new();
     let mut latest = None;
     for event in batches(events, request_seq) {
         latest = Some(event);
@@ -100,16 +128,34 @@ pub fn paper_conventions(events: &[Event], request_seq: u64) -> Option<Value> {
                 }
             }
         }
+        for lim in event.payload["limitations"].as_array().into_iter().flatten() {
+            if let Some(s) = lim.as_str() {
+                if !is_pending_items_note(s) && limitations_seen.insert(s.to_owned()) {
+                    limitations.push(Value::String(s.to_owned()));
+                }
+            }
+        }
     }
     let latest = latest?;
     let pending_items: Vec<String> = rejected_order
         .into_iter()
         .filter(|id| !accepted_ids.contains(id))
         .collect();
+    if !pending_items.is_empty() {
+        let note = pending_items_note(&pending_items);
+        if limitations_seen.insert(note.clone()) {
+            limitations.push(Value::String(note));
+        }
+    }
     let mut result = latest.payload.clone();
     result["items"] = Value::Array(items);
+    result["limitations"] = Value::Array(limitations);
     result["conventions_seq"] = json!(latest.seq);
     result["pending_items"] = json!(pending_items);
+    if !pending_items.is_empty() {
+        result["done"] = json!(false);
+        result["coverage"] = json!("partial");
+    }
     Some(result)
 }
 
@@ -155,6 +201,8 @@ pub(super) fn payload<'a>(
         request.payload["conventions_scope"].as_str()
     };
     let mut prior_ids = BTreeSet::new();
+    let mut prior_rejected_order = Vec::new();
+    let mut prior_rejected_seen = BTreeSet::new();
     let mut labels = BTreeSet::new();
     let mut next = 1;
     let mut previous = None;
@@ -178,6 +226,13 @@ pub(super) fn payload<'a>(
             ) {
                 prior_ids.insert(id.to_owned());
                 labels.insert((label.trim().to_owned(), scope.trim().to_owned()));
+            }
+        }
+        for rejected in event.payload["rejected_items"].as_array().into_iter().flatten() {
+            if let Some(id) = rejected["id"].as_str() {
+                if prior_rejected_seen.insert(id.to_owned()) {
+                    prior_rejected_order.push(id.to_owned());
+                }
             }
         }
         next += 1;
@@ -279,34 +334,41 @@ pub(super) fn payload<'a>(
         prior_ids.insert(item.id.clone());
         labels.insert((item.label.trim().to_owned(), item.scope.trim().to_owned()));
     }
+    for rejected in &rejected_items {
+        if let Some(id) = rejected["id"].as_str() {
+            if prior_rejected_seen.insert(id.to_owned()) {
+                prior_rejected_order.push(id.to_owned());
+            }
+        }
+    }
+    let pending_items: Vec<String> = prior_rejected_order
+        .into_iter()
+        .filter(|id| !prior_ids.contains(id))
+        .collect();
     batch.items = accepted_items;
     let mut done_requested = None;
     let mut coverage_reported = None;
-    if !rejected_items.is_empty() {
+    if !pending_items.is_empty() {
         done_requested = Some(batch.done);
         coverage_reported = Some(batch.coverage.clone());
         batch.done = false;
         batch.coverage = "partial".into();
-        let ids: Vec<&str> = rejected_items
-            .iter()
-            .filter_map(|r| r["id"].as_str())
-            .collect();
-        let note: String = format!(
-            "{} items awaiting valid citations: {}",
-            rejected_items.len(),
-            ids.join(", ")
-        )
-        .chars()
-        .take(500)
-        .collect();
-        batch.limitations.push(note);
+        let note = pending_items_note(&pending_items);
+        if !batch.limitations.iter().any(|s| s == &note) {
+            if batch.limitations.len() >= 12 {
+                batch.limitations.truncate(11);
+            }
+            batch.limitations.push(note);
+        }
     }
     let mut payload = serde_json::to_value(batch).map_err(|e| e.to_string())?;
     payload["coverage_basis"] = json!("model_reported");
     if !rejected_items.is_empty() {
         payload["rejected_items"] = Value::Array(rejected_items);
-        payload["done_requested"] = json!(done_requested.unwrap());
-        payload["coverage_reported"] = json!(coverage_reported.unwrap());
+    }
+    if let (Some(done_req), Some(cov_rep)) = (done_requested, coverage_reported) {
+        payload["done_requested"] = json!(done_req);
+        payload["coverage_reported"] = json!(cov_rep);
     }
     if let Some(prev) = previous {
         if let Some(prev_scope) = prev.payload.get("coverage_scope") {
