@@ -147,7 +147,7 @@ pub(crate) fn finish_question(
             ("answered", json!(clipped), Value::Null, cites)
         }
         Err(err) => {
-            let stopped = err == "stopped by user"
+            let stopped = matches!(err.as_str(), "stopped by user" | "turn stopped by the user")
                 || events.iter().any(|e| {
                     e.seq > seq && e.kind == "session.abort" && e.payload["stopped"] == true
                 });

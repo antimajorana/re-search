@@ -94,11 +94,12 @@ fn push_passage_range(
                 b = b.saturating_sub(1);
             }
         } else {
-            if start_byte.is_some_and(|sb| a == 1 && sb > 0) {
+            if start_byte.is_some_and(|sb| sb > 0) {
                 a = a.saturating_add(1);
             }
             if !excerpt.ends_with('\n')
-                && (excerpt.len() >= 900 || total_lines.is_some_and(|t| b < t))
+                && (total_lines.is_some_and(|t| b < t)
+                    || (total_lines.is_none() && excerpt.len() >= 900))
             {
                 b = b.saturating_sub(1);
             }

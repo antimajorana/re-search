@@ -596,3 +596,289 @@ fn review_flow_f9_early_stop_question_is_stopped() {
     assert_eq!(answer.payload["status"], "stopped");
     assert_eq!(answer.payload["error"], "stopped by user");
 }
+
+#[test]
+fn review3_flow_f9_cli_early_stop_question_is_stopped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = test_desktop_state(tmp.path());
+    let ledger = Ledger::open(tmp.path()).unwrap();
+    ledger
+        .append("s1", "investigation.started", 1, &json!({}))
+        .unwrap();
+    let seq = ledger
+        .append(
+            "s1",
+            "investigation.question_requested",
+            1,
+            &json!({"source_id": "src-1", "question": "Q"}),
+        )
+        .unwrap();
+
+    let out = crate::investigation_question::finish_question(
+        &state,
+        &ledger,
+        "s1",
+        seq,
+        Err("turn stopped by the user".into()),
+    );
+    assert_eq!(out, Err("turn stopped by the user".into()));
+
+    let events = ledger.read_session("s1").unwrap();
+    assert!(
+        !events.iter().any(|e| e.kind == "session.abort"),
+        "CLI early stop must not invent a session.abort event"
+    );
+    let answer = events
+        .iter()
+        .find(|e| e.kind == "investigation.answer")
+        .expect("investigation.answer recorded");
+    assert_eq!(answer.payload["request_seq"], seq);
+    assert_eq!(answer.payload["status"], "stopped");
+    assert_eq!(answer.payload["error"], "turn stopped by the user");
+}
+
+#[test]
+fn review3_honesty_m2_no_bytes_start_byte_fails_closed() {
+    let path = "src-1/paper.txt";
+    let events = vec![
+        ev(
+            11,
+            "tool.request",
+            json!({"call_id": "p1", "tool": "search_paper_passages", "caller": "agent:s1"}),
+        ),
+        ev(
+            12,
+            "tool.result",
+            json!({"call_id": "p1", "ok": true, "result": {"inline": serde_json::to_string(&json!({
+                "passages": [
+                    {
+                        "path": path,
+                        "start_line": 3,
+                        "end_line": 4,
+                        "start_byte": 120,
+                        "end_byte": 170,
+                        "excerpt": "tail of line 3\nfull line 4\n"
+                    },
+                    {
+                        "path": path,
+                        "start_line": 9,
+                        "end_line": 10,
+                        "start_byte": 300,
+                        "end_byte": 335,
+                        "excerpt": "tail of line 9\nshort eof line 10"
+                    }
+                ]
+            })).unwrap()}}),
+        ),
+    ];
+    let cites = answer_cites(
+        None,
+        &events,
+        10,
+        path,
+        Some(10),
+        "[L3] [L4] [L9] [L10]",
+    );
+    assert_eq!(
+        cites,
+        vec![
+            json!({"start": 3, "end": 3, "read": false}),
+            json!({"start": 4, "end": 4, "read": true}),
+            json!({"start": 9, "end": 9, "read": false}),
+            json!({"start": 10, "end": 10, "read": true}),
+        ]
+    );
+
+    // When total_lines is unknown, an oversized cut excerpt without trailing newline fails closed.
+    let unknown_total_events = vec![
+        ev(
+            11,
+            "tool.request",
+            json!({"call_id": "p2", "tool": "search_paper_passages", "caller": "agent:s1"}),
+        ),
+        ev(
+            12,
+            "tool.result",
+            json!({"call_id": "p2", "ok": true, "result": {"inline": serde_json::to_string(&json!({
+                "passages": [
+                    {
+                        "path": path,
+                        "start_line": 2,
+                        "end_line": 2,
+                        "excerpt": "x".repeat(950)
+                    }
+                ]
+            })).unwrap()}}),
+        ),
+    ];
+    let unknown_cites = answer_cites(None, &unknown_total_events, 10, path, None, "[L2]");
+    assert_eq!(unknown_cites, vec![json!({"start": 2, "end": 2, "read": false})]);
+}
+
+#[test]
+fn review3_honesty_f17_unselected_page_lines_stay_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = test_desktop_state(tmp.path());
+    let ledger = Ledger::open(tmp.path()).unwrap();
+    let path = "src-pdf/paper.txt";
+    let content = concat!(
+        "p1 line 1\np1 line 2\np1 line 3\n",
+        "p2 line 4\np2 line 5\np2 line 6\n",
+        "p3 line 7\np3 line 8\np3 line 9\n"
+    );
+    let file_path = tmp.path().join("sessions/s1/sources").join(path);
+    std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+    std::fs::write(&file_path, content).unwrap();
+    let sha = ledger::sha256_hex(content.as_bytes());
+
+    ledger
+        .append(
+            "s1",
+            "source.ingested",
+            1,
+            &json!({
+                "source_id": "src-pdf",
+                "format": "pdf",
+                "primary_path": path,
+                "files_sha256": { path: sha },
+                "page_lines": [[1, 1, 3], [2, 4, 6], [3, 7, 9]]
+            }),
+        )
+        .unwrap();
+    ledger
+        .append(
+            "s1",
+            "investigation.paper",
+            1,
+            &json!({
+                "source_id": "src-pdf",
+                "question": "Q",
+                "page_start": 2,
+                "page_end": 3
+            }),
+        )
+        .unwrap();
+    let req_seq = ledger
+        .append(
+            "s1",
+            "investigation.question_requested",
+            1,
+            &json!({
+                "source_id": "src-pdf",
+                "question": "Q",
+                "page_start": 2,
+                "page_end": 3
+            }),
+        )
+        .unwrap();
+    ledger
+        .append(
+            "s1",
+            "tool.request",
+            1,
+            &json!({"call_id": "rpl1", "tool": "read_paper_lines", "caller": "agent:s1"}),
+        )
+        .unwrap();
+    ledger
+        .append(
+            "s1",
+            "tool.result",
+            1,
+            &json!({"call_id": "rpl1", "ok": true, "result": {"inline": serde_json::to_string(&json!({
+                "a_meta": {"path": path, "start_line": 1, "end_line": 3, "total_lines": 9},
+                "text": "1\tp1 line 1\n2\tp1 line 2\n3\tp1 line 3"
+            })).unwrap()}}),
+        )
+        .unwrap();
+
+    let events = ledger.read_session("s1").unwrap();
+    let cites = answer_cites_for_session(
+        &state,
+        &ledger,
+        "s1",
+        &events,
+        req_seq,
+        "Page 1 [L1-3] was read, page 2 [L5] was not.",
+    );
+    assert_eq!(
+        cites,
+        vec![
+            json!({"start": 1, "end": 3, "read": true}),
+            json!({"start": 5, "end": 5, "read": false}),
+        ]
+    );
+}
+
+#[test]
+fn review3_honesty_f16_no_files_sha256_entry_still_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = test_desktop_state(tmp.path());
+    let ledger = Ledger::open(tmp.path()).unwrap();
+    let path = "src-legacy/paper.tex";
+
+    ledger
+        .append(
+            "s1",
+            "source.ingested",
+            1,
+            &json!({
+                "source_id": "src-legacy",
+                "format": "tex",
+                "primary_path": path
+            }),
+        )
+        .unwrap();
+    ledger
+        .append(
+            "s1",
+            "investigation.paper",
+            1,
+            &json!({"source_id": "src-legacy", "question": "Q"}),
+        )
+        .unwrap();
+    let req_seq = ledger
+        .append(
+            "s1",
+            "investigation.question_requested",
+            1,
+            &json!({"source_id": "src-legacy", "question": "Q"}),
+        )
+        .unwrap();
+    ledger
+        .append(
+            "s1",
+            "tool.request",
+            1,
+            &json!({"call_id": "rpl1", "tool": "read_paper_lines", "caller": "agent:s1"}),
+        )
+        .unwrap();
+    ledger
+        .append(
+            "s1",
+            "tool.result",
+            1,
+            &json!({"call_id": "rpl1", "ok": true, "result": {"inline": serde_json::to_string(&json!({
+                "a_meta": {"path": path, "start_line": 4, "end_line": 8, "total_lines": 20},
+                "text": "4\tline 4\n5\tline 5"
+            })).unwrap()}}),
+        )
+        .unwrap();
+
+    let events = ledger.read_session("s1").unwrap();
+    let cites = answer_cites_for_session(
+        &state,
+        &ledger,
+        "s1",
+        &events,
+        req_seq,
+        "Received [L5-7], unread [L12], out-of-bounds [L25].",
+    );
+    assert_eq!(
+        cites,
+        vec![
+            json!({"start": 5, "end": 7, "read": true}),
+            json!({"start": 12, "end": 12, "read": false}),
+        ]
+    );
+}
+
