@@ -488,3 +488,124 @@ fn review_honesty_f12_recorder_def_hashes_match_merged() {
     );
 }
 
+#[test]
+fn review3_conventions_result_returns_pending_abandoned_and_hint() {
+    let paper_text = concat!(
+        "Title: Conventions Hint Test\n",
+        "Throughout this paper we set Planck constant hbar = 1.\n",
+        "The metric signature is chosen to be (-,+,+,+).\n",
+    );
+    let (_tmp, env, ledger, pid, req) = setup(paper_text);
+
+    // Batch 1: accept `hbar-unit`, reject `bad-sign`.
+    let b1 = json!({
+        "request_seq": req,
+        "source_id": pid,
+        "batch_index": 1,
+        "done": true,
+        "coverage": "paper",
+        "limitations": [],
+        "items": [
+            {
+                "id": "hbar-unit",
+                "category": "units",
+                "label": "hbar = 1",
+                "meaning": "Natural units with hbar = 1.",
+                "scope": "Paper",
+                "basis": "explicit",
+                "anchors": [{
+                    "source_id": pid,
+                    "start_line": 2,
+                    "end_line": 2,
+                    "kind": "passage",
+                    "quote": "Throughout this paper we set Planck constant hbar = 1"
+                }]
+            },
+            {
+                "id": "bad-sign",
+                "category": "sign",
+                "label": "sign convention",
+                "meaning": "Unverifiable convention.",
+                "scope": "Paper",
+                "basis": "explicit",
+                "anchors": [{
+                    "source_id": pid,
+                    "start_line": 3,
+                    "end_line": 3,
+                    "kind": "passage",
+                    "quote": "this quote does not exist anywhere in the paper"
+                }]
+            }
+        ]
+    });
+    let r1 = record_conventions(&env, &ledger, SID, &b1).unwrap();
+    assert_eq!(r1["done"], false);
+    assert_eq!(r1["pending_items"], json!(["bad-sign"]));
+    assert!(r1.get("abandoned_items").is_none());
+    let hint1 = r1["pending_hint"].as_str().expect("expected pending_hint on batch 1");
+    assert!(hint1.contains("done=true"), "hint1={hint1}");
+    assert!(hint1.contains("coverage=\"partial\""), "hint1={hint1}");
+    assert!(hint1.contains("limitation"), "hint1={hint1}");
+    assert!(hint1.contains("id"), "hint1={hint1}");
+
+    // Batch 2: done=true, coverage="partial", limitation without naming `bad-sign`, empty items.
+    let b2 = json!({
+        "request_seq": req,
+        "source_id": pid,
+        "batch_index": 2,
+        "done": true,
+        "coverage": "partial",
+        "limitations": ["No citation found."],
+        "items": []
+    });
+    let r2 = record_conventions(&env, &ledger, SID, &b2).unwrap();
+    assert_eq!(r2["done"], false);
+    assert_eq!(r2["pending_items"], json!(["bad-sign"]));
+    assert!(r2.get("rejected_items").is_none());
+    assert!(r2.get("abandoned_items").is_none());
+    let hint2 = r2["pending_hint"].as_str().expect("expected pending_hint on batch 2");
+    assert!(hint2.contains("done=true"), "hint2={hint2}");
+    assert!(hint2.contains("coverage=\"partial\""), "hint2={hint2}");
+    assert!(hint2.contains("limitation"), "hint2={hint2}");
+
+    // Batch 3: retry `bad-sign` (still invalid quote) AND name `bad-sign` in a limitation with done=true, coverage="partial".
+    let b3 = json!({
+        "request_seq": req,
+        "source_id": pid,
+        "batch_index": 3,
+        "done": true,
+        "coverage": "partial",
+        "limitations": ["Could not verify bad-sign in the scanned text."],
+        "items": [
+            {
+                "id": "bad-sign",
+                "category": "sign",
+                "label": "sign convention",
+                "meaning": "Unverifiable convention.",
+                "scope": "Paper",
+                "basis": "explicit",
+                "anchors": [{
+                    "source_id": pid,
+                    "start_line": 3,
+                    "end_line": 3,
+                    "kind": "passage",
+                    "quote": "still not present anywhere in the paper text"
+                }]
+            }
+        ]
+    });
+    let r3 = record_conventions(&env, &ledger, SID, &b3).unwrap();
+    assert_eq!(r3["done"], true);
+    assert_eq!(r3["coverage"], "partial");
+    assert_eq!(r3["pending_items"], json!([]));
+    assert_eq!(r3["abandoned_items"], json!(["bad-sign"]));
+    assert!(r3.get("pending_hint").is_none());
+
+    let events = ledger.read_verified_session(SID).unwrap().1;
+    let catalog = paper_conventions(&events, req).unwrap();
+    assert_eq!(catalog["done"], true);
+    assert_eq!(catalog["coverage"], "partial");
+    assert_eq!(catalog["pending_items"], json!([]));
+    assert_eq!(catalog["abandoned_items"], json!(["bad-sign"]));
+}
+

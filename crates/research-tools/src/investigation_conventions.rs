@@ -374,19 +374,14 @@ pub(super) fn payload<'a>(
             accepted_items.push(item);
         }
     }
-    if had_items && accepted_items.is_empty() {
-        return Err(faults_error(&all_faults));
-    }
     // Rebuild accepted sets from accepted items only (prior accepted items + accepted_items).
     for item in &accepted_items {
         prior_ids.insert(item.id.clone());
         prior_abandoned_ids.remove(&item.id);
         labels.insert((item.label.trim().to_owned(), item.scope.trim().to_owned()));
     }
-    let mut newly_rejected_ids = BTreeSet::new();
     for rejected in &rejected_items {
         if let Some(id) = rejected["id"].as_str() {
-            newly_rejected_ids.insert(id.to_owned());
             prior_abandoned_ids.remove(id);
             if prior_rejected_seen.insert(id.to_owned()) {
                 prior_rejected_order.push(id.to_owned());
@@ -396,10 +391,7 @@ pub(super) fn payload<'a>(
     let mut abandoned_items = Vec::new();
     if batch.done && batch.coverage == "partial" {
         for id in &prior_rejected_order {
-            if prior_ids.contains(id)
-                || prior_abandoned_ids.contains(id)
-                || newly_rejected_ids.contains(id)
-            {
+            if prior_ids.contains(id) || prior_abandoned_ids.contains(id) {
                 continue;
             }
             if batch
@@ -411,6 +403,15 @@ pub(super) fn payload<'a>(
                 prior_abandoned_ids.insert(id.clone());
             }
         }
+    }
+    let all_rejected_abandoned = !rejected_items.is_empty()
+        && rejected_items.iter().all(|r| {
+            r["id"]
+                .as_str()
+                .is_some_and(|id| prior_abandoned_ids.contains(id))
+        });
+    if had_items && accepted_items.is_empty() && !all_rejected_abandoned {
+        return Err(faults_error(&all_faults));
     }
     let pending_items: Vec<String> = prior_rejected_order
         .into_iter()
@@ -447,6 +448,9 @@ pub(super) fn payload<'a>(
         payload["abandoned_items"] = Value::Array(
             abandoned_items.into_iter().map(Value::String).collect(),
         );
+    }
+    if !pending_items.is_empty() {
+        payload["pending_items"] = json!(pending_items);
     }
     if let (Some(done_req), Some(cov_rep)) = (done_requested, coverage_reported) {
         payload["done_requested"] = json!(done_req);

@@ -571,6 +571,21 @@ fn record_document(
         if let Some(rejected) = payload.get("rejected_items") {
             result["rejected_items"] = rejected.clone();
         }
+        let pending = payload
+            .get("pending_items")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        if pending.as_array().is_some_and(|items| !items.is_empty()) {
+            result["pending_hint"] = json!(
+                "To finish without re-citing a pending item, send a batch with done=true, coverage=\"partial\", and a limitation naming that item's id."
+            );
+        }
+        result["pending_items"] = pending;
+        if let Some(abandoned) = payload.get("abandoned_items") {
+            if abandoned.as_array().is_some_and(|items| !items.is_empty()) {
+                result["abandoned_items"] = abandoned.clone();
+            }
+        }
     }
     Ok(result)
 }
