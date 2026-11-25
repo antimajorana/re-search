@@ -30,10 +30,10 @@ Never print, copy or store a credential. Your result goes back by pushing your b
   in your report (file, function, what the other brief delivers there).
 - Prefer new files. Keep an edit to an existing file small and local, in its own commit, and list
   it under "Merge notes".
-- **The owner has not answered the decisions in section 8 of the overview.** Treat the recommended
-  options as provisional: put every name that depends on one (an event kind, a word shown on
-  screen) in one named constant with a comment naming the decision, so that it can change in one
-  place. Do not implement F1 (tool profiles). Do not edit `crates/agent/src/resume.rs`,
+- **The owner accepted every recommended answer in section 8 of the overview on 2026-11-25.** Build
+  on them. Still put every name that depends on one (an event kind, a word shown on screen) in
+  one named constant with a comment naming the decision, so that it can change in one place. F1
+  (tool profiles) is approved; implement it only in the brief that owns it. Do not edit `crates/agent/src/resume.rs`,
   `crates/desktop-server/src/routes_session.rs`, `turn_runner.rs` or `http_srv.rs`.
 - Shared package F2 is in your checkout: `crates/research-tools/src/paper_key.rs` (`PaperKey`,
   `PaperRef`, `NodeRef`, `Mode`, the id-prefix table, `node_tag`). Use these types; do not define

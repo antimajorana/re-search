@@ -68,8 +68,9 @@ about week 9 to about week 11 (planning estimate). The write-up (F15) and correc
 after week 8, because they need the modes' records to exist.
 
 **Decisions needed from the owner** (section 8): the scope decisions of 2026-11-25 are recorded in
-8.1; still open are tool profiles, one global library, the two-month order above, where "New
-research" goes, and the new questions that the added packages raise (8.3).
+8.1; on the same day the owner accepted every recommended answer of 8.2 and 8.3 in one message
+(tool profiles, one global library, the two-month order above, where "New research" goes, and the
+questions that the added packages raise).
 
 ### 0.1 Scope revision of 2026-11-25 (owner decisions)
 
