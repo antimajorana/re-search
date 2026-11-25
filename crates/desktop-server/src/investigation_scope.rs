@@ -282,6 +282,55 @@ pub(crate) fn conventions_view_expanding(
     paper_requested && catalog.is_none_or(|c| c["coverage_scope"] != "paper")
 }
 
+/// Prepare a Scope::Map turn: pin paper if needed, compute outline/scope, append mapping_requested & scope.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_map(
+    state: &DesktopState,
+    ledger: &Ledger,
+    session: &str,
+    pinned: Option<&Event>,
+    source: &Event,
+    source_id: &str,
+    page_range: (Option<u64>, Option<u64>),
+    req: &mut Value,
+    prompt: &str,
+    route: crate::investigation::PaperRoute,
+) -> std::result::Result<String, (u16, String)> {
+    let storage = |error: ledger::Error| crate::routes_session::internal(error.to_string());
+    if pinned.is_none() {
+        ledger
+            .append(
+                session,
+                "investigation.paper",
+                1,
+                &json!({"source_id":source_id,"question":prompt,"page_start":page_range.0,"page_end":page_range.1}),
+            )
+            .map_err(storage)?;
+    }
+    let prepared_scope = compute_scope(state, ledger, session, source, prompt, page_range);
+    let mut mapping_payload = json!({"source_id":source_id,"question":prompt,"summary_requested":true,"conventions_requested":false,"overview_only":true});
+    if let Some(resolved) = prepared_scope.as_ref().and_then(PreparedScope::resolved_json) {
+        mapping_payload["scope"] = resolved;
+        mapping_payload["conventions_scope"] = json!("section");
+    }
+    let seq = ledger
+        .append(session, "investigation.mapping_requested", 1, &mapping_payload)
+        .map_err(storage)?;
+    let mut text = crate::investigation::prompts::map_base_instructions(
+        route,
+        source_id,
+        &source.payload["primary_path"],
+    );
+    if let Some(ref scope_info) = prepared_scope {
+        ledger
+            .append(session, "investigation.scope", 1, &scope_info.event_payload(seq))
+            .map_err(storage)?;
+        text.push_str(&scope_info.mapping_instructions_suffix());
+    }
+    req["_paper_map_request"] = json!(seq);
+    Ok(text)
+}
+
 #[cfg(test)]
 #[path = "investigation_scope_tests.rs"]
 mod tests;

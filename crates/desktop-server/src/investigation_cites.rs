@@ -441,4 +441,41 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn read_paper_lines_marks_cites_read() {
+        let path = "src-1/paper.txt";
+        let events = vec![
+            ev(10, "investigation.question_requested", json!({"source_id": "src-1"})),
+            ev(11, "tool.request", json!({"call_id": "r1", "tool": "read_paper_lines"})),
+            ev(
+                12,
+                "tool.result",
+                json!({"call_id": "r1", "ok": true, "result": {"inline": serde_json::to_string(&json!({
+                    "a_meta": {
+                        "path": path,
+                        "start_line": 15,
+                        "end_line": 28,
+                        "total_lines": 50
+                    },
+                    "text": "15\tline"
+                })).unwrap()}}),
+            ),
+        ];
+        let cites = answer_cites(
+            None,
+            &events,
+            10,
+            path,
+            None,
+            "Read [L16-20], unread [L30], out of bounds [L55].",
+        );
+        assert_eq!(
+            cites,
+            vec![
+                json!({"start": 16, "end": 20, "read": true}),
+                json!({"start": 30, "end": 30, "read": false}),
+            ]
+        );
+    }
 }

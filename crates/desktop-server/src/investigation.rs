@@ -386,52 +386,18 @@ pub(crate) fn prepare(
                 context_text(&claim_context(&map, &node, &events))
             )
         }
-        Scope::Map => {
-            if pinned.is_none() {
-                ledger
-                    .append(
-                        session,
-                        "investigation.paper",
-                        1,
-                        &json!({"source_id":source_id,"question":prompt,"page_start":page_start,"page_end":page_end}),
-                    )
-                    .map_err(storage)?;
-            }
-            let prepared_scope = crate::investigation_scope::compute_scope(
-                state,
-                &ledger,
-                session,
-                source,
-                prompt,
-                (page_start, page_end),
-            );
-            let mut mapping_payload = json!({"source_id":source_id,"question":prompt,"summary_requested":true,"conventions_requested":false,"overview_only":true});
-            if let Some(resolved) = prepared_scope
-                .as_ref()
-                .and_then(crate::investigation_scope::PreparedScope::resolved_json)
-            {
-                mapping_payload["scope"] = resolved;
-                mapping_payload["conventions_scope"] = json!("section");
-            }
-            let seq = ledger
-                .append(
-                    session,
-                    "investigation.mapping_requested",
-                    1,
-                    &mapping_payload,
-                )
-                .map_err(storage)?;
-            let mut text =
-                prompts::map_base_instructions(route, &source_id, &source.payload["primary_path"]);
-            if let Some(ref scope_info) = prepared_scope {
-                ledger
-                    .append(session, "investigation.scope", 1, &scope_info.event_payload(seq))
-                    .map_err(storage)?;
-                text.push_str(&scope_info.mapping_instructions_suffix());
-            }
-            req["_paper_map_request"] = json!(seq);
-            text
-        }
+        Scope::Map => crate::investigation_scope::prepare_map(
+            state,
+            &ledger,
+            session,
+            pinned,
+            source,
+            &source_id,
+            (page_start, page_end),
+            req,
+            prompt,
+            route,
+        )?,
         Scope::Question => {
             let prepared_scope = crate::investigation_scope::compute_scope(
                 state,
