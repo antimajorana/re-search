@@ -48,7 +48,11 @@ for f in crates/desktop-server/assets/*.js; do node --check "$f"; done
 node --test crates/desktop-server/tests/*.test.mjs
 ```
 
-Some tests need `RE_SEARCH_PYTHON` (set it to `$(command -v python3)`). If a test fails on Linux
+Some tests need `RE_SEARCH_PYTHON` (set it to `$(command -v python3)`). If your machine lacks a
+tool or package that a test needs (for example the export tests need Python `sympy`), install it
+(`pip install --user sympy`, `apt-get`, `cargo install`, `npm`) and run the test; a missing package
+is never a reason to leave a test failing or to call it pre-existing. Installing on your machine is
+not a project dependency: do not add it to the repository's manifests. If a test fails on Linux
 before your change too, record it as pre-existing (run it on the base commit to prove it) and move on.
 Playwright and browser tests are out of scope here; the coordinator runs them on Windows.
 
