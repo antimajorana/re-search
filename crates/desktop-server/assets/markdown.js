@@ -2,20 +2,94 @@
 // Offline Markdown parser and HTML renderer with container-aware block display math, lists, tables, and headings.
 import { escapeHtml } from './code_highlight.js';
 import {
-  MATH_ENVS, extractMath, findDisplayClose, findEnvBlockClose,
-  formatMathTokenHtml, isEscapedAt, normalizeMathTex,
+  HEADING_LINE_RE, MATH_ENVS, extractMath, findClosingDelim, findDisplayClose,
+  findEnvBlockClose, formatMathTokenHtml, isEscapedAt, normalizeMathTex,
 } from './math_scan.js';
 import { renderFormulaHtml } from './math_katex.js';
 import { numberEquations } from './math_equations.js';
 
 const CITATION_BODY_RE = /^[\d,\s\u2013\u2014-]+$/;
+const FENCE_OPEN_RE = /^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?(`{3,}|~{3,})([^\r\n]*)$/;
+
+function parseQuotePrefix(line) {
+  let depth = 0;
+  let pos = 0;
+  while (pos < line.length) {
+    const m = /^[ \t]*>[ \t]?/.exec(line.slice(pos));
+    if (!m) break;
+    depth += 1;
+    pos += m[0].length;
+  }
+  return { depth, rest: line.slice(pos) };
+}
+
+function isFenceClose(rest, fence) {
+  const m = /^[ \t]*(`{3,}|~{3,})[ \t]*$/.exec(rest);
+  return Boolean(m && m[1][0] === fence.char && m[1].length >= fence.len);
+}
 
 /** Strips HTML comments (`<!-- ... -->`) outside fenced and inline code. */
 export function stripComments(text) {
-  return String(text ?? '').replace(
-    /(^ {0,3}(`{3,}|~{3,})[^]*?(?:^ {0,3}\2[`~]*[ \t]*$|$(?![\s\S])))|(`+)[^`\n]*?\3|<!--[^]*?-->/gm,
-    (m, fence, _f, tick) => (fence || tick ? m : ''),
-  );
+  const s = String(text ?? '');
+  let out = '';
+  let i = 0;
+  let atLineStart = true;
+  let inFence = null;
+
+  while (i < s.length) {
+    if (atLineStart) {
+      const nl = s.indexOf('\n', i);
+      const rawLine = nl === -1 ? s.slice(i) : s.slice(i, nl);
+      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+      const { depth, rest } = parseQuotePrefix(line);
+      if (inFence) {
+        if (depth >= inFence.depth) {
+          out += rawLine + (nl === -1 ? '' : '\n');
+          i = nl === -1 ? s.length : nl + 1;
+          if (depth === inFence.depth && isFenceClose(rest, inFence)) inFence = null;
+          continue;
+        }
+        inFence = null;
+      }
+      const open = FENCE_OPEN_RE.exec(rest);
+      if (open && (open[1][0] === '~' || !open[2].includes('`'))) {
+        inFence = { char: open[1][0], len: open[1].length, depth };
+        out += rawLine + (nl === -1 ? '' : '\n');
+        i = nl === -1 ? s.length : nl + 1;
+        continue;
+      }
+    }
+    const ch = s[i];
+    if (ch === '\n') { out += '\n'; i += 1; atLineStart = true; continue; }
+    if (ch === '`') {
+      let ticks = 1;
+      while (s[i + ticks] === '`') ticks += 1;
+      const marker = '`'.repeat(ticks);
+      const nl = s.indexOf('\n', i + ticks);
+      const limit = nl === -1 ? s.length : nl;
+      let close = s.indexOf(marker, i + ticks);
+      while (close !== -1 && close < limit && (s[close - 1] === '`' || s[close + ticks] === '`')) {
+        close = s.indexOf(marker, close + 1);
+      }
+      if (close !== -1 && close < limit) {
+        out += s.slice(i, close + ticks);
+        i = close + ticks;
+      } else {
+        out += marker;
+        i += ticks;
+      }
+      atLineStart = false;
+      continue;
+    }
+    if (ch === '<' && s.startsWith('<!--', i)) {
+      const end = s.indexOf('-->', i + 4);
+      if (end !== -1) { i = end + 3; atLineStart = false; continue; }
+    }
+    out += ch;
+    i += 1;
+    atLineStart = false;
+  }
+  return out;
 }
 
 export function applyEmphasis(escapedText) {
@@ -125,6 +199,67 @@ function matchBlockDisplay(lines, i) {
     if (found && found.body.trim()) return found;
   }
   return null;
+}
+
+function findUnclosedParaDisplay(paraLines) {
+  if (!paraLines.length) return null;
+  const text = paraLines.join('\n');
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '`') {
+      let ticks = 1;
+      while (text[i + ticks] === '`') ticks += 1;
+      const marker = '`'.repeat(ticks);
+      let close = text.indexOf(marker, i + ticks);
+      while (close !== -1 && (text[close - 1] === '`' || text[close + ticks] === '`')) {
+        close = text.indexOf(marker, close + 1);
+      }
+      if (close !== -1 && !text.slice(i + ticks, close).includes('\n\n')) { i = close + ticks; continue; }
+      i += ticks;
+      continue;
+    }
+    if (ch === '\\') {
+      const next = text[i + 1];
+      if (next === '\\' || next === '$') { i += 2; continue; }
+      if (next === '[') {
+        const end = findClosingDelim(text, '\\]', i + 2);
+        if (end === -1) return { close: '\\]', hasBody: Boolean(text.slice(i + 2).trim()) };
+        i = end + 2;
+        continue;
+      }
+      if (next === '(') {
+        const end = findClosingDelim(text, '\\)', i + 2);
+        i = end !== -1 ? end + 2 : i + 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === '$' && text[i + 1] === '$') {
+      const end = findClosingDelim(text, '$$', i + 2);
+      if (end === -1) return { close: '$$', hasBody: Boolean(text.slice(i + 2).trim()) };
+      if (text.slice(i + 2, end).trim()) { i = end + 2; continue; }
+      i += 2;
+      continue;
+    }
+    i += 1;
+  }
+  return null;
+}
+
+function findParaDisplayClose(lines, startIdx, openPara) {
+  let hasBody = openPara.hasBody;
+  for (let k = startIdx; k < lines.length; k++) {
+    const line = lines[k];
+    if (!line.trim() || HEADING_LINE_RE.test(line) || /^[ \t]{0,3}(?:`{3,}|~{3,})/.test(line) || /^\s*>\s?/.test(line)) {
+      return -1;
+    }
+    const col = findClosingDelim(line, openPara.close, 0);
+    if (col !== -1) return (hasBody || line.slice(0, col).trim()) ? k : -1;
+    if (line.trim()) hasBody = true;
+  }
+  return -1;
 }
 
 function leadingIndent(line) {
@@ -280,6 +415,17 @@ function renderMarkdownBlocks(inputLines, mathTokens, parseOpts) {
     if (/^\s*>\s?/.test(line)) { flushPara(); quote.push(line.replace(/^\s*>\s?/, '')); continue; }
     flushQuote();
 
+    // Complete an unclosed mid-line $$ or \[ opener in para before treating a line-start closer as a new block opener.
+    const openPara = findUnclosedParaDisplay(para);
+    if (openPara) {
+      const closeLine = findParaDisplayClose(lines, i, openPara);
+      if (closeLine !== -1) {
+        for (let k = i; k <= closeLine; k++) para.push(lines[k]);
+        i = closeLine;
+        continue;
+      }
+    }
+
     // Block display math ($$, \[, \begin{env})
     const disp = matchBlockDisplay(lines, i);
     if (disp) {
@@ -292,8 +438,16 @@ function renderMarkdownBlocks(inputLines, mathTokens, parseOpts) {
         out.push(`\u0000D${id}\u0000`);
       }
       if (disp.rest && disp.rest.trim()) {
-        lines[disp.closeLine] = disp.rest.trimStart();
-        i = disp.closeLine - 1;
+        const tail = disp.rest.trimStart();
+        const prevLine = lines[disp.closeLine];
+        lines[disp.closeLine] = tail;
+        if (matchBlockDisplay(lines, disp.closeLine)) {
+          i = disp.closeLine - 1;
+        } else {
+          lines[disp.closeLine] = prevLine;
+          para.push(tail);
+          i = disp.closeLine;
+        }
       } else {
         i = disp.closeLine;
       }

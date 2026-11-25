@@ -12,6 +12,7 @@
 .investigation-inner h2 { font-size: clamp(1.3rem, 2vw, 1.65rem); line-height: 1.32; margin: .25rem 0 .65rem; }
 .investigation-inner h3 { font-size: 1.03rem; margin: 1.25rem 0 .5rem; }
 .investigation-inner p { margin: .35rem 0 .8rem; white-space: pre-line; }
+.investigation-inner .rich-prose p { white-space: normal; }
 .investigation-inner :is(small, .investigation-meta, .investigation-kind, label span) { color: var(--ink-secondary); }
 .investigation-setup { display: grid; gap: .5rem; max-width: 38rem; }
 .investigation-setup label, .investigation-action-form label { font-size: .88rem; font-weight: 600; }
