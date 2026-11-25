@@ -247,6 +247,7 @@ def check_investigation(browser, binary):
             page.evaluate("async id => (await import('/assets/investigation.js')).refreshInvestigation(id)", parent)
             chart = graph.locator(".investigation-index")
             expect(chart.locator(".investigation-graph-node")).to_have_count(2)
+            expect(chart.locator(".question-match")).to_have_count(0)
             edge = chart.locator('[data-from="mass"][data-to="force"]')
             expect(edge).to_have_attribute("data-hidden", "1")
             edge.focus()
@@ -412,17 +413,24 @@ def check_question_first_investigation(browser, binary):
                 path = scenario["upload"]["primary_path"]
                 state["source_id"] = source
                 if req.get("investigation_scope") == "map":
-                    anchor = {"source_id": source, "path": path,
-                              "file_sha256": hashlib.sha256(body.encode()).hexdigest(),
-                              "source_seq": scenario["upload"]["event_seq"],
-                              "start_line": 2, "end_line": 2, "kind": "passage", "excerpt": lines[1]}
+                    def anchor(index):
+                        return {"source_id": source, "path": path,
+                                "file_sha256": hashlib.sha256(body.encode()).hexdigest(),
+                                "source_seq": scenario["upload"]["event_seq"],
+                                "start_line": index + 1, "end_line": index + 1,
+                                "kind": "passage", "excerpt": lines[index]}
                     state.update(
                         question=req["prompt"], mapping_requested=True, map_seq=11,
                         map={"title": "Dynamics of a unit mass", "coverage": "partial",
                              "answer_node_ids": ["force"], "limitations": [],
-                             "nodes": [{"id": "force", "sentence": lines[1], "main": True,
-                                        "kind": "result", "anchors": [anchor], "questions": []}],
-                             "edges": []},
+                             "nodes": [{"id": "mass", "sentence": lines[0], "main": False,
+                                        "kind": "assumption", "anchors": [anchor(0)], "questions": []},
+                                       {"id": "force", "sentence": lines[1], "main": True,
+                                        "kind": "result", "anchors": [anchor(1)], "questions": []}],
+                             "edges": [{"from": "mass", "to": "force", "kind": "depends_on",
+                                        "basis": "inferred",
+                                        "reason": "Unit mass connects force and acceleration.",
+                                        "anchor": anchor(0)}]},
                     )
                 elif len(state["answers"]) == 0:
                     state["answers"] = [{
@@ -481,8 +489,15 @@ def check_question_first_investigation(browser, binary):
             page.evaluate("() => window.fixtureEventStream.dispatchEvent(new MessageEvent('turn_complete',{data:'{}'}))")
             expect(page.get_by_role("heading", name="Dynamics of a unit mass")).to_be_visible()
             expect(page.locator("#investigation-map .investigation-index")).to_contain_text("Selected for your question")
+            expect(page.locator('#investigation-map .investigation-index [data-node="force"]')).to_contain_text("Selected for your question")
+            expect(page.locator('#investigation-map .investigation-index [data-node="force"]')).to_contain_text(lines[1])
             page.locator('#investigation-map [data-node="force"]').click()
             expect(page.locator("#investigation-map").get_by_label("Focus question")).to_have_value(question)
+            chart = page.locator("#investigation-map .investigation-index")
+            expect(chart.locator(".investigation-graph-node")).to_have_count(2)
+            expect(chart.locator(".question-match")).to_have_count(1)
+            expect(chart.locator(".question-match")).to_contain_text("Selected for your question")
+            expect(chart.locator(".question-match")).to_contain_text(lines[1])
 
             page.locator("#composer-input").fill("How is the force measured?")
             with page.expect_response("**/" + sid + "/messages"):
