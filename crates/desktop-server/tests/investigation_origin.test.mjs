@@ -93,6 +93,9 @@ async function setupHarness(t, hooks = {}) {
   byId.get('investigation-file').files = [];
   byId.get('investigation-existing').options = [];
   byId.get('investigation-existing').add = opt => byId.get('investigation-existing').options.push(opt);
+  byId.get('investigation-status').after = (...nodes) => {
+    for (const node of nodes) { if (node?.id) byId.set(node.id, node); }
+  };
   const submitBtn = createElement('button');
   byId.get('investigation-setup').append(submitBtn);
   byId.get('investigation-origin').hidden = true;
@@ -102,6 +105,7 @@ async function setupHarness(t, hooks = {}) {
     getElementById: id => byId.get(id),
     createElement,
     createTextNode,
+    addEventListener() {},
     activeElement: null,
   };
   globalThis.window = { katex };
@@ -109,16 +113,19 @@ async function setupHarness(t, hooks = {}) {
   t.after(() => Object.assign(globalThis, prev));
 
   const mathHref = new URL('math.js', assetsDir).href;
+  const stateHref = new URL('investigation_state.js', assetsDir).href;
   let source = await readFile(new URL('investigation.js', assetsDir), 'utf8');
   const stubs = {
     'api.js': 'export const getSession = async () => ({}); export const findInvestigationConventions = async () => {};',
-    'composer.js': 'export const arrayBufferToBase64 = () => "";',
+    'composer.js': 'export const arrayBufferToBase64 = () => ""; export const setComposerPlaceholder = () => {};',
     'investigation_map.js': `export const DEFAULT_PAPER_REQUEST = 'Identify'; export const createPaperMap = () => ({ reset() {}, update() {}, updateSummary() {}, renderAnchors() {}, openNode: (...a) => globalThis.__originMapOpen?.(...a) ?? true });`,
     'pdf_preview.js': 'export const openOriginalPdf = () => {};',
     'investigation_conventions.js': 'export const createConventionCatalog = () => ({ reset() {}, update() {} });',
+    'investigation_answer.js': 'export const createAnswerCard = () => ({ reset() {}, update() {} });',
     'source_links.js': 'export const citedPaperLinks = () => [];',
   };
   source = source.replace("'/assets/math.js'", JSON.stringify(mathHref));
+  source = source.replace("'/assets/investigation_state.js'", JSON.stringify(stateHref));
   for (const [name, stub] of Object.entries(stubs)) {
     source = source.replace(`'/assets/${name}'`, JSON.stringify(dataUrl(stub)));
   }

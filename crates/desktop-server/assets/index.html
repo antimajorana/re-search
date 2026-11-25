@@ -223,7 +223,7 @@
 
       <div id="investigation-nav" class="investigation-nav" hidden>
         <div class="segmented-group" role="group" aria-label="Investigation view">
-          <button id="show-paper-map" type="button" class="seg-btn" aria-controls="investigation-panel" aria-pressed="true">Paper map</button>
+          <button id="show-paper-map" type="button" class="seg-btn" aria-controls="investigation-panel" aria-pressed="true">Paper</button>
           <button id="show-investigation-chat" type="button" class="seg-btn" aria-controls="message-stream" aria-pressed="false">Conversation</button>
         </div>
       </div>
@@ -232,7 +232,9 @@
         <div class="investigation-inner">
           <form id="investigation-setup" class="investigation-setup">
             <h2>Investigate a paper</h2>
-            <p>Trace the authors’ main results back to their assumptions, methods and evidence.</p>
+            <p>Add one paper and ask about it. Answers cite line numbers in the paper.</p>
+            <label for="investigation-question">Your question <span>(optional)</span></label>
+            <textarea id="investigation-question" class="text-input" rows="2" placeholder="e.g. Help me understand section V.D.4"></textarea>
             <label for="investigation-file">Primary paper</label>
             <input id="investigation-file" type="file" accept=".tex,.pdf,.md,.txt,.zip,.tgz,.gz" aria-describedby="investigation-formats">
             <small id="investigation-formats">PDF, TeX, Markdown, plain text or a TeX archive. Up to 10 MiB.</small>
@@ -246,8 +248,6 @@
               <div><label>First page <input id="investigation-page-start" type="number" min="1" step="1" class="text-input"></label>
               <label>Last page <input id="investigation-page-end" type="number" min="1" step="1" class="text-input"></label></div>
             </fieldset>
-            <label for="investigation-question">Reading question <span>(optional)</span></label>
-            <textarea id="investigation-question" class="text-input" rows="2" placeholder="Which assumptions does the main result need?"></textarea>
             <button type="submit" class="pill-btn primary">Find main results</button>
           </form>
           <button id="investigation-original" type="button" class="pill-btn sm" hidden>Open original PDF</button>
