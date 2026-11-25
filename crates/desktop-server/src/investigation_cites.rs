@@ -61,14 +61,24 @@ fn is_main_agent_caller(caller: &str) -> bool {
         || caller.starts_with("antigravity:")
 }
 
+fn sha_matches(expected_sha: Option<&str>, actual: Option<&str>) -> bool {
+    match expected_sha {
+        Some(expected) => !expected.is_empty() && actual == Some(expected),
+        None => true,
+    }
+}
+
 /// Collect line ranges received by the model for `primary_path` from `tool.result`
 /// events recorded after `request_seq`, together with the maximum `total_lines`
 /// reported by any matching `fs_read` or `read_paper_lines` result.
+/// When `expected_sha` is `Some`, only results whose `file_sha256` equals `expected_sha`
+/// are credited or allowed to update `observed_total_lines`.
 pub(crate) fn collect_received_ranges(
     ledger: Option<&Ledger>,
     events: &[Event],
     request_seq: u64,
     primary_path: &str,
+    expected_sha: Option<&str>,
 ) -> (Vec<(usize, usize)>, Option<usize>) {
     let mut requests: HashMap<&str, (&str, Option<&Value>)> = HashMap::new();
     for ev in events.iter().filter(|e| e.seq > request_seq && e.kind == "tool.request") {
@@ -108,7 +118,9 @@ pub(crate) fn collect_received_ranges(
             "search_paper_passages" => {
                 if let Some(passages) = val["passages"].as_array() {
                     for passage in passages {
-                        if passage["path"].as_str() == Some(primary_path) {
+                        if passage["path"].as_str() == Some(primary_path)
+                            && sha_matches(expected_sha, passage["file_sha256"].as_str())
+                        {
                             push_range(
                                 &mut ranges,
                                 passage["start_line"].as_u64(),
@@ -120,7 +132,9 @@ pub(crate) fn collect_received_ranges(
             }
             "read_paper_lines" => {
                 let meta = &val["a_meta"];
-                if meta["path"].as_str() != Some(primary_path) {
+                if meta["path"].as_str() != Some(primary_path)
+                    || !sha_matches(expected_sha, meta["file_sha256"].as_str())
+                {
                     continue;
                 }
                 if let Some(total) = meta["total_lines"]
@@ -140,7 +154,10 @@ pub(crate) fn collect_received_ranges(
             }
             "fs_read" => {
                 let is_sources_root = val["root"].as_str().is_none_or(|r| r == "sources");
-                if !is_sources_root || val["path"].as_str() != Some(primary_path) {
+                if !is_sources_root
+                    || val["path"].as_str() != Some(primary_path)
+                    || !sha_matches(expected_sha, val["file_sha256"].as_str())
+                {
                     continue;
                 }
                 if let Some(total) = val["total_lines"]
@@ -249,18 +266,78 @@ pub(crate) fn parse_line_citations(text: &str) -> Vec<(usize, usize)> {
     out
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PageLineBounds {
+    Unrestricted,
+    Allowed(usize, usize),
+    Denied,
+}
+
+fn selected_page_line_bounds(
+    ledger: &Ledger,
+    paper: &Value,
+    receipt: &Value,
+) -> PageLineBounds {
+    if paper["page_start"].is_null() && paper["page_end"].is_null() {
+        return PageLineBounds::Unrestricted;
+    }
+    let read_page = |field: &str, default: usize| -> Option<usize> {
+        if paper[field].is_null() {
+            return Some(default);
+        }
+        paper[field].as_u64().and_then(|n| usize::try_from(n).ok())
+    };
+    let Some(count) = receipt["page_count"]
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+    else {
+        return PageLineBounds::Denied;
+    };
+    let (Some(first), Some(last)) = (read_page("page_start", 1), read_page("page_end", count))
+    else {
+        return PageLineBounds::Denied;
+    };
+    if receipt["format"].as_str() != Some("pdf") || first == 0 || last < first || last > count {
+        return PageLineBounds::Denied;
+    }
+    let Ok(page_lines) = research_tools::pdf::verified_page_lines(receipt, || {
+        let blob = receipt["raw_blob"]
+            .as_str()
+            .ok_or_else(|| "Original PDF unavailable.".to_string())?;
+        ledger.get_blob(blob).map_err(|e| e.to_string())
+    }) else {
+        return PageLineBounds::Denied;
+    };
+    match page_lines
+        .iter()
+        .copied()
+        .filter(|&(p, _, _)| (first..=last).contains(&p))
+        .fold(None::<(usize, usize)>, |acc, (_, a, b)| {
+            Some(match acc {
+                Some((lo, hi)) => (lo.min(a), hi.max(b)),
+                None => (a, b),
+            })
+        }) {
+        Some((min_line, max_line)) => PageLineBounds::Allowed(min_line, max_line),
+        None => PageLineBounds::Denied,
+    }
+}
+
 /// Build the `cites` array (`[{start, end, read}]`) stored on `investigation.answer`.
 /// Keeps only ranges with `1 <= start <= end <= total_lines` (when `total_lines` is known).
-pub(crate) fn answer_cites(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn answer_cites_checked(
     ledger: Option<&Ledger>,
     events: &[Event],
     request_seq: u64,
     primary_path: &str,
+    expected_sha: Option<&str>,
     total_lines: Option<usize>,
+    allowed_lines: PageLineBounds,
     answer_text: &str,
 ) -> Vec<Value> {
     let (received, observed_total) =
-        collect_received_ranges(ledger, events, request_seq, primary_path);
+        collect_received_ranges(ledger, events, request_seq, primary_path, expected_sha);
     let max_lines = total_lines.or(observed_total);
     let mut seen = HashSet::new();
     let mut cites = Vec::new();
@@ -276,11 +353,38 @@ pub(crate) fn answer_cites(
         if !seen.insert((start, end)) {
             continue;
         }
-        let read = end.saturating_sub(start) <= MAX_CLICKABLE_CITE_SPAN
+        let in_allowed_pages = match allowed_lines {
+            PageLineBounds::Unrestricted => true,
+            PageLineBounds::Allowed(min_line, max_line) => min_line <= start && end <= max_line,
+            PageLineBounds::Denied => false,
+        };
+        let read = in_allowed_pages
+            && end.saturating_sub(start) <= MAX_CLICKABLE_CITE_SPAN
             && received.iter().any(|&(rs, re)| rs <= start && end <= re);
         cites.push(json!({ "start": start, "end": end, "read": read }));
     }
     cites
+}
+
+#[cfg(test)]
+pub(crate) fn answer_cites(
+    ledger: Option<&Ledger>,
+    events: &[Event],
+    request_seq: u64,
+    primary_path: &str,
+    total_lines: Option<usize>,
+    answer_text: &str,
+) -> Vec<Value> {
+    answer_cites_checked(
+        ledger,
+        events,
+        request_seq,
+        primary_path,
+        None,
+        total_lines,
+        PageLineBounds::Unrestricted,
+        answer_text,
+    )
 }
 
 pub(crate) fn source_total_lines(
@@ -326,18 +430,20 @@ pub(crate) fn answer_cites_for_session(
     request_seq: u64,
     answer_text: &str,
 ) -> Vec<Value> {
-    let source_id = events
+    let Some(paper_ev) = events
         .iter()
         .rev()
         .find(|e| e.kind == "investigation.paper")
-        .and_then(|e| e.payload["source_id"].as_str());
-    let Some(source_id) = source_id else {
+    else {
         return Vec::new();
     };
-    let source_ev = events
+    let Some(source_id) = paper_ev.payload["source_id"].as_str() else {
+        return Vec::new();
+    };
+    let Some(source_ev) = events
         .iter()
-        .find(|e| e.kind == "source.ingested" && e.payload["source_id"].as_str() == Some(source_id));
-    let Some(source_ev) = source_ev else {
+        .find(|e| e.kind == "source.ingested" && e.payload["source_id"].as_str() == Some(source_id))
+    else {
         return Vec::new();
     };
     let Some(primary_path) = source_ev.payload["primary_path"].as_str() else {
@@ -345,248 +451,22 @@ pub(crate) fn answer_cites_for_session(
     };
     let expected_sha = source_ev.payload["files_sha256"]
         .get(primary_path)
-        .and_then(Value::as_str);
-    let total_lines = source_total_lines(state, session, primary_path, expected_sha);
-    answer_cites(
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let total_lines = source_total_lines(state, session, primary_path, Some(expected_sha));
+    let allowed_lines = selected_page_line_bounds(ledger, &paper_ev.payload, &source_ev.payload);
+    answer_cites_checked(
         Some(ledger),
         events,
         request_seq,
         primary_path,
+        Some(expected_sha),
         total_lines,
+        allowed_lines,
         answer_text,
     )
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn ev(seq: u64, kind: &str, payload: Value) -> Event {
-        Event {
-            session: "s1".to_string(),
-            seq,
-            ts_ms: (seq * 1000) as i64,
-            kind: kind.to_string(),
-            schema_version: 1,
-            payload,
-            prev_hash: String::new(),
-            event_hash: String::new(),
-        }
-    }
-
-    #[test]
-    fn cites_marked_read_only_inside_received_ranges() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let ledger = Ledger::open(dir.path()).expect("open ledger");
-        let path = "src-1/paper.tex";
-        let blob_payload = serde_json::to_vec(&json!({
-            "root": "sources",
-            "path": path,
-            "start_line": 21,
-            "end_line": 30,
-            "total_lines": 100
-        }))
-        .unwrap();
-        let blob_hash = ledger.put_blob(&blob_payload).expect("put_blob");
-
-        let events = vec![
-            // Prior turn read (before request_seq=10) must be ignored.
-            ev(5, "tool.request", json!({"call_id": "old", "tool": "fs_read"})),
-            ev(
-                6,
-                "tool.result",
-                json!({"call_id": "old", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-                    "root": "sources", "path": path, "start_line": 1, "end_line": 5, "total_lines": 100
-                })).unwrap()}}),
-            ),
-            ev(10, "investigation.question_requested", json!({"source_id": "src-1"})),
-            // Workspace-root fs_read with same relative path must be ignored.
-            ev(11, "tool.request", json!({"call_id": "ws", "tool": "fs_read"})),
-            ev(
-                12,
-                "tool.result",
-                json!({"call_id": "ws", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-                    "root": "workspace", "path": path, "start_line": 80, "end_line": 90, "total_lines": 100
-                })).unwrap()}}),
-            ),
-            // Offset-mode fs_read (inline) lines 10..20 + blob lines 21..30 -> merged 10..30.
-            ev(13, "tool.request", json!({"call_id": "r1", "tool": "fs_read"})),
-            ev(
-                14,
-                "tool.result",
-                json!({"call_id": "r1", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-                    "root": "sources", "path": path, "start_line": 10, "end_line": 20, "total_lines": 100
-                })).unwrap()}}),
-            ),
-            ev(15, "tool.request", json!({"call_id": "r2", "tool": "fs_read"})),
-            ev(
-                16,
-                "tool.result",
-                json!({"call_id": "r2", "ok": true, "result": {"blob": blob_hash}}),
-            ),
-            // Grep-mode fs_read: lines 40 and 42 (gap at 41!).
-            ev(17, "tool.request", json!({"call_id": "g1", "tool": "fs_read"})),
-            ev(
-                18,
-                "tool.result",
-                json!({"call_id": "g1", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-                    "root": "sources", "path": path, "matches": [
-                        {"line": 40, "text": "hit a"},
-                        {"line": 42, "text": "hit b"}
-                    ], "total_lines": 100
-                })).unwrap()}}),
-            ),
-            // search_paper_passages: lines 60..65 on primary_path, 70..75 on another paper.
-            ev(19, "tool.request", json!({"call_id": "s1", "tool": "search_paper_passages"})),
-            ev(
-                20,
-                "tool.result",
-                json!({"call_id": "s1", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-                    "passages": [
-                        {"path": path, "start_line": 60, "end_line": 65},
-                        {"path": "src-2/other.tex", "start_line": 70, "end_line": 75}
-                    ]
-                })).unwrap()}}),
-            ),
-        ];
-
-        let answer = concat!(
-            "Offset [L12] and merged [L18–25]. ",
-            "Grep [L40, L42] vs gap [L40-42]. ",
-            "Search [L61-64] vs other paper [L72]. ",
-            "Prior turn [L3], workspace [L85], unread [L50]. ",
-            "Invalid: out of range [L101], reversed [L20-15], zero [L0]."
-        );
-
-        let cites = answer_cites(Some(&ledger), &events, 10, path, Some(100), answer);
-        assert_eq!(
-            cites,
-            vec![
-                json!({"start": 12, "end": 12, "read": true}),
-                json!({"start": 18, "end": 25, "read": true}),
-                json!({"start": 40, "end": 40, "read": true}),
-                json!({"start": 42, "end": 42, "read": true}),
-                json!({"start": 40, "end": 42, "read": false}),
-                json!({"start": 61, "end": 64, "read": true}),
-                json!({"start": 72, "end": 72, "read": false}),
-                json!({"start": 3, "end": 3, "read": false}),
-                json!({"start": 85, "end": 85, "read": false}),
-                json!({"start": 50, "end": 50, "read": false}),
-            ]
-        );
-    }
-
-    #[test]
-    fn read_paper_lines_marks_cites_read() {
-        let path = "src-1/paper.txt";
-        let events = vec![
-            ev(10, "investigation.question_requested", json!({"source_id": "src-1"})),
-            ev(11, "tool.request", json!({"call_id": "r1", "tool": "read_paper_lines"})),
-            ev(
-                12,
-                "tool.result",
-                json!({"call_id": "r1", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-                    "a_meta": {
-                        "path": path,
-                        "start_line": 15,
-                        "end_line": 28,
-                        "total_lines": 50
-                    },
-                    "text": "15\tline"
-                })).unwrap()}}),
-            ),
-        ];
-        let cites = answer_cites(
-            None,
-            &events,
-            10,
-            path,
-            None,
-            "Read [L16-20], unread [L30], out of bounds [L55].",
-        );
-        assert_eq!(
-            cites,
-            vec![
-                json!({"start": 16, "end": 20, "read": true}),
-                json!({"start": 30, "end": 30, "read": false}),
-            ]
-        );
-    }
-
-    #[test]
-    fn caller_allowlist_and_unmatched_results() {
-        let path = "src-1/paper.txt";
-        let res = |cid: &str, s: u64, e: u64| {
-            ev(20, "tool.result", json!({"call_id": cid, "ok": true, "result": {"inline":
-                serde_json::to_string(&json!({"root":"sources","path":path,"start_line":s,"end_line":e,"total_lines":100})).unwrap()}}))
-        };
-        let events = vec![
-            ev(11, "tool.request", json!({"call_id": "w", "tool": "fs_read", "caller": "worker:lit"})),
-            res("w", 1, 5),
-            ev(12, "tool.request", json!({"call_id": "u", "tool": "fs_read", "caller": "user:canvas"})),
-            res("u", 6, 10),
-            ev(13, "tool.request", json!({"call_id": "e", "tool": "fs_read", "caller": ""})),
-            res("e", 11, 15),
-            ev(14, "tool.request", json!({"call_id": "n", "tool": "fs_read", "caller": 42})),
-            res("n", 16, 20),
-            res("unmatched", 21, 25),
-            ev(15, "tool.request", json!({"call_id": "a", "tool": "fs_read", "caller": "agent:s1"})),
-            res("a", 30, 32),
-            ev(16, "tool.request", json!({"call_id": "c", "tool": "fs_read", "caller": "claude-code-cli:s1"})),
-            res("c", 40, 42),
-            ev(17, "tool.request", json!({"call_id": "g", "tool": "fs_read", "caller": "antigravity:s1"})),
-            res("g", 50, 52),
-        ];
-        let cites = answer_cites(
-            None, &events, 10, path, Some(100),
-            "[L2] [L7] [L12] [L17] [L22] [L31] [L41] [L51]",
-        );
-        let flags: Vec<bool> = cites.iter().map(|c| c["read"].as_bool().unwrap()).collect();
-        assert_eq!(flags, vec![false, false, false, false, false, true, true, true]);
-    }
-
-    #[test]
-    fn truncated_empty_and_partial_reads_excluded() {
-        let path = "src-1/paper.txt";
-        let events = vec![
-            ev(11, "tool.request", json!({"call_id": "rpl", "tool": "read_paper_lines", "caller": "agent:s1"})),
-            ev(12, "tool.result", json!({"call_id": "rpl", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-                "a_meta": {"path": path, "start_line": 1, "end_line": 1, "total_lines": 30, "line_truncated": true}
-            })).unwrap()}})),
-            ev(13, "tool.request", json!({"call_id": "eof", "tool": "fs_read", "caller": "agent:s1"})),
-            ev(14, "tool.result", json!({"call_id": "eof", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-                "root": "sources", "path": path, "start_line": 30, "end_line": 30, "returned_chars": 0, "content": ""
-            })).unwrap()}})),
-            ev(15, "tool.request", json!({"call_id": "mid", "tool": "fs_read", "caller": "agent:s1"})),
-            ev(16, "tool.result", json!({"call_id": "mid", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-                "root": "sources", "path": path, "start_line": 5, "end_line": 8, "offset": 12, "truncated": true, "content": "tail\n6\n7\nhead"
-            })).unwrap()}})),
-            ev(17, "tool.request", json!({"call_id": "nl", "tool": "fs_read", "caller": "agent:s1"})),
-            ev(18, "tool.result", json!({"call_id": "nl", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-                "root": "sources", "path": path, "start_line": 10, "end_line": 12, "offset": 0, "truncated": true, "content": "10\n11\n12\n"
-            })).unwrap()}})),
-        ];
-        let cites = answer_cites(
-            None, &events, 10, path, None,
-            "[L1] [L30] [L5] [L6-7] [L8] [L10-12] [L31]",
-        );
-        let got: Vec<(u64, u64, bool)> = cites
-            .iter()
-            .map(|c| (c["start"].as_u64().unwrap(), c["end"].as_u64().unwrap(), c["read"].as_bool().unwrap()))
-            .collect();
-        assert_eq!(got, vec![(1, 1, false), (30, 30, false), (5, 5, false), (6, 7, true), (8, 8, false), (10, 12, true)]);
-    }
-
-    #[test]
-    fn wide_citation_above_513_lines_stays_unread() {
-        let path = "src-1/wide.txt";
-        let events = vec![
-            ev(11, "tool.request", json!({"call_id": "a", "tool": "read_paper_lines", "caller": "agent:s1"})),
-            ev(12, "tool.result", json!({"call_id": "a", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-                "a_meta": {"path": path, "start_line": 1, "end_line": 600, "total_lines": 600}
-            })).unwrap()}})),
-        ];
-        let cites = answer_cites(None, &events, 10, path, Some(600), "[L1-513] [L1-514]");
-        assert_eq!(cites, vec![json!({"start": 1, "end": 513, "read": true}), json!({"start": 1, "end": 514, "read": false})]);
-    }
-}
+#[path = "investigation_cites_tests.rs"]
+mod tests;

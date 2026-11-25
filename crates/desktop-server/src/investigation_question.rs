@@ -137,16 +137,23 @@ pub(crate) fn finish_question(
     seq: u64,
     outcome: std::result::Result<String, String>,
 ) -> std::result::Result<String, String> {
-    let events = ledger.read_session(session).unwrap_or_default();
+    let verified = ledger.read_verified_session(session).ok().map(|(_, evs)| evs);
     let (status, text, error, cites) = match &outcome {
         Ok(reply) => {
             let clipped = reply.chars().take(24_000).collect::<String>();
-            let cites = crate::investigation_cites::answer_cites_for_session(
-                state, ledger, session, &events, seq, &clipped,
-            );
+            let cites = verified
+                .as_deref()
+                .map(|events| {
+                    crate::investigation_cites::answer_cites_for_session(
+                        state, ledger, session, events, seq, &clipped,
+                    )
+                })
+                .unwrap_or_default();
             ("answered", json!(clipped), Value::Null, cites)
         }
         Err(err) => {
+            let events =
+                verified.unwrap_or_else(|| ledger.read_session(session).unwrap_or_default());
             let stopped = events.iter().any(|e| {
                 e.seq > seq && e.kind == "session.abort" && e.payload["stopped"] == true
             });
