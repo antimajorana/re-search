@@ -7,6 +7,7 @@
 //! chat history. All tool calls still flow through `tools::Router::try_call`.
 
 use crate::explore::{explore_tool_spec, run_parallel_exploration, DELEGATE_EXPLORE};
+use crate::paper_read::{paper_read_tool_spec, run_paper_readers, PaperReaderConfig, DELEGATE_READ_PAPER};
 use crate::runner::{validate_turn, Audit};
 use crate::transport::{
     CancelToken, ContentBlock, Message, ModelRequest, Role, StopReason, StreamObserver, ToolSpec,
@@ -60,6 +61,7 @@ pub struct DelegationConfig<'a> {
     pub lean_worker: Option<DelegatedWorkerSpec<'a>>,
     pub lean_router: Option<&'a Router>,
     pub explorer_worker: Option<DelegatedWorkerSpec<'a>>,
+    pub paper_reader: Option<PaperReaderConfig<'a>>,
     pub custom_subagents: Vec<CustomSubagentDelegation<'a>>,
     pub pinned_conventions: Option<String>,
 }
@@ -104,7 +106,7 @@ impl<'a> TargetWorker<'a> {
 pub fn is_delegation_tool(name: &str) -> bool {
     matches!(
         name,
-        DELEGATE_COMPUTE | DELEGATE_LITERATURE | DELEGATE_LEAN | DELEGATE_EXPLORE | DELEGATE_SUBAGENT
+        DELEGATE_COMPUTE | DELEGATE_LITERATURE | DELEGATE_LEAN | DELEGATE_EXPLORE | DELEGATE_READ_PAPER | DELEGATE_SUBAGENT
     )
 }
 
@@ -170,6 +172,9 @@ pub fn delegation_tool_specs(cfg: &DelegationConfig<'_>) -> Vec<ToolSpec> {
     }
     if let Some(w) = &cfg.explorer_worker {
         specs.push(explore_tool_spec(w));
+    }
+    if let Some(pr) = &cfg.paper_reader {
+        specs.push(paper_read_tool_spec(pr));
     }
     if !cfg.custom_subagents.is_empty() {
         let roster = cfg.custom_subagents.iter().map(|sa| {
@@ -384,6 +389,9 @@ pub(crate) fn run_delegation_call(
 ) -> Result<(bool, String), String> {
     if tool_name == DELEGATE_EXPLORE {
         return run_parallel_exploration(audit, router, cfg, tool_use_id, input, cancel);
+    }
+    if tool_name == DELEGATE_READ_PAPER {
+        return run_paper_readers(audit, cfg, tool_use_id, input, cancel);
     }
     let task = input.get("task").and_then(Value::as_str).map(str::trim).unwrap_or("");
     if task.is_empty() {

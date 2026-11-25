@@ -19,6 +19,7 @@ pub mod interaction;
 pub mod model_list;
 pub mod narrator;
 pub mod openai;
+pub mod paper_read;
 pub mod presets;
 mod provenance;
 pub use provenance::workspace_revision;
@@ -49,6 +50,10 @@ pub use delegate::{
     WORKER_MAX_TOKENS,
 };
 pub use explore::{explore_worker_tools, DELEGATE_EXPLORE, EXPLORE_BRANCH_MAX_TURNS, MAX_EXPLORE_BRANCHES};
+pub use paper_read::{
+    paper_reader_tools, PaperReaderConfig, PaperReaderSlice, DELEGATE_READ_PAPER,
+    PAPER_READER_MAX_TURNS, PAPER_READER_RETURN_MAX_BYTES, PAPER_READER_TOOLS,
+};
 pub use gemini::{GeminiConfig, GeminiTransport};
 pub use guardrails::{
     build_research_system_prompt, check_computation_interpretation, check_final_answer_gate,
