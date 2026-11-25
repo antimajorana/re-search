@@ -26,3 +26,17 @@ Who owns what, when two briefs touch the same file:
 | `crates/desktop-server/assets/math*.js`, `markdown.js`, CSS for math | latex | none |
 | `crates/desktop-server/assets/investigation.js`, `composer.js`, `index.html`, `app.js` | ux-ui | latex (`app.js` 2 lines), split-3 (`investigation.js` scope chip) |
 | `crates/desktop-server/assets/investigation_map.js`, `investigation_conventions.js` | split-1 | ux-ui (`openFirst` option, header gate), split-2 (reader label) |
+
+## Which Gemini model runs which agent (user's rule, 2026-11-25)
+
+- Default for every agent (implementation, merge, fixes): **Gemini 4 Neon (High)**,
+  `--model gemini-4-neon-high`.
+- Long reviews and audits: **Gemini 4 Carbon**, `--model gemini-4-carbon-high`.
+
+The coordinator sets the model when it launches the agent; an agent does not switch model itself.
+- Fix rounds (user's choice, 2026-11-25): one orchestrating agent (`gemini-pro-orchestrator` is refused for
+  remote agents, "not available for remote agents"; the CLI falls back to Neon High),
+  which hands each fix to Neon (High) subagents; the coordinator verifies its output at the end.
+- Orchestration from now on (user, 2026-11-25): **Gemini 4 Carbon (Medium)**, `--model gemini-4-carbon-medium`,
+  with the `/teamwork` command, which does what the Orchestrator model would. Agents already running are left
+  as they are.
