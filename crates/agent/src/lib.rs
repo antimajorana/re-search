@@ -26,6 +26,7 @@ pub use provenance::workspace_revision;
 pub mod provider_config;
 pub mod responses;
 pub mod resume;
+pub mod resume_profile;
 pub mod runner;
 pub mod sidetalk;
 pub mod strategist;
@@ -71,6 +72,10 @@ pub use provider_config::{
 pub use responses::{BearerSource, ChatGptConfig, ChatGptTransport, TOOL_NAMESPACE};
 pub use resume::{
     inspect_session_for_resume, resume_agent_loop, ResumeConfig, ResumeInspection, ResumeReject, ResumeRejectKind,
+};
+pub use resume_profile::{
+    check_tool_defs_drift_for_profile, inspect_session_with_profile, resolve_session_profile,
+    ResolvedSessionProfile,
 };
 pub use runner::{
     run_agent_loop, AgentConfig, EventSink, NoopSink, SessionOutcome, DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS,
