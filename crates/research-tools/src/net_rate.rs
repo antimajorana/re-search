@@ -338,6 +338,8 @@ struct GateState {
 pub struct NetRateGate {
     clock: Arc<dyn RateClock>,
     state: Mutex<GateState>,
+    /// Whether a request to a loopback mock waits like the service it stands for.
+    wait_on_loopback: bool,
 }
 
 impl NetRateGate {
@@ -345,6 +347,19 @@ impl NetRateGate {
         Self {
             clock,
             state: Mutex::new(GateState::default()),
+            wait_on_loopback: true,
+        }
+    }
+
+    /// The gate of a running process: real hosts wait on the real clock; a loopback mock is
+    /// counted but never waited for. The limits protect the services, and a mock on
+    /// `127.0.0.1` needs no protection, so tests that reach the process-wide gate through a
+    /// mock do not sleep. Spacing is tested with [`NetRateGate::new`] and a fake clock, which
+    /// does apply the limits to loopback URLs.
+    pub fn process_wide() -> Self {
+        Self {
+            wait_on_loopback: false,
+            ..Self::system()
         }
     }
 
@@ -404,6 +419,12 @@ impl NetRateGate {
         service_hint: Option<Service>,
     ) -> RateGrant {
         let bucket = resolve_bucket(uri, endpoints, service_hint);
+        let host = uri.authority().map(|a| a.host().to_ascii_lowercase()).unwrap_or_default();
+        if !self.wait_on_loopback && (host == "127.0.0.1" || host == "localhost") {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            *state.acquired.entry(bucket.clone()).or_insert(0) += 1;
+            return RateGrant { bucket, granted_at: self.clock.now(), waited: Duration::ZERO };
+        }
         self.acquire_grant(&bucket)
     }
 
@@ -418,7 +439,7 @@ static GLOBAL_GATE: OnceLock<NetRateGate> = OnceLock::new();
 
 /// Process-wide network rate gate shared by every caller and mode in the process.
 pub fn global_gate() -> &'static NetRateGate {
-    GLOBAL_GATE.get_or_init(NetRateGate::system)
+    GLOBAL_GATE.get_or_init(NetRateGate::process_wide)
 }
 
 #[cfg(test)]
