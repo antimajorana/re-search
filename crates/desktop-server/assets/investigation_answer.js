@@ -1,6 +1,20 @@
 // Answer card for question-first Investigation turns.
-import { renderMathTextInto, renderRichInto } from '/assets/math.js';
+import { markdownToRenderedHtml, mathTextToHtml, renderMathTextInto, renderRichInto } from '/assets/math.js';
 import { linkLineCitations } from '/assets/paper_cites.js';
+
+const HAS_MATH_RE = /\$|\\[\[(]|\\begin\{/;
+const NON_ANSWER_STATUSES = new Set(['running', 'stopped', 'failed', 'interrupted']);
+
+function harvestOlderMacros(older) {
+  for (const item of older) {
+    const q = item?.question ? String(item.question) : '';
+    if (q && HAS_MATH_RE.test(q)) mathTextToHtml(q);
+    if (!NON_ANSWER_STATUSES.has(item?.status)) {
+      const text = item?.text ? String(item.text) : '';
+      if (text && HAS_MATH_RE.test(text)) markdownToRenderedHtml(text);
+    }
+  }
+}
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -63,6 +77,7 @@ export function createAnswerCard(host, { onFindMainResults, onOpenConversation, 
     host.hidden = false;
     const newest = rows.at(-1);
     const older = rows.slice(0, -1);
+    if (older.length) harvestOlderMacros(older);
 
     host.append(el('h2', '', 'Answer'));
     if (newest?.question) {

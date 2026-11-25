@@ -17,6 +17,14 @@ const setupDrafts = new Map();
 
 export function initInvestigation(options) {
   callbacks = options;
+  let answerHost = byId('investigation-answer');
+  if (!answerHost) {
+    answerHost = document.createElement('section');
+    answerHost.id = 'investigation-answer';
+    answerHost.setAttribute('aria-live', 'polite');
+    answerHost.hidden = true;
+    byId('investigation-status').after(answerHost);
+  }
   scopeChip = createScopeChip(byId('investigation-status'));
   paperMap = createPaperMap(byId('investigation-map'), {
     citedPaperLinks,
@@ -29,14 +37,6 @@ export function initInvestigation(options) {
     },
     act: handleClaimAction,
   });
-  let answerHost = byId('investigation-answer');
-  if (!answerHost) {
-    answerHost = document.createElement('section');
-    answerHost.id = 'investigation-answer';
-    answerHost.setAttribute('aria-live', 'polite');
-    answerHost.hidden = true;
-    byId('investigation-status').after(answerHost);
-  }
   answerCard = createAnswerCard(answerHost, {
     onFindMainResults: findMainResultsFromAnswer,
     onOpenConversation: () => selectView('chat'),
@@ -82,6 +82,7 @@ export function initInvestigation(options) {
   document.addEventListener?.('research:approvals', event => {
     if (event?.detail?.sessionId !== sessionId || session?.mode !== 'investigation') return;
     approvalWaiting = Boolean(event.detail.waiting);
+    if (!approvalWaiting && session) session = { ...session, pending_approvals: [] };
     syncStatus();
   });
 }
@@ -160,7 +161,7 @@ function showStatus(text) {
 }
 
 function syncStatus() {
-  if (session?.mode !== 'investigation') { clearStatusTimer(); return; }
+  if (typeof document === 'undefined' || session?.mode !== 'investigation') { clearStatusTimer(); return; }
   const inv = session.investigation || {};
   const state = paperViewState(inv, {
     ...session, uploading: uploadingKind, startedAtMs: runStartedAt, approvalWaiting,
@@ -314,6 +315,16 @@ export function showInvestigationSession(id, data) {
   clearTimeout(summaryTimer);
   summaryTimer = null;
   readRevision++;
+  if (typeof document === 'undefined') {
+    clearStatusTimer();
+    sessionId = id;
+    session = data;
+    approvalWaiting = false;
+    uploadingKind = null;
+    runStartedAt = null;
+    localStatus = '';
+    return;
+  }
   if (sessionId !== id) {
     if (sessionId && session?.mode === 'investigation') {
       setupDrafts.set(sessionId, { question: byId('investigation-question').value, source: byId('investigation-existing').value,

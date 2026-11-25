@@ -21,11 +21,12 @@ export function latestRequestEvent(events) {
   }) || null;
 }
 
-function isTurnStopped(events) {
+function stoppedRequestKind(events) {
   const list = Array.isArray(events) ? events : [];
   const req = latestRequestEvent(list);
-  if (!req || req.kind === 'investigation.question_requested') return false;
-  return list.some(ev => ev?.seq > req.seq && ev?.kind === 'session.abort' && ev?.payload?.stopped === true);
+  if (!req || req.kind === 'investigation.question_requested') return null;
+  const aborted = list.some(ev => ev?.seq > req.seq && ev?.kind === 'session.abort' && ev?.payload?.stopped === true);
+  return aborted ? req.kind : null;
 }
 
 export function paperViewState(inv, session, nowMs = Date.now()) {
@@ -53,8 +54,9 @@ export function paperViewState(inv, session, nowMs = Date.now()) {
   const showComposer = hasPaper;
   const composerPlaceholder = hasPaper ? 'Ask a follow-up about this paper…' : null;
 
-  const approvalWaiting = Boolean(sess.approvalWaiting)
-    || (Array.isArray(sess.pending_approvals) && sess.pending_approvals.length > 0);
+  const approvalWaiting = typeof sess.approvalWaiting === 'boolean'
+    ? sess.approvalWaiting
+    : (Array.isArray(sess.pending_approvals) && sess.pending_approvals.length > 0);
   const uploading = sess.uploading || null;
   const latestReq = latestRequestEvent(events);
   const startMs = typeof sess.startedAtMs === 'number'
@@ -71,7 +73,9 @@ export function paperViewState(inv, session, nowMs = Date.now()) {
       && !events.some(ev => ev?.seq > latestTurnReq.seq
         && (ev?.kind === 'investigation.answer' || ev?.kind === 'session.end' || ev?.kind === 'session.abort')))
   );
-  const turnStopped = !running && isTurnStopped(events);
+  const stoppedKind = running ? null : stoppedRequestKind(events);
+  const mappingStopped = stoppedKind === 'investigation.mapping_requested';
+  const otherTurnStopped = Boolean(stoppedKind && !mappingStopped);
 
   let statusText = '';
   let showApprovalButton = false;
@@ -97,10 +101,12 @@ export function paperViewState(inv, session, nowMs = Date.now()) {
     } else {
       statusText = `Reading the paper · ${elapsed}`;
     }
-  } else if (turnStopped) {
+  } else if (mappingStopped) {
     statusText = 'Stopped. Anything already saved is kept below.';
   } else if (data.mapping_error) {
     statusText = (hasMap ? 'Showing the saved main results. The latest reading failed. ' : '') + data.mapping_error;
+  } else if (otherTurnStopped) {
+    statusText = 'Stopped. Anything already saved is kept below.';
   } else if (showMapUnavailable) {
     statusText = 'The main results are unavailable. Try again or read the conversation.';
   }
