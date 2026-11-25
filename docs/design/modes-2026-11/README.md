@@ -1,12 +1,12 @@
 # Three modes, one foundation (2026-11)
 
 Plan and working files for the Investigate, Explore and Solve modes and the shared foundation
-packages F0 to F12. The work branch is `claude/project-thread-caszr2`, based on
+packages F0 to F16 (F13 to F16 were added by the scope revision of 2026-11-25). The work branch is `claude/project-thread-caszr2`, based on
 `gemini/work/fixed`.
 
 | File | What it is |
 |---|---|
-| `00-overview.md` | **The authoritative plan.** Shared packages, contradictions resolved, build order (section 6), evaluation set (section 7), owner decisions (section 8) |
+| `00-overview.md` | **The authoritative plan.** Scope revision (section 0.1), shared packages (section 2), contradictions resolved, build order (section 6), evaluation set (section 7), owner decisions (section 8) |
 | `investigate.md`, `explore.md`, `solve.md` | The three mode designs, already reconciled to the overview. Where one of them and the overview disagree, the overview wins |
 | `reSearch-modes-gaps-and-prior-art-2026-11-25.md` | Background: gaps and prior art |
 | `agents/RULES.md` | Rules for every Gemini agent on this work |
@@ -25,8 +25,21 @@ packages F0 to F12. The work branch is `claude/project-thread-caszr2`, based on
 | V1 skeleton core for TeX | brief `agents/v1-skeleton.md` | `gemini/modes/v1-skeleton` |
 | S2 Solve model, state fold, badge function | brief `agents/s2-solve-model.md` | `gemini/modes/s2-solve-model` |
 | F1 tool profiles | **not started: waits for the owner's decision 1** | - |
+| F13 paper sources and sync, F14 PDF and old papers, F15 write-up, F16 corrections and lessons | planned, no brief yet (overview 2.11 to 2.14; F14a in week 4, F13a in week 6) | - |
+| S16 formal tier (Lean) | cut | - |
+| S22 engine manager (Cadabra2, FORM), V14 prior work in Investigate, version tracking (half of V10) | deferred | - |
+
+## Scope revision of 2026-11-25
+
+The owner decided: add a bring-your-own-papers library with sync (designed on the owner's Kandinsky
+app), PDF-only and old papers (essential), a write-up output and learning from corrections; skip
+numerics ahead of Lean; cut Lean and physlib; defer Cadabra2, FORM, V14 and version tracking.
+`00-overview.md` section 0.1 says what each decision means; the three mode documents carry a "Scope
+revision" block under their titles. For briefs in work: S2 has no Lean-checked tier (brief updated);
+F3 and V1 are unaffected.
 
 ## Owner decisions
 
-Section 8 of the overview is not answered yet. The recommended options are provisional. No agent
+The scope decisions are recorded in section 8.1 of the overview. Sections 8.2 (the first questions)
+and 8.3 (new questions raised by the revision) are not answered yet. The recommended options are provisional. No agent
 implements F1 (tool profiles), adds a tool to any registry, or changes a tool definition.

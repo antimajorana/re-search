@@ -2,6 +2,22 @@
 
 Reconciled with 00-overview.md on 2026-11-25; shared packages are referred to by their F ids.
 
+Scope revision of 2026-11-25 (owner decisions, overview section 0.1), applied below:
+
+- **Bring your own papers.** The library gains the user's own sources (F13: a Kandinsky vault, a
+  folder, a `.bib` file, later Zotero), kept in step by sync. Explore searches them and can read
+  papers the user owns, paywalled ones included.
+- **Old and PDF-only papers are essential.** Reading a PDF is a normal path on the shared PDF
+  package F14 (page-broken text, page links, scans tagged "OCR").
+- **A write-up:** the cited summary (F15). **Corrections are reused** (F16): marks, confirmed and
+  rejected "same" judgements, and notes the user chooses to keep.
+- **Explore is now Investigate's only path to earlier literature**, through "Search wider in
+  Explore" (Investigate's own prior-work check, V14, is deferred).
+- **Lean is cut**: `lean` is no longer a method of a first calculation, and the word "verified" is
+  shown nowhere.
+- In the revised build order the shared literature services (F11) and coverage (F12) come in
+  weeks 9 to 11, so Explore's first screen moves to about week 11 (overview section 6).
+
 Written 2026-11-25. One design, merged from two proposals (researcher-first and architecture-first)
 after a hostile review of both. Code facts were checked read-only on `origin/gemini/work/fixed`
 (commit 824e7c4); nothing was built or run. All waiting times and model-call counts below are
@@ -10,7 +26,7 @@ measures them.
 
 Terms used throughout:
 
-- **Shared package (F0 to F12)**: a piece of code that all three modes (Investigate, Explore, Solve)
+- **Shared package (F0 to F16)**: a piece of code that all three modes (Investigate, Explore, Solve)
   use and that is built once. The packages are defined in `00-overview.md` section 2 ("the
   overview" below). This document names them by id and describes only what is specific to Explore.
 - **Exchange** (previously called "leg" in this document): one model call with one job (for example
@@ -27,8 +43,10 @@ Terms used throughout:
   sha256. Two grades: *full-text* (lines of an ingested paper) and *abstract* (the abstract returned
   by a search service).
 - **Matched**: the word shown on screen when the app found a quote at the cited place ("quote
-  matched at lines 212-219", "4 quotes could not be matched"). On screen "verified" is used only
-  for Lean, in every mode. Internal names (functions, tests) may keep "verify".
+  matched at lines 212-219", "4 quotes could not be matched"). The word "verified" is reserved for
+  a machine-checked formal proof and, since Lean was cut, is shown nowhere. Internal names
+  (functions, tests) may keep "verify". A quote from a PDF names its page; a quote found in the
+  text of a scanned page is "matched in OCR text" and its chip opens the page image (F14).
 - **Coverage**: the app-computed record of where the search looked, what failed and what was read
   (shared package F12).
 - **Paper key**: one stable name per paper across services and sessions (for example
@@ -46,6 +64,10 @@ Terms used throughout:
 4. It draws a concept map of what is known and open around the idea, and proposes a few concrete ways
    to pursue it, each with a first calculation that can be opened in Solve.
 5. Papers found are kept in a local library, so the next exploration starts faster and costs less.
+   The library also holds the papers you already own, read from where you keep them and kept in
+   step (F13), so a paywalled or old paper in your collection can be searched and read.
+6. You can take the result out as a cited summary (F15): what was found for each part, with the
+   quotes and citations, where the search looked, and the directions.
 
 Explore has no proof duty and no verifier verdict. It is a staged pipeline run by the app, not a
 free-running agent.
@@ -69,7 +91,7 @@ b_n ~ alpha*n in the volume-law phase and saturation in the area-law phase."
 | Plan approval | One card lists the 14 queries and the services. "Allow for this session". | 0 |
 | Search | 14 queries run under per-service rate limits. 121 candidates after merging. "Where I looked" fills in: arXiv ok, INSPIRE ok, Crossref ok, Semantic Scholar rate-limited (2 of 4 queries failed, in red). | 0 |
 | Triage | Top 40 by rank get a label and a reason, each with a phrase the app located in the stored abstract. Groups: core (2), related (7), background (12), unrelated (19). Reading list: 6 papers, editable. | 1 |
-| Read | 5 TeX sources fetched (3 s apart), 1 comes from the library. One reader per paper. [P1] turns "read: passages (410 of 2,300 lines), 4 quotes". [P4] is PDF-only and slow; it is read last. | 11 |
+| Read | 4 TeX sources fetched (3 s apart), 1 comes from the fetch cache, 1 ([P4], a journal paper with no arXiv version) is a PDF in the user's own library and is read from there. One reader per paper. [P1] turns "read: passages (410 of 2,300 lines), 4 quotes". [P4] turns "read: passages, 2 quotes (p. 3, p. 7)"; its text was extracted once, when the library indexed it. | 11 |
 | Map and overlaps | 23 nodes. Per part: sc-1 "Model judges: partly the same: [P1] computes Lanczos coefficients for a non-Hermitian chain without measurements across the transition; quote matched at lines 212-219" (after the user's confirming click: "found (partly)"); sc-2 "Model judges: same under another name: 'spread complexity saturation', [P2]; quote"; sc-3 "not found in the searched scope". | 1 |
 | Coverage line next to sc-3 | Written by the app: "Not found in 18 queries on arXiv, INSPIRE-HEP, Crossref; 40 abstracts screened; 6 papers read (5 in passages, 1 in full). Semantic Scholar was rate-limited, so the search is incomplete. Not searched: books, talks, theses outside arXiv, paywalled full text." The chip reads "not found (incomplete search)" because one service failed. Button: "Retry Semantic Scholar". | 0 |
 | Directions | 4 cards. One is marked Concrete: "Bi-Lanczos coefficients along the no-click trajectory. Known: [k-3], [k-5]. Missing: no evidence in the searched scope for b_n across the transition. First calculation: the effective Hamiltonian is quadratic, so the Krylov problem is single-particle of size L; compute b_n for L = 64..512. Check first: the zero-measurement limit must reproduce [k-2]. Risk: trajectory average differs from averaged dynamics [k-7]. Stop if: profiles coincide within error on both sides at L = 512. [Open in Solve]". Two others lack a check and sit under "Loose ideas". | 1 |
@@ -98,10 +120,10 @@ model calls - Stop".
 | Sharpen | "Sharpened idea" card (the data record is still called IdeaBrief; the word "brief" is not shown, because Solve uses "resume brief" for something else): restatement, assumptions, parts (each highlighting the span of the user's own text it comes from), terms and aliases, perspectives with queries, up to 2 questions with defaults applied. All editable. | 5 to 20 s, in parallel with the first search | 1 |
 | Search | One approval card for the whole plan. Then candidates merge in; "Where I looked" updates per service. | 10 to 60 s (arXiv allows 1 request per 3 s) | 0 |
 | Triage | List regroups: core, related, background, unrelated (collapsed). Each label is marked "from abstract". Reading list shown and editable. | 10 to 25 s | 1 |
-| Read | Per paper: queued, fetching, reading, "read: passages (k of N lines), q quotes" or "read: full", "nothing relevant", "unavailable: attach PDF", "PDF only: slow". Quotes appear under the row as they are matched; clicking one opens the source lines. | 10 to 30 s per TeX paper; 30 to 140 s extra per PDF-only paper | 1 to 3 per paper |
+| Read | Per paper: queued, fetching, "from your library", "extracting text (page k of n)", reading, "read: passages (k of N lines), q quotes" or "read: full", "nothing relevant", "unavailable: not on arXiv and not in your library; attach PDF", "scan: quotes are from OCR text". Quotes appear under the row as they are matched; clicking one opens the source lines, or the page for a PDF. | 10 to 30 s per TeX paper; for a PDF whose text is not yet in the library, the extraction time measured by F14a comes on top (one logged run with today's extractor: 30 to 140 s) | 1 to 3 per paper |
 | Map and overlaps | Table with one row per part of the idea: idea sentence, status chip, matched quote with paper and line link, "what differs (model)". Concept map as a grouped list and a graph kept in sync (the shared graph view, F6). | 15 to 40 s | 1 |
 | Directions | Cards in two groups: Concrete and Loose ideas (collapsed). Fixed layout: Question, Known (quote chips), Missing, First calculation with "Check first", Effort, Risks, Stop if. Free text is tagged "suggestion (model)". | 10 to 30 s | 1 |
-| Afterwards | Ask about a node (Conversation tab), "Search more about this node", "Who cited this since" (no model), flag a node, revise the idea (map marked stale, not deleted), Open in Solve, Investigate this paper, export. | - | per action |
+| Afterwards | Ask about a node (Conversation tab), "Search more about this node", "Who cited this since" (no model), flag a node, revise the idea (map marked stale, not deleted), Open in Solve, Investigate this paper, Write up (the cited summary, F15; no model), export. After a mark or a rejection: "Remember this?" (F16). | - | per action |
 
 Presets (ceilings are enforced in code; "typical" is the estimate):
 
@@ -165,7 +187,8 @@ form; `app` = citation expansion and seed lookups.
 
 **Candidate** - `key`, `ids{}`, `title`, `authors[<=8]`, `year`, `abstract` (optional, <= 3,000),
 `abstract_ref` {`raw_blob`, `provider`, `verbatim: bool`}, `found_by[qid]`, `perspectives[]`, `score`,
-`citation_count`, `withdrawn_or_retracted`, `in_library`, `user_seed`, `cited_by_origin` (app-filled;
+`citation_count`, `withdrawn_or_retracted`, `in_library`, `owned` (app-filled: a file of this paper is
+in one of the user's own sources, so it can be read without a fetch), `user_seed`, `cited_by_origin` (app-filled;
 true when the session was opened from an Investigate node and the origin paper cites this one, see
 rule V9). Score is deterministic:
 reciprocal-rank fusion over (query, service) lists, plus number of distinct perspectives, plus a
@@ -176,7 +199,8 @@ index (OpenAlex); those can be shown and triaged but can never be evidence.
 `why` (<= 200), `abstract_quote`}, `reading_list[PaperKey]`.
 
 **PaperRead** - `key`, `version` (for example v2), `source_id`, `source_seq`, `origin`: arxiv_eprint |
-arxiv_pdf | library | upload, `status`: read_full | read_passages | nothing_relevant | unavailable |
+arxiv_pdf | library (the fetch cache) | user_library (a file of the user's own sources, F13) | upload,
+`text_basis` (app-filled, from the source receipt: tex | pdf_text | scan_text_layer | ocr; F14), `status`: read_full | read_passages | nothing_relevant | unavailable |
 failed, `reason`, `lines_sent` (a count; the ranges themselves are in `context.supplied` events, F4),
 `total_lines`, `raw_blob`.
 
@@ -185,7 +209,8 @@ event kinds of F4, not in Explore-only kinds.
 Full text (`evidence.quote`): F4's `QuoteRef` (`source_id`, `path`, `start_line`, `end_line`,
 `file_sha256`, `quote_sha256`) with `cited_range`, `quote` (at most 300 characters), `excerpt`,
 `source_seq`, `caller`, plus `paper_key` and the Explore fields, which are optional in the shared
-payload: `role`: states_result | defines | poses_open_question | method | limitation |
+payload (the page of a PDF quote and the tag "OCR" are not stored: the view computes them from the
+lines and from the source's `text_basis`): `role`: states_result | defines | poses_open_question | method | limitation |
 claims_novelty | negative_result, `subclaim_ids[]`, `gist` (<= 240, model text, always shown next to
 the quote).
 Abstract (`evidence.abstract`): `paper_key`, `quote`, `start`, `end` (offsets filled by the app),
@@ -213,7 +238,8 @@ new map is kept with status `not_in_current_map`, never deleted.
 "definition" is also a node kind in Investigate, where code finds it in the paper; here it needs a
 matched quote with role defines. The same word is kept; the graph legend is per mode. What a node
 rests on is shown by the display grade all modes share (overview 2.10): coverage and verdict text are
-"by code"; a node on `xe` evidence is "matched quote, full text" (solid, quote chip); a node on `xa`
+"by code"; a node on `xe` evidence is "matched quote, full text" (solid, quote chip), or "matched quote, scanned page" with the tag
+"OCR" when the paper is a scan; a node on `xa`
 evidence only is "matched quote, abstract" (dashed, "abstract only"); summaries, differences and
 direction text are "model statement" (dashed or tagged "(model)"); the idea text, marks and
 confirmations are "user statement" (plain, "you").
@@ -268,16 +294,18 @@ sentences come from F12's wording module; the chips above are provisional until 
 **Coverage** (the shared record of F12, `search_coverage.rs`, which Investigate adopts too;
 app-computed from ledger events only) - `providers[]` {`name`, `state`: ok | partial |
 failed | rate_limited | not_configured | disabled, `queries_ok`, `queries_failed`, `cached`},
+`library` {`papers`, `with_full_text`, `hits`} (the user's own papers and the fetch cache, searched
+locally; always listed, never counted as a service by the gate),
 `perspectives[]` {`id`, `kind`, `queries_ok`, `hits`}, `candidates_total`, `screened`,
 `papers` {read_full, read_passages, nothing_relevant, unavailable}, `unavailable_core[]`,
 `year_range`, `citation_expansion` {seeds, hops}, `known_paper_recall` {given, found_by_search, missed[]},
 `not_searched` (fixed app text: books and monographs, theses not on arXiv, talks and unpublished notes,
-non-English literature, most work before 1991 without a DOI, paywalled full text), `gate` {each
-condition, `passed`}.
+non-English literature, most work before 1991 without a DOI unless it is in your library, paywalled
+full text that is not in your library), `gate` {each condition, `passed`}.
 
 **Direction** - `id: r-N`, `title`, `question`, `known[]` {`text`, `node_ids[]`}, `missing[]` {`text`,
 `basis`: no_evidence_in_scope | open_question(q-N)}, `first_calculation` {`setup`, `inputs[node ids]`,
-`method`: by_hand | sympy | numeric | lean | literature, `expected_form` (the shape of the answer,
+`method`: by_hand | sympy | numeric | literature (`lean` was removed with Lean), `expected_form` (the shape of the answer,
 not its value), `check` {`text`, `reproduces`: optional k-N}, `effort`: hours | days | weeks},
 `risks[]` {`text`, `kind`: already_done | technical | no_go | low_payoff, `node_ids[]`}, `stop_if`,
 `solve_setup` {`statement`, `task_kind`: calculate | prove | check_derivation, `target` {`description`,
@@ -317,7 +345,8 @@ F11); they are listed here because Explore writes them.
 | `idea.map` | map recorder | nodes, edges, overlaps, dropped items with reasons |
 | `idea.verdict` | app | Verdict list + Coverage, written at the same head as the map |
 | `idea.directions` | directions recorder | Direction list, map_seq |
-| `idea.note` | user action | target (node, direction, candidate, verdict), action: wrong | not_relevant | pin | key_paper | confirm_same | reject_same | comment |
+| `idea.note` | user action | target (node, direction, candidate, verdict), action: wrong | not_relevant | pin | key_paper | confirm_same | reject_same | comment. These are the corrections F16 reads (4.4) |
+| `lessons.supplied` (shared, F16) | app | `run_id`, `lesson_ids`, `blob`: the notes from the user's earlier corrections that an exchange was given |
 | `idea.stage` | app | stage, state: requested | finished | failed | stopped_at_cap | cancelled, request id. Shown with the shared run-state words (overview 3.3): requested is "Running" (or "Waiting for you" while the plan approval is open), finished is "Done", failed is "Failed", stopped_at_cap and cancelled are "Paused: (reason)" with Continue; a stage left at requested by a crash is "Interrupted" with Retry (rule S3). |
 | `idea.exchange` (previously `idea.leg`) | app | exchange name, attempt, model, tokens in and out, request and response blob hashes, accepted, faults |
 | `handoff.sent` (shared, F7; previously `idea.handoff`) | app | written in this session when a direction or a paper is handed over: direction or paper, target mode: solve | investigate, new session id |
@@ -332,7 +361,7 @@ costs zero model calls, and the user sees and can edit the target's setup screen
 |---|---|
 | Direction (Concrete or Loose), "Open in Solve" | `from`: `NodeRef` of the direction. `target_mode`: solve. `statement`: `solve_setup.statement`. `ask`: `solve_setup` with Solve's field names. `context`: each `known[]` item with role known_result and the `QuoteRef`s of its `xe` evidence. `papers`: `PaperRef`s for `source_keys[]`. `check.reproduces` travels as a suggested done criterion; `risks` and `stop_if` become notes the user sees on the setup card; direction prose travels as `model_text` and is shown as "(model)". |
 | Paper row or map node, "Investigate this paper" | `from`: `NodeRef` of the row or node. `target_mode`: investigate. `papers`: one `PaperRef`. `context`: the quotes Explore already matched in that paper. The parts of the idea travel as a focus. |
-| Arriving from Investigate ("Has this been extended?", "Search wider in Explore") | The idea text is prefilled from `statement.text` and stays editable. `from.paper` names the origin paper; `papers` holds the origin paper and its resolved bibliography, the bibliography used as seeds. If a prior-work task ran in Investigate, its coverage travels so the queries already shown are not repeated. The first screen is the Explore form with terms, library matches and first queries. Rule V9 applies. |
+| Arriving from Investigate ("Has this been extended?", "Search wider in Explore") | The idea text is prefilled from `statement.text` and stays editable. `from.paper` names the origin paper; `papers` holds the origin paper and its resolved bibliography, the bibliography used as seeds. The first screen is the Explore form with terms, library matches and first queries. Rule V9 applies. "Search wider in Explore" is Investigate's only prior-work path while its own check (V14) is deferred: the parts of the idea are then the claims of the result, and Investigate shows this session's status sentence for them on the result's half-badge by reading the latest `idea.verdict` here. Nothing is written back. |
 
 Rules of the packet that bind Explore: nothing arrives as checked (the new session re-ingests the
 same bytes and runs every `QuoteRef` through F4's `verify_quote` against its own receipt; a quote that
@@ -351,22 +380,56 @@ and writes.
 `<data_dir>/library/library.db`, SQLite through the `rusqlite` version already used by the ledger
 crate (bundled build; its build script enables FTS5, to be confirmed by a unit test in F10).
 
+Since the scope revision the library has two kinds of content: papers the app fetched or saw (as
+before), and **the user's own papers**, read from where the user keeps them by shared package F13
+(overview 2.11). The first two sources are a Kandinsky vault (its references folder, one note per
+paper with the metadata, a derived `refs.bib`, PDFs in the vault or in shared folders) and a plain
+folder; then a `.bib` file; then Zotero's database. Sync is one way: the sources are read, never
+written. Files are used in place; bytes are copied only when a paper is opened in a session.
+
 | Table | Content | Rebuildable from ledgers and blobs |
 |---|---|---|
 | `paper` | key, ids, title, authors, year, abstract, bibtex, flags, first and last seen | yes |
 | `alias` | identifier -> key | yes |
-| `fulltext` | key, version, raw blob sha256, format, bytes, origin, fetched time. This table is the fetch cache of F3; a minimal form ships with F3 and F10 adds the rest | yes |
+| `fulltext` | key, version, raw blob sha256, format, bytes, origin, fetched time. This table is the fetch cache of F3; a minimal form ships with F3 and F10 adds the rest. With origin `user_library` a row names a file (path, size, mtime, and sha256 once read) instead of a blob | yes |
+| `source` (F13) | id, kind (kandinsky_vault, folder, bibtex, zotero), root, settings, last sync, state | no (the user's settings) |
+| `source_item` (F13) | source, external id (the user's citation key, or the path), key (empty until the file has an identifier or a hash), ids, files with size and mtime, state (present, changed, missing, possible_duplicate) | yes, by scanning the source again |
+| `paper_text` (F14) | key, version, file sha256, extractor, text blob, page basis: PDF text extracted once per file | yes |
 | `seen` | key, session, role: candidate, triaged, read (written by Explore); investigated, cited_lookup, solve_source (written by the other modes) | yes |
 | `skeleton` | key, version, builder, blob sha256: the structure of a cited paper, built once by Investigate. Explore does not write it | yes |
 | `finding` | key, session, evidence seq, role, gist, quote, cited range | yes |
 | `search_cache` | service, url sha256, raw blob, fetched time (7-day reuse) | no (cache only) |
-| `paper_fts` | FTS5 over title, abstract, gists | yes |
+| `paper_fts` | FTS5 over title, abstract, gists, and the full text where `paper_text` has it | yes |
 | `user_mark` | key, status: unread, skimmed, key, irrelevant; tags; note | no (user data; included in backups) |
 
 Full-text bytes are not copied: they are the ledger's content-addressed blobs. Reusing a paper in a
 new session means re-ingesting the blob through `ingest_bytes`, which writes a fresh `source.ingested`
-event, so the new session checks quotes against its own pinned copy. The library is an index and a
+event, so the new session checks quotes against its own pinned copy. The same holds for a file of
+the user's own sources: opening it ingests its bytes into the session, so moving, editing or
+deleting the file later changes nothing in that session. The library is an index and a
 cache. It is never evidence.
+
+### 4.4 What the user's own papers and corrections change in Explore
+
+- **Preview and candidates.** Library matches include the user's own papers. A candidate that the
+  user owns is marked "in your library" (`owned`) and costs no fetch.
+- **Reading.** The reading queue takes a paper from the library first (F3's order). A paywalled
+  paper that the user owns is read like any other. PDF text comes from F14: quotes name the page;
+  quotes from a scan are tagged "OCR"; a `judged` status may rest on them, tagged so (overview 8.3,
+  question 3).
+- **Coverage.** The library is listed under "Where I looked" with its counts. It is not a service
+  for the gate (rule V3 still needs two literature services), because a private collection is not
+  an index of the literature.
+- **Seeds.** "Papers you already know" can be picked from the library; the user's collections and
+  tags are shown as filters only and are never sent to a service.
+- **Write-up.** The cited summary cites with the user's own citation keys where the paper is in
+  their library, so it drops into a document that already uses their `refs.bib`.
+- **Corrections (F16).** By code: "irrelevant" demotes a paper in later sessions and "key paper"
+  makes it a seed when its terms match (decision 11); a confirmed "same under another name" adds the
+  two names to the alias list used when later queries are built; a rejected one is not proposed as
+  the same again. As notes for the model: only when the user says "Remember this", in their own
+  words, supplied to the sharpen, triage and map exchanges as quoted data and recorded in
+  `lessons.supplied`. Neither changes a verdict: rule V10.
 
 ---
 
@@ -426,7 +489,10 @@ Shared, called by Explore and referred to by package id: `paper_key::*` (F2), `l
 Scholar 1 per s, Crossref 1 per s; every outgoing request of every mode passes it), `paper_fetch::fetch`
 and `fetched_sources` (F3; the session limit is the preset's `max_papers`), `quote_core::verify_quote`
 and `lines_sent` (F4), `run_budget` (F9), `library::*` (F10), `search_coverage::compute` (F12),
-`prior_work_wording::*` (F12; the only place user-facing verdict sentences are produced).
+`prior_work_wording::*` (F12; the only place user-facing verdict sentences are produced),
+`paper_sources::*` (F13; the user's own papers, read through the library), `pdf_pages::*` and
+`pdf_match::*` (F14; page-broken PDF text, the page of a line, matching that ignores ligatures and
+line-end hyphens), `writeup::*` (F15), `lessons::select` and `lessons::record_supplied` (F16).
 
 ### 5.4 HTTP routes (new file `routes_idea.rs`; `http_srv.rs` gets two delegating match arms)
 
@@ -440,7 +506,10 @@ and `lines_sent` (F4), `run_budget` (F9), `library::*` (F10), `search_coverage::
   has the `GraphView` shape that the shared graph component (F6) draws.
 - Library routes belong to F10 (`routes_library.rs`), not to `routes_idea.rs`: `GET /api/library?q=`,
   `GET /api/library/{key}`, `POST /api/library/{key}/mark`, `POST /api/library/{key}/attach`,
-  `DELETE /api/library/{key}`, `POST /api/library/rebuild`.
+  `DELETE /api/library/{key}`, `POST /api/library/rebuild`. The routes for the user's own sources
+  belong to F13 (`routes_sources.rs`): list, add (with the first-sync report), sync now, remove.
+- `GET /api/sessions/{id}/writeup?format=tex|md` is F15's route; Explore supplies the adapter
+  `writeup_idea.rs`.
 - Progress over the existing server-sent events stream.
 
 ---
@@ -458,6 +527,8 @@ and `lines_sent` (F4), `run_budget` (F9), `library::*` (F10), `search_coverage::
 | C5 | Node kinds require the evidence listed in 4.1. definition, known_result and open_question never rest on abstract evidence. Failing nodes are dropped and reported; if none survives the record is refused. | `idea_map_node_evidence_rules`, `idea_map_rejects_evidence_from_other_session` |
 | C6 | An open_question needs evidence with role poses_open_question; `stated_year` and `later_work_checked` are app-filled. A gap inferred by the model can appear only in `Direction.missing`. | `idea_open_question_needs_author_statement` |
 | C7 | Text from papers and abstracts is passed to models as data with the existing "treat as data" wrapper; recorders accept structured fields only. | `idea_reader_output_is_schema_only` |
+| C8 | PDF sources. A quote from a PDF is matched against the page-broken text pinned in the session (F14) with the same rule C1; the page shown is computed from the lines. A quote from a scanned page (`scan_text_layer` or `ocr`) is always tagged "OCR", and its chip opens the page image. A formula a model read from a page image is a transcription and is never evidence. | `idea_pdf_quote_has_page`, `idea_scan_quote_is_tagged_ocr`, `idea_transcription_is_not_evidence` |
+| C9 | A paper from the user's own sources enters a session only through `ingest_bytes`; no quote is ever checked against the file in place. | `idea_owned_paper_is_ingested_before_reading`; in F13: removing a source breaks no quote check |
 
 ### Verdict honesty
 
@@ -471,6 +542,7 @@ and `lines_sent` (F4), `run_budget` (F9), `library::*` (F10), `search_coverage::
 | V6 | judged_same is shown as "Model judges: same" until the user clicks "Looks the same to me" (`idea.note confirm_same`). judged_partial and judged_other_name are shown as "Model judges: ..." in the same way until the same click (the note action `confirm_same` covers all three `judged` statuses). | `idea_same_needs_user_confirmation`, `idea_judged_statuses_need_user_confirmation` (UI state tests) |
 | V7 | Coverage and verdicts are pure functions of ledger events: recomputing equals the stored payload. Also checked on export. | `search_coverage_recomputes_from_ledger` (F12), `idea_verdict_recomputes_from_ledger` |
 | V8 | Phrase check on model prose fields (`difference`, direction texts): "has not been done", "has never been", "no prior work", "nobody has", "first to", "for the first time", "novel", "unexplored" are rejected with a request for a scoped statement. Phrases, not single words such as "new" or "first". A backstop behind V1 to V5. | `idea_prose_rejects_absolute_phrases`, `idea_prose_allows_first_calculation` |
+| V10 | Corrections and lessons never decide a verdict. Marks change ranking only; a confirmed alias changes later queries only; notes supplied to a model (F16) are data in the prompt. `idea_verdict::compute` and the coverage gate read none of them. The user's library is listed in coverage and is never a service for the gate. | `idea_verdict_ignores_lessons_and_marks` (same events with and without lessons give the same verdicts and gate), `idea_library_does_not_count_as_service` |
 | V9 | Exclude the origin paper. When the session was opened by a `handoff.packet` whose `from.paper` is set (an Investigate node asked "Has this been extended?"), that paper never supports judged_same, judged_partial, judged_other_name or abstract_only for any part: `idea_verdict::compute` skips overlaps whose `paper_key` equals the origin's `PaperKey`. The origin's own references stay candidates and are marked "cited by the origin" (`cited_by_origin`). Without this rule every such session would report "found" by pointing at the paper the question came from. | `idea_verdict_excludes_origin_paper`, `idea_origin_references_are_marked` |
 
 ### Directions
@@ -505,7 +577,8 @@ and `lines_sent` (F4), `run_budget` (F9), `library::*` (F10), `search_coverage::
 | S5 | Attaching a library paper re-ingests the same bytes; deleting `library.db` does not break quote checking in any session. | In F10: `library_attach_reingests_same_bytes`, `library_loss_does_not_break_verify` |
 | S6 | Provided by F0: no source file touched by these packages exceeds 600 lines (CI check). | In F0: workflow step in `workbench-checks.yml` |
 | S7 | Only the host writes the mode marker `idea.started`; no tool or recorder can append it. | In F5: the test that lists what each tool can append |
-| S8 | No Explore view shows "new", "novel", "proved" or "verified" outside the allowed places ("verified" only for Lean). | Property test in CI (overview 7.3) |
+| S8 | No Explore view, export or write-up shows "verified" at all, or "new", "novel" or "proved" outside the allowed places. | Property test in CI (overview 7.3) |
+| S9 | The cited summary (F15) is a pure function of ledger events; its status sentences are the stored verdict texts; the coverage paragraph cannot be left out; every citation resolves to a library entry. | Evaluation set W; `idea_writeup_recomputes_from_ledger` |
 
 ---
 
@@ -547,6 +620,10 @@ This document used to build its own version of each piece below. Each is now one
 | F10 Library | `library.rs`, `library_schema.rs`, `routes_library.rs` | Package X5; `idea_library.rs`, `idea_library_schema.rs` |
 | F11 Literature services | `lit_providers.rs`, `lit_abstracts.rs` | Package X2; `idea_providers.rs`, `idea_abstracts.rs` |
 | F12 Coverage, verdict and wording | `search_coverage.rs`, `prior_work.rs`, `prior_work_wording.rs` | Coverage and wording parts of X7; `idea_coverage.rs`, `idea_wording.rs` |
+| F13 Paper sources and sync | The user's own papers in the library: `paper_sources.rs`, adapters, `routes_sources.rs` | The "Zotero link" add-on of section 10; "attach PDF" as the only way to read a paywalled paper |
+| F14 PDF and old papers | Page-broken PDF text kept once per file, page of a line, scan detection, matching for PDF text, later own OCR | The PDF handling inside X9 and X10 |
+| F15 Write-up | Document model and the TeX, Markdown and BibTeX writers; Explore's adapter `writeup_idea.rs` | The Markdown export of X17 |
+| F16 Corrections and lessons | Marks and aliases reused by code; notes kept on request | Decision 11 as an Explore-only rule |
 
 The prefix `idea_` stays for Explore-only code.
 
@@ -638,7 +715,8 @@ package F1 moves that list into data (tool profiles) and is the only package tha
 5. `pipeline_version` in `idea.started` lets a later app version show "made with an older pipeline;
    re-run to update" instead of misreading old events.
 6. Library (F10): created empty on first use. An optional button backfills it from existing sessions'
-   `source.ingested` events (pointers to existing blobs; no bytes move). A `schema_version` table
+   `source.ingested` events (pointers to existing blobs; no bytes move). The user's own sources
+   (F13) are added in Settings; the first sync of a source shows a report before anything is indexed. A `schema_version` table
    guards upgrades; the derived tables can be rebuilt at any time.
 7. A session started after F1 records a profile and will not resume in an older build (said once in
    the release notes).
@@ -657,10 +735,12 @@ specific to Explore.
 
 **X1, X3 and X4 are the first three Explore packages to build.** X1 needs no model, no network and
 no UI decision. X3 and X4 give the first slice that works without a model. Before them the shared
-foundation must exist: F0, F1, F2, F3, F5, F9, F10 and F11 for X3, and also F6 for X4. Order of work, as in the overview's build
-order (section 6): X1 in week 7 of the two-month plan; then, as the first work of month 3, X3 and X4;
+foundation must exist: F0, F1, F2, F3, F5, F9, F10 and F11 for X3, and also F6 for X4. Order of work, as in the overview's revised build
+order (section 6): the library (F10), the user's own sources (F13a) and the PDF text core (F14a)
+land inside the first two months; F11, F12 and X1 follow in weeks 9 to 11; then X3 and X4 (first
+screen at about week 11, a planning estimate; a fifth worker brings it back to about week 9);
 then X6 to X8; then X9 to X13. X14 to X19 follow, with the search-recall half of X14 as soon as X7
-is done.
+is done. The cited summary (F15's Explore adapter) comes after X11.
 
 | Id | Title | What | Files | Size | Depends on |
 |---|---|---|---|---|---|
@@ -673,15 +753,15 @@ is done.
 | X6 | Exchange runner, budget, Sharpen | `agent::exchange` (one model call, validate, up to 2 repairs, `idea.exchange` audit, budget callback into F9); `record_idea_brief`; "Sharpened idea" card with editable queries and answers. | `agent/src/exchange.rs`, `idea_brief.rs`, `idea_exchanges.rs`, `idea_setup.js` | M | X3, F9 |
 | X7 | Plan execution, approval | `idea_search` tool in profile `explore/1`, called by the app through the Router; one batched approval on the shared approval card, which lists each grant it will record; calls into F12 for coverage, gate and wording (no longer built here); known-paper recall input; "Where I looked" panel. | `idea_tools.rs`, `routers.rs` (`build_idea_router`), `idea_exchanges.rs`, `idea_search.js` | M | X6, F1, F11, F12 |
 | X8 | Triage and abstract evidence | `record_idea_triage`, abstract-quote location on F11's verbatim abstracts, `evidence.abstract`, grouped list, reading-list ticks, Quick preset path. | `idea_triage.rs`, `idea_exchanges.rs`, `idea_search.js` | M | X7, F4 |
-| X9 | Reading queue | `idea_fetch_papers` as a thin tool over F3's `paper_fetch` (library blob first, arXiv e-print, PDF last and one at a time; the fetcher itself is no longer built here); `idea.paper`; Attach PDF through the existing upload; row states. | `idea_tools.rs`, `idea_read.rs`, `idea_search.js` | S | X7, F3, F10 |
-| X10 | Passage reader | Passage pack builder, `record_paper_evidence` on the shared quote core (F4), `context.supplied` for every message with paper lines, `evidence.quote`, parallel readers up to the configured limit, live quotes. | `idea_evidence.rs`, `idea_read.rs`, `research-tools/tests/idea_evidence.rs` | L | X6, X9, F4 |
+| X9 | Reading queue | `idea_fetch_papers` as a thin tool over F3's `paper_fetch` (library first, which includes the user's own files and needs no network for them; then arXiv e-print; arXiv PDF last and one at a time; the fetcher itself is no longer built here); PDF text from F14, taken from the library when it was extracted before; `idea.paper` with `text_basis`; Attach PDF through the existing upload; row states. | `idea_tools.rs`, `idea_read.rs`, `idea_search.js` | S | X7, F3, F10 |
+| X10 | Passage reader | Works the same on TeX and on page-broken PDF text (rule C8: page on the chip, "OCR" tag for scans). Passage pack builder, `record_paper_evidence` on the shared quote core (F4), `context.supplied` for every message with paper lines, `evidence.quote`, parallel readers up to the configured limit, live quotes. | `idea_evidence.rs`, `idea_read.rs`, `research-tools/tests/idea_evidence.rs` | L | X6, X9, F4 |
 | X11 | Map, overlaps, verdict | `record_idea_map` (edge reading per kind), node rules, stable ids, `idea_verdict` on F12's status enum and gate, exclude-origin rule (V9), phrase check, map and verdict written at one head. | `idea_map.rs`, `idea_map_validate.rs`, `idea_verdict.rs`, `research-tools/tests/idea_map.rs` | L | X8, X10, F12 |
 | X12 | Map and verdict UI | Verdict table with side-by-side quote, confirm control, grouped list and graph through the shared graph view (an adapter, no layout code of its own), quote chips and badges from F6, node drawer, flags, stale banner. | `idea_map.js`, `tests/idea_map.test.mjs` | M | X11, F6 |
 | X13 | Directions and hand-over buttons | `record_idea_directions`, concreteness, cards, `solve_setup` with Solve's names; two buttons on top of F7: "Open in Solve" (opens Solve's setup card) and "Investigate this paper"; `handoff.sent`; reading the child's state back onto the card. The packet format and the receiving route are F7. | `idea_directions.rs`, `idea_handoff.rs`, `idea_directions.js` | M | X11, F7 |
-| X14 | Evaluation cases for Explore | Set I of the shared evaluation set (overview section 7): ten ideas (3 done, 2 done under another name, 3 done partly, 2 open as far as known), frozen as recorded responses, in F8's manifest format, with answer keys (key papers and expected status per part) written by someone other than the builder. Explore's share of set C (chains): 2 from a paper node to an idea, 2 from an idea to a Solve problem. Measures: time to first content (candidates under 6 s), model calls against the cap, known-paper recall of the search alone per service set, "none in scope" shown for a part with a known earlier source (the false-negative rate that decides whether the mode is announced), "judged same" where the key says different, quotes accepted and rejected per model call, quotes surviving re-matching after a hand-over (must be 100 percent). The harness itself is F8. The search-recall half can start after X7. | `tests/fixtures/eval/` (set I), `desktop-server/tests/idea_eval.rs` | S | F8, X7, then X11 |
+| X14 | Evaluation cases for Explore | Set I of the shared evaluation set (overview section 7): ten ideas (3 done, 2 done under another name, 3 done partly, 2 open as far as known), frozen as recorded responses, in F8's manifest format, with answer keys (key papers and expected status per part) written by someone other than the builder. Explore's share of set C (chains): 2 from a paper node to an idea, 2 from an idea to a Solve problem. Measures: time to first content (candidates under 6 s), model calls against the cap, known-paper recall of the search alone per service set, "none in scope" shown for a part with a known earlier source (the false-negative rate that decides whether the mode is announced), "judged same" where the key says different, quotes accepted and rejected per model call, quotes surviving re-matching after a hand-over (must be 100 percent). Added by the scope revision: for 2 of the ideas a key paper is available only from the library (paywalled), and recall is recorded with and without the library; the Explore reader runs on the PDF-only papers of set P6; set C has 4 chains from a paper node to an idea, 2 of them restated results whose earlier source is known ("Search wider in Explore"), which is where Investigate's deferred prior-work check is now measured. The harness itself is F8. The search-recall half can start after X7. | `tests/fixtures/eval/` (set I), `desktop-server/tests/idea_eval.rs` | S | F8, X7, then X11 |
 | X15 | Conversation turns | Explore system prompt, node context, the four tools of `explore/1` in chat, line-citation check for answers (logic of `investigation_cites.rs` for several papers; lines are credited through F4). The golden file and the earlier definitions are F1. | `idea_chat.rs`, `idea_system_prompt.rs` | M | X11, F1, F4 |
 | X16 | Citation expansion, second round | References and citations of the key papers (relations from F11), in-network ranking, "cited by your core papers but unread", "Who cited this since", Thorough self-check round. | `idea_net.rs`, `idea.rs`, `idea_search.js` | M | X11, F11 |
-| X17 | Library pane and export | Library view, search, marks, Save to project (on F10's routes), Markdown, JSON and BibTeX export with coverage. | `library.js`, `export/src/idea.rs` | M | F10, X11 |
+| X17 | Library pane and export | Library view, search, marks, Save to project (on F10's routes), JSON and BibTeX export with coverage. A minimal library list and the sources panel are built earlier, with F13a (week 6). The readable output is the cited summary of F15 (`writeup_idea.rs`: per part the status sentence, quotes and citations, "what differs (model)", the coverage paragraph, the directions), built after X11; it replaces the Markdown export that was planned here. | `library.js`, `export/src/idea.rs` | M | F10, X11; F15 for the cited summary |
 | X18 | CLI-subscription routes | Run exchanges as plain prompt-in, JSON-out calls through the Claude CLI and Antigravity routes, with the same validators. | `cli_turn.rs`, `cli_relay.rs`, `idea_exchanges.rs` | L | X6, X10 |
 | X19 | Optional services | OpenAlex (new allowlist host, its own entry in F3's network gate, key in settings, threat-model note) and TheoremSearch (off by default, own consent text). | `lit_providers.rs`, `net_rate.rs`, `http_client.rs`, `lib.rs` | S each | F3, F11 |
 
@@ -694,8 +774,9 @@ is done.
 | Idea preview, library, first search on arXiv and INSPIRE-HEP, Crossref | Semantic Scholar (higher limits), OpenAlex (wider field coverage) | Hosted model access for users with none |
 | Complete-search gate reachable with arXiv + INSPIRE-HEP alone | - | Larger citation databases, higher limits |
 | All exchanges with the user's own model access (API key; CLI subscription after X18) | Cheaper model for readers | Heavy PDF parsing (Docling, GROBID) for PDF-only papers |
-| arXiv full text (TeX first), user-attached PDFs | - | Open-access full-text fetch from publisher hosts |
-| Concept map, verdicts, directions, export, library | - | Shared library of maps; Zotero link |
+| arXiv full text (TeX first), user-attached PDFs, PDF-only and scanned papers with page-linked quotes (F14) | - | Open-access full-text fetch from publisher hosts |
+| The user's own papers from a Kandinsky vault, a folder or a `.bib` file, kept in step (F13) | - | - |
+| Concept map, verdicts, directions, cited summary (F15), export, library | - | Shared library of maps |
 
 With no model at all the app still does the first search, shows abstracts and keeps the library.
 The app says plainly which service was "not configured"; this never blocks a verdict.
@@ -723,6 +804,7 @@ The app says plainly which service was "not configured"; this never blocks a ver
 | Gerby / Stacks Project | MIT | idea | Permanent node tags independent of numbering |
 | Solver agent / re-Solve | AGPL-3.0 | lesson | Rules checked per call and returned as errors; prompt-only reminders are ignored |
 | TheoremSearch | no licence | optional public service only, never its code | Off by default |
+| Kandinsky (the owner's notes app) | AGPL-3.0, own | approach; code if the owner allows (overview 8.3, question 2) | The user's papers as files with a derived `refs.bib`; PDFs used in place; scan with a dry-run report; moved files recognised by hash; duplicates by DOI, arXiv id, file hash, ISBN and fuzzy title; citation keys kept; PDF text cached per file |
 | re:Search itself | GPL-3.0 -> AGPL-3.0 | code | Ledger, Router, policy, approver, ingest, quote verification, outline, passage search, mode-marker and legacy-defs patterns |
 
 ---
@@ -746,8 +828,12 @@ The app says plainly which service was "not configured"; this never blocks a ver
 5. **Rate limits.** There is no rate limiter in the code today; F3 adds the one gate that all modes
    share, so an Investigate session fetching at the same time slows Explore down. arXiv at 1 request per 3 s makes an
    18-query plan take up to a minute and six full texts at least 18 s.
-6. **PDF-only papers.** Extraction was logged at 34 to 138 s per paper. Done one at a time, last in
-   the queue, skippable.
+6. **PDF-only and old papers.** Now a normal path (F14), and often the papers that matter most for
+   "has this been done": older work is where an idea is most likely to exist under another name.
+   What remains weak: extraction with today's extractor was logged at 34 to 138 s per paper (F14a
+   measures a second one, and the text is kept once per file); formulas in PDF text are poor and in
+   OCR text useless, so a result stated mainly as a formula may be quoted only by its surrounding
+   sentence; pages with no text at all cannot be read before own OCR exists (F14b).
 7. **Privacy of an unpublished idea.** Terms go to public search services and the text to the user's
    model provider. Queries are shown before sending; an offline switch exists; TheoremSearch is off.
    Once "Allow for this session" is given, later model-written queries run without a prompt (existing
@@ -767,9 +853,17 @@ The app says plainly which service was "not configured"; this never blocks a ver
     citations are from general knowledge (now F11's concern); `SourceIndex` construction outside
     Investigation (now settled in F4) and the CLI plain-prompt path were not read in full; all
     timings are estimates.
-14. **Waiting for the foundation.** Explore now depends on nine shared packages before its first
-    screen (F0, F1, F2, F3, F5, F6, F9, F10, F11). In the overview's two-month plan the Explore screen is the first work of month 3; only
-    X1 and the shared search, coverage and wording code land earlier.
+14. **Waiting for the foundation.** Explore depends on nine shared packages before its first
+    screen (F0, F1, F2, F3, F5, F6, F9, F10, F11). In the overview's revised plan the library, the
+    user's own sources and the PDF text core come first and F11 follows in weeks 9 to 10, so the
+    Explore screen is at about week 11 (planning estimate).
+15. **The library is not the literature.** A hit in the user's own papers is strong evidence that
+    something exists; no hit there says nothing. The coverage sentence keeps the two apart and the
+    gate never counts the library as a service.
+16. **Privacy of the library.** Collections, tags and notes of the user's library stay local. Only
+    terms and identifiers go to search services, as before.
+17. **Stale lessons.** A note kept from an old correction can be wrong for a new idea. Each use is
+    shown, each note has a scope and a use count, and deleting one is one click.
 
 ---
 
@@ -785,9 +879,9 @@ The app says plainly which service was "not configured"; this never blocks a ver
 | 6 | Does "found (same)" need your confirmation? | Yes. It reads "Model judges: same" until you click "Looks the same to me". The shared status table (overview 2.9) applies the same to "found (partly)" and "found under another name". (Overview section 8, decision 9 asks whether Investigate adopts the same click.) |
 | 7 | How much of a paper must be read to count as read? | Passage reading counts, labelled "read: passages (k of N lines)" and counted separately in coverage. "Read more" is one click. |
 | 8 | Which services are on at first release? | arXiv, INSPIRE-HEP, Crossref, Semantic Scholar (all already on the allowlist). OpenAlex after sign-off on the new host (X19). TheoremSearch off until its terms are known. |
-| 9 | Full text beyond arXiv? | Not fetched by the free core (keeps the allowlist closed). You attach the PDF. A wider fetcher could be an add-on. |
+| 9 | Full text beyond arXiv? | Not fetched by the free core (keeps the allowlist closed). It comes from your own library (F13: decided, added) or you attach the PDF. A wider fetcher could be an add-on. |
 | 10 | (Now a shared decision: overview section 8, decision 5, one library for all modes.) | What stays Explore's: projects keep their curated list and get "Save to project". |
-| 11 | Should your marks (key paper, irrelevant) change later rankings? | Yes, visibly: "irrelevant" demotes but still lists; "key" is added as a seed when its terms match. |
+| 11 | Should your marks (key paper, irrelevant) change later rankings? | Yes, visibly: "irrelevant" demotes but still lists; "key" is added as a seed when its terms match. Now part of the shared package F16 (decided, added), together with confirmed and rejected "same" judgements. |
 | 12 | Explore on CLI-subscription routes in the first release? | Deterministic part only, with a clear message. X18 moves up if most of your own use is through a CLI subscription. |
 | 13 | Revising the idea after a map exists? | Keep the old map marked stale; "Re-map against revision n" reuses all evidence at no reader cost. |
 | 14 | Send a contact address to Crossref for its faster pool? | Off. A settings field you may fill in yourself. |
@@ -795,10 +889,13 @@ The app says plainly which service was "not configured"; this never blocks a ver
 | 16 | (Settled by the overview, section 5.2, and section 8, decisions 10 and 11.) | Explore-only events, files and tools use `idea`; shared event kinds are `evidence.quote`, `evidence.abstract`, `context.supplied`, `handoff.packet`, `handoff.sent`; "leg" is renamed "exchange"; the mode is called "Explore" on screen; `delegate_explore` keeps its id and gets the label "Try strategies in parallel". |
 
 Other shared decisions that bind this document and are not repeated here: overview section 8,
-decision 1 (tool profiles; Explore is `explore/1`), 3 ("verified" only for Lean; quotes are
-"matched"), 4 (dashed always means "not checked by code"), 6 (home screen with three cards), 7
-("New research" stays under "More" until X13 and S13 work), 8 (hand-overs re-match every quote and
-carry no badge) and 12 (who writes the answer keys of the evaluation set).
+decision 1 (tool profiles; Explore is `explore/1`), 4 (dashed always means "not checked by code"),
+6 (home screen with three cards), 7 ("New research" stays under "More" until X13 and S13 work), 8
+(hand-overs re-match every quote and carry no badge) and 12 (who writes the answer keys of the
+evaluation set). Decided on 2026-11-25 (overview 8.1): "verified" is shown nowhere and quotes are
+"matched"; bring your own papers; PDF-only and old papers essential; write-up; corrections. New
+questions that touch Explore (overview 8.3): 1 (the revised order), 3 (a `judged` status on OCR
+text), 5 and 6 (sync direction and first sources), 7 (lessons).
 
 ---
 

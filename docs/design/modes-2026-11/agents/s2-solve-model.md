@@ -19,8 +19,11 @@ Pure code, no I/O, no ledger writes, no tool: `crates/research-tools/src/solve_m
    time or all at once, and from any prefix onwards (test this directly).
 3. Own tier and effective tier, the stale and fail rules, and the closure over declared plus
    derived edges, as one badge function from state to what is shown. A step is never shown above
-   the weakest thing it relies on. The word "verified" is reserved for Lean (owner decision 3,
-   provisional): keep every on-screen word in one table of constants.
+   the weakest thing it relies on. Scope revision of 2026-11-25: Lean is cut, so there is **no
+   Lean-checked tier** and no formal-check record; the tier order ends at Computed (`solve.md`
+   4.4). The word "verified" must not appear in any on-screen word: keep every on-screen word in
+   one table of constants, with a test that none contains "verified". If the tier or the word
+   was already written, remove it and say so under "Merge notes".
 4. Property tests R4, R7 and R8 as the rules table defines them, written with a small
    deterministic generator (no new dependency), plus the named unit tests of that table that
    belong to S2.
