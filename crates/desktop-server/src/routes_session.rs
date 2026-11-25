@@ -327,7 +327,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
                 "ts_ms": ev.ts_ms,
                 "kind": ev.kind,
                 "schema_version": ev.schema_version,
-                "payload": ev.payload,
+                "payload": crate::paper_reader::poll_event_payload(&ev.kind, &ev.payload),
                 "prev_hash": ev.prev_hash,
                 "event_hash": ev.event_hash,
             });
@@ -541,6 +541,7 @@ pub fn handle_put_settings(state: &DesktopState, body: &[u8]) -> ApiResult {
         }
         None => None,
     };
+    let reader_patch = crate::paper_reader::parse_reader_settings_patch(&val)?;
 
     if let Some(roles_val) = val.get("roles") {
         let parsed: RoleAssignment =
@@ -588,24 +589,14 @@ pub fn handle_put_settings(state: &DesktopState, body: &[u8]) -> ApiResult {
     store.save_to_data_dir(&state.cfg.data_dir).map_err(internal)?;
     state
         .update_ui_settings(|ui| {
-            if let Some(dp) = next_provider {
-                ui.default_provider = Some(dp);
-            }
-            if let Some(dm) = next_model {
-                ui.default_model = dm;
-            }
-            if let Some(conv) = next_conv {
-                ui.pinned_conventions = Some(conv);
-            }
-            if let Some(rp) = next_role_presets {
-                ui.role_presets = Some(rp);
-            }
-            if let Some(auto) = next_auto_approve {
-                ui.auto_approve_tools = auto;
-            }
-            if let Some(am) = next_agent_models {
-                ui.agent_models = am;
-            }
+            if let Some(dp) = next_provider { ui.default_provider = Some(dp); }
+            if let Some(dm) = next_model { ui.default_model = dm; }
+            if let Some(conv) = next_conv { ui.pinned_conventions = Some(conv); }
+            if let Some(rp) = next_role_presets { ui.role_presets = Some(rp); }
+            if let Some(auto) = next_auto_approve { ui.auto_approve_tools = auto; }
+            if let Some(am) = next_agent_models { ui.agent_models = am; }
+            if let Some(en) = reader_patch.enabled { ui.paper_readers_enabled = en; }
+            if let Some(mp) = reader_patch.max_parallel { ui.paper_reader_max_parallel = mp; }
         })
         .map_err(internal)?;
     if val.get("keys").is_some() || val.get("base_urls").is_some() {

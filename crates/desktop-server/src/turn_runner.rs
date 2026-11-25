@@ -130,13 +130,14 @@ pub(crate) fn spawn_turn_thread(
     Ok(())
 }
 
-fn make_worker_spec<'a>(
+pub(crate) fn make_worker_spec<'a>(
     role: &str,
     display_name: &str,
     built: &'a crate::agent_models::BuiltWorkerTransport,
     system_prompt: &str,
     allowed_tools: Vec<String>,
     max_turns: u32,
+    effort: Option<String>,
 ) -> DelegatedWorkerSpec<'a> {
     DelegatedWorkerSpec {
         role: role.to_string(),
@@ -148,7 +149,7 @@ fn make_worker_spec<'a>(
         allowed_tools,
         max_turns,
         max_tokens: WORKER_MAX_TOKENS,
-        reasoning_effort: None,
+        reasoning_effort: effort,
     }
 }
 
@@ -187,7 +188,19 @@ fn run_session_turn(
         .unwrap_or(DEFAULT_MAX_TOKENS);
 
     let env = Arc::new(state.research_env_for_session(session_id)?);
-    let project_context = crate::investigation::turn_context(crate::project_context::brief(state, session_id)?, req);
+    let prepared_paper_reader = crate::paper_reader::prepare_for_turn(
+        state,
+        &env,
+        &ui,
+        req,
+        session_id,
+        provider,
+        &model,
+    )?;
+    let project_context = crate::paper_reader::append_reader_guidance(
+        crate::investigation::turn_context(crate::project_context::brief(state, session_id)?, req),
+        prepared_paper_reader.is_some(),
+    );
     let transport = state.build_transport(provider, &model)?;
     let v_built = crate::agent_models::resolve_optional_role_transport(
         state,
@@ -287,6 +300,7 @@ fn run_session_turn(
                  Use `set_random_seed(seed)` for stochastic calculations. Leave the final answer to the Orchestrator.",
                 compute_worker_tools(),
                 DEFAULT_WORKER_MAX_TURNS,
+                None,
             )
         }),
         literature_worker: lit_built.as_ref().map(|b| {
@@ -299,6 +313,7 @@ fn run_session_turn(
                  Return exact passages, source paths, line ranges and tool references alongside terms, conventions, and arXiv IDs or DOIs.",
                 literature_worker_tools(),
                 DEFAULT_WORKER_MAX_TURNS,
+                None,
             )
         }),
         lean_worker: lean_built.as_ref().map(|b| {
@@ -311,6 +326,7 @@ fn run_session_turn(
                  Report reusable declarations, verified status, diagnostics, and recorded Proof DAG entries.",
                 lean_worker_tools(),
                 DEFAULT_WORKER_MAX_TURNS,
+                None,
             )
         }),
         lean_router: lean_router.as_ref(),
@@ -322,8 +338,10 @@ fn run_session_turn(
                 "You are an isolated Ultramath Parallel Explorer branch for reSearch. Test only your assigned approach independently using allowed read/compute tools without modifying the Proof DAG. Report viability, exact symbolic/numerical checks, obstructions or counterexamples, and key equations concisely.",
                 explore_worker_tools(),
                 EXPLORE_BRANCH_MAX_TURNS,
+                None,
             )
         }),
+        paper_reader: prepared_paper_reader.as_ref().map(|r| r.as_config()),
         custom_subagents: custom_built
             .iter()
             .map(|(sa, b)| CustomSubagentDelegation {

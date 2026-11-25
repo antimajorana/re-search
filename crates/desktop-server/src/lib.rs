@@ -22,6 +22,7 @@ pub mod launcher;
 mod manuscript_drafts;
 pub mod model_catalog;
 mod original_pdf;
+pub mod paper_reader;
 mod projects;
 pub mod routes_session;
 pub mod routes_subagents;

@@ -96,18 +96,20 @@ pub struct UiSettings {
     pub auto_approve_tools: bool,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub agent_models: std::collections::BTreeMap<String, crate::agent_models::AgentModelSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paper_readers_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paper_reader_max_parallel: Option<usize>,
 }
 
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
-            default_provider: None,
-            default_model: None,
-            pinned_conventions: None,
-            role_presets: None,
-            antigravity_ack: None,
+            default_provider: None, default_model: None, pinned_conventions: None,
+            role_presets: None, antigravity_ack: None,
             auto_approve_tools: default_auto_approve_tools(),
             agent_models: std::collections::BTreeMap::new(),
+            paper_readers_enabled: None, paper_reader_max_parallel: None,
         }
     }
 }
@@ -466,6 +468,8 @@ impl DesktopState {
             "role_presets": ui.role_presets.unwrap_or_else(|| json!({})),
             "auto_approve_tools": ui.auto_approve_tools,
             "agent_models": ui.agent_models,
+            "paper_readers_enabled": ui.paper_readers_enabled,
+            "paper_reader_max_parallel": ui.paper_reader_max_parallel,
         }))
     }
 

@@ -29,6 +29,8 @@ const RESERVED_IDS: &[&str] = &[
     "lean_worker",
     "explorer-worker",
     "explorer_worker",
+    "paper-reader",
+    "paper_reader",
     "step-verifier",
     "full-verifier",
     "strategist",
@@ -110,6 +112,15 @@ pub fn builtin_agents_json() -> Vec<Value> {
             "when": "Invoked by Orchestrator via `delegate_explore` to test 2–4 candidate approaches in parallel.",
             "category": "worker",
             "summary": "Evaluates competing Ansaetze or proof strategies concurrently in read/compute-only branches without mutating the Proof DAG, returning per-branch viability, checks, and obstructions."
+        }),
+        json!({
+            "id": "paper-reader",
+            "role_key": "paper_reader",
+            "name": "Paper Reader",
+            "role": "Isolated Paper Evidence Reader",
+            "when": "Invoked by Orchestrator via `delegate_read_paper` during Investigation turns when enabled.",
+            "category": "worker",
+            "summary": "Reads assigned slices of the paper in parallel using `read_paper_lines` and `search_paper_passages`, saving verified line-and-quote evidence pointers via `note_evidence`."
         }),
         json!({
             "id": "step-verifier",
