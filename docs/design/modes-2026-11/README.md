@@ -28,9 +28,8 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | F6 graph view and shared UI parts | brief `agents/f6-graph-ui.md` | `gemini/modes/f6-graph-ui` |
 | F14a PDF text core | brief `agents/f14a-pdf-core.md` | `gemini/modes/f14a-pdf-core` |
 | F10 library | brief `agents/f10-library.md` | `gemini/modes/f10-library` |
-| F11 literature services | brief `agents/f11-lit-services.md` | `gemini/modes/f11-lit-services` |
-| X1 terms, queries, rank | brief `agents/x1-idea-terms.md` | `gemini/modes/x1-idea-terms` |
-| S3 router gate, S6 check process | brief `agents/s3-s6-gate-worker.md` | `gemini/modes/s3-s6-gate-worker` |
+| F11, X1, S3, S6 in one agent with subagents | brief `agents/q-f11-x1-s3-s6.md` | `gemini/modes/q-f11-x1-s3-s6` |
+| Investigate lane A: V2, V3, V4, V5 in order | brief `agents/inv-a-v2-v5.md`, starts when V1 is merged | `gemini/modes/inv-a-v2-v5` |
 | F13 paper sources and sync, F14 PDF and old papers, F15 write-up, F16 corrections and lessons | planned, no brief yet (overview 2.11 to 2.14; F14a in week 4, F13a in week 6) | - |
 | S16 formal tier (Lean) | cut | - |
 | S22 engine manager (Cadabra2, FORM), V14 prior work in Investigate, version tracking (half of V10) | deferred | - |
