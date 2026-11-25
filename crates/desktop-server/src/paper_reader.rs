@@ -124,6 +124,7 @@ fn is_section_scoped(req: &Value, marker_payload: Option<&Value>) -> bool {
     }
     marker_payload.is_some_and(|m| {
         m["conventions_scope"].as_str() == Some("section")
+            || m["scope"].as_str() == Some("section")
             || m["scope"]["resolved"].as_bool() == Some(true)
             || m["scope"]["status"].as_str() == Some("resolved")
     })
@@ -427,30 +428,54 @@ pub fn prepare_for_turn(
     } else {
         Vec::new()
     };
+    let parse_scope_lines = |s: &Value| -> Option<(usize, usize)> {
+        if let (Some(a), Some(b)) = (
+            s.get("start_line").and_then(Value::as_u64),
+            s.get("end_line").and_then(Value::as_u64),
+        ) {
+            let (a, b) = (a as usize, b as usize);
+            return (a >= 1 && b >= a).then_some((a, b));
+        }
+        let ranges = s.get("ranges").and_then(Value::as_array)?;
+        let mut min_s = usize::MAX;
+        let mut max_e = 0usize;
+        for r in ranges {
+            let arr = r.as_array()?;
+            let a = arr.first()?.as_u64()? as usize;
+            let b = arr.get(1)?.as_u64()? as usize;
+            if a >= 1 && b >= a {
+                min_s = min_s.min(a);
+                max_e = max_e.max(b);
+            }
+        }
+        (min_s != usize::MAX && max_e >= min_s).then_some((min_s, max_e))
+    };
     let scope_lines = req
         .get("_paper_scope")
-        .or_else(|| marker.payload.get("scope"))
-        .and_then(|s| {
-            if let (Some(a), Some(b)) = (
-                s.get("start_line").and_then(Value::as_u64),
-                s.get("end_line").and_then(Value::as_u64),
-            ) {
-                let (a, b) = (a as usize, b as usize);
-                return (a >= 1 && b >= a).then_some((a, b));
+        .and_then(parse_scope_lines)
+        .or_else(|| marker.payload.get("scope").and_then(parse_scope_lines))
+        .or_else(|| {
+            if marker.kind != "investigation.conventions_resumed"
+                || marker.payload["scope"].as_str() != Some("section")
+            {
+                return None;
             }
-            let ranges = s.get("ranges").and_then(Value::as_array)?;
-            let mut min_s = usize::MAX;
-            let mut max_e = 0usize;
-            for r in ranges {
-                let arr = r.as_array()?;
-                let a = arr.first()?.as_u64()? as usize;
-                let b = arr.get(1)?.as_u64()? as usize;
-                if a >= 1 && b >= a {
-                    min_s = min_s.min(a);
-                    max_e = max_e.max(b);
-                }
-            }
-            (min_s != usize::MAX && max_e >= min_s).then_some((min_s, max_e))
+            let map_req = marker
+                .payload
+                .get("for_request_seq")
+                .and_then(Value::as_u64)
+                .and_then(|seq| {
+                    events
+                        .iter()
+                        .find(|e| e.seq == seq && e.kind == "investigation.mapping_requested")
+                })
+                .or_else(|| {
+                    events
+                        .iter()
+                        .rev()
+                        .find(|e| e.kind == "investigation.mapping_requested")
+                })?;
+            map_req.payload.get("scope").and_then(parse_scope_lines)
         });
 
     let Some(expected_sha) = receipt.payload["files_sha256"]

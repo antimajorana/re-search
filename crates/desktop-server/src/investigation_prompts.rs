@@ -66,7 +66,7 @@ pub(crate) fn conventions_resume_instructions(
             pending.join(", ")
         ));
     }
-    let lead = if expanding {
+    let lead = if expanding && !catalog.is_null() && catalog["done"] == true && pending.is_empty() {
         "Expand the section conventions catalog to cover the whole paper."
     } else if catalog.is_null() {
         "Review only the paper's conventions."

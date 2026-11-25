@@ -61,11 +61,18 @@ pub(crate) fn finish(
             .map_err(|e| e.to_string())?;
         return outcome;
     } else if let Some(seq) = req["_paper_request"].as_u64() {
+        let ledger = state.open_ledger()?;
         let (status, text) = match &outcome {
             Ok(t) => ("answered", t),
-            Err(t) => ("failed", t),
+            Err(t) => {
+                let events = ledger.read_session(session).unwrap_or_default();
+                let stopped = events.iter().any(|e| {
+                    e.seq > seq && e.kind == "session.abort" && e.payload["stopped"] == true
+                });
+                (if stopped { "stopped" } else { "failed" }, t)
+            }
         };
-        state.open_ledger()?.append(session,"investigation.result",1,&json!({"request_seq":seq,"status":status,"text":text.chars().take(24000).collect::<String>()})).map_err(|e| e.to_string())?;
+        ledger.append(session,"investigation.result",1,&json!({"request_seq":seq,"status":status,"text":text.chars().take(24000).collect::<String>()})).map_err(|e| e.to_string())?;
     } else if let Some(seq) = req["_paper_map_request"].as_u64() {
         let ledger = state.open_ledger()?;
         let events = ledger.read_session(session).map_err(|e| e.to_string())?;

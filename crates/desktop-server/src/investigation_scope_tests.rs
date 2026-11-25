@@ -152,7 +152,7 @@ fn finish_accepts_section_catalog() {
     let ctx = req["_paper_context"].as_str().unwrap();
     assert!(ctx.contains("Paper structure"), "{ctx}");
     assert!(ctx.contains("Section II.A.1"), "{ctx}");
-    assert!(ctx.contains("record conventions for the scope plus global notation"), "{ctx}");
+    assert!(!ctx.contains("record conventions for the scope"), "{ctx}");
 
     let ledger = state.open_ledger().unwrap();
     let events = ledger.read_session(sid).unwrap();

@@ -251,12 +251,8 @@ pub(crate) fn prepare(
         .as_object_mut()
         .ok_or_else(|| bad("A turn must be a JSON object."))?;
     for field in [
-        "_paper_context",
-        "_paper_request",
-        "_paper_map_request",
-        "_paper_branch_request",
-        "_paper_conventions_request",
-        "_paper_question_request",
+        "_paper_context", "_paper_request", "_paper_map_request", "_paper_branch_request",
+        "_paper_conventions_request", "_paper_question_request", "_paper_scope",
     ] {
         object.remove(field);
     }
@@ -301,33 +297,23 @@ pub(crate) fn prepare(
             if !crate::investigation_scope::conventions_resume_allows(&catalog) {
                 return Err(conflict("The conventions review is already saved."));
             }
-            let expanding = crate::investigation_scope::conventions_expanding_to_paper(
-                &events, seq, &catalog,
-            );
+            let resume_scope =
+                crate::investigation_scope::conventions_resume_scope(&events, seq, &catalog);
+            let expanding =
+                crate::investigation_scope::conventions_expanding_to_paper(&events, seq, &catalog);
             let prior = context_text(&catalog);
             let next_batch = catalog["batch_index"].as_u64().unwrap_or(0) + 1;
             let text = prompts::conventions_resume_instructions(
-                route,
-                &source_id,
-                &source.payload["primary_path"],
-                seq,
-                next_batch,
-                &catalog,
-                &prior,
-                expanding,
+                route, &source_id, &source.payload["primary_path"], seq, next_batch, &catalog,
+                &prior, expanding,
             );
             let mut resumed_payload =
                 json!({"for_request_seq":seq,"source_id":source_id,"map_seq":map.seq});
-            if expanding {
-                resumed_payload["scope"] = json!("paper");
+            if let Some(scope_name) = resume_scope {
+                resumed_payload["scope"] = json!(scope_name);
             }
             ledger
-                .append(
-                    session,
-                    "investigation.conventions_resumed",
-                    1,
-                    &resumed_payload,
-                )
+                .append(session, "investigation.conventions_resumed", 1, &resumed_payload)
                 .map_err(storage)?;
             req["_paper_conventions_request"] = json!(seq);
             text
@@ -350,13 +336,7 @@ pub(crate) fn prepare(
                 "paper_conventions":selected_context["paper_conventions"],"conventions_status":selected_context["conventions_status"],
                 "existing_edges":edges,"selected_edges":selected_context["edges"],"reader_corrections":selected_context["corrections"]});
             let seq = ledger
-                .append(
-                    session,
-                    "investigation.branch_requested",
-                    1,
-                    &json!({"map_seq":map.seq,"node_id":node["id"],
-                "source_id":source_id,"question":focus}),
-                )
+                .append(session, "investigation.branch_requested", 1, &json!({"map_seq":map.seq,"node_id":node["id"],"source_id":source_id,"question":focus}))
                 .map_err(storage)?;
             req["_paper_branch_request"] = json!(seq);
             prompts::branch_turn_instructions(route, seq, &context_text(&context))
@@ -372,13 +352,7 @@ pub(crate) fn prepare(
                 _ => return Err(bad("Unknown Investigation action.")),
             };
             let seq = ledger
-                .append(
-                    session,
-                    "investigation.requested",
-                    1,
-                    &json!({"map_seq":map.seq,"node_id":node["id"],
-                "edge_from":action["edge_from"],"action":name,"question":prompt}),
-                )
+                .append(session, "investigation.requested", 1, &json!({"map_seq":map.seq,"node_id":node["id"],"edge_from":action["edge_from"],"action":name,"question":prompt}))
                 .map_err(storage)?;
             req["_paper_request"] = json!(seq);
             format!(
@@ -387,37 +361,16 @@ pub(crate) fn prepare(
             )
         }
         Scope::Map => crate::investigation_scope::prepare_map(
-            state,
-            &ledger,
-            session,
-            pinned,
-            source,
-            &source_id,
-            (page_start, page_end),
-            req,
-            prompt,
-            route,
+            state, &ledger, session, pinned, source, &source_id, (page_start, page_end), req, prompt, route,
         )?,
         Scope::Question => {
             let prepared_scope = crate::investigation_scope::compute_scope(
-                state,
-                &ledger,
-                session,
-                source,
-                prompt,
-                (page_start, page_end),
+                state, &ledger, session, source, prompt, (page_start, page_end),
             );
             prepare_question(
-                &ledger,
-                session,
-                &events,
-                pinned,
-                &source_id,
+                &ledger, session, &events, pinned, &source_id,
                 source.payload["primary_path"].as_str().unwrap_or_default(),
-                (page_start, page_end),
-                req,
-                prompt,
-                prepared_scope.as_ref(),
+                (page_start, page_end), req, prompt, prepared_scope.as_ref(),
             )?
         }
     };
@@ -448,9 +401,7 @@ pub(crate) fn handle(
         return Err(bad("Invalid Investigation request."));
     }
     let ledger: Ledger = state.open_ledger().map_err(storage)?;
-    let (_, events) = ledger
-        .read_verified_session(session)
-        .map_err(|e| bad(e.to_string()))?;
+    let (_, events) = ledger.read_verified_session(session).map_err(|e| bad(e.to_string()))?;
     if operation == "conventions" {
         let map = current_map(&events, val["map_seq"].as_u64())?;
         let seq = map.payload["request_seq"]
@@ -463,12 +414,12 @@ pub(crate) fn handle(
         }
         val["investigation_conventions"] = json!({"map_seq":map.seq});
         crate::turn_runner::spawn_turn_thread(
-            Arc::clone(state),
-            session.to_owned(),
-            val,
-            "Complete the paper’s conventions review.".into(),
+            Arc::clone(state), session.to_owned(), val, "Complete the paper’s conventions review.".into(),
         )?;
         return Ok((202, json!({"session":session,"status":"running"})));
+    }
+    if operation == "research" {
+        return open_research(state, &ledger, session, &events, &val);
     }
     let (map, node) = selection(&events, &val)?;
     match operation {
@@ -488,12 +439,7 @@ pub(crate) fn handle(
                 "Develop this result: {}\nReading question: {question}",
                 node["sentence"].as_str().unwrap_or_default()
             );
-            crate::turn_runner::spawn_turn_thread(
-                Arc::clone(state),
-                session.to_owned(),
-                val,
-                prompt,
-            )?;
+            crate::turn_runner::spawn_turn_thread(Arc::clone(state), session.to_owned(), val, prompt)?;
             Ok((202, json!({"session":session,"status":"running"})))
         }
         "corrections" => {
@@ -504,10 +450,7 @@ pub(crate) fn handle(
                     "investigation.correction",
                     1,
                     &correction,
-                    &events
-                        .last()
-                        .ok_or_else(|| bad("Map missing from session."))?
-                        .event_hash,
+                    &events.last().ok_or_else(|| bad("Map missing from session."))?.event_hash,
                 )
                 .map_err(|err| match err {
                     ledger::Error::SessionChanged(_) => {
@@ -540,43 +483,95 @@ pub(crate) fn handle(
                 return Err(bad("Keep the question under 8192 characters."));
             }
             val["investigation_action"] = json!({"action":action,"node_id":node["id"],"map_seq":map.seq,"edge_from":val["edge_from"]});
-            crate::turn_runner::spawn_turn_thread(
-                Arc::clone(state),
-                session.to_owned(),
-                val,
-                prompt,
-            )?;
+            crate::turn_runner::spawn_turn_thread(Arc::clone(state), session.to_owned(), val, prompt)?;
             Ok((202, json!({"status":"running","session":session})))
-        }
-        "research" => {
-            let question = text(&val, "question", 8192)?;
-            let mut context = claim_context(&map, &node, &events);
-            context["question"] = json!(question);
-            if let Some(paper) = latest(&events, "investigation.paper") {
-                context["primary_source_id"] = paper.payload["source_id"].clone();
-                context["page_start"] = paper.payload["page_start"].clone();
-                context["page_end"] = paper.payload["page_end"].clone();
-            }
-            context["parent_session"] = json!(session);
-            context["evidence_through_seq"] = json!(events.last().map_or(map.seq, |e| e.seq));
-            let child = export::fork::research_from_paper(&state.cfg.data_dir, session, &context)
-                .map_err(bad)?;
-            let mut meta = state.load_meta(session).unwrap_or_default();
-            meta.id = child.clone();
-            meta.title = question.chars().take(80).collect();
-            meta.allow_model_title = Some(false);
-            meta.archived = false;
-            meta.fork_info = None;
-            meta.created_ms = crate::state::now_ms();
-            state.save_meta(&meta).map_err(storage)?;
-            if let Some(project) = crate::projects::project_for_session(state, session)? {
-                crate::projects::attach_session(state, &project.id, &child)?;
-            }
-            ledger.append(session,"investigation.linked",1,&json!({"session_id":child,"map_seq":map.seq,"node_id":node["id"],"question":question})).map_err(storage)?;
-            Ok((201, json!({"session_id":child})))
         }
         _ => Err(not_found("Unknown Investigation action.")),
     }
+}
+
+fn open_research(
+    state: &DesktopState,
+    ledger: &Ledger,
+    session: &str,
+    events: &[Event],
+    val: &Value,
+) -> ApiResult {
+    let paper = latest(events, "investigation.paper");
+    let has_map_target = !val["map_seq"].is_null() || !val["node_id"].is_null();
+    let (mut context, question, default_through, mut linked) = if has_map_target {
+        let (map, node) = selection(events, val)?;
+        let q = text(val, "question", 8192)?.to_owned();
+        let mut ctx = claim_context(&map, &node, events);
+        ctx["question"] = json!(q);
+        (ctx, q, map.seq, json!({"map_seq": map.seq, "node_id": node["id"]}))
+    } else {
+        if !is_investigation(events) {
+            return Err(bad("Open an Investigation session to use this action."));
+        }
+        let answer = if let Some(aseq) = val["answer_seq"].as_u64() {
+            events.iter().rev().find(|e| {
+                e.kind == "investigation.answer"
+                    && (e.seq == aseq || e.payload["request_seq"].as_u64() == Some(aseq))
+            })
+        } else {
+            events
+                .iter()
+                .rev()
+                .find(|e| e.kind == "investigation.answer" && e.payload["status"] == "answered")
+                .or_else(|| latest(events, "investigation.answer"))
+        }
+        .ok_or_else(|| bad("Map the paper first."))?;
+        let q_req = answer.payload["request_seq"].as_u64().and_then(|seq| {
+            events.iter().find(|e| e.seq == seq && e.kind == "investigation.question_requested")
+        });
+        let q = if val["question"].as_str().is_some_and(|s| !s.trim().is_empty()) {
+            text(val, "question", 8192)?.to_owned()
+        } else {
+            q_req.and_then(|e| e.payload["question"].as_str())
+                .or_else(|| paper.and_then(|p| p.payload["question"].as_str()))
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && s.chars().count() <= 8192)
+                .ok_or_else(|| bad("Provide question using up to 8192 characters."))?
+                .to_owned()
+        };
+        let source_id = paper.and_then(|p| p.payload["source_id"].as_str())
+            .or_else(|| q_req.and_then(|e| e.payload["source_id"].as_str()))
+            .or_else(|| latest(events, "source.ingested").and_then(|e| e.payload["source_id"].as_str()))
+            .ok_or_else(|| bad("Add a paper to this Investigation first."))?;
+        let claim: String = answer.payload["text"].as_str().unwrap_or_default().chars().take(1400).collect();
+        let sources: Vec<Value> = list(&answer.payload["cites"]).iter()
+            .filter(|c| c["read"] == true && c["source_id"].as_str().is_some())
+            .map(|c| json!({"source_id":c["source_id"],"path":c["path"],"start_line":c["start"],"end_line":c["end"],"kind":"passage"}))
+            .collect();
+        let ctx = json!({"source_id":source_id,"answer_seq":answer.seq,"answer_hash":answer.event_hash,
+            "question":q,"claim":claim,"sources":sources,"assumptions":[],"dependencies":[],
+            "edges":[],"corrections":[],"paper_conventions":[]});
+        (ctx, q, answer.seq, json!({"answer_seq": answer.seq}))
+    };
+    if let Some(p) = paper {
+        context["primary_source_id"] = p.payload["source_id"].clone();
+        context["page_start"] = p.payload["page_start"].clone();
+        context["page_end"] = p.payload["page_end"].clone();
+    }
+    context["parent_session"] = json!(session);
+    context["evidence_through_seq"] = json!(events.last().map_or(default_through, |e| e.seq));
+    let child = export::fork::research_from_paper(&state.cfg.data_dir, session, &context).map_err(bad)?;
+    let mut meta = state.load_meta(session).unwrap_or_default();
+    meta.id = child.clone();
+    meta.title = question.chars().take(80).collect();
+    meta.allow_model_title = Some(false);
+    meta.archived = false;
+    meta.fork_info = None;
+    meta.created_ms = crate::state::now_ms();
+    state.save_meta(&meta).map_err(storage)?;
+    if let Some(project) = crate::projects::project_for_session(state, session)? {
+        crate::projects::attach_session(state, &project.id, &child)?;
+    }
+    linked["session_id"] = json!(child);
+    linked["question"] = json!(question);
+    ledger.append(session, "investigation.linked", 1, &linked).map_err(storage)?;
+    Ok((201, json!({"session_id": child})))
 }
 
 #[cfg(test)]

@@ -24,15 +24,49 @@ pub fn research_from_paper(data_dir: &Path, parent: &str, context: &Value) -> Re
     validate_session_id(parent).map_err(|e| e.to_string())?;
     let ledger = Ledger::open_existing(data_dir).map_err(|e| e.to_string())?;
     let (_, events) = ledger.read_verified_session(parent).map_err(|e| e.to_string())?;
-    let map = events.iter().find(|e| e.kind == "investigation.map"
-        && Some(e.seq) == context["map_seq"].as_u64()
-        && Some(e.event_hash.as_str()) == context["map_hash"].as_str()).ok_or("Paper map revision missing.")?;
+    let (primary_source_id, default_through) = if context["map_seq"].is_u64() {
+        let map = events
+            .iter()
+            .find(|e| {
+                e.kind == "investigation.map"
+                    && Some(e.seq) == context["map_seq"].as_u64()
+                    && Some(e.event_hash.as_str()) == context["map_hash"].as_str()
+            })
+            .ok_or("Paper map revision missing.")?;
+        let src = map.payload["source_id"]
+            .as_str()
+            .ok_or("Paper map has no primary source.")?;
+        (src, map.seq)
+    } else if context["answer_seq"].is_u64() {
+        let ans = events
+            .iter()
+            .find(|e| {
+                e.kind == "investigation.answer"
+                    && Some(e.seq) == context["answer_seq"].as_u64()
+                    && Some(e.event_hash.as_str()) == context["answer_hash"].as_str()
+            })
+            .ok_or("Investigation answer revision missing.")?;
+        let src = context["source_id"]
+            .as_str()
+            .or_else(|| context["primary_source_id"].as_str())
+            .or_else(|| {
+                events
+                    .iter()
+                    .rev()
+                    .find(|e| e.kind == "investigation.paper")
+                    .and_then(|e| e.payload["source_id"].as_str())
+            })
+            .ok_or("Investigation answer has no primary source.")?;
+        (src, ans.seq)
+    } else {
+        return Err("Paper map revision missing.".into());
+    };
     let mut source_ids = std::collections::BTreeSet::new();
-    source_ids.insert(map.payload["source_id"].as_str().ok_or("Paper map has no primary source.")?);
+    source_ids.insert(primary_source_id);
     for anchor in context["sources"].as_array().into_iter().flatten() {
         source_ids.insert(anchor["source_id"].as_str().ok_or("Source identifier missing from evidence.")?);
     }
-    let through = context["evidence_through_seq"].as_u64().unwrap_or(map.seq);
+    let through = context["evidence_through_seq"].as_u64().unwrap_or(default_through);
     let sources: Vec<_> = events.iter().filter(|e| e.kind == "source.ingested" && e.seq <= through
         && e.payload["source_id"].as_str().is_some_and(|id| source_ids.contains(id))).cloned().collect();
     if source_ids.iter().any(|id| !sources.iter().any(|e| e.payload["source_id"].as_str() == Some(*id))) {
