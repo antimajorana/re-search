@@ -105,7 +105,7 @@ fn solve_setup_and_node_ref_roundtrip_with_default_budgets() {
             DoneCriterion {
                 id: "c1".into(),
                 kind: DoneCriterionKind::FinalTierAtLeast,
-                params: json!({"tier": "computed"}),
+                params: json!({"tier": "verified"}),
             },
             DoneCriterion {
                 id: "c2".into(),
@@ -123,7 +123,6 @@ fn solve_setup_and_node_ref_roundtrip_with_default_budgets() {
             solver: RoleModel { provider: "anthropic".into(), model: "m-solver".into() },
             verifier: RoleModel { provider: "openai".into(), model: "m-verifier".into() },
             compute: None,
-            formal: None,
         },
         budgets: SolveBudgets::default(),
         review: ReviewPolicy::ProseOnly,

@@ -382,6 +382,9 @@ fn parse_solve_ack(seq: u64, p: &Value) -> Option<SolveAck> {
 }
 
 fn parse_evidence_quote(seq: u64, p: &Value) -> Option<EvidenceQuoteRecord> {
+    let ocr = p.get("ocr").and_then(Value::as_bool).unwrap_or(false)
+        || p.get("scanned").and_then(Value::as_bool).unwrap_or(false)
+        || p.get("source_kind").and_then(Value::as_str) == Some("ocr");
     Some(EvidenceQuoteRecord {
         seq,
         source_id: p.get("source_id").and_then(Value::as_str)?.to_string(),
@@ -390,6 +393,7 @@ fn parse_evidence_quote(seq: u64, p: &Value) -> Option<EvidenceQuoteRecord> {
         end_line: p.get("end_line").and_then(Value::as_u64)? as usize,
         file_sha256: p.get("file_sha256").and_then(Value::as_str)?.to_string(),
         quote_sha256: p.get("quote_sha256").and_then(Value::as_str)?.to_string(),
+        ocr,
     })
 }
 

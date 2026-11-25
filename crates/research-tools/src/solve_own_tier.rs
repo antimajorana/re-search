@@ -1,14 +1,14 @@
-//! Own-tier evaluation for a single Solve step (`solve.md` 4.4 rules 1–6).
+//! Own-tier evaluation for a single Solve step (`solve.md` 4.4 rules 1, 3–6; rule 2 cut with Lean).
 //! Internal helper module for `solve_status.rs`.
 
 use crate::proof_dag::tool_reference_matches;
 use crate::solve_badge::{
-    wording, Tier, FORMAL_CHECK_NAME, IDENTITY_NUMERIC_MIN_DIGITS, IDENTITY_NUMERIC_MIN_POINTS,
-    STANDARD_LEAN_AXIOMS,
+    wording, Tier, IDENTITY_NUMERIC_MIN_DIGITS, IDENTITY_NUMERIC_MIN_POINTS,
 };
 use crate::solve_model::{
-    compute_claim_sha256, AckKind, CheckOutcome, Claim, ClaimForm, ReviewIndependence,
-    ReviewVerdict, SolveCheck, SolveEntry, SolveReview, StepEntryType, StepOrigin,
+    compute_claim_sha256, AckKind, CheckOutcome, Claim, ClaimForm, EvidenceQuoteRecord,
+    ReviewIndependence, ReviewVerdict, SolveCheck, SolveEntry, SolveReview, StepEntryType,
+    StepOrigin,
 };
 use crate::solve_state::SolveState;
 use serde_json::Value;
@@ -25,39 +25,10 @@ const NON_IDENTITY_CHECKS: &[&str] = &[
 pub(crate) struct OwnEval {
     pub own: Tier,
     pub sublabels: Vec<String>,
-    pub used_numeric_only: bool,
+    pub series_flags: Vec<String>,
+    pub ocr_source: bool,
     pub own_checks_stale: bool,
     pub has_transcription_ack: bool,
-    pub has_formal_stmt_ack: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FormalOutcome {
-    Verified,
-    Rejected,
-    Other,
-}
-
-fn classify_formal_check(check: &SolveCheck) -> FormalOutcome {
-    let status = check.evidence.get("status").and_then(Value::as_str);
-    if check.outcome == CheckOutcome::Fail || status == Some("rejected") {
-        return FormalOutcome::Rejected;
-    }
-    if status == Some("verified") {
-        let Some(axioms) = check.evidence.get("axioms").and_then(Value::as_array) else {
-            // R14: exit 0 / verified without axiom confirmation is rejected.
-            return FormalOutcome::Rejected;
-        };
-        let all_standard = axioms
-            .iter()
-            .all(|a| a.as_str().is_some_and(|name| STANDARD_LEAN_AXIOMS.contains(&name)));
-        if all_standard && check.outcome == CheckOutcome::Pass {
-            return FormalOutcome::Verified;
-        }
-        // R14: sorryAx or any non-standard axiom is rejected.
-        return FormalOutcome::Rejected;
-    }
-    FormalOutcome::Other
 }
 
 fn has_matching_ack(state: &SolveState, entry: &SolveEntry, kind: AckKind) -> bool {
@@ -89,17 +60,16 @@ fn latest_matching_review<'a>(
         .max_by_key(|r| r.seq)
 }
 
-fn is_cited_entry(state: &SolveState, entry: &SolveEntry) -> bool {
+fn matched_cited_quote<'a>(
+    state: &'a SolveState,
+    entry: &SolveEntry,
+) -> Option<&'a EvidenceQuoteRecord> {
     if entry.entry_type != StepEntryType::ReferenceLookup {
-        return false;
+        return None;
     }
-    let Some(ref qref) = entry.source_ref else {
-        return false;
-    };
-    let Some(seq) = qref.evidence_seq else {
-        return false;
-    };
-    state.quotes.get(&seq).is_some_and(|rec| rec.matches_ref(qref))
+    let qref = entry.source_ref.as_ref()?;
+    let seq = qref.evidence_seq?;
+    state.quotes.get(&seq).filter(|rec| rec.matches_ref(qref))
 }
 
 fn has_successful_cited_receipt(state: &SolveState, entry: &SolveEntry) -> bool {
@@ -112,19 +82,6 @@ fn has_successful_cited_receipt(state: &SolveState, entry: &SolveEntry) -> bool 
         }
     }
     false
-}
-
-fn check_matches_formal_binding(check: &SolveCheck, entry: &SolveEntry) -> bool {
-    if let Some(ref c_esh) = check.entry_sha256 {
-        return entry.entry_sha256.as_deref() == Some(c_esh.as_str());
-    }
-    if check.claim_sha256.is_empty() {
-        return false;
-    }
-    if entry.claim_sha256.as_deref() == Some(check.claim_sha256.as_str()) {
-        return true;
-    }
-    entry.claims.is_empty() && entry.entry_sha256.as_deref() == Some(check.claim_sha256.as_str())
 }
 
 /// Returns `(all_handles_portable, handle_redefined_stale)`.
@@ -180,6 +137,16 @@ fn series_order_satisfied(claim: &Claim, check: &SolveCheck) -> bool {
     false
 }
 
+/// Fail-closed check for whether a series or `independent_recompute` check compared
+/// coefficients/results symbolically (exact) rather than numerically (`solve.md` 4.4).
+fn is_exact_comparison(check: &SolveCheck) -> bool {
+    if check.evidence.get("numeric_coefficients").and_then(Value::as_bool) == Some(true) {
+        return false;
+    }
+    check.evidence.get("exact").and_then(Value::as_bool) == Some(true)
+        || check.evidence.get("comparison").and_then(Value::as_str) == Some("exact")
+}
+
 fn value_two_runs_differ(state: &SolveState, claim: &Claim, check: &SolveCheck) -> bool {
     let code_from_handle = |h| {
         let expr = state.handles.get(h)?;
@@ -196,11 +163,12 @@ fn value_two_runs_differ(state: &SolveState, claim: &Claim, check: &SolveCheck) 
     matches!((h1, h2), (Some(a), Some(b)) if !a.is_empty() && !b.is_empty() && a != b)
 }
 
-fn equation_numeric_qualifies(check: &SolveCheck) -> bool {
+fn equation_numeric_evidence(check: &SolveCheck) -> Option<(u64, u64)> {
     let points = check.evidence.get("points").and_then(Value::as_u64).unwrap_or(0);
     let digits = check.evidence.get("digits").and_then(Value::as_u64).unwrap_or(0);
     let domain_ok = check.evidence.get("domain_checked").and_then(Value::as_bool) != Some(false);
-    points >= IDENTITY_NUMERIC_MIN_POINTS && digits >= IDENTITY_NUMERIC_MIN_DIGITS && domain_ok
+    (points >= IDENTITY_NUMERIC_MIN_POINTS && digits >= IDENTITY_NUMERIC_MIN_DIGITS && domain_ok)
+        .then_some((points, digits))
 }
 
 pub(crate) fn push_unique(list: &mut Vec<String>, item: String) {
@@ -214,22 +182,10 @@ pub(crate) fn evaluate_own(state: &SolveState, entry: &SolveEntry) -> OwnEval {
     let (all_portable, handle_redefined_stale) = handles_status(state, entry);
 
     let mut matching_claim_checks: Vec<&SolveCheck> = Vec::new();
-    let mut matching_formal_checks: Vec<&SolveCheck> = Vec::new();
     let mut has_stale_claim_check = handle_redefined_stale;
-    let mut has_stale_formal_check = false;
 
-    for check in &state.checks {
-        if check.name == FORMAL_CHECK_NAME {
-            if check_matches_formal_binding(check, entry) {
-                if current_math == Some(check.math_sha256.as_str()) {
-                    matching_formal_checks.push(check);
-                } else if current_math.is_some() {
-                    has_stale_formal_check = true;
-                }
-            }
-            continue;
-        }
-        if let Some(ref c_hash) = entry.claim_sha256 {
+    if let Some(ref c_hash) = entry.claim_sha256 {
+        for check in &state.checks {
             if check.claim_sha256 == *c_hash {
                 if current_math == Some(check.math_sha256.as_str())
                     && all_portable
@@ -243,16 +199,14 @@ pub(crate) fn evaluate_own(state: &SolveState, entry: &SolveEntry) -> OwnEval {
         }
     }
 
-    let own_checks_stale = (has_stale_claim_check && matching_claim_checks.is_empty())
-        || (has_stale_formal_check && matching_formal_checks.is_empty());
-
+    let own_checks_stale = has_stale_claim_check && matching_claim_checks.is_empty();
     let latest_review = latest_matching_review(state, entry);
     let has_transcription_ack = has_matching_ack(state, entry, AckKind::Transcription);
-    let has_formal_stmt_ack = has_matching_ack(state, entry, AckKind::FormalStatement);
     let has_hand_checked = has_matching_ack(state, entry, AckKind::HandChecked);
     let has_assumption_ack = has_matching_ack(state, entry, AckKind::Assumption);
 
     let mut sublabels: Vec<String> = Vec::new();
+    let mut series_flags: Vec<String> = Vec::new();
     let mut any_claim_check_failed = false;
     for check in &matching_claim_checks {
         if check.outcome == CheckOutcome::Fail {
@@ -264,26 +218,20 @@ pub(crate) fn evaluate_own(state: &SolveState, entry: &SolveEntry) -> OwnEval {
         }
     }
 
-    let any_formal_rejected = matching_formal_checks
-        .iter()
-        .any(|c| classify_formal_check(c) == FormalOutcome::Rejected);
-    let any_formal_verified = matching_formal_checks
-        .iter()
-        .any(|c| classify_formal_check(c) == FormalOutcome::Verified);
-
-    let mk = |own: Tier, sublabels: Vec<String>, used_numeric_only: bool| OwnEval {
+    let mk = |own: Tier, sublabels: Vec<String>, series_flags: Vec<String>, ocr_source: bool| OwnEval {
         own,
         sublabels,
-        used_numeric_only,
+        series_flags,
+        ocr_source,
         own_checks_stale,
         has_transcription_ack,
-        has_formal_stmt_ack,
     };
 
     // Rule 1: Failed overrides everything and is never cleared by a later passing check.
+    // Includes any failed numeric guard on an otherwise symbolically verified equation (R8).
     let review_rejected = latest_review.is_some_and(|r| r.verdict == ReviewVerdict::Rejected);
-    if any_claim_check_failed || any_formal_rejected || review_rejected {
-        return mk(Tier::Failed, sublabels, false);
+    if any_claim_check_failed || review_rejected {
+        return mk(Tier::Failed, sublabels, series_flags, false);
     }
 
     // Rule 5 (neutral bases & solver assumptions): Given, Cited, Assumed by model.
@@ -292,37 +240,38 @@ pub(crate) fn evaluate_own(state: &SolveState, entry: &SolveEntry) -> OwnEval {
             entry.origin,
             Some(StepOrigin::Setup | StepOrigin::Given | StepOrigin::User)
         ) || has_assumption_ack;
-        return mk(if is_given { Tier::Given } else { Tier::AssumedByModel }, sublabels, false);
+        return mk(
+            if is_given { Tier::Given } else { Tier::AssumedByModel },
+            sublabels,
+            series_flags,
+            false,
+        );
     }
-    if is_cited_entry(state, entry) {
-        return mk(Tier::Cited, sublabels, false);
+    if let Some(quote) = matched_cited_quote(state, entry) {
+        return mk(Tier::Cited, sublabels, series_flags, quote.ocr);
     }
 
-    // Rule 2: Lean-checked.
-    if any_formal_verified {
-        return mk(Tier::LeanChecked, sublabels, false);
-    }
-
-    // Rule 3: Computed — every claim must have a passing identity-class check.
-    let (all_claims_computed, used_numeric_only) = evaluate_claims_computed(
+    // Rule 3: Verified (4) or Checked numerically (3).
+    // Each claim gets the tier of its best passing identity check; the step gets the lowest
+    // tier among its claims (`solve.md` 4.4 rule 3).
+    if let Some(computed_tier) = evaluate_claims_computed_tier(
         state,
         entry,
         &matching_claim_checks,
         all_portable,
         handle_redefined_stale,
         &mut sublabels,
-    );
-    if all_claims_computed {
-        return mk(Tier::Computed, sublabels, used_numeric_only);
+        &mut series_flags,
+    ) {
+        return mk(computed_tier, sublabels, series_flags, false);
     }
 
     // Rule 4: Checked by you / Model agreed / Model agreed (same model).
     if has_hand_checked {
-        return mk(Tier::CheckedByYou, sublabels, false);
+        return mk(Tier::CheckedByYou, sublabels, series_flags, false);
     }
     if let Some(review) = latest_review.filter(|r| r.verdict == ReviewVerdict::Accepted) {
-        let tier = review_accepted_tier(state, review);
-        return mk(tier, sublabels, false);
+        return mk(review_accepted_tier(state, review), sublabels, series_flags, false);
     }
 
     // Rule 6: Unchecked (with "ran" sublabel for computation step with receipt and no claims).
@@ -332,27 +281,27 @@ pub(crate) fn evaluate_own(state: &SolveState, entry: &SolveEntry) -> OwnEval {
     {
         push_unique(&mut sublabels, wording::SUBLABEL_RAN.to_string());
     }
-    mk(Tier::Unchecked, sublabels, false)
+    mk(Tier::Unchecked, sublabels, series_flags, false)
 }
 
-fn evaluate_claims_computed(
+fn evaluate_claims_computed_tier(
     state: &SolveState,
     entry: &SolveEntry,
     matching_checks: &[&SolveCheck],
     all_portable: bool,
     handle_redefined_stale: bool,
     sublabels: &mut Vec<String>,
-) -> (bool, bool) {
-    let mut all_computed = !entry.claims.is_empty()
+    series_flags: &mut Vec<String>,
+) -> Option<Tier> {
+    let eligible = !entry.claims.is_empty()
         && all_portable
         && !handle_redefined_stale
         && entry.claim_sha256.is_some();
-    let mut used_numeric_only = false;
+
+    let mut step_tier: Option<Tier> = if eligible { Some(Tier::Verified) } else { None };
 
     for (idx, claim) in entry.claims.iter().enumerate() {
-        let mut claim_passed = false;
-        let mut claim_strong = false;
-        let mut claim_numeric = false;
+        let mut best_claim_tier: Option<Tier> = None;
 
         for check in matching_checks
             .iter()
@@ -360,38 +309,59 @@ fn evaluate_claims_computed(
         {
             match (claim.form, check.name.as_str()) {
                 (ClaimForm::Equation, "identity_symbolic") => {
-                    claim_passed = true;
-                    claim_strong = true;
+                    best_claim_tier = best_of(best_claim_tier, Tier::Verified);
                     push_unique(sublabels, wording::SUBLABEL_SYMBOLIC.to_string());
                 }
-                (ClaimForm::Equation, "identity_numeric") if equation_numeric_qualifies(check) => {
-                    claim_passed = true;
-                    claim_numeric = true;
-                    push_unique(sublabels, wording::SUBLABEL_NUMERIC_ONLY.to_string());
+                (ClaimForm::Equation, "identity_numeric") => {
+                    if let Some((pts, digs)) = equation_numeric_evidence(check) {
+                        best_claim_tier = best_of(best_claim_tier, Tier::CheckedNumerically);
+                        push_unique(
+                            sublabels,
+                            wording::format_numeric_equation_sublabel(pts, digs),
+                        );
+                    }
                 }
                 (ClaimForm::Equation | ClaimForm::Value, "independent_recompute") => {
-                    claim_passed = true;
-                    claim_strong = true;
+                    let t = if is_exact_comparison(check) {
+                        Tier::Verified
+                    } else {
+                        Tier::CheckedNumerically
+                    };
+                    best_claim_tier = best_of(best_claim_tier, t);
                     push_unique(sublabels, wording::SUBLABEL_INDEPENDENT_RECOMPUTE.to_string());
                 }
                 (ClaimForm::Series, "series_match" | "vanishes_to_order")
                     if series_order_satisfied(claim, check) =>
                 {
-                    claim_passed = true;
-                    let sub = match &claim.order {
-                        Some(o) => wording::format_series_sublabel(&o.variable, o.n),
-                        None => wording::SUBLABEL_SERIES_FALLBACK.to_string(),
-                    };
-                    push_unique(sublabels, sub);
+                    let exact = is_exact_comparison(check);
+                    let t = if exact { Tier::Verified } else { Tier::CheckedNumerically };
+                    best_claim_tier = best_of(best_claim_tier, t);
+                    if let Some(ref o) = claim.order {
+                        let order_text = wording::format_series_order(&o.variable, o.n);
+                        push_unique(series_flags, order_text.clone());
+                        let sub = if exact {
+                            order_text
+                        } else {
+                            wording::format_series_numeric_sublabel(&o.variable, o.n)
+                        };
+                        push_unique(sublabels, sub);
+                    } else {
+                        let sub = if exact {
+                            wording::SUBLABEL_SERIES_FALLBACK
+                        } else {
+                            wording::SUBLABEL_SERIES_NUMERIC_FALLBACK
+                        };
+                        push_unique(sublabels, sub.to_string());
+                    }
                 }
                 (ClaimForm::Value, "identity_numeric")
                     if value_two_runs_differ(state, claim, check) =>
                 {
-                    claim_passed = true;
+                    best_claim_tier = best_of(best_claim_tier, Tier::CheckedNumerically);
                     push_unique(sublabels, wording::SUBLABEL_TWO_RUNS_AGREE.to_string());
                 }
                 (ClaimForm::Inequality, "counterexample_search") => {
-                    // Rule 3 & R8: never grants Computed, only adds the sublabel.
+                    // Rule 3 & R8: never grants a computed tier, only adds the sublabel.
                     push_unique(
                         sublabels,
                         wording::SUBLABEL_SAMPLED_NO_COUNTEREXAMPLE.to_string(),
@@ -400,14 +370,26 @@ fn evaluate_claims_computed(
                 _ => {}
             }
         }
-        if claim_numeric && !claim_strong {
-            used_numeric_only = true;
-        }
-        if !claim_passed {
-            all_computed = false;
-        }
+
+        step_tier = match (step_tier, best_claim_tier) {
+            (Some(cur), Some(claim_t)) => {
+                if claim_t.lattice_rank() < cur.lattice_rank() {
+                    Some(claim_t)
+                } else {
+                    Some(cur)
+                }
+            }
+            _ => None,
+        };
     }
-    (all_computed, used_numeric_only)
+    step_tier
+}
+
+fn best_of(current: Option<Tier>, candidate: Tier) -> Option<Tier> {
+    match current {
+        Some(cur) if cur.lattice_rank() >= candidate.lattice_rank() => Some(cur),
+        _ => Some(candidate),
+    }
 }
 
 fn review_accepted_tier(state: &SolveState, review: &SolveReview) -> Tier {

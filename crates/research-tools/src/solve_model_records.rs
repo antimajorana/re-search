@@ -82,8 +82,6 @@ pub struct SolveRoles {
     pub verifier: RoleModel,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compute: Option<RoleModel>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub formal: Option<RoleModel>,
 }
 
 /// Default Solve budgets (`solve.md` 4.1 & D8).
@@ -179,7 +177,6 @@ pub struct SolveReview {
 pub enum AckKind {
     Assumption,
     Transcription,
-    FormalStatement,
     HandChecked,
 }
 

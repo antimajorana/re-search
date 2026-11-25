@@ -45,7 +45,6 @@ fn sample_setup(rev: u32, convention: &str) -> SolveSetup {
             solver: RoleModel { provider: "anthropic".into(), model: "solver-m".into() },
             verifier: RoleModel { provider: "openai".into(), model: "verifier-m".into() },
             compute: None,
-            formal: None,
         },
         budgets: SolveBudgets::default(),
         review: crate::solve_model::ReviewPolicy::ProseOnly,
@@ -186,7 +185,6 @@ fn rich_session_events() -> Vec<Event> {
                 claim_sha256: claim_hash,
                 claim_index: 0,
                 entry_id: Some("e-3".into()),
-                entry_sha256: None,
                 math_sha256: math_sha,
                 name: "identity_symbolic".into(),
                 registry_sha256: "reg-1".into(),
@@ -222,11 +220,16 @@ fn rich_session_events() -> Vec<Event> {
         mk_event(16, event_kinds::SESSION_RESUME, json!({"tool_profile": "solve/1"})),
         mk_event(
             17,
+            event_kinds::LESSONS_SUPPLIED,
+            json!({"run_id": "r-1", "lesson_ids": ["L-1"], "blob": "bb"}),
+        ),
+        mk_event(
+            18,
             event_kinds::SOLVE_DONE,
             json!({
                 "final_entry_id": "e-3",
-                "own_tier": "Computed",
-                "effective_tier": "Computed",
+                "own_tier": "Verified",
+                "effective_tier": "Verified",
                 "criteria": [],
                 "rests_on": {"given": ["e-1", "e-2"], "cited": [], "assumed_by_model": [], "weakest": []},
                 "status": "finished",
@@ -260,10 +263,10 @@ fn incremental_fold_matches_all_at_once_and_every_prefix() {
     }
 
     assert!(all_at_once.started);
-    assert_eq!(all_at_once.upto_seq, 17);
+    assert_eq!(all_at_once.upto_seq, 18);
     assert_eq!(all_at_once.run_status, SolveRunStatus::Done(SolveDoneStatus::Finished));
     assert_eq!(all_at_once.tier("e-2").unwrap().effective, Tier::Given);
-    assert_eq!(all_at_once.tier("e-3").unwrap().effective, Tier::Computed);
+    assert_eq!(all_at_once.tier("e-3").unwrap().effective, Tier::Verified);
     assert!(all_at_once.pending_runs.is_empty());
 }
 

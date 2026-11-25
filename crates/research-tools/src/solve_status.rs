@@ -3,6 +3,7 @@
 //! Combines own-tier evaluation (`solve_own_tier`), monotone effective-tier propagation
 //! over declared plus derived edges (`proof_closure`), stale/fail rules, flags, and the
 //! single badge function (`solve_badge::badge_for_step`). Pure code, no I/O.
+//! Reads no lessons (`solve.md` R24).
 
 use crate::proof_closure::{all_deps, proper_ancestor_ids, topological_order};
 pub use crate::solve_badge::*;
@@ -126,9 +127,8 @@ fn propagate_step(
         Tier::Stale
     } else {
         match min_rank {
-            5 => eval.own,
-            4 => Tier::LeanChecked,
-            3 => Tier::Computed,
+            4 => eval.own,
+            3 => Tier::CheckedNumerically,
             2 => {
                 let any_model_agreed = eval.own == Tier::ModelAgreed
                     || dep_ranks.iter().any(|(_, r, t, _)| *r == 2 && *t == Tier::ModelAgreed);
@@ -200,19 +200,21 @@ fn attach_flags(
             if entry.transcription.is_some() && !eval.has_transcription_ack {
                 flags.push(wording::FLAG_TRANSCRIPTION_UNCONFIRMED.to_string());
             }
-            if eval.own == Tier::LeanChecked && !eval.has_formal_stmt_ack {
-                flags.push(wording::FLAG_STATEMENT_MATCH_UNCONFIRMED.to_string());
-            }
             if eval.own == Tier::ModelAgreedSameModel
                 || step_tier.effective == Tier::ModelAgreedSameModel
             {
                 flags.push(wording::FLAG_SAME_MODEL.to_string());
             }
-            if eval.own == Tier::Computed && eval.used_numeric_only {
-                flags.push(wording::FLAG_NUMERIC_ONLY.to_string());
+            if eval.own.is_computed() {
+                for sf in &eval.series_flags {
+                    push_unique(&mut flags, sf.clone());
+                }
             }
             if model_assumptions_count > 0 {
                 flags.push(wording::format_model_assumptions_flag(model_assumptions_count));
+            }
+            if eval.own == Tier::Cited && eval.ocr_source {
+                flags.push(wording::FLAG_OCR_SOURCE.to_string());
             }
             step_tier.flags = flags;
         }

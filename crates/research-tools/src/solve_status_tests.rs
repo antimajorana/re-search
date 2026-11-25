@@ -70,7 +70,6 @@ impl Harness {
                 solver: RoleModel { provider: "anthropic".into(), model: "solver-1".into() },
                 verifier: RoleModel { provider: "openai".into(), model: "verifier-1".into() },
                 compute: None,
-                formal: None,
             },
             budgets: SolveBudgets::default(),
             review: ReviewPolicy::ProseOnly,
@@ -166,7 +165,6 @@ impl Harness {
                 claim_sha256: claim_sha.into(),
                 claim_index,
                 entry_id: Some(entry_id.into()),
-                entry_sha256: None,
                 math_sha256: math_sha,
                 name: name.into(),
                 registry_sha256: "reg-v1".into(),
@@ -176,30 +174,6 @@ impl Harness {
                 receipt: ReceiptRef { call_id: "c-chk".into(), result_seq: self.seq + 1 },
                 evidence,
                 evidence_sha256: "ev-sha".into(),
-            })
-            .unwrap(),
-        );
-    }
-
-    fn add_formal(&mut self, entry_id: &str, entry_sha: &str, outcome: CheckOutcome, ev: Value) {
-        let math_sha = self.math_sha();
-        self.emit(
-            event_kinds::SOLVE_CHECK,
-            serde_json::to_value(SolveCheck {
-                check_id: format!("fc-{}", self.seq + 1),
-                claim_sha256: String::new(),
-                claim_index: 0,
-                entry_id: Some(entry_id.into()),
-                entry_sha256: Some(entry_sha.into()),
-                math_sha256: math_sha,
-                name: FORMAL_CHECK_NAME.into(),
-                registry_sha256: "lean".into(),
-                params: json!({}),
-                outcome,
-                asked_by: CheckRequester::Solver,
-                receipt: ReceiptRef { call_id: "c-lean".into(), result_seq: self.seq + 1 },
-                evidence: ev,
-                evidence_sha256: "fev".into(),
             })
             .unwrap(),
         );
@@ -219,6 +193,36 @@ fn eq_claim(lhs: HandleRef, rhs: HandleRef) -> Claim {
 }
 
 #[test]
+fn wording_constants_allow_verified_only_for_verified_badge_and_own_check_line() {
+    assert_eq!(wording::BADGE_VERIFIED, "Verified");
+    assert_eq!(wording::OWN_CHECK_VERIFIED, "own check: verified");
+    assert_eq!(wording::BADGE_CHECKED_NUMERICALLY, "Checked numerically");
+
+    for &c in wording::NON_VERIFIED_CONSTANTS {
+        let lower = c.to_ascii_lowercase();
+        assert!(!lower.contains("verified"), "non-verified constant `{c}` contains `verified`");
+        for word in lower.split(|ch: char| !ch.is_ascii_alphanumeric()) {
+            assert!(
+                !matches!(word, "proved" | "new" | "novel" | "computed"),
+                "disallowed word `{word}` in constant `{c}`"
+            );
+        }
+    }
+
+    // Explicit tier order: Unchecked (0) < SameModel (1) < ModelAgreed/CheckedByYou (2)
+    // < CheckedNumerically (3) < Verified (4).
+    assert_eq!(Tier::Unchecked.ordered_rank(), Some(0));
+    assert_eq!(Tier::ModelAgreedSameModel.ordered_rank(), Some(1));
+    assert_eq!(Tier::ModelAgreed.ordered_rank(), Some(2));
+    assert_eq!(Tier::CheckedByYou.ordered_rank(), Some(2));
+    assert_eq!(Tier::CheckedNumerically.ordered_rank(), Some(3));
+    assert_eq!(Tier::Verified.ordered_rank(), Some(4));
+    assert_eq!(Tier::Failed.ordered_rank(), None);
+    assert_eq!(Tier::Given.ordered_rank(), None);
+    assert_eq!(Tier::Cited.ordered_rank(), None);
+}
+
+#[test]
 fn r4_resaving_handle_drops_tier_and_rerecording_same_claim_keeps_checks() {
     let mut h = Harness::new();
     let r1 = h.add_sympy_run("c1", "code1");
@@ -230,16 +234,18 @@ fn r4_resaving_handle_drops_tier_and_rerecording_same_claim_keeps_checks() {
     );
     let claim_sha = claim_sha.unwrap();
     h.add_check(&claim_sha, 0, "e-1", "identity_symbolic", CheckOutcome::Pass, json!({"residual": "0"}));
-    assert_eq!(h.state.tier("e-1").unwrap().effective, Tier::Computed);
+    assert_eq!(h.state.tier("e-1").unwrap().effective, Tier::Verified);
+    assert_eq!(h.state.badge("e-1").unwrap().label, wording::BADGE_VERIFIED);
+    assert_eq!(h.state.badge("e-1").unwrap().own_check_line, None);
 
-    // Re-recording the exact same claim on e-2 (new wording) KEEPS the passing check (R4).
+    // Re-recording the exact same claim on e-2 KEEPS the passing check (R4).
     h.add_step(
         "e-2", StepEntryType::Correction, Some(StepOrigin::Solver), (&[], &[]),
         vec![eq_claim(a1.clone(), b1.clone())], "clearer wording",
     );
-    assert_eq!(h.state.tier("e-2").unwrap().effective, Tier::Computed);
+    assert_eq!(h.state.tier("e-2").unwrap().effective, Tier::Verified);
 
-    // Re-saving handle A as version 2 drops tier (old check does not match).
+    // Re-saving handle A as version 2 drops tier.
     let a2 = h.add_expr("A", 2, "sha_a2", ("c1", r1), None, true);
     h.add_step(
         "e-3", StepEntryType::Derivation, Some(StepOrigin::Solver), (&[], &[]),
@@ -247,14 +253,14 @@ fn r4_resaving_handle_drops_tier_and_rerecording_same_claim_keeps_checks() {
     );
     assert_eq!(h.state.tier("e-3").unwrap().effective, Tier::Unchecked);
 
-    // Re-saving handle A@1 in place with a different srepr_sha256 also drops e-2's tier to Stale.
+    // Re-saving handle A@1 in place with a different srepr_sha256 drops e-2 to Stale.
     h.add_expr("A", 1, "sha_a1_mutated", ("c1", r1), None, true);
     assert_eq!(h.state.tier("e-2").unwrap().effective, Tier::Stale);
     assert!(h.state.tier("e-2").unwrap().stale);
 }
 
 #[test]
-fn r4_two_claim_step_needs_every_claim_and_setup_revision_makes_checks_stale() {
+fn r4_two_claim_step_mixed_tiers_and_setup_revision_staleness() {
     let mut h = Harness::new();
     let r1 = h.add_sympy_run("c1", "code1");
     let a = h.add_expr("A", 1, "sa", ("c1", r1), None, true);
@@ -266,11 +272,18 @@ fn r4_two_claim_step_needs_every_claim_and_setup_revision_makes_checks_stale() {
     );
     let claim_sha = claim_sha.unwrap();
 
+    // Claim 0 symbolic alone does not lift a two-claim step (R4).
     h.add_check(&claim_sha, 0, "e-1", "identity_symbolic", CheckOutcome::Pass, json!({}));
     assert_eq!(h.state.tier("e-1").unwrap().own, Tier::Unchecked);
 
+    // Claim 1 numeric (12 pts, 50 digits) -> mixed symbolic + numeric gives CheckedNumerically (R8).
+    h.add_check(&claim_sha, 1, "e-1", "identity_numeric", CheckOutcome::Pass, json!({"points": 12, "digits": 50}));
+    assert_eq!(h.state.tier("e-1").unwrap().own, Tier::CheckedNumerically);
+    assert_eq!(h.state.badge("e-1").unwrap().label, wording::BADGE_CHECKED_NUMERICALLY);
+
+    // Claim 1 also passes symbolic -> best per claim is Verified for both -> step becomes Verified!
     h.add_check(&claim_sha, 1, "e-1", "identity_symbolic", CheckOutcome::Pass, json!({}));
-    assert_eq!(h.state.tier("e-1").unwrap().own, Tier::Computed);
+    assert_eq!(h.state.tier("e-1").unwrap().own, Tier::Verified);
 
     // Setup revision changing an assumption changes math_sha256 -> checks become Stale (R4, D15).
     h.set_setup(2, "Euclidean, hbar = c = 1", "m can be negative");
@@ -281,46 +294,51 @@ fn r4_two_claim_step_needs_every_claim_and_setup_revision_makes_checks_stale() {
 }
 
 #[test]
-fn r8_weak_checks_inequalities_numeric_thresholds_and_value_runs() {
+fn r8_weak_checks_numeric_guard_series_exact_vs_numeric_and_value_runs() {
     let mut h = Harness::new();
     let r1 = h.add_sympy_run("c1", "code1");
     let a = h.add_expr("A", 1, "sa", ("c1", r1), None, true);
     let b = h.add_expr("B", 1, "sb", ("c1", r1), None, true);
+    let c = h.add_expr("C", 1, "sc", ("c1", r1), None, true);
 
-    // 1. Only dimensions + symmetry passing -> Unchecked with sublabels.
+    // 1. Only dimensions + symmetry -> Unchecked with sublabels.
     let (c_eq, _) = h.add_step(
         "e-1", StepEntryType::Result, Some(StepOrigin::Solver), (&[], &[]),
-        vec![eq_claim(a.clone(), b.clone())], "eq with only physics checks",
+        vec![eq_claim(a.clone(), b.clone())], "eq",
     );
     let c_eq = c_eq.unwrap();
     h.add_check(&c_eq, 0, "e-1", "dimensions", CheckOutcome::Pass, json!({}));
     h.add_check(&c_eq, 0, "e-1", "symmetry", CheckOutcome::Pass, json!({}));
-    let t1 = h.state.tier("e-1").unwrap();
-    assert_eq!(t1.own, Tier::Unchecked);
-    assert_eq!(t1.sublabels, vec!["dimensions", "symmetry"]);
+    assert_eq!(h.state.tier("e-1").unwrap().own, Tier::Unchecked);
+    assert_eq!(h.state.tier("e-1").unwrap().sublabels, vec!["dimensions", "symmetry"]);
 
-    // 2. Inequality with counterexample_search passing -> Unchecked with sublabel.
+    // 2. Inequality with counterexample_search -> Unchecked with sublabel.
     let ineq = Claim {
-        form: ClaimForm::Inequality, lhs: a.clone(), rhs: b, relation: ClaimRelation::Ge,
+        form: ClaimForm::Inequality, lhs: a.clone(), rhs: b.clone(), relation: ClaimRelation::Ge,
         order: None, domain: None, how: None,
     };
-    let (c_ineq, _) = h.add_step(
-        "e-2", StepEntryType::Result, Some(StepOrigin::Solver), (&[], &[]), vec![ineq], "inequality",
-    );
+    let (c_ineq, _) = h.add_step("e-2", StepEntryType::Result, Some(StepOrigin::Solver), (&[], &[]), vec![ineq], "ineq");
     h.add_check(&c_ineq.unwrap(), 0, "e-2", "counterexample_search", CheckOutcome::Pass, json!({}));
     assert_eq!(h.state.tier("e-2").unwrap().own, Tier::Unchecked);
     assert_eq!(h.state.tier("e-2").unwrap().sublabels, vec![wording::SUBLABEL_SAMPLED_NO_COUNTEREXAMPLE]);
 
-    // 3. Numeric identity below 12 points / 50 digits -> Unchecked; at threshold -> Computed + numeric-only flag.
+    // 3. Equation numeric identity: below 12/50 -> Unchecked; at 12/50 -> CheckedNumerically (never Verified).
     h.add_check(&c_eq, 0, "e-1", "identity_numeric", CheckOutcome::Pass, json!({"points": 11, "digits": 50}));
     assert_eq!(h.state.tier("e-1").unwrap().own, Tier::Unchecked);
     h.add_check(&c_eq, 0, "e-1", "identity_numeric", CheckOutcome::Pass, json!({"points": 12, "digits": 50}));
-    assert_eq!(h.state.tier("e-1").unwrap().own, Tier::Computed);
-    assert!(h.state.tier("e-1").unwrap().flags.contains(&wording::FLAG_NUMERIC_ONLY.to_string()));
-    h.add_check(&c_eq, 0, "e-1", "identity_symbolic", CheckOutcome::Pass, json!({}));
-    assert!(!h.state.tier("e-1").unwrap().flags.contains(&wording::FLAG_NUMERIC_ONLY.to_string()));
+    let t1 = h.state.tier("e-1").unwrap();
+    assert_eq!(t1.own, Tier::CheckedNumerically);
+    assert!(t1.sublabels.contains(&wording::SUBLABEL_NUMERIC_DEFAULT.to_string()));
 
-    // 4. Value claim requires two receipts with different code_sha256.
+    // 4. Verified equation whose numeric guard fails -> Failed (R8).
+    let (c_guard, _) = h.add_step("e-g", StepEntryType::Result, Some(StepOrigin::Solver), (&[], &[]), vec![eq_claim(b.clone(), c.clone())], "branch cut");
+    let c_guard = c_guard.unwrap();
+    h.add_check(&c_guard, 0, "e-g", "identity_symbolic", CheckOutcome::Pass, json!({}));
+    assert_eq!(h.state.tier("e-g").unwrap().own, Tier::Verified);
+    h.add_check(&c_guard, 0, "e-g", "identity_numeric", CheckOutcome::Fail, json!({"counterexample": "x = -2"}));
+    assert_eq!(h.state.tier("e-g").unwrap().own, Tier::Failed);
+
+    // 5. Value claim two-run check -> CheckedNumerically (never Verified).
     let r2_same = h.add_sympy_run("c2", "code1");
     let r3_diff = h.add_sympy_run("c3", "code_independent");
     let v1 = h.add_expr("V1", 1, "sv1", ("c1", r1), None, true);
@@ -332,18 +350,26 @@ fn r8_weak_checks_inequalities_numeric_thresholds_and_value_runs() {
     assert_eq!(h.state.tier("e-3").unwrap().own, Tier::Unchecked);
     let (c_diff, _) = h.add_step("e-4", StepEntryType::NumericalComputation, Some(StepOrigin::Solver), (&[], &[]), vec![val_claim(v1, v2_diff)], "diff");
     h.add_check(&c_diff.unwrap(), 0, "e-4", "identity_numeric", CheckOutcome::Pass, json!({"digits": 12}));
-    assert_eq!(h.state.tier("e-4").unwrap().own, Tier::Computed);
+    assert_eq!(h.state.tier("e-4").unwrap().own, Tier::CheckedNumerically);
     assert!(h.state.tier("e-4").unwrap().sublabels.contains(&wording::SUBLABEL_TWO_RUNS_AGREE.to_string()));
 
-    // 5. Non-portable handle can never reach Computed.
+    // 6. independent_recompute: exact -> Verified, otherwise -> CheckedNumerically.
+    let (c_ir, _) = h.add_step("e-5", StepEntryType::Result, Some(StepOrigin::Solver), (&[], &[]), vec![eq_claim(a.clone(), c)], "blind");
+    let c_ir = c_ir.unwrap();
+    h.add_check(&c_ir, 0, "e-5", "independent_recompute", CheckOutcome::Pass, json!({"exact": false}));
+    assert_eq!(h.state.tier("e-5").unwrap().own, Tier::CheckedNumerically);
+    h.add_check(&c_ir, 0, "e-5", "independent_recompute", CheckOutcome::Pass, json!({"exact": true}));
+    assert_eq!(h.state.tier("e-5").unwrap().own, Tier::Verified);
+
+    // 7. Non-portable handle can never reach a computed tier.
     let bad_h = h.add_expr("NonPort", 1, "snp", ("c1", r1), None, false);
-    let (c_np, _) = h.add_step("e-5", StepEntryType::Derivation, Some(StepOrigin::Solver), (&[], &[]), vec![eq_claim(bad_h, a)], "non-portable");
-    h.add_check(&c_np.unwrap(), 0, "e-5", "identity_symbolic", CheckOutcome::Pass, json!({}));
-    assert_eq!(h.state.tier("e-5").unwrap().own, Tier::Unchecked);
+    let (c_np, _) = h.add_step("e-6", StepEntryType::Derivation, Some(StepOrigin::Solver), (&[], &[]), vec![eq_claim(bad_h, a)], "non-portable");
+    h.add_check(&c_np.unwrap(), 0, "e-6", "identity_symbolic", CheckOutcome::Pass, json!({}));
+    assert_eq!(h.state.tier("e-6").unwrap().own, Tier::Unchecked);
 }
 
 #[test]
-fn r9_derived_dependency_lowers_tier_even_when_undeclared_in_depends_on() {
+fn r9_derived_dependency_lowers_verified_and_emits_own_check_verified_line() {
     let mut h = Harness::new();
     let r1 = h.add_sympy_run("c1", "code1");
     h.add_step("e-3", StepEntryType::Assumption, Some(StepOrigin::Solver), (&[], &[]), vec![], "unacked assumption");
@@ -356,8 +382,10 @@ fn r9_derived_dependency_lowers_tier_even_when_undeclared_in_depends_on() {
     h.add_check(&c_sha.unwrap(), 0, "e-4", "identity_symbolic", CheckOutcome::Pass, json!({}));
 
     let badge = h.state.badge("e-4").unwrap();
-    assert_eq!(badge.own, Tier::Computed);
+    assert_eq!(badge.own, Tier::Verified);
     assert_eq!(badge.effective, Tier::Unchecked);
+    assert_eq!(badge.label, wording::BADGE_UNCHECKED);
+    assert_eq!(badge.own_check_line.as_deref(), Some(wording::OWN_CHECK_VERIFIED));
     assert_eq!(badge.lowered_by, vec!["e-3"]);
     assert_eq!(badge.rests_on_line.as_deref(), Some("rests on e-3 (assumed by model)"));
     assert!(badge.flags.contains(&"rests on 1 assumption made by the model".to_string()));
@@ -378,33 +406,33 @@ fn fail_is_permanent_and_propagates_broken_notice_and_supersede_causes_stale() {
     let (c7, _) = h.add_step("e-7", StepEntryType::Derivation, Some(StepOrigin::Solver), (&["e-6"], &[]), vec![eq_claim(b, c.clone())], "downstream");
     h.add_check(&c7.unwrap(), 0, "e-7", "identity_symbolic", CheckOutcome::Pass, json!({}));
 
-    // Fail on e-6 followed by later pass on e-6's claim: fail is NEVER cleared.
     h.add_check(&c6, 0, "e-6", "series_match", CheckOutcome::Fail, json!({"counterexample": "0.0312"}));
     h.add_check(&c6, 0, "e-6", "identity_symbolic", CheckOutcome::Pass, json!({}));
     assert_eq!(h.state.badge("e-6").unwrap().label, wording::BADGE_FAILED);
     let b7 = h.state.badge("e-7").unwrap();
-    assert_eq!(b7.own, Tier::Computed);
+    assert_eq!(b7.own, Tier::Verified);
     assert_eq!(b7.effective, Tier::Failed);
     assert_eq!(b7.label, "Broken: rests on failed e-6");
+    assert_eq!(b7.own_check_line.as_deref(), Some(wording::OWN_CHECK_VERIFIED));
     assert_eq!(b7.border, BorderStyle::None);
 
-    // Superseding a non-failed step makes its dependent Stale.
     let (c8, _) = h.add_step("e-8", StepEntryType::Derivation, Some(StepOrigin::Solver), (&[], &[]), vec![eq_claim(c, d.clone())], "ok step");
     h.add_check(&c8.unwrap(), 0, "e-8", "identity_symbolic", CheckOutcome::Pass, json!({}));
     let (c9, _) = h.add_step("e-9", StepEntryType::Result, Some(StepOrigin::Solver), (&["e-8"], &[]), vec![eq_claim(d, e)], "uses e-8");
     h.add_check(&c9.unwrap(), 0, "e-9", "identity_symbolic", CheckOutcome::Pass, json!({}));
-    assert_eq!(h.state.tier("e-9").unwrap().effective, Tier::Computed);
+    assert_eq!(h.state.tier("e-9").unwrap().effective, Tier::Verified);
     h.emit(event_kinds::PROOF_SUPERSEDE, json!({"entry_id": "e-8", "replaced_by": "e-8b", "reason": "cleanup"}));
     assert!(h.state.badge("e-9").unwrap().stale);
     assert_eq!(h.state.badge("e-9").unwrap().effective, Tier::Stale);
 }
 
 #[test]
-fn given_and_cited_are_neutral_and_lean_formal_check_enforces_r14_axioms() {
+fn given_cited_ocr_and_earlier_lean_receipt_and_r24_lessons_invariance() {
     let mut h = Harness::new();
     let r1 = h.add_sympy_run("c1", "code1");
     h.add_step("e-1", StepEntryType::Assumption, Some(StepOrigin::Setup), (&[], &[]), vec![], "setup");
 
+    // Full-text matched quote -> Cited (MatchedQuoteFullText).
     let q_seq = h.emit(
         event_kinds::EVIDENCE_QUOTE,
         json!({"source_id": "src-1", "path": "paper.tex", "start_line": 10, "end_line": 12, "file_sha256": "f".repeat(64), "quote_sha256": "q".repeat(64)}),
@@ -421,33 +449,47 @@ fn given_and_cited_are_neutral_and_lean_formal_check_enforces_r14_axioms() {
     assert_eq!(h.state.badge("e-2").unwrap().grade, DisplayGrade::MatchedQuoteFullText);
     assert_eq!(h.state.badge("e-2").unwrap().border, BorderStyle::Solid);
 
+    // OCR scanned-page quote -> Cited + MatchedQuoteScannedPage + "OCR" tag + "OCR source" flag.
+    let q_ocr_seq = h.emit(
+        event_kinds::EVIDENCE_QUOTE,
+        json!({"source_id": "src-2", "path": "scan.pdf", "start_line": 3, "end_line": 4, "file_sha256": "c".repeat(64), "quote_sha256": "d".repeat(64), "ocr": true}),
+    );
+    let qref_ocr = QuoteRef {
+        source_id: "src-2".into(), path: "scan.pdf".into(), start_line: 3, end_line: 4,
+        file_sha256: "c".repeat(64), quote_sha256: "d".repeat(64), evidence_seq: Some(q_ocr_seq),
+    };
+    h.emit(
+        event_kinds::PROOF_ENTRY,
+        json!({"entry_id": "e-2b", "entry_type": "reference_lookup", "summary": "ocr cited", "details": "d", "depends_on": [], "source_ref": qref_ocr}),
+    );
+    let b_ocr = h.state.badge("e-2b").unwrap();
+    assert_eq!(b_ocr.effective, Tier::Cited);
+    assert_eq!(b_ocr.grade, DisplayGrade::MatchedQuoteScannedPage);
+    assert_eq!(b_ocr.provenance_tag.as_deref(), Some(wording::TAG_OCR));
+    assert!(b_ocr.flags.contains(&wording::FLAG_OCR_SOURCE.to_string()));
+
+    // Verified step depending on Given + Cited + OCR Cited stays Verified.
     let a = h.add_expr("A", 1, "sa", ("c1", r1), None, true);
     let b = h.add_expr("B", 1, "sb", ("c1", r1), None, true);
-    let (c3, _) = h.add_step("e-3", StepEntryType::Result, Some(StepOrigin::Solver), (&["e-1", "e-2"], &[]), vec![eq_claim(a, b)], "over given+cited");
+    let (c3, _) = h.add_step("e-3", StepEntryType::Result, Some(StepOrigin::Solver), (&["e-1", "e-2", "e-2b"], &[]), vec![eq_claim(a, b)], "over neutral");
     h.add_check(&c3.unwrap(), 0, "e-3", "identity_symbolic", CheckOutcome::Pass, json!({}));
-    assert_eq!(h.state.tier("e-3").unwrap().effective, Tier::Computed);
+    assert_eq!(h.state.tier("e-3").unwrap().effective, Tier::Verified);
 
-    // Lean R14: standard axioms -> LeanChecked + flag; sorryAx or missing axioms -> Failed.
-    let (_, e4_sha) = h.add_step("e-4", StepEntryType::Derivation, Some(StepOrigin::Solver), (&[], &[]), vec![], "lean");
-    h.add_formal("e-4", &e4_sha, CheckOutcome::Pass, json!({"status": "verified", "axioms": ["propext", "Classical.choice", "Quot.sound"]}));
-    let b4 = h.state.badge("e-4").unwrap();
-    assert_eq!(b4.effective, Tier::LeanChecked);
-    assert_eq!(b4.label, wording::BADGE_LEAN_CHECKED);
-    assert!(b4.flags.contains(&wording::FLAG_STATEMENT_MATCH_UNCONFIRMED.to_string()));
-    h.emit(event_kinds::SOLVE_ACK, json!({"entry_id": "e-4", "kind": "formal_statement", "entry_sha256": e4_sha}));
-    assert!(!h.state.badge("e-4").unwrap().flags.contains(&wording::FLAG_STATEMENT_MATCH_UNCONFIRMED.to_string()));
+    // Earlier `lean_check` tool result is stored as a receipt and gives NO tier (D19).
+    h.emit(event_kinds::TOOL_REQUEST, json!({"call_id": "c-lean", "tool": "lean_check"}));
+    h.emit(event_kinds::TOOL_RESULT, json!({"call_id": "c-lean", "ok": true, "result": {"status": "verified"}}));
+    h.add_step("e-4", StepEntryType::Derivation, Some(StepOrigin::Solver), (&[], &[]), vec![], "old lean step");
+    assert!(h.state.receipts.contains_key("c-lean"));
+    assert_eq!(h.state.tier("e-4").unwrap().effective, Tier::Unchecked);
 
-    let (_, e5_sha) = h.add_step("e-5", StepEntryType::Derivation, Some(StepOrigin::Solver), (&[], &[]), vec![], "sorry");
-    h.add_formal("e-5", &e5_sha, CheckOutcome::Pass, json!({"status": "verified", "axioms": ["sorryAx"]}));
-    assert_eq!(h.state.tier("e-5").unwrap().effective, Tier::Failed);
-
-    let (_, e6_sha) = h.add_step("e-6", StepEntryType::Derivation, Some(StepOrigin::Solver), (&[], &[]), vec![], "no axioms");
-    h.add_formal("e-6", &e6_sha, CheckOutcome::Pass, json!({"status": "verified"}));
-    assert_eq!(h.state.tier("e-6").unwrap().effective, Tier::Failed);
+    // R24: adding `lessons.supplied` changes no tier or badge.
+    let tiers_before = h.state.tiers.clone();
+    h.emit(event_kinds::LESSONS_SUPPLIED, json!({"run_id": "r1", "lesson_ids": ["l-1", "l-2"], "blob": "b"}));
+    assert_eq!(h.state.tiers, tiers_before);
 }
 
 #[test]
-fn worked_example_honest_ending_and_transcription_and_ran_flags() {
+fn worked_example_series_exact_vs_numeric_and_transcription_and_ran_flags() {
     let mut h = Harness::new();
     let r1 = h.add_sympy_run("c1", "code1");
     h.add_step("e-1", StepEntryType::Assumption, Some(StepOrigin::Setup), (&[], &[]), vec![], "Euclidean");
@@ -466,13 +508,21 @@ fn worked_example_honest_ending_and_transcription_and_ran_flags() {
         vec![series_claim], "MS-bar potential",
     );
     let c7 = c7.unwrap();
-    h.add_check(&c7, 0, "e-7", "series_match", CheckOutcome::Pass, json!({"order": {"variable": "eps", "point": "0", "n": 0}}));
+    // Numeric series comparison -> CheckedNumerically + "to O(eps^0), numeric coefficients" + flag "to O(eps^0)".
+    h.add_check(&c7, 0, "e-7", "series_match", CheckOutcome::Pass, json!({"order": {"variable": "eps", "point": "0", "n": 0}, "numeric_coefficients": true}));
+    assert_eq!(h.state.tier("e-7").unwrap().own, Tier::CheckedNumerically);
+    assert!(h.state.tier("e-7").unwrap().sublabels.contains(&"to O(eps^0), numeric coefficients".to_string()));
+    assert!(h.state.tier("e-7").unwrap().flags.contains(&"to O(eps^0)".to_string()));
+
+    // Exact series comparison lifts own tier to Verified (best passing check for the claim).
+    h.add_check(&c7, 0, "e-7", "series_match", CheckOutcome::Pass, json!({"order": {"variable": "eps", "point": "0", "n": 0}, "exact": true}));
     h.add_check(&c7, 0, "e-7", "dimensions", CheckOutcome::Pass, json!({}));
 
     let b7 = h.state.badge("e-7").unwrap();
-    assert_eq!(b7.own, Tier::Computed);
+    assert_eq!(b7.own, Tier::Verified);
     assert_eq!(b7.effective, Tier::Unchecked);
-    assert!(b7.sublabels.contains(&"series to O(eps^0)".to_string()));
+    assert_eq!(b7.own_check_line.as_deref(), Some(wording::OWN_CHECK_VERIFIED));
+    assert!(b7.sublabels.contains(&"to O(eps^0)".to_string()));
     assert!(b7.sublabels.contains(&"dimensions".to_string()));
     assert!(b7.flags.contains(&"rests on 1 assumption made by the model".to_string()));
 
@@ -482,7 +532,7 @@ fn worked_example_honest_ending_and_transcription_and_ran_flags() {
         json!({"target_entry_id": "e-4", "entry_sha256": e4_sha, "verdict": "accepted", "independence": "different_provider"}),
     );
     assert_eq!(h.state.badge("e-7").unwrap().effective, Tier::ModelAgreed);
-    assert!(h.state.badge("e-7").unwrap().flags.is_empty());
+    assert_eq!(h.state.badge("e-7").unwrap().flags, vec!["to O(eps^0)"]);
     assert_eq!(rests_on_summary(&h.state, "e-7").given, vec!["e-1", "e-3"]);
 
     let e8_sha = compute_entry_sha256(None, "ran step", "d");

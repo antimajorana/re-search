@@ -14,7 +14,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 /// Event kinds written or read by Solve mode.
-/// Names marked as provisional depend on unanswered owner decisions in `00-overview.md` section 8.
+/// Names governed by owner decisions in `00-overview.md` section 8 (accepted 2026-11-25)
+/// remain single named constants so they can change in one place.
 pub mod event_kinds {
     pub const SOLVE_STARTED: &str = "solve.started";
     pub const SOLVE_SETUP: &str = "solve.setup";
@@ -23,25 +24,27 @@ pub mod event_kinds {
     pub const PROOF_SUPERSEDE: &str = "proof.supersede";
     pub const PROOF_VERIFICATION: &str = "proof.verification";
     pub const SOLVE_EXPR: &str = "solve.expr";
-    /// Provisional: owner decision 11 ("check" belongs to Solve).
+    /// Owner decision 11 ("check" belongs to Solve).
     pub const SOLVE_CHECK: &str = "solve.check";
     pub const SOLVE_ACK: &str = "solve.ack";
     pub const SOLVE_PAUSED: &str = "solve.paused";
     pub const SOLVE_CHECKPOINT: &str = "solve.checkpoint";
     pub const SOLVE_DONE: &str = "solve.done";
     pub const SOLVE_ARTIFACT: &str = "solve.artifact";
-    /// Provisional: owner decision 10 (shared stored-quote event kind, package F4).
+    /// Owner decision 10 (shared stored-quote event kind, package F4).
     pub const EVIDENCE_QUOTE: &str = "evidence.quote";
-    /// Provisional: owner decision 10 (shared supplied-context event kind, package F4).
+    /// Owner decision 10 (shared supplied-context event kind, package F4).
     pub const CONTEXT_SUPPLIED: &str = "context.supplied";
-    /// Provisional: owner decision 10 (shared hand-off packet event kind, package F7).
+    /// Owner decision 10 (shared hand-off packet event kind, package F7).
     pub const HANDOFF_PACKET: &str = "handoff.packet";
+    /// Shared supplied-lessons event kind (package F16; never affects tiers, R24).
+    pub const LESSONS_SUPPLIED: &str = "lessons.supplied";
     pub const GUARDRAIL_BLOCKED: &str = "guardrail.blocked";
     pub const TOOL_REQUEST: &str = "tool.request";
     pub const TOOL_RESULT: &str = "tool.result";
     pub const NOTE: &str = "note";
     pub const SESSION_RESUME: &str = "session.resume";
-    /// Provisional: owner decision 1 (tool profiles, package F1).
+    /// Owner decision 1 (tool profiles, package F1).
     pub const SOLVE_TOOL_PROFILE_V1: &str = "solve/1";
 }
 
@@ -166,7 +169,7 @@ pub struct QuoteRef {
     pub evidence_seq: Option<u64>,
 }
 
-/// Folded representation of a shared `evidence.quote` event (`00-overview.md` 2.5).
+/// Folded representation of a shared `evidence.quote` event (`00-overview.md` 2.5 & 2.10).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EvidenceQuoteRecord {
     pub seq: u64,
@@ -176,6 +179,9 @@ pub struct EvidenceQuoteRecord {
     pub end_line: usize,
     pub file_sha256: String,
     pub quote_sha256: String,
+    /// True when the quote was matched in OCR text extracted from a scanned page.
+    #[serde(default)]
+    pub ocr: bool,
 }
 
 impl EvidenceQuoteRecord {
@@ -406,9 +412,6 @@ pub struct SolveCheck {
     pub claim_index: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry_id: Option<String>,
-    /// Optional entry-hash binding for claimless formal checks (`formal_check`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entry_sha256: Option<String>,
     pub math_sha256: String,
     pub name: String,
     pub registry_sha256: String,

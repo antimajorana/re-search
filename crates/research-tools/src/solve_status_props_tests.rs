@@ -70,7 +70,6 @@ fn setup_event(seq: u64, rev: u32, tag: &str) -> (Event, String) {
             solver: RoleModel { provider: "p1".into(), model: "m1".into() },
             verifier: RoleModel { provider: "p2".into(), model: "m2".into() },
             compute: None,
-            formal: None,
         },
         budgets: SolveBudgets::default(),
         review: ReviewPolicy::ProseOnly,
@@ -118,7 +117,6 @@ fn check_ev(
             claim_sha256: claim_sha.into(),
             claim_index,
             entry_id: None,
-            entry_sha256: None,
             math_sha256: math_sha.into(),
             name: name.into(),
             registry_sha256: "r".into(),
@@ -143,10 +141,11 @@ fn random_dag(rng: &mut Rng, n_nodes: usize) -> (SolveState, u64, String) {
 
     seq += 1;
     let quote_seq = seq;
+    let ocr = rng.chance(1, 2);
     state.apply(&ev(
         quote_seq,
         event_kinds::EVIDENCE_QUOTE,
-        json!({"source_id": "src", "path": "p.tex", "start_line": 1, "end_line": 2, "file_sha256": "a".repeat(64), "quote_sha256": "b".repeat(64)}),
+        json!({"source_id": "src", "path": "p.tex", "start_line": 1, "end_line": 2, "file_sha256": "a".repeat(64), "quote_sha256": "b".repeat(64), "ocr": ocr}),
     ));
     seq += 1;
     state.apply(&expr_ev(seq, "H_lhs", "sl"));
@@ -213,24 +212,19 @@ fn random_dag(rng: &mut Rng, n_nodes: usize) -> (SolveState, u64, String) {
 
         match kind_roll {
             3 => {
+                // Verified (exact symbolic)
                 seq += 1;
                 state.apply(&check_ev(seq, &claim_sha.unwrap(), 0, &math_sha, "identity_symbolic", CheckOutcome::Pass, json!({})));
             }
             4 => {
+                // Failed check
                 seq += 1;
                 state.apply(&check_ev(seq, &claim_sha.unwrap(), 0, &math_sha, "identity_numeric", CheckOutcome::Fail, json!({"counterexample": "1"})));
             }
             5 => {
+                // Checked numerically (12 points, 50 digits)
                 seq += 1;
-                let fc = SolveCheck {
-                    check_id: format!("fc-{seq}"), claim_sha256: String::new(), claim_index: 0,
-                    entry_id: Some(eid.clone()), entry_sha256: Some(entry_sha.clone()), math_sha256: math_sha.clone(),
-                    name: FORMAL_CHECK_NAME.into(), registry_sha256: "r".into(), params: json!({}),
-                    outcome: CheckOutcome::Pass, asked_by: CheckRequester::Solver,
-                    receipt: ReceiptRef { call_id: "cl".into(), result_seq: seq },
-                    evidence: json!({"status": "verified", "axioms": ["propext"]}), evidence_sha256: "e".into(),
-                };
-                state.apply(&ev(seq, event_kinds::SOLVE_CHECK, serde_json::to_value(fc).unwrap()));
+                state.apply(&check_ev(seq, &claim_sha.unwrap(), 0, &math_sha, "identity_numeric", CheckOutcome::Pass, json!({"points": 12, "digits": 50})));
             }
             7 => {
                 let indep = if rng.chance(1, 2) { "different_provider" } else { "same_model" };
@@ -257,24 +251,47 @@ fn random_dag(rng: &mut Rng, n_nodes: usize) -> (SolveState, u64, String) {
     (state, seq, math_sha)
 }
 
-fn assert_no_forbidden_words(badge: &StepBadge) {
-    let mut texts: Vec<&str> = vec![&badge.label];
+fn contains_word(text: &str, target: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == target)
+}
+
+fn assert_r22_wording(badge: &StepBadge) {
+    // Badge label contains "verified" iff effective tier is Verified.
+    if badge.effective == Tier::Verified {
+        assert_eq!(badge.label, wording::BADGE_VERIFIED);
+    } else {
+        assert!(
+            !contains_word(&badge.label, "verified"),
+            "non-Verified effective {:?} showed `verified` in label `{}`",
+            badge.effective,
+            badge.label
+        );
+    }
+    // `own_check_line` is "own check: verified" iff own == Verified && effective != Verified.
+    if badge.own == Tier::Verified && badge.effective != Tier::Verified {
+        assert_eq!(badge.own_check_line.as_deref(), Some(wording::OWN_CHECK_VERIFIED));
+    } else {
+        assert_eq!(badge.own_check_line, None);
+    }
+
+    // No other badge string may contain "verified", and no string anywhere may contain
+    // "proved", "new", "novel", or "computed".
+    let mut others: Vec<&str> = Vec::new();
     if let Some(ref line) = badge.rests_on_line {
-        texts.push(line);
+        others.push(line);
     }
     if let Some(ref tag) = badge.provenance_tag {
-        texts.push(tag);
+        others.push(tag);
     }
-    texts.extend(badge.sublabels.iter().map(String::as_str));
-    texts.extend(badge.flags.iter().map(String::as_str));
-    for text in texts {
-        let lower = text.to_ascii_lowercase();
-        for word in lower.split(|c: char| !c.is_ascii_alphanumeric()) {
-            assert!(
-                !matches!(word, "verified" | "proved" | "new" | "novel"),
-                "forbidden screen word `{word}` in badge text `{text}` for {}",
-                badge.entry_id
-            );
+    others.extend(badge.sublabels.iter().map(String::as_str));
+    others.extend(badge.flags.iter().map(String::as_str));
+    for text in &others {
+        assert!(!contains_word(text, "verified"), "unexpected `verified` in `{text}` for {}", badge.entry_id);
+    }
+    for text in others.into_iter().chain(std::iter::once(badge.label.as_str())).chain(badge.own_check_line.as_deref()) {
+        for forbidden in ["proved", "new", "novel", "computed"] {
+            assert!(!contains_word(text, forbidden), "forbidden `{forbidden}` in `{text}` for {}", badge.entry_id);
         }
     }
 }
@@ -286,7 +303,6 @@ fn r7_and_r22_property_tiers_monotone_and_wording_clean_on_200_random_dags() {
         let n = 4 + rng.usize(10);
         let (state, mut seq, math_sha) = random_dag(&mut rng, n);
 
-        // 1. effective <= own AND effective <= every dependency (declared + derived), plus R22.
         for entry in &state.entries {
             let t = state.tier(&entry.entry_id).unwrap();
             assert!(t.effective.lattice_rank() <= t.own.lattice_rank(), "case {case} {}", entry.entry_id);
@@ -294,10 +310,9 @@ fn r7_and_r22_property_tiers_monotone_and_wording_clean_on_200_random_dags() {
                 let dt = state.tier(dep).unwrap();
                 assert!(t.effective.lattice_rank() <= dt.effective.lattice_rank(), "case {case} {} -> {dep}", entry.entry_id);
             }
-            assert_no_forbidden_words(&state.badge(&entry.entry_id).unwrap());
+            assert_r22_wording(&state.badge(&entry.entry_id).unwrap());
         }
 
-        // 2. Adding a fail on any node never raises any tier.
         let before: BTreeMap<String, i8> =
             state.tiers.iter().map(|(k, v)| (k.clone(), v.effective.lattice_rank())).collect();
         let target = &state.entries[rng.usize(state.entries.len())];
@@ -316,7 +331,6 @@ fn r7_and_r22_property_tiers_monotone_and_wording_clean_on_200_random_dags() {
             assert!(with_fail.tier(id).unwrap().effective.lattice_rank() <= old_rank, "case {case} fail raised {id}");
         }
 
-        // 3. Adding a new acyclic edge (declared or derived) never raises any tier.
         if state.entries.len() >= 2 {
             let dst_idx = 1 + rng.usize(state.entries.len() - 1);
             let src_id = state.entries[rng.usize(dst_idx)].entry_id.clone();
@@ -377,7 +391,7 @@ fn r4_property_multi_claim_and_setup_change_and_rerecord() {
 
         seq += 1;
         state.apply(&check_ev(seq, &claim_sha, omit, &math_sha, "identity_symbolic", CheckOutcome::Pass, json!({})));
-        assert_eq!(state.tier("e-1").unwrap().own, Tier::Computed);
+        assert_eq!(state.tier("e-1").unwrap().own, Tier::Verified);
 
         seq += 1;
         let (se2, _) = setup_event(seq, 2, &format!("math-changed-{case}"));
@@ -387,7 +401,7 @@ fn r4_property_multi_claim_and_setup_change_and_rerecord() {
 }
 
 #[test]
-fn r8_property_non_identity_and_weak_checks_never_grant_computed() {
+fn r8_property_weak_checks_never_compute_and_numeric_never_verifies() {
     let weak_names = ["dimensions", "limit_case", "symmetry", "conservation", "convergence", "matrix_property"];
     let mut rng = Rng::new(0x0000_0088);
     for case in 0..60 {
@@ -430,14 +444,21 @@ fn r8_property_non_identity_and_weak_checks_never_grant_computed() {
             }
         }
         seq += 1;
-        let (extra_name, extra_ev) = if is_ineq {
-            ("counterexample_search", json!({"points": 100}))
+        if is_ineq {
+            state.apply(&check_ev(seq, &claim_sha, 0, &math_sha, "counterexample_search", CheckOutcome::Pass, json!({"points": 100})));
+            assert_eq!(state.tier("e-1").unwrap().own, Tier::Unchecked, "case {case} ineq");
+        } else if rng.chance(1, 2) {
+            // Under-threshold numeric -> Unchecked.
+            let pts = rng.usize(12) as u64;
+            state.apply(&check_ev(seq, &claim_sha, 0, &math_sha, "identity_numeric", CheckOutcome::Pass, json!({"points": pts, "digits": 50})));
+            assert_eq!(state.tier("e-1").unwrap().own, Tier::Unchecked, "case {case} under-threshold");
         } else {
-            ("identity_numeric", json!({"points": rng.usize(12) as u64, "digits": 50}))
-        };
-        state.apply(&check_ev(seq, &claim_sha, 0, &math_sha, extra_name, CheckOutcome::Pass, extra_ev));
-
-        assert_eq!(state.tier("e-1").unwrap().own, Tier::Unchecked, "case {case}");
-        assert_no_forbidden_words(&state.badge("e-1").unwrap());
+            // Qualifying numeric (points >= 12, digits >= 50) -> CheckedNumerically, NEVER Verified.
+            let pts = 12 + (rng.usize(200) as u64);
+            let digs = 50 + (rng.usize(100) as u64);
+            state.apply(&check_ev(seq, &claim_sha, 0, &math_sha, "identity_numeric", CheckOutcome::Pass, json!({"points": pts, "digits": digs})));
+            assert_eq!(state.tier("e-1").unwrap().own, Tier::CheckedNumerically, "case {case} numeric");
+        }
+        assert_r22_wording(&state.badge("e-1").unwrap());
     }
 }
