@@ -38,6 +38,13 @@ export function initInvestigation(options) {
   answerCard = createAnswerCard(answerHost, {
     onFindMainResults: findMainResultsFromAnswer,
     onOpenConversation: () => selectView('chat'),
+    openCite: (start, end) => {
+      const source = primarySource();
+      const path = source?.primary_path || source?.files?.[0];
+      if (source?.source_id && path) {
+        callbacks.openSource(sessionId, { source_id: source.source_id, path, start_line: start, end_line: end });
+      }
+    },
   });
   conventionCatalog = createConventionCatalog(byId('investigation-conventions'), paperMap.renderAnchors, async mapSeq => {
     const id = sessionId;

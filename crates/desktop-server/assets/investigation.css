@@ -31,6 +31,9 @@
 .investigation-earlier-answers { margin-top: .75rem; }
 .investigation-earlier-answers > summary { cursor: pointer; color: var(--ink-secondary); font-size: .88rem; }
 .investigation-earlier-item { border-top: 1px solid var(--border-subtle); margin-top: .7rem; padding-top: .65rem; }
+.line-cite { appearance: none; background: none; border: 0; padding: 0; margin: 0; font: inherit;
+  color: var(--accent); cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.line-cite:hover, .line-cite:focus-visible { text-decoration-style: solid; }
 #investigation-original { margin: .5rem 0; }
 #investigation-summary { border-bottom: 1px solid var(--border-subtle); margin-bottom: 1.3rem; padding-bottom: .8rem; }
 .investigation-summary-part { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: .65rem; margin: .75rem 0; }

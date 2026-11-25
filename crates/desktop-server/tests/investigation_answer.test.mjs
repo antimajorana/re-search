@@ -105,8 +105,10 @@ async function loadAnswerCard(t) {
   t.after(() => Object.assign(globalThis, prev));
 
   const mathHref = new URL('math.js', assetsDir).href;
+  const citesHref = new URL('paper_cites.js', assetsDir).href;
   const source = (await readFile(new URL('investigation_answer.js', assetsDir), 'utf8'))
-    .replace("'/assets/math.js'", JSON.stringify(mathHref));
+    .replace("'/assets/math.js'", JSON.stringify(mathHref))
+    .replace("'/assets/paper_cites.js'", JSON.stringify(citesHref));
   return import(dataUrl(source));
 }
 

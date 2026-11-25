@@ -1,5 +1,6 @@
 // Answer card for question-first Investigation turns.
 import { renderMathTextInto, renderRichInto } from '/assets/math.js';
+import { linkLineCitations } from '/assets/paper_cites.js';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -8,7 +9,7 @@ function el(tag, className, text) {
   return node;
 }
 
-function renderRowBody(parent, row, onLinkCites) {
+function renderRowBody(parent, row, openCite) {
   if (row?.status === 'running') {
     parent.append(el('p', 'investigation-meta', 'Working on your question…'));
     return;
@@ -27,12 +28,12 @@ function renderRowBody(parent, row, onLinkCites) {
   }
   const body = el('div', 'investigation-answer-body rich-prose');
   renderRichInto(body, String(row?.text || ''));
-  onLinkCites?.(body, row?.cites);
+  linkLineCitations(body, row?.cites, openCite);
   parent.append(body);
   parent.append(el('p', 'investigation-answer-note investigation-meta', 'Written by the model. Check the cited lines.'));
 }
 
-export function createAnswerCard(host, { onFindMainResults, onOpenConversation, onLinkCites } = {}) {
+export function createAnswerCard(host, { onFindMainResults, onOpenConversation, openCite } = {}) {
   let signature = '';
   let earlierOpen = false;
   let pendingMap = false;
@@ -69,7 +70,7 @@ export function createAnswerCard(host, { onFindMainResults, onOpenConversation, 
       renderMathTextInto(q, String(newest.question));
       host.append(q);
     }
-    renderRowBody(host, newest, onLinkCites);
+    renderRowBody(host, newest, openCite);
 
     const actions = el('div', 'investigation-actions');
     if (!hasMap) {
@@ -113,7 +114,7 @@ export function createAnswerCard(host, { onFindMainResults, onOpenConversation, 
             renderMathTextInto(q, String(item.question));
             article.append(q);
           }
-          renderRowBody(article, item, onLinkCites);
+          renderRowBody(article, item, openCite);
           details.append(article);
         }
       };
