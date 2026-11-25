@@ -96,6 +96,8 @@ impl Fixture {
             files: BTreeMap::new(),
             bytes_left: MAX_TOTAL_BYTES,
             pages,
+            history: &self.events,
+            active_marker_seq: None,
         }
     }
 
@@ -415,13 +417,13 @@ fn excerpt_and_quote_together_refused() {
     a.excerpt = Some("We assume positive mass throughout this paper.".into());
     let err = idx.verify_any("nodes[n1].anchors[0]", &mut a).unwrap_err();
     assert_eq!(err.code, "invalid_anchor_form");
-    // Evidence anchor is also refused in Phase 1.
+    // Evidence anchor without recorder quote is refused fail-closed in Phase 2.
     let mut ev = fx.pointer(1, 1, "assume positive mass throughout");
     ev.quote = None;
     ev.evidence = Some("ev-12".into());
     assert_eq!(
         idx.verify_any("nodes[n1].anchors[0]", &mut ev).unwrap_err().code,
-        "evidence_unavailable"
+        "evidence_quote_missing"
     );
 }
 

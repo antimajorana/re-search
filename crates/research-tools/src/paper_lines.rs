@@ -120,6 +120,8 @@ pub fn read_lines(
         files: BTreeMap::new(),
         bytes_left: MAX_TOTAL_BYTES,
         pages: None,
+        history: &events,
+        active_marker_seq: None,
     };
     let file = index.load(source_id, path)?;
     let total_lines = file.line_count();

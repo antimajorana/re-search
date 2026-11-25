@@ -423,9 +423,24 @@ fn e2e_mock_reader_then_ev_anchors_finish_mapped() {
                 }
                 3 => {
                     let evs = ev_cl.lock().unwrap().clone();
-                    let req_seq = body["messages"][0]["content"].to_string()
-                        .split("request_seq=").nth(1)
-                        .and_then(|s| s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse::<u64>().ok())
+                    let req_seq = results
+                        .get(2)
+                        .and_then(|r| r["content"].as_str())
+                        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                        .and_then(|v| v["request_seq"].as_u64())
+                        .or_else(|| {
+                            body["messages"][0]["content"]
+                                .to_string()
+                                .split("request_seq=")
+                                .nth(1)
+                                .and_then(|s| {
+                                    s.chars()
+                                        .take_while(|c| c.is_ascii_digit())
+                                        .collect::<String>()
+                                        .parse::<u64>()
+                                        .ok()
+                                })
+                        })
                         .unwrap();
                     ant_tool("claude-sonnet-4-6", "o_conv", "record_paper_conventions", json!({
                         "request_seq": req_seq, "source_id": src_id, "batch_index": 1, "done": true,

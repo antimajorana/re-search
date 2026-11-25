@@ -195,21 +195,14 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
       box.append(title, quote, element('small', '', anchor.path));
       if (Array.isArray(anchor.cited_range) && anchor.cited_range.length === 2) {
         const [a, b] = anchor.cited_range;
-        const cited = a === b ? String(a) : a + '–' + b;
-        box.append(element('small', 'investigation-anchor-note', 'lines corrected by the app (cited ' + cited + ')'));
+        box.append(element('small', 'investigation-anchor-note', 'lines corrected by the app (cited ' + (a === b ? a : a + '–' + b) + ')'));
       }
-      if (anchor.excerpt_basis === 'evidence') {
-        box.append(element('small', 'investigation-anchor-basis', 'located by reader'));
-      }
+      if (anchor.excerpt_basis === 'evidence') box.append(element('small', 'investigation-anchor-basis', 'located by reader'));
       box.append(open);
-      const original = openPdf?.(anchor, true);
-      if (original) box.append(button('Open original PDF page', () => openPdf(anchor, false)));
+      if (openPdf?.(anchor, true)) box.append(button('Open original PDF page', () => openPdf(anchor, false)));
       if (anchor.kind === 'reference') {
         for (const link of citedPaperLinks?.(anchor.excerpt) || []) {
-          const external = element('a', 'pill-btn sm', link.label);
-          external.href = link.url;
-          external.target = '_blank';
-          external.rel = 'noopener noreferrer';
+          const external = Object.assign(element('a', 'pill-btn sm', link.label), { href: link.url, target: '_blank', rel: 'noopener noreferrer' });
           box.append(external);
         }
       }

@@ -82,7 +82,7 @@ pub(crate) struct Anchor {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AnchorBasis { Model, CitedLines, #[allow(dead_code)] Evidence }
+pub(crate) enum AnchorBasis { Model, CitedLines, Evidence }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct AnchorCorrection {
@@ -184,6 +184,7 @@ pub(crate) struct SourceIndex<'a> {
     pub(crate) sandbox: WorkspaceSandbox, pub(crate) session: &'a str, pub(crate) primary_source_id: &'a str,
     pub(crate) receipts: BTreeMap<&'a str, &'a Event>, pub(crate) files: BTreeMap<String, VerifiedFile>,
     pub(crate) bytes_left: usize, pub(crate) pages: Option<SelectedPages<'a>>,
+    pub(crate) history: &'a [Event], pub(crate) active_marker_seq: Option<u64>,
 }
 
 impl SourceIndex<'_> {
@@ -276,24 +277,24 @@ impl SourceIndex<'_> {
     }
 
     pub(crate) fn verify_any(&mut self, owner: &str, anchor: &mut Anchor) -> Result<AnchorNote, AnchorFault> {
-        let forms = usize::from(anchor.excerpt.is_some())
-            + usize::from(anchor.quote.is_some())
-            + usize::from(anchor.evidence.is_some());
-        if forms != 1 {
-            return Err(fault(owner, "invalid_anchor_form", "Provide exactly one of excerpt, quote, or evidence for each anchor.", range_opt(anchor), None, false));
-        }
-        if anchor.evidence.is_some() {
-            return Err(fault(owner, "evidence_unavailable", "Evidence anchors are not available yet; use a quote pointer instead.", range_opt(anchor), None, false));
-        }
         if anchor.excerpt.is_some() {
+            if anchor.quote.is_some() || anchor.evidence.is_some() {
+                return Err(fault(owner, "invalid_anchor_form", "Provide exactly one of excerpt, quote, or evidence for each anchor.", range_opt(anchor), None, false));
+            }
             return self.verify(anchor)
                 .map(|()| AnchorNote { basis: AnchorBasis::Model, corrected: None })
                 .map_err(|msg| fault(owner, "legacy_excerpt_failed", msg, range_opt(anchor), None, true));
         }
-        self.verify_pointer(owner, anchor)
+        if anchor.evidence.is_some() {
+            return crate::investigation_evidence::resolve_evidence(self, owner, anchor);
+        }
+        if anchor.quote.is_some() {
+            return self.verify_pointer(owner, anchor);
+        }
+        Err(fault(owner, "invalid_anchor_form", "Provide exactly one of excerpt, quote, or evidence for each anchor.", range_opt(anchor), None, false))
     }
 
-    fn verify_pointer(&mut self, owner: &str, anchor: &mut Anchor) -> Result<AnchorNote, AnchorFault> {
+    pub(crate) fn verify_pointer(&mut self, owner: &str, anchor: &mut Anchor) -> Result<AnchorNote, AnchorFault> {
         let cited = range_opt(anchor);
         let fail = |code: &'static str, msg: String, lines: Option<[usize; 2]>, tt: Option<String>| {
             Err(fault(owner, code, msg, lines, tt, false))
@@ -494,7 +495,7 @@ fn format_candidates(matches: &[FoldMatch]) -> String {
         .collect::<Vec<_>>().join(", ")
 }
 
-fn is_bare_section_name(label: &str) -> bool {
+pub(crate) fn is_bare_section_name(label: &str) -> bool {
     let mut s = label.trim().trim_end_matches(['.', ':']).trim();
     if let Some(rest) = strip_section_number_prefix(s) { s = rest.trim(); }
     SECTION_NAMES.contains(&s.to_ascii_lowercase().as_str())

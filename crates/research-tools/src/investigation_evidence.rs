@@ -3,9 +3,9 @@
 //! `note_evidence` is registered ONLY on the isolated paper-reader router via
 //! [`register_reader_tools`] and is never exposed in the main session registry.
 
-use crate::investigation_anchor_shim::{
-    bounded, find_folded_matches, fold_text, is_bare_section_name, non_space_count, valid_id,
-    Anchor, AnchorFault, AnchorNote, SelectedPages, SourceIndex, ANCHOR_KINDS, MAX_TOTAL_BYTES,
+use crate::investigation::anchor::{
+    bounded, fold_with_map, is_bare_section_name, valid_id, Anchor, AnchorBasis, AnchorCorrection,
+    AnchorFault, AnchorNote, SelectedPages, SourceIndex, ANCHOR_KINDS, MAX_TOTAL_BYTES,
 };
 use crate::ResearchEnv;
 use ledger::{Event, Ledger};
@@ -111,7 +111,7 @@ pub fn note_evidence_def() -> ToolDef {
 /// `search_paper_passages`, `read_paper_lines` (7,000-char budget), and `note_evidence`.
 pub fn register_reader_tools(registry: &mut Registry, env: Arc<ResearchEnv>) {
     crate::paper_passages::register(registry, env.clone());
-    crate::paper_lines_shim::register_with_budget(registry, env.clone(), READER_LINE_BUDGET);
+    crate::paper_lines::register_with_budget(registry, env.clone(), READER_LINE_BUDGET);
     registry.register(
         note_evidence_def(),
         Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
@@ -140,6 +140,7 @@ pub(crate) fn find_active_marker(events: &[Event]) -> Result<(&[Event], &Event, 
                 "investigation.mapping_requested" | "investigation.mapping_finished"
                     | "investigation.branch_requested" | "investigation.branch_finished"
                     | "investigation.conventions_resumed" | "investigation.conventions_finished"
+                    | "investigation.question_requested" | "investigation.answer"
                     | "investigation.requested" | "investigation.result"
                     | "session.end" | "session.abort"
             )
@@ -259,7 +260,7 @@ pub fn note_evidence_with_hook(
                         "index": idx, "ok": true, "evidence": format!("ev-{}", appended.seq),
                         "start_line": anchor.start_line, "end_line": anchor.end_line,
                     });
-                    if note.corrected { entry["corrected"] = json!(true); }
+                    if note.corrected.is_some() { entry["corrected"] = json!(true); }
                     outcome = Some(entry);
                     break;
                 }
@@ -287,13 +288,13 @@ fn parse_evidence_seq(ev_id: &str) -> Option<u64> {
 
 /// Resolve and re-verify an evidence-backed recorder anchor `{source_id, evidence, quote, kind, label?}`.
 #[allow(clippy::result_large_err)]
-pub fn resolve_evidence(
+pub(crate) fn resolve_evidence(
     index: &mut SourceIndex<'_>,
     owner: &str,
     anchor: &mut Anchor,
 ) -> Result<AnchorNote, AnchorFault> {
-    let fault = |code: &str, msg: String| AnchorFault {
-        owner: owner.to_string(), code: code.to_string(), message: msg, lines: None, true_text: None, legacy: false,
+    let fault = |code: &'static str, msg: String| AnchorFault {
+        owner: owner.to_string(), code, message: msg, lines: None, true_text: None, legacy: false,
     };
     if !valid_id(&anchor.source_id, 64)
         || !ANCHOR_KINDS.contains(&anchor.kind.as_str())
@@ -345,11 +346,12 @@ pub fn resolve_evidence(
     if let Some(pages) = &index.pages {
         pages.check_range(&rec.source_id, &rec.path, rec.start_line, rec.end_line).map_err(|msg| fault("outside_selected_pages", msg))?;
     }
-    let file = index.load_path(&rec.source_id, &rec.path).map_err(|msg| fault("source_load_failed", msg))?;
+    let file = index.load(&rec.source_id, &rec.path).map_err(|msg| fault("source_load_failed", msg))?;
     if file.sha256 != rec.file_sha256 || file.source_seq != rec.source_seq {
         return Err(fault("source_changed", format!("Source file `{}` revision no longer matches `{ev_id}`.", rec.path)));
     }
-    let Some(full_lines) = file.slice_lines(rec.start_line, rec.end_line) else {
+    let Some(full_lines) = (rec.start_line >= 1 && rec.start_line <= rec.end_line && rec.end_line <= file.line_count())
+        .then(|| file.lines_text(rec.start_line, rec.end_line)) else {
         return Err(fault("line_out_of_range", format!("Evidence `{ev_id}` lines {}–{} are outside `{}`.", rec.start_line, rec.end_line, rec.path)));
     };
     let derived: &str = if let Some([w0, w1]) = rec.excerpt_window {
@@ -368,9 +370,11 @@ pub fn resolve_evidence(
     if let Some(label) = anchor.label.as_deref().filter(|l| !derived.contains(*l)) {
         return Err(fault("label_not_found", format!("Label `{label}` not found in evidence `{ev_id}`.")));
     }
-    let ns_len = non_space_count(quote_raw);
-    let whole_ok = ns_len >= 3 && fold_text(derived) == fold_text(quote_raw);
-    if (ns_len < 16 && !whole_ok) || find_folded_matches(derived, quote_raw).is_empty() {
+    let ns_len = quote_raw.chars().filter(|c| !c.is_whitespace()).count();
+    let (folded_derived, _) = fold_with_map(derived);
+    let (folded_quote, _) = fold_with_map(quote_raw);
+    let whole_ok = ns_len >= 3 && folded_derived == folded_quote;
+    if (ns_len < 16 && !whole_ok) || folded_quote.is_empty() || !folded_derived.contains(&folded_quote) {
         return Err(fault("evidence_quote_mismatch", format!("Recorder quote was not found in evidence `{ev_id}`.")));
     }
     let (derived_owned, file_sha, source_seq) = (derived.to_string(), file.sha256.clone(), file.source_seq);
@@ -384,9 +388,11 @@ pub fn resolve_evidence(
     anchor.excerpt_window = rec.excerpt_window;
     anchor.file_sha256 = file_sha;
     anchor.source_seq = source_seq;
-    Ok(AnchorNote {
-        owner: owner.to_string(), basis: "evidence".to_string(),
-        corrected: rec.cited_range.is_some() || !rec.range_basis.is_empty(),
-        lines: [anchor.start_line, anchor.end_line], from: rec.cited_range, range_basis: rec.range_basis,
-    })
+    let corrected = rec.cited_range.map(|from| AnchorCorrection {
+        owner: owner.to_string(),
+        lines: [anchor.start_line, anchor.end_line],
+        from,
+        basis: rec.range_basis,
+    });
+    Ok(AnchorNote { basis: AnchorBasis::Evidence, corrected })
 }
