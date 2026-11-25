@@ -216,7 +216,14 @@ fn run_single_reader(
                         match pr.reader_router.try_call(&caller, name, tinput) {
                             Ok(CallOutcome::Ok(val)) => {
                                 if name == "read_paper_lines" {
-                                    if let (Some(a), Some(b)) = (val["a_meta"]["start_line"].as_u64(), val["a_meta"]["end_line"].as_u64()) {
+                                    let meta = &val["a_meta"];
+                                    let primary_complete = meta["path"].as_str() == Some(pr.primary_path.as_str())
+                                        && meta["line_truncated"].as_bool() != Some(true);
+                                    if let (true, Some(a), Some(b)) = (
+                                        primary_complete,
+                                        meta["start_line"].as_u64(),
+                                        meta["end_line"].as_u64(),
+                                    ) {
                                         read_ranges.push((a as usize, b as usize));
                                     }
                                 } else if name == NOTE_EVIDENCE {
