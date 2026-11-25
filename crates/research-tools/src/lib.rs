@@ -7,6 +7,7 @@ pub mod fs_tools;
 pub mod http_client;
 pub mod ingest;
 pub mod investigation;
+pub mod investigation_outline;
 pub mod latex_compile;
 pub mod latex_repair;
 pub mod lean_check;
