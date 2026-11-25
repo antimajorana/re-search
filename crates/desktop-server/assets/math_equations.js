@@ -1,13 +1,15 @@
 // Ported in part from Kandinsky (github.com/antimajorana/kandinsky, 833a95f), the same author's project.
 // App-managed per-root equation numbering, \label/\tag extraction, \eqref rewriting, and click navigation.
-import { normalizeEqnarrayBody } from './math_scan.js';
+import { isEscapedAt, normalizeEqnarrayBody, stripTexComments } from './math_scan.js';
 
 const LABEL_RE = /\\label\{([^{}]*)\}/g;
-const OWN_TAG_RE = /\\tag\*?\s*\{([^{}]*)\}/;
 const NO_TAG_RE = /\\(?:notag|nonumber)\b/g;
 const MULTI_ROW_RE = /\\begin\{(align|gather|eqnarray|alignat|flalign)\}/;
 const STARRED_MULTI_ROW_RE = /\\begin\{(align\*|gather\*|eqnarray\*|alignat\*|flalign\*)\}/;
 const NUMBERED_SINGLE_RE = /\\begin\{(equation|multline)\}/;
+const SINGLE_DISPLAY_ENVS = new Set(['equation', 'equation*', 'multline', 'multline*']);
+const TAG_WRAPPER_RE = /\\(?:text|textrm|textbf|textit|mathrm|mathbf|mathit|mathsf|mathtt|mathcal|mbox|operatorname)\s*\{/g;
+const TAG_MATH_CMD_RE = /\\(?:mathrm|mathbf|mathit|mathsf|mathtt|mathcal|mathbb|mathfrak|mathscr|boldsymbol|bm)\s*\{/g;
 const SAFE_EQ_ID_RE = /^[A-Za-z0-9:._-]+$/;
 const EQREF_NAV_INSTALLED = Symbol('reSearchEqrefNav');
 
@@ -31,6 +33,91 @@ function readBalancedBracesEnd(tex, openIdx) {
   return -1;
 }
 
+function formatTagLabel(raw) {
+  let s = String(raw ?? '').trim();
+  for (let pass = 0; pass < 4; pass++) {
+    let changed = false;
+    let out = '';
+    let cursor = 0;
+    TAG_WRAPPER_RE.lastIndex = 0;
+    for (let m; (m = TAG_WRAPPER_RE.exec(s)) !== null;) {
+      if (isEscapedAt(s, m.index)) continue;
+      const openIdx = m.index + m[0].length - 1;
+      const endIdx = readBalancedBracesEnd(s, openIdx);
+      if (endIdx === -1) continue;
+      out += s.slice(cursor, m.index) + s.slice(openIdx + 1, endIdx - 1);
+      cursor = endIdx;
+      TAG_WRAPPER_RE.lastIndex = endIdx;
+      changed = true;
+    }
+    if (!changed) break;
+    s = (out + s.slice(cursor)).trim();
+  }
+  return s;
+}
+
+/** KaTeX parses `\tag{...}` in text mode; wrap bare math-only font commands in `$...$`. */
+function normalizeTagBodyForKatex(body) {
+  let out = '';
+  let inMath = false;
+  for (let i = 0; i < body.length;) {
+    const ch = body[i];
+    if (ch === '\\') {
+      if (!inMath) {
+        TAG_MATH_CMD_RE.lastIndex = i;
+        const m = TAG_MATH_CMD_RE.exec(body);
+        if (m && m.index === i) {
+          const openIdx = i + m[0].length - 1;
+          const endIdx = readBalancedBracesEnd(body, openIdx);
+          if (endIdx !== -1) {
+            out += `$${body.slice(i, endIdx)}$`;
+            i = endIdx;
+            continue;
+          }
+        }
+      }
+      out += body.slice(i, i + 2);
+      i += Math.min(2, body.length - i);
+      continue;
+    }
+    if (ch === '$') inMath = !inMath;
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+function findOwnTag(tex) {
+  const re = /\\tag\*?\s*\{/g;
+  for (let m; (m = re.exec(tex)) !== null;) {
+    if (isEscapedAt(tex, m.index)) continue;
+    const openIdx = m.index + m[0].length - 1;
+    const endIdx = readBalancedBracesEnd(tex, openIdx);
+    if (endIdx === -1) continue;
+    const raw = tex.slice(openIdx + 1, endIdx - 1).trim();
+    return { start: m.index, end: endIdx, openIdx, raw, label: formatTagLabel(raw) };
+  }
+  return null;
+}
+
+function normalizeOwnTagsInTex(tex) {
+  const re = /\\tag\*?\s*\{/g;
+  let out = '';
+  let cursor = 0;
+  for (let m; (m = re.exec(tex)) !== null;) {
+    if (isEscapedAt(tex, m.index)) continue;
+    const openIdx = m.index + m[0].length - 1;
+    const endIdx = readBalancedBracesEnd(tex, openIdx);
+    if (endIdx === -1) continue;
+    const inner = tex.slice(openIdx + 1, endIdx - 1);
+    const fixed = normalizeTagBodyForKatex(inner);
+    out += tex.slice(cursor, openIdx + 1) + fixed + '}';
+    cursor = endIdx;
+    re.lastIndex = endIdx;
+  }
+  return cursor === 0 ? tex : out + tex.slice(cursor);
+}
+
 /** Splits top-level rows of a multi-row environment as [start, end) offsets into `tex`. */
 export function findEnvRowSpans(tex, envRe = MULTI_ROW_RE) {
   const m = envRe.exec(tex);
@@ -49,6 +136,10 @@ export function findEnvRowSpans(tex, envRe = MULTI_ROW_RE) {
   let depth = 0;
   let envEnd = -1;
   for (let i = start; i < tex.length; i++) {
+    if (tex[i] === '%') {
+      while (i < tex.length && tex[i] !== '\n' && tex[i] !== '\r') i += 1;
+      continue;
+    }
     if (tex.startsWith('\\begin{', i) || tex.startsWith('\\end{', i)) {
       const env = /^\\(begin|end)\{[^}]*\}/.exec(tex.slice(i, i + 48));
       if (env) {
@@ -90,7 +181,7 @@ function starredTwinOf(envName) {
 }
 
 function normalizeSingleDisplayBody(tex) {
-  return tex
+  const s = stripTexComments(tex)
     .replace(LABEL_RE, '')
     .replace(/\\(?:begin|end)\{subequations\}/g, '')
     .replace(/\\(?:begin|end)\{equation\*?\}/g, '')
@@ -100,6 +191,91 @@ function normalizeSingleDisplayBody(tex) {
     .replace(/\\(begin|end)\{gather\*?\}/g, '\\$1{gathered}')
     .replace(/\\begin\{eqnarray\*?\}([\s\S]*?)\\end\{eqnarray\*?\}/g, (_, b) => `\\begin{aligned}${normalizeEqnarrayBody(b)}\\end{aligned}`)
     .trim();
+  return normalizeOwnTagsInTex(s);
+}
+
+function registerTagRefs(refMap, labels, tagText, rawTag = '') {
+  if (!tagText) return;
+  refMap.set(tagText, tagText);
+  if (rawTag && rawTag !== tagText) refMap.set(rawTag, tagText);
+  for (const id of labels) refMap.set(id, tagText);
+}
+
+function findTopLevelSingleEnvs(tex) {
+  const envs = [];
+  let outer = '';
+  let i = 0;
+  while (i < tex.length) {
+    if (tex.startsWith('\\begin{', i) && !isEscapedAt(tex, i)) {
+      const bEnd = tex.indexOf('}', i + 7);
+      const env = bEnd !== -1 ? tex.slice(i + 7, bEnd) : '';
+      if (SINGLE_DISPLAY_ENVS.has(env)) {
+        const openTag = `\\begin{${env}}`;
+        const closeTag = `\\end{${env}}`;
+        let depth = 1;
+        let pos = bEnd + 1;
+        let closeStart = -1;
+        while (pos < tex.length) {
+          const o = tex.indexOf(openTag, pos);
+          const c = tex.indexOf(closeTag, pos);
+          if (c === -1) break;
+          if (o !== -1 && o < c) { depth += 1; pos = o + openTag.length; }
+          else {
+            depth -= 1;
+            if (depth === 0) { closeStart = c; pos = c + closeTag.length; break; }
+            pos = c + closeTag.length;
+          }
+        }
+        if (closeStart !== -1) {
+          envs.push({ envName: env, body: tex.slice(bEnd + 1, closeStart) });
+          i = pos;
+          continue;
+        }
+      }
+    }
+    outer += tex[i];
+    i += 1;
+  }
+  if (envs.length < 2) return null;
+  if (outer.replace(LABEL_RE, '').trim()) return null;
+  return { envs, outerLabels: extractLabels(outer) };
+}
+
+function processMultiSingleEnvDisplay(multiSingle, next, refMap) {
+  const { envs, outerLabels } = multiSingle;
+  const allLabels = [];
+  const allTags = [];
+  const rows = [];
+
+  for (const { envName, body } of envs) {
+    const isStarred = envName.endsWith('*');
+    const cleanBody = stripTexComments(body);
+    const rowLabels = extractLabels(cleanBody);
+    for (const id of rowLabels) allLabels.push(id);
+    const ownTag = findOwnTag(cleanBody);
+    const hasNoTag = new RegExp(NO_TAG_RE.source).test(cleanBody);
+    const wrapped = envName.startsWith('multline') ? `\\begin{gathered}${cleanBody}\\end{gathered}` : cleanBody;
+    let row = normalizeSingleDisplayBody(hasNoTag ? wrapped.replace(NO_TAG_RE, '') : wrapped);
+
+    let tagText = null;
+    if (ownTag) {
+      tagText = ownTag.label || ownTag.raw;
+      registerTagRefs(refMap, rowLabels, tagText, ownTag.raw);
+    } else if (!hasNoTag && (!isStarred || rowLabels.length > 0)) {
+      tagText = next();
+      row = `${row.trimEnd()} \\tag{${tagText}}`;
+      registerTagRefs(refMap, rowLabels, tagText);
+    }
+    if (tagText) allTags.push(tagText);
+    rows.push(row);
+  }
+
+  if (outerLabels.length && allTags.length) {
+    for (const id of outerLabels) refMap.set(id, allTags[0]);
+  }
+  const combinedIds = [...new Set([...allLabels, ...outerLabels, ...allTags])];
+  const eqId = allLabels[0] || outerLabels[0] || allTags[0] || '';
+  return { prepared: `\\begin{gather*}\n${rows.join(' \\\\\n')}\n\\end{gather*}`, eqId, eqIds: combinedIds };
 }
 
 function processMultiRowDisplay(tex, envInfo, isStarred, next, refMap) {
@@ -111,10 +287,10 @@ function processMultiRowDisplay(tex, envInfo, isStarred, next, refMap) {
 
   for (const [a, b] of rows) {
     pieces.push(tex.slice(cursor, a));
-    let row = tex.slice(a, b);
+    let row = stripTexComments(tex.slice(a, b));
     const rowLabels = extractLabels(row);
     for (const id of rowLabels) allLabels.push(id);
-    const ownTag = OWN_TAG_RE.exec(row);
+    const ownTag = findOwnTag(row);
     const hasNoTag = new RegExp(NO_TAG_RE.source).test(row);
     row = row.replace(LABEL_RE, '');
     if (envName === 'eqnarray' || envName === 'eqnarray*') {
@@ -123,19 +299,18 @@ function processMultiRowDisplay(tex, envInfo, isStarred, next, refMap) {
 
     let tagText = null;
     if (ownTag) {
-      tagText = ownTag[1].trim();
+      tagText = ownTag.label || ownTag.raw;
+      row = normalizeOwnTagsInTex(row);
+      registerTagRefs(refMap, rowLabels, tagText, ownTag.raw);
     } else if (hasNoTag) {
       row = row.replace(NO_TAG_RE, '');
     } else if (!isStarred || rowLabels.length > 0) {
       tagText = next();
       row = `${row.trimEnd()} \\tag{${tagText}}`;
+      registerTagRefs(refMap, rowLabels, tagText);
     }
 
-    if (tagText !== null) {
-      allTags.push(tagText);
-      refMap.set(tagText, tagText);
-      for (const id of rowLabels) refMap.set(id, tagText);
-    }
+    if (tagText) allTags.push(tagText);
     pieces.push(row);
     cursor = b;
   }
@@ -143,7 +318,7 @@ function processMultiRowDisplay(tex, envInfo, isStarred, next, refMap) {
 
   const targetEnv = starredTwinOf(envName);
   const escEnv = envName.replace('*', '\\*');
-  let out = pieces.join('')
+  const out = pieces.join('')
     .replace(LABEL_RE, '')
     .replace(/\\(?:begin|end)\{subequations\}/g, '')
     .replace(new RegExp(`\\\\(begin|end)\\{${escEnv}\\}`, 'g'), `\\$1{${targetEnv}}`)
@@ -170,7 +345,19 @@ export function numberEquations(tokens) {
 
   for (const tok of tokens) {
     if (!tok || !tok.display) continue;
-    const raw = String(tok.raw ?? tok.tex ?? '').replace(/\\(?:begin|end)\{subequations\}/g, '').trim();
+    const raw = stripTexComments(String(tok.raw ?? tok.tex ?? ''))
+      .replace(/\\(?:begin|end)\{subequations\}/g, '')
+      .trim();
+
+    const multiSingle = findTopLevelSingleEnvs(raw);
+    if (multiSingle) {
+      const res = processMultiSingleEnvDisplay(multiSingle, next, refMap);
+      tok.prepared = res.prepared;
+      tok.eqId = res.eqId;
+      tok.eqIds = res.eqIds;
+      tok.eqNumbered = true;
+      continue;
+    }
 
     const multi = findEnvRowSpans(raw, MULTI_ROW_RE);
     if (multi) {
@@ -193,14 +380,13 @@ export function numberEquations(tokens) {
     }
 
     const labels = extractLabels(raw);
-    const ownTag = OWN_TAG_RE.exec(raw);
+    const ownTag = findOwnTag(raw);
     const hasNoTag = new RegExp(NO_TAG_RE.source).test(raw);
     const hasNumberedEnv = NUMBERED_SINGLE_RE.test(raw);
 
     if (ownTag) {
-      const tagText = ownTag[1].trim();
-      for (const id of labels) refMap.set(id, tagText);
-      if (tagText) refMap.set(tagText, tagText);
+      const tagText = ownTag.label || ownTag.raw;
+      registerTagRefs(refMap, labels, tagText, ownTag.raw);
       tok.prepared = normalizeSingleDisplayBody(raw);
       tok.eqId = labels[0] || tagText;
       tok.eqIds = [...new Set([...labels, ...(tagText ? [tagText] : [])])];
@@ -212,8 +398,7 @@ export function numberEquations(tokens) {
       tok.eqNumbered = true;
     } else if (labels.length > 0 || hasNumberedEnv) {
       const tagText = next();
-      for (const id of labels) refMap.set(id, tagText);
-      refMap.set(tagText, tagText);
+      registerTagRefs(refMap, labels, tagText);
       const body = normalizeSingleDisplayBody(raw);
       tok.prepared = `${body} \\tag{${tagText}}`;
       tok.eqId = labels[0] || tagText;

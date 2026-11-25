@@ -40,6 +40,26 @@ export function isEscapedAt(text, pos) {
   return bs % 2 === 1;
 }
 
+/** Strips unescaped TeX `%...` line comments while preserving `\%` and line breaks. */
+export function stripTexComments(tex) {
+  const s = String(tex ?? '');
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\' && i + 1 < s.length) {
+      out += s[i] + s[i + 1];
+      i += 1;
+      continue;
+    }
+    if (s[i] === '%') {
+      while (i < s.length && s[i] !== '\n' && s[i] !== '\r') i += 1;
+      if (i < s.length) out += s[i];
+      continue;
+    }
+    out += s[i];
+  }
+  return out;
+}
+
 export function findMatchingEnvEnd(text, env, pos, stopOnHeading = false) {
   const openTag = `\\begin{${env}}`;
   const closeTag = `\\end{${env}}`;
@@ -161,6 +181,136 @@ export function findDisplayClose(lines, startLine, openCol, closeDelim) {
   return null;
 }
 
+function unwrapDisplayDelims(segText) {
+  const t = segText.trim();
+  if (t.startsWith('\\[') && t.endsWith('\\]')) return t.slice(2, -2).trim();
+  if (t.startsWith('$$') && t.endsWith('$$')) return t.slice(2, -2).trim();
+  return t;
+}
+
+function attachOuterLabels(segText, outerLabels) {
+  if (!outerLabels.length) return segText;
+  const suffix = outerLabels.join('\n');
+  if (segText.startsWith('\\[') && segText.endsWith('\\]')) {
+    return `\\[\n${segText.slice(2, -2).trim()}\n${suffix}\n\\]`;
+  }
+  if (segText.startsWith('$$') && segText.endsWith('$$')) {
+    return `$$\n${segText.slice(2, -2).trim()}\n${suffix}\n$$`;
+  }
+  return `${segText}\n${suffix}`;
+}
+
+function splitSubequationsSegments(inner) {
+  const rawSegs = [];
+  let buf = '';
+  const flushOther = () => {
+    if (buf) { rawSegs.push({ kind: 'other', text: buf }); buf = ''; }
+  };
+
+  for (let i = 0; i < inner.length;) {
+    const ch = inner[i];
+    if (ch === '%') {
+      while (i < inner.length && inner[i] !== '\n' && inner[i] !== '\r') i += 1;
+      if (i < inner.length) { buf += inner[i]; i += 1; }
+      continue;
+    }
+    if (ch === '\\') {
+      if (inner[i + 1] === '\\') { buf += '\\\\'; i += 2; continue; }
+      if (inner.startsWith('\\begin{', i)) {
+        const bEnd = inner.indexOf('}', i + 7);
+        const env = bEnd !== -1 ? inner.slice(i + 7, bEnd) : '';
+        if (MATH_ENVS.has(env)) {
+          const end = findMatchingEnvEnd(inner, env, bEnd + 1, false);
+          if (end !== -1) {
+            flushOther();
+            rawSegs.push({ kind: 'math', text: inner.slice(i, end).trim() });
+            i = end;
+            continue;
+          }
+        }
+      }
+      if (inner[i + 1] === '[') {
+        const end = findClosingDelim(inner, '\\]', i + 2);
+        if (end !== -1 && inner.slice(i + 2, end).trim()) {
+          flushOther();
+          rawSegs.push({ kind: 'math', text: inner.slice(i, end + 2).trim() });
+          i = end + 2;
+          continue;
+        }
+      }
+      buf += inner.slice(i, i + 2);
+      i += Math.min(2, inner.length - i);
+      continue;
+    }
+    if (ch === '$' && inner[i + 1] === '$') {
+      const end = findClosingDelim(inner, '$$', i + 2);
+      if (end !== -1 && inner.slice(i + 2, end).trim()) {
+        flushOther();
+        rawSegs.push({ kind: 'math', text: inner.slice(i, end + 2).trim() });
+        i = end + 2;
+        continue;
+      }
+    }
+    buf += ch;
+    i += 1;
+  }
+  flushOther();
+
+  const outerLabels = [];
+  const segs = [];
+  let mathCount = 0;
+  let hasProse = false;
+  for (const seg of rawSegs) {
+    if (seg.kind === 'math') {
+      mathCount += 1;
+      segs.push(seg);
+      continue;
+    }
+    const clean = stripTexComments(seg.text);
+    for (const m of clean.matchAll(/\\label\{[^{}]*\}/g)) outerLabels.push(m[0]);
+    const prose = clean.replace(/\\label\{[^{}]*\}/g, '').trim();
+    if (prose) {
+      hasProse = true;
+      segs.push({ kind: 'other', prose });
+    }
+  }
+
+  if (mathCount === 0 || (mathCount === 1 && !hasProse)) return null;
+  const firstMath = segs.find((s) => s.kind === 'math');
+  if (firstMath && outerLabels.length) firstMath.text = attachOuterLabels(firstMath.text, outerLabels);
+  return segs;
+}
+
+function splitSubequationsForBlocks(fullBody, rest) {
+  const openTag = '\\begin{subequations}';
+  const closeTag = '\\end{subequations}';
+  if (!fullBody.startsWith(openTag) || !fullBody.endsWith(closeTag)) return null;
+  const inner = fullBody.slice(openTag.length, -closeTag.length);
+  const segs = splitSubequationsSegments(inner);
+  if (!segs) return null;
+  const firstIdx = segs.findIndex((s) => s.kind === 'math');
+  if (firstIdx === -1) return null;
+
+  const firstBody = unwrapDisplayDelims(segs[firstIdx].text);
+  const tailLines = [];
+  let lastKind = 'math';
+  for (let idx = firstIdx + 1; idx < segs.length; idx++) {
+    const seg = segs[idx];
+    if (seg.kind === 'math') {
+      tailLines.push(...seg.text.split('\n'));
+      lastKind = 'math';
+    } else if (seg.prose) {
+      tailLines.push('', ...seg.prose.split('\n'), '');
+      lastKind = 'other';
+    }
+  }
+  if (rest && rest.trim()) {
+    if (tailLines.length > 0 && lastKind === 'math') tailLines[tailLines.length - 1] += rest;
+    else tailLines.push(rest.trimStart());
+  }
+  return { firstBody, tailLines };
+}
+
 export function findEnvBlockClose(lines, startLine, openStart, env) {
   const openTag = `\\begin{${env}}`;
   const closeTag = `\\end{${env}}`;
@@ -183,7 +333,16 @@ export function findEnvBlockClose(lines, startLine, openStart, env) {
             const to = k === l ? pos : lines[k].length;
             parts.push(lines[k].slice(from, to));
           }
-          return { body: parts.join('\n'), closeLine: l, rest: lines[l].slice(pos) };
+          const fullBody = parts.join('\n');
+          const rest = lines[l].slice(pos);
+          if (env === 'subequations') {
+            const split = splitSubequationsForBlocks(fullBody, rest);
+            if (split) {
+              lines.splice(startLine, l - startLine + 1, '', ...split.tailLines);
+              return { body: split.firstBody, closeLine: startLine, rest: '' };
+            }
+          }
+          return { body: fullBody, closeLine: l, rest };
         }
       }
     }
@@ -283,6 +442,23 @@ export function extractMath(text, mathTokens, opts = {}) {
         if (MATH_ENVS.has(env)) {
           const end = findMatchingEnvEnd(text, env, bEnd + 1, !texMode);
           if (end !== -1) {
+            if (env === 'subequations') {
+              const inner = text.slice(bEnd + 1, end - '\\end{subequations}'.length);
+              const segs = splitSubequationsSegments(inner);
+              if (segs) {
+                const chunks = [];
+                for (const seg of segs) {
+                  if (seg.kind === 'math') {
+                    chunks.push(push(unwrapDisplayDelims(seg.text), true, { inlineDisplay: midSentenceEnv }));
+                  } else if (seg.prose) {
+                    chunks.push(extractMath(seg.prose, mathTokens, opts));
+                  }
+                }
+                out += chunks.filter(Boolean).join('\n');
+                i = end;
+                continue;
+              }
+            }
             const isInline = midSentenceEnv && INLINE_MATH_ENVS.has(env);
             const glue = isInline && captureGlue ? matchGlue(text, end) : '';
             out += push(text.slice(i, end), !isInline, { inlineDisplay: !isInline && midSentenceEnv, glue });
