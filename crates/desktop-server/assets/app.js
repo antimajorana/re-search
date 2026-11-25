@@ -425,7 +425,6 @@ function syncWorkspaceIndicators(wsRoot) {
 function resetToBlankState() {
   navigationRevision += 1;
   sessionSelection += 1;
-  resetMathMacros();
   setComposerLoading(false);
   closeSse();
   state.activeSessionId = null;
@@ -662,7 +661,6 @@ function connectSessionSse(id) {
         }
         recoveredRevision = revision;
         resetLiveTurnState();
-        resetMathMacros();
         renderSessionStream(id, sess);
         setComposerBusy(false);
         applySession(id, sess);
@@ -775,7 +773,6 @@ function connectSessionSse(id) {
           resetLiveTurnState();
         } else if (lastMsg?.role === 'assistant') {
           resetLiveTurnState();
-          resetMathMacros();
           renderSessionStream(id, sess);
         } else {
           finalizeLiveAssistant('');

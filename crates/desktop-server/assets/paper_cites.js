@@ -13,15 +13,13 @@ function shouldSkip(node) {
   return classes.includes('katex') || classes.includes('katex-display');
 }
 
-const MAX_CITE_SPAN = 512;
-
 function buildAllowedSet(cites) {
   const allowed = new Set();
   for (const item of Array.isArray(cites) ? cites : []) {
     if (!item || item.read !== true) continue;
     const start = Number(item.start);
     const end = Number(item.end);
-    if (Number.isInteger(start) && Number.isInteger(end) && start >= 1 && start <= end && end - start <= MAX_CITE_SPAN) {
+    if (Number.isInteger(start) && Number.isInteger(end) && start >= 1 && start <= end) {
       allowed.add(`${start}:${end}`);
     }
   }
@@ -46,7 +44,7 @@ function replaceTextWithCites(text, allowed, open) {
       if (part.index > partLast) pieces.push(document.createTextNode(inner.slice(partLast, part.index)));
       const start = Number(part[1]);
       const end = part[2] !== undefined ? Number(part[2]) : start;
-      if (Number.isInteger(start) && Number.isInteger(end) && start >= 1 && start <= end && end - start <= MAX_CITE_SPAN && allowed.has(`${start}:${end}`)) {
+      if (Number.isInteger(start) && Number.isInteger(end) && start >= 1 && start <= end && allowed.has(`${start}:${end}`)) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'line-cite';

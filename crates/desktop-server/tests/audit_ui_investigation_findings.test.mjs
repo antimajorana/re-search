@@ -271,7 +271,7 @@ test('F11 [major] investigation_conventions.js:42-45,142-144: section-catalog pa
   );
 });
 
-test('F12 [minor] paper_cites.js:22,47: spans over 512 lines must stay plain text so clicking never triggers routes_tools.rs HTTP 400', (t) => {
+test('F12 [minor] paper_cites.js: wide read ranges stay clickable buttons (clamping handled by openCite)', (t) => {
   const prev = { document: globalThis.document };
   const makeText = (v) => ({
     nodeType: 3,
@@ -287,6 +287,9 @@ test('F12 [minor] paper_cites.js:22,47: spans over 512 lines must stay plain tex
   globalThis.document = {
     createElement: (tag) => {
       const el = makeEl(tag);
+      const handlers = new Map();
+      el.addEventListener = (type, fn) => handlers.set(type, fn);
+      el.click = () => handlers.get('click')?.({ currentTarget: el });
       el.append = (...nodes) => {
         for (const n of nodes) {
           const c = typeof n === 'string' ? makeText(n) : n;
@@ -302,15 +305,19 @@ test('F12 [minor] paper_cites.js:22,47: spans over 512 lines must stay plain tex
 
   const root = globalThis.document.createElement('div');
   const p = globalThis.document.createElement('p');
-  p.append('Whole section [L10–550] exceeds the 513-line reader limit.');
+  p.append('Whole section [L10–550] remains a clickable citation button.');
   root.append(p);
 
-  linkLineCitations(root, [{ start: 10, end: 550, read: true }], () => {});
+  const opened = [];
+  linkLineCitations(root, [{ start: 10, end: 550, read: true }], (s, e) => opened.push([s, e]));
+  const buttons = root.querySelectorAll('.line-cite');
   assert.equal(
-    root.querySelectorAll('.line-cite').length,
-    0,
-    '[L10–550] (541 lines > 513 limit in routes_tools.rs:163) became a clickable button that returns HTTP 400',
+    buttons.length,
+    1,
+    '[L10–550] (read: true) must remain a clickable citation button; investigation.js::openCite clamps to 513 lines',
   );
+  buttons[0].click();
+  assert.deepEqual(opened, [[10, 550]]);
 });
 
 test('F13 [minor] investigation.js:20,38: #investigation-scope-chip must appear above #investigation-answer, not below it', async (t) => {

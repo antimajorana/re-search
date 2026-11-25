@@ -9,7 +9,7 @@ import { citedPaperLinks } from '/assets/source_links.js';
 import { createAnswerCard } from '/assets/investigation_answer.js';
 import { latestRequestEvent, paperViewState, setupButtonLabel } from '/assets/investigation_state.js';
 
-let callbacks, paperMap, conventionCatalog, answerCard, scopeChip, sessionId, session, view, readRevision = 0, submitting = false;
+let callbacks, paperMap, conventionCatalog, answerCard, scopeChip, sessionId, session, view, readRevision = 0, submitting = false, creating = false;
 let summaryTimer = null, statusTimer = null, uploadingKind = null, runStartedAt = null;
 let approvalWaiting = false, localStatus = '';
 const byId = id => document.getElementById(id);
@@ -44,7 +44,11 @@ export function initInvestigation(options) {
       const source = primarySource();
       const path = source?.primary_path || source?.files?.[0];
       if (source?.source_id && path) {
-        callbacks.openSource(sessionId, { source_id: source.source_id, path, start_line: start, end_line: end });
+        const clampedEnd = Math.min(end, start + 512);
+        callbacks.openSource(sessionId, { source_id: source.source_id, path, start_line: start, end_line: clampedEnd });
+        if (clampedEnd < end) {
+          showStatus(`Showing lines ${start}–${clampedEnd} of ${start}–${end} (513-line viewer limit).`);
+        }
       }
     },
   });
@@ -59,9 +63,12 @@ export function initInvestigation(options) {
   });
   byId('new-investigation-btn').addEventListener('click', async event => {
     const button = event.currentTarget;
-    if (button.disabled) return;
+    if (button.disabled || creating) return;
     button.disabled = true;
-    try { await callbacks.create(); } finally { button.disabled = false; }
+    creating = true;
+    syncSetupControls();
+    try { await callbacks.create(); }
+    finally { creating = false; button.disabled = false; syncSetupControls(); }
   });
   byId('show-paper-map').addEventListener('click', () => selectView('map'));
   byId('show-investigation-chat').addEventListener('click', () => selectView('chat'));
@@ -100,6 +107,24 @@ function primaryPdf() {
 function syncSetupButton() {
   const btn = byId('investigation-setup')?.querySelector('button');
   if (btn) btn.textContent = setupButtonLabel(byId('investigation-question')?.value);
+}
+
+function syncSetupControls() {
+  const locked = submitting || creating;
+  const pinned = Boolean(session?.investigation?.source_id) || locked;
+  for (const fieldId of ['investigation-page-start', 'investigation-page-end', 'investigation-existing', 'investigation-file']) {
+    const el = byId(fieldId);
+    if (el) el.disabled = pinned;
+  }
+  const question = byId('investigation-question');
+  if (question) question.disabled = locked;
+  const setup = byId('investigation-setup');
+  if (setup) {
+    const buttons = typeof setup.querySelectorAll === 'function'
+      ? setup.querySelectorAll('button')
+      : (setup.querySelector?.('button') ? [setup.querySelector('button')] : []);
+    for (const btn of buttons) btn.disabled = locked;
+  }
 }
 
 function syncPdfButton() {
@@ -393,12 +418,8 @@ export function showInvestigationSession(id, data) {
     byId('investigation-page-start').value = inv.page_start || '';
     byId('investigation-page-end').value = inv.page_end || '';
   }
-  const pinned = Boolean(inv.source_id) || submitting;
-  for (const fieldId of ['investigation-page-start','investigation-page-end','investigation-existing','investigation-file']) byId(fieldId).disabled = pinned;
-  byId('investigation-question').disabled = submitting;
-  const setup = byId('investigation-setup');
-  setup.hidden = !state.showSetup;
-  setup.querySelector('button').disabled = submitting;
+  byId('investigation-setup').hidden = !state.showSetup;
+  syncSetupControls();
   if (state.refillQuestion && !byId('investigation-question').value && inv.question) byId('investigation-question').value = inv.question;
   syncSetupButton();
   if (!submitting) localStatus = '';
@@ -456,7 +477,7 @@ async function findMainResultsFromAnswer(question) {
 
 async function buildMap(event) {
   event.preventDefault();
-  if (submitting || session?.running) return;
+  if (submitting || creating || session?.running) return;
   const id = sessionId;
   const file = byId('investigation-file').files[0];
   let sourceId = byId('investigation-existing').value || session?.investigation?.source_id;
@@ -525,8 +546,7 @@ async function buildMap(event) {
     if (sessionId === id) {
       uploadingKind = null;
       submitting = false;
-      button.disabled = false;
-      for (const control of controls) control.disabled = control.id !== 'investigation-question' && Boolean(session?.investigation?.source_id);
+      syncSetupControls();
     }
   }
 }

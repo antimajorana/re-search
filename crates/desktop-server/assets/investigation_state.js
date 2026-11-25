@@ -21,12 +21,11 @@ export function latestRequestEvent(events) {
   }) || null;
 }
 
-function stoppedRequestKind(events) {
+function isMappingStopped(inv, events) {
   const list = Array.isArray(events) ? events : [];
   const req = latestRequestEvent(list);
-  if (!req || req.kind === 'investigation.question_requested') return null;
-  const aborted = list.some(ev => ev?.seq > req.seq && ev?.kind === 'session.abort' && ev?.payload?.stopped === true);
-  return aborted ? req.kind : null;
+  if (!req || req.kind !== 'investigation.mapping_requested' || inv?.mapping_status === 'mapped') return false;
+  return list.some(ev => ev?.seq > req.seq && ev?.kind === 'session.abort' && ev?.payload?.stopped === true);
 }
 
 export function paperViewState(inv, session, nowMs = Date.now()) {
@@ -73,9 +72,7 @@ export function paperViewState(inv, session, nowMs = Date.now()) {
       && !events.some(ev => ev?.seq > latestTurnReq.seq
         && (ev?.kind === 'investigation.answer' || ev?.kind === 'session.end' || ev?.kind === 'session.abort')))
   );
-  const stoppedKind = running ? null : stoppedRequestKind(events);
-  const mappingStopped = stoppedKind === 'investigation.mapping_requested';
-  const otherTurnStopped = Boolean(stoppedKind && !mappingStopped);
+  const mappingStopped = !running && isMappingStopped(data, events);
 
   let statusText = '';
   let showApprovalButton = false;
@@ -94,8 +91,6 @@ export function paperViewState(inv, session, nowMs = Date.now()) {
     timerActive = true;
     if (questionRunning) {
       statusText = `Reading the paper for your question · ${elapsed}`;
-    } else if (latestReq?.kind === 'investigation.requested') {
-      statusText = `Checking selected claim · ${elapsed}`;
     } else if (data.summary && !hasMap && data.summary_is_current !== false) {
       statusText = `Overview saved. Finding the main results · ${elapsed}`;
     } else {
@@ -105,8 +100,6 @@ export function paperViewState(inv, session, nowMs = Date.now()) {
     statusText = 'Stopped. Anything already saved is kept below.';
   } else if (data.mapping_error) {
     statusText = (hasMap ? 'Showing the saved main results. The latest reading failed. ' : '') + data.mapping_error;
-  } else if (otherTurnStopped) {
-    statusText = 'Stopped. Anything already saved is kept below.';
   } else if (showMapUnavailable) {
     statusText = 'The main results are unavailable. Try again or read the conversation.';
   }
