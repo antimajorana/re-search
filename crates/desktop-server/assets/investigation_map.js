@@ -52,9 +52,10 @@ function mathSpans(text) {
         }
       } else if (text[i + 1] && !/\s/.test(text[i + 1])) {
         for (let j = i + 1; j < text.length && !(text[j] === '\n' && text[j + 1] === '\n'); j++) {
-          if (text[j] === '$' && !isEscaped(text, j) && text[j + 1] !== '$' && !/\s/.test(text[j - 1])) {
-            spans.push([i, j + 1]); i = j; break;
-          }
+          if (text[j] !== '$' || isEscaped(text, j)) continue;
+          const b = text.slice(i + 1, j);
+          if (text[j + 1] === '$' || /\s/.test(text[j - 1]) || /[0-9]/.test(text[j + 1] || '') || (/^\d/.test(b) && /[ \t][A-Za-z]{2,}\b/.test(b.replace(/\\[A-Za-z]+(?:\{[^{}]*\})?/g, ' ')))) break;
+          spans.push([i, j + 1]); i = j; break;
         }
       }
     } else if (text[i] === '\\' && !isEscaped(text, i) && (text[i + 1] === '(' || text[i + 1] === '[')) {
@@ -195,7 +196,7 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
       box.append(title, quote, element('small', '', anchor.path));
       if (Array.isArray(anchor.cited_range) && anchor.cited_range.length === 2) {
         const [a, b] = anchor.cited_range;
-        box.append(element('small', 'investigation-anchor-note', 'lines corrected by the app (cited ' + (a === b ? a : a + '–' + b) + ')'));
+        if (a !== anchor.start_line || b !== anchor.end_line) box.append(element('small', 'investigation-anchor-note', 'lines corrected by the app (cited ' + (a === b ? a : a + '–' + b) + ')'));
       }
       if (anchor.excerpt_basis === 'evidence') box.append(element('small', 'investigation-anchor-basis', 'located by reader'));
       box.append(open);

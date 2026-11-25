@@ -303,7 +303,7 @@ fn role_priority(role: &str) -> usize {
 }
 
 fn collect_evidence_rows(
-    events: &[Event], marker_seq: u64, roles_filter: &[String], page_lines: &[(usize, usize, usize)], focus: &str,
+    events: &[Event], marker_seq: u64, primary_source_id: &str, roles_filter: &[String], page_lines: &[(usize, usize, usize)], focus: &str,
 ) -> Vec<EvidenceRow> {
     let start_idx = events.iter()
         .rposition(|e| matches!(e.kind.as_str(), "investigation.started" | "investigation.handoff"))
@@ -319,7 +319,9 @@ fn collect_evidence_rows(
         let mut obj = Map::new();
         obj.insert("e".into(), json!(format!("ev-{}", ev.seq)));
         obj.insert("l".into(), json!(format!("{}-{}", rec.start_line, rec.end_line)));
-        if let Some(pg) = page_for_line(page_lines, rec.start_line) { obj.insert("pg".into(), json!(pg)); }
+        if rec.source_id == primary_source_id {
+            if let Some(pg) = page_for_line(page_lines, rec.start_line) { obj.insert("pg".into(), json!(pg)); }
+        }
         obj.insert("k".into(), json!(rec.kind));
         obj.insert("r".into(), json!(rec.role));
         if let Some(lab) = &rec.label { obj.insert("lab".into(), json!(lab)); }
@@ -445,7 +447,7 @@ pub(crate) fn run_paper_readers(
     }
     if mode == "list" {
         let events = audit.ledger.read_session(audit.session).map_err(|e| e.to_string())?;
-        let rows = collect_evidence_rows(&events, pr.marker_seq, &roles, &pr.page_lines, &focus);
+        let rows = collect_evidence_rows(&events, pr.marker_seq, &pr.source_id, &roles, &pr.page_lines, &focus);
         let ev_count = rows.len();
         let (_, canonical, omitted) = assemble_return_json(&[], &json!({ "lines_read_pct": 0, "gaps": [] }), rows);
         return emit_end(audit, tool_use_id, pr, provider, started, true, 0, 0, 0, json!({ "mode": "list", "evidence_count": ev_count, "omitted": omitted }), canonical, false);
@@ -522,7 +524,7 @@ pub(crate) fn run_paper_readers(
     let lines_read_pct = (total_covered * 100).checked_div(total_assigned).unwrap_or(0).min(100);
     let coverage_json = json!({ "lines_read_pct": lines_read_pct, "gaps": all_gaps });
     let events = audit.ledger.read_session(audit.session).map_err(|e| e.to_string())?;
-    let rows = collect_evidence_rows(&events, pr.marker_seq, &roles, &pr.page_lines, &focus);
+    let rows = collect_evidence_rows(&events, pr.marker_seq, &pr.source_id, &roles, &pr.page_lines, &focus);
     let ev_count = rows.len();
     let (_, canonical, omitted) = assemble_return_json(&readers_json, &coverage_json, rows);
     let any_ok = outcomes.iter().any(|o| o.ok) || ev_count > 0;
