@@ -299,6 +299,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
     }
     crate::cli_turn::sweep_session_tool_config(state, session_id);
     let meta = state.load_meta(session_id);
+    let running = is_turn_running(state, session_id);
     let ledger = state.open_ledger().map_err(internal)?;
     let events = ledger
         .read_session(session_id)
@@ -348,14 +349,14 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
             "project_id": project.map(|p| p.id),
             "events": events_json,
             "mode": if crate::investigation::is_investigation(&events) { "investigation" } else { "research" },
-            "investigation": crate::investigation::view(&events, is_turn_running(state, session_id)),
+            "investigation": crate::investigation::view(&events, running),
             "messages": messages,
             "traces": traces,
             "sources": sources,
             "linked_sources": linked_sources,
             "stats": stats,
             "archived": meta.as_ref().is_some_and(|m| m.archived),
-            "running": is_turn_running(state, session_id),
+            "running": running,
             "session_grants": list_session_grants(state, session_id),
             "pending_approvals": pending,
             "pending_checkpoints": state.hitl.list_pending(session_id),
