@@ -173,6 +173,7 @@ const DELEGATION_TITLES = {
   delegate_literature: 'Literature Worker',
   delegate_lean: 'Lean Prover Worker',
   delegate_explore: 'Parallel Explorer (Ultramath)',
+  delegate_read_paper: 'Paper Reader',
   lean_check: 'Lean 4 Checker',
 };
 
@@ -183,6 +184,8 @@ function formatDelegationCard(toolName, argsObj, outObj, rawOut) {
   const tag = String(
     (outObj && outObj.model) ||
     (toolName === 'lean_check' && outObj && outObj.status) ||
+    (toolName === 'delegate_read_paper' && argsObj && argsObj.mode === 'list' && 'list') ||
+    (toolName === 'delegate_read_paper' && outObj && Array.isArray(outObj.readers) && `${outObj.readers.length} reader${outObj.readers.length === 1 ? '' : 's'}`) ||
     'Running...'
   );
 
@@ -202,6 +205,22 @@ function formatDelegationCard(toolName, argsObj, outObj, rawOut) {
     } else if (Array.isArray(outObj.branches)) {
       const bc = outObj.branches.length;
       metaParts.push(`${bc} branch${bc === 1 ? '' : 'es'}`);
+    }
+    if (toolName === 'delegate_read_paper') {
+      if (Array.isArray(outObj.readers) && outObj.readers.length > 0) {
+        const rc = outObj.readers.length;
+        metaParts.push(`${rc} reader${rc === 1 ? '' : 's'}`);
+      }
+      if (outObj.coverage && typeof outObj.coverage.lines_read_pct === 'number') {
+        metaParts.push(`${outObj.coverage.lines_read_pct}% read`);
+      }
+      if (Array.isArray(outObj.evidence)) {
+        const ec = outObj.evidence.length;
+        metaParts.push(`${ec} pointer${ec === 1 ? '' : 's'}`);
+      }
+      if (Number(outObj.omitted) > 0) {
+        metaParts.push(`${Number(outObj.omitted)} omitted`);
+      }
     }
     if (outObj.routing_reason) metaParts.push(String(outObj.routing_reason));
     if (Array.isArray(outObj.tools_used) && outObj.tools_used.length > 0) {
@@ -226,7 +245,7 @@ function formatDelegationCard(toolName, argsObj, outObj, rawOut) {
     ? `<div class="sc-meta-line">${escapeHtml(metaParts.join(' · '))}</div>`
     : '';
 
-  const taskText = String((argsObj && (argsObj.task || argsObj.problem || argsObj.statement || argsObj.path)) || '').trim();
+  const taskText = String((argsObj && (argsObj.task || argsObj.problem || argsObj.focus || argsObj.statement || argsObj.path)) || '').trim();
   const taskHtml = taskText
     ? `<div class="sc-meta-line">${mathTextToHtml(taskText)}</div>`
     : '';
@@ -251,6 +270,29 @@ function formatDelegationCard(toolName, argsObj, outObj, rawOut) {
       return `<li><strong>${mathTextToHtml(label)}</strong>${stat || bModel ? ` <code>${escapeHtml(`${stat}${bModel}`.trim())}</code>` : ''}${bSum ? ` · ${mathTextToHtml(bSum)}` : ''}</li>`;
     }).join('');
     bodyDetail += `<ul class="sc-hit-list">${items}</ul>`;
+  }
+  if (toolName === 'delegate_read_paper' && outObj && Array.isArray(outObj.readers) && outObj.readers.length > 0) {
+    const rItems = outObj.readers.slice(0, 8).map((r, i) => {
+      const ro = r && typeof r === 'object' ? r : {};
+      const range = Array.isArray(ro.range) && ro.range.length === 2 ? `L${Number(ro.range[0]) || 0}–${Number(ro.range[1]) || 0}` : `Reader ${i + 1}`;
+      const stat = ro.ok === true ? 'ok' : 'gap';
+      const pts = Number(ro.pointers) || 0;
+      const rErr = ro.error ? ` · ${escapeHtml(String(ro.error).slice(0, 120))}` : '';
+      return `<li><strong>${escapeHtml(range)}</strong> <code>${escapeHtml(stat)}</code> · ${escapeHtml(`${pts} pointer${pts === 1 ? '' : 's'}`)}${rErr}</li>`;
+    }).join('');
+    bodyDetail += `<ul class="sc-hit-list">${rItems}</ul>`;
+  }
+  if (toolName === 'delegate_read_paper' && outObj && Array.isArray(outObj.evidence) && outObj.evidence.length > 0) {
+    const eItems = outObj.evidence.slice(0, 8).map((ev) => {
+      const eo = ev && typeof ev === 'object' ? ev : {};
+      const id = eo.e ? `<code>${escapeHtml(String(eo.e))}</code> ` : '';
+      const loc = eo.l ? `<code>L${escapeHtml(String(eo.l))}</code> ` : '';
+      const role = eo.r ? `<span class="badge">${escapeHtml(String(eo.r))}</span> ` : '';
+      const lab = eo.lab ? `<strong>${mathTextToHtml(String(eo.lab))}</strong> · ` : '';
+      const gist = eo.g ? mathTextToHtml(String(eo.g)) : (eo.q ? mathTextToHtml(String(eo.q)) : '');
+      return `<li>${id}${loc}${role}${lab}${gist}</li>`;
+    }).join('');
+    bodyDetail += `<ul class="sc-hit-list">${eItems}</ul>`;
   }
   if (outObj && outObj.summary) {
     const sum = String(outObj.summary).trim();
@@ -302,6 +344,7 @@ export function buildStructuredTraceCard(tr, opts = {}) {
   } else if (
     toolName === 'delegate_compute' || toolName === 'delegate_literature' ||
     toolName === 'delegate_lean' || toolName === 'delegate_explore' ||
+    toolName === 'delegate_read_paper' ||
     toolName === 'delegate_subagent' || toolName === 'lean_check'
   ) {
     spec = formatDelegationCard(toolName, argsObj, outObj, rawOutStr);

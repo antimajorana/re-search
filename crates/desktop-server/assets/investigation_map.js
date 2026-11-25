@@ -121,7 +121,11 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
       const title = element('summary', '', [anchor.label || nameOf(anchor.kind), location].join(' · '));
       const quote = math('blockquote', anchor.excerpt);
       const open = button('Open cited lines', () => openSource(anchor));
-      box.append(title, quote, element('small', '', anchor.path), open);
+      box.append(title, quote, element('small', '', anchor.path));
+      if (anchor.excerpt_basis === 'evidence') {
+        box.append(element('small', 'investigation-anchor-basis', 'located by reader'));
+      }
+      box.append(open);
       const original = openPdf?.(anchor, true);
       if (original) box.append(button('Open original PDF page', () => openPdf(anchor, false)));
       if (anchor.kind === 'reference') {
