@@ -414,7 +414,7 @@ fn extract_question_refs(question: &str) -> Vec<QuestionRef> {
 
     let sec_re = SEC_RE.get_or_init(|| {
         Regex::new(
-            r"(?:(?i:sections?|subsections?|subsubsections?|secs?\.?)|§)\s*([IVXivx]+(?:\.[A-Za-z](?:\.\d+)?|\s+[A-Z](?:\s+\d+)?)?|\d+(?:\.\d+)*)\b"
+            r"(?:(?i:sections?|subsections?|subsubsections?|secs?\.?)|§)\s*([IVXivx]+(?:\.[A-Za-z](?:(?:\.|\s+)\d+)?|\s+[A-Za-z](?:\.|\s+)\d+|\s+[A-Zb-hj-z])?|\d+(?:\.\d+)*)\b"
         ).unwrap()
     });
     let app_re = APP_RE.get_or_init(|| {

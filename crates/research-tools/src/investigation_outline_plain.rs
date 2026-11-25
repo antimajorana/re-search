@@ -318,11 +318,19 @@ fn assemble_aps(lines: &[&str], cands: &[Candidate]) -> Vec<OutlineSection> {
                     while j < cands.len() {
                         match &cands[j].kind {
                             CandKind::Dotted(v) if v.len() == 1 => {
+                                if let Some(list_end) = packed_dotted_list_end(lines, cands, j) {
+                                    j = list_end;
+                                    continue;
+                                }
+                                if cands[j].ends_with_dot {
+                                    j += 1;
+                                    continue;
+                                }
                                 let n = v[0];
                                 if n == 1 && last_n >= 1 {
                                     break; // Restarting at 1 inside a subsubsection is a body list.
                                 }
-                                if !cands[j].ends_with_dot && valid_step(last_n, n) {
+                                if valid_step(last_n, n) {
                                     last_n = n;
                                     run.push(&cands[j]);
                                 }
@@ -437,17 +445,38 @@ fn assemble_fixed_and_appendices(cands: &[Candidate]) -> Vec<OutlineSection> {
     sections
 }
 
+fn no_prose_between(lines: &[&str], line_a: usize, line_b: usize) -> bool {
+    (line_a..line_b.saturating_sub(1))
+        .all(|idx| lines.get(idx).map(|s| s.trim().is_empty()).unwrap_or(true))
+}
+
 fn is_packed_list(lines: &[&str], run: &[&Candidate]) -> bool {
-    if run.len() < 2 {
-        return false;
+    run.len() >= 2 && run.windows(2).any(|p| no_prose_between(lines, p[0].line_no, p[1].line_no))
+}
+
+fn packed_dotted_list_end(lines: &[&str], cands: &[Candidate], start: usize) -> Option<usize> {
+    let CandKind::Dotted(v0) = &cands[start].kind else { return None };
+    if v0.len() != 1 {
+        return None;
     }
-    run.windows(2).any(|pair| {
-        let (a, b) = (pair[0].line_no, pair[1].line_no);
-        (a..b.saturating_sub(1))
-            .filter(|&idx| !lines.get(idx).map(|s| s.trim().is_empty()).unwrap_or(true))
-            .count()
-            == 0
-    })
+    let (mut prev_n, mut k) = (v0[0], start + 1);
+    while let Some(c) = cands.get(k) {
+        let CandKind::Dotted(vk) = &c.kind else { break };
+        if vk.len() != 1 || vk[0] != prev_n + 1 || !no_prose_between(lines, cands[k - 1].line_no, c.line_no) {
+            break;
+        }
+        let adjacent = c.line_no == cands[k - 1].line_no + 1;
+        let has_packed_next = cands.get(k + 1).is_some_and(|next| {
+            matches!(&next.kind, CandKind::Dotted(vn) if vn.len() == 1 && vn[0] == vk[0] + 1)
+                && no_prose_between(lines, c.line_no, next.line_no)
+        });
+        if !adjacent && !c.ends_with_dot && !has_packed_next {
+            break;
+        }
+        prev_n = vk[0];
+        k += 1;
+    }
+    (k >= start + 2).then_some(k)
 }
 
 fn is_letter_list(lines: &[&str], cands: &[Candidate], start: usize) -> bool {
