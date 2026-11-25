@@ -14,6 +14,12 @@ use anchor::{
     anchor_schema, bounded, faults_error, reject_app_only_fields, string_schema as string,
     valid_id, Anchor, AnchorFault, AnchorReport, SelectedPages, SourceIndex, MAX_TOTAL_BYTES,
 };
+#[path = "investigation_legacy_defs.rs"]
+mod legacy_defs;
+pub use legacy_defs::{
+    earlier_defs, is_current_recorder_def, GOLDEN_BRANCH_7C36A0E, GOLDEN_CONVENTIONS_7C36A0E,
+    GOLDEN_MAP_7C36A0E, GOLDEN_MAP_NO_ANSWER_INDEX_7C36A0E, GOLDEN_SUMMARY_7C36A0E,
+};
 #[path = "investigation_conventions.rs"]
 mod conventions;
 pub use conventions::{conventions_def, paper_conventions, RECORD_PAPER_CONVENTIONS};
