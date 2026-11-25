@@ -3,6 +3,7 @@
 
 pub mod agent_models;
 mod investigation;
+mod investigation_cites;
 mod investigation_finish;
 mod investigation_question;
 mod investigation_system_prompt;

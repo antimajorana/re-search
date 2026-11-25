@@ -102,7 +102,7 @@ def check_investigation(browser, binary):
                     {"id":"calibration", "category":"normalization", "label":"Calibration units", "meaning":"The sensor uses the same mass unit.",
                      "scope":"Sensor observations", "basis":"inferred", "rationale":"The calibration sentence links the unit convention to the sensor.",
                      "anchors":[anchor(4)]}]}
-                state.update(map=None, map_seq=None, conventions_requested=True)
+                state.update(map=None, map_seq=None, mapping_requested=True, conventions_requested=True)
                 route.fulfill(status=202, json={"status": "running"})
 
             def upload(route):
@@ -138,8 +138,14 @@ def check_investigation(browser, binary):
                               assumptions=[lines[0]], sources=state["map"]["nodes"][0]["anchors"])
                 route.fulfill(status=201, json={"session_id": child})
 
+            receipts["stops"] = []
+            def stop_turn(route):
+                receipts["stops"].append(True)
+                route.fulfill(status=200, json={"ok": True})
+
             page.route("**/" + parent + "/upload", upload)
             page.route("**/" + parent + "/messages", send)
+            page.route("**/" + parent + "/stop", stop_turn)
             page.route("**/" + parent + "/investigation/corrections", correct)
             page.route("**/" + parent + "/investigation/rechecks", check)
             page.route("**/" + parent + "/investigation/branches", develop)
@@ -153,11 +159,11 @@ def check_investigation(browser, binary):
             expect(page.locator("#investigation-status")).to_contain_text("Enter both page numbers")
             page.get_by_label("Primary paper", exact=True).set_input_files({"name": "dynamics.txt", "mimeType": "text/plain", "buffer": body.encode()})
             expect(page.get_by_label("First page")).to_be_hidden()
-            page.get_by_label("Reading question").fill("Which assumption connects the result?")
             page.get_by_role("button", name="Find main results").click()
             brief = page.locator("#investigation-summary")
             expect(brief.get_by_role("heading", name="What, Why, and How")).to_be_visible()
             expect(page.locator("#pipeline-bar")).to_be_hidden()
+            expect(page.get_by_role("button", name="Paper", exact=True)).to_be_visible()
             expect(page.get_by_role("button", name="Conversation", exact=True)).to_be_visible()
             expect(brief).to_contain_text("Reading the paper")
             state["summary"] = scenario["summary"]
@@ -195,15 +201,23 @@ def check_investigation(browser, binary):
             catalog.locator(":scope > summary").click()
             expect(catalog).to_contain_text("Conventions review stopped. The provider stopped before the next batch.")
             catalog.get_by_role("button", name="Continue conventions review").click()
+            expect(page.locator("#composer-stop")).to_be_visible()
             expect(catalog.locator(":scope > summary")).to_contain_text("2 found so far")
             expect(catalog.locator(":scope > summary")).to_be_focused()
             assert receipts["conventions"]["map_seq"] == 11 and receipts["conventions"]["provider"] == "antigravity"
-            inferred.get_by_role("button", name="Open cited lines").focus()
             for index in range(5):
                 state["conventions"]["items"].append({**scenario["conventions"]["items"][0], "id":"note-"+str(index),
                     "label":"Reading "+str(index), "meaning":"A separate fixture convention."})
+            page.evaluate("async id => (await import('/assets/investigation.js')).refreshInvestigation(id)", parent)
+            expect(catalog.get_by_role("searchbox")).to_be_visible()
+            catalog.get_by_role("searchbox").focus()
+            page.keyboard.press("Escape")
+            assert receipts["stops"] == []
+            expect(page.locator("#composer-stop")).to_be_visible()
+            inferred.get_by_role("button", name="Open cited lines").focus()
             state["conventions"].update(done=True, coverage="partial", limitations=["The appendix was outside the selected pages."])
             scenario["running"] = False
+            page.evaluate("() => window.fixtureEventStream.dispatchEvent(new MessageEvent('turn_complete',{data:'{}'}))")
             expect(catalog.locator(":scope > summary")).to_contain_text("7 entries · partial coverage", timeout=15000)
             expect(inferred.get_by_role("button", name="Open cited lines")).to_be_focused()
             expect(catalog).to_contain_text("The appendix was outside the selected pages.")
@@ -214,13 +228,14 @@ def check_investigation(browser, binary):
             assert receipts["send"]["provider"] == "antigravity"
             assert "investigation_page_start" not in receipts["send"]
             assert receipts["send"]["model"] == "gemini-carbon-fixture"
-            assert receipts["send"]["prompt"] == "Which assumption connects the result?"
+            assert receipts["send"]["prompt"] == "Identify the paper’s main results."
+            assert receipts["send"]["investigation_scope"] == "map"
             graph = page.locator("#investigation-map")
             expect(graph.locator(".investigation-graph-node")).to_have_count(0)
             expect(graph.locator('.investigation-index [data-node]')).to_have_count(2)
             expect(graph.locator('[data-node="second"] .katex').first).to_be_visible()
             graph.locator('[data-node="force"]').click()
-            expect(graph.get_by_label("Focus question")).to_have_value("Which assumption connects the result?")
+            expect(graph.get_by_label("Focus question")).to_have_value("What assumptions, methods and evidence support this result?")
             assert state["activities"] == [] and state["branches"] == []
             graph.get_by_label("Focus question").fill("How does the calibration support the argument?")
             graph.get_by_role("button", name="Develop this result").click()
@@ -232,8 +247,6 @@ def check_investigation(browser, binary):
             page.evaluate("async id => (await import('/assets/investigation.js')).refreshInvestigation(id)", parent)
             chart = graph.locator(".investigation-index")
             expect(chart.locator(".investigation-graph-node")).to_have_count(2)
-            expect(chart.locator(".question-match")).to_contain_text("Selected for your question")
-            expect(chart.locator(".question-match")).to_contain_text(lines[1])
             edge = chart.locator('[data-from="mass"][data-to="force"]')
             expect(edge).to_have_attribute("data-hidden", "1")
             edge.focus()
@@ -264,7 +277,7 @@ def check_investigation(browser, binary):
             capture_graph_screen(page, "investigation-summary-narrow", brief)
             graph.locator('[data-node="second"]').click()
             expect(graph.locator(".investigation-graph-viewport")).to_have_count(0)
-            expect(graph.get_by_label("Focus question")).to_have_value("Which assumption connects the result?")
+            expect(graph.get_by_label("Focus question")).to_have_value("What assumptions, methods and evidence support this result?")
             graph.get_by_label("Focus question").fill("How was the acceleration prediction calibrated?")
             graph.get_by_role("button", name="Develop this result").click()
             expect(graph.get_by_text("Developing branch · How was the acceleration prediction calibrated?")).to_be_visible()
@@ -282,7 +295,7 @@ def check_investigation(browser, binary):
             expect(graph.get_by_role("heading", name="What this statement uses")).to_be_visible()
             expect(graph.get_by_text("Dependency · Inferred rationale")).to_be_visible()
             expect(graph.get_by_text("Support · Author-stated connection")).to_be_visible()
-            graph.locator(".investigation-selected summary").click()
+            expect(graph.locator(".investigation-selected details").first).to_have_attribute("open", "")
             graph.get_by_role("button", name="Open cited lines").first.click()
             expect(page.locator("#source-reader-dialog")).to_be_visible()
             expect(page.locator("#source-reader-status")).to_contain_text("Line 2")
@@ -325,4 +338,149 @@ def check_investigation(browser, binary):
             expect(catalog.locator(":scope > summary")).to_contain_text("None reported in the paper")
             expect(graph.locator(".investigation-claim-title")).to_have_text(lines[1])
             assert not errors, errors
+    check_question_first_investigation(browser, binary)
     print("Investigation upload, provider selection, focused map, exact passages, correction, recheck and linked Research passed")
+
+
+def check_question_first_investigation(browser, binary):
+    lines = ["Assume a unit mass.", "The net force equals its acceleration.", "We measure a unit force."]
+    body = "\n".join(lines)
+    with tempfile.TemporaryDirectory(prefix="re-search-paper-question-") as directory:
+        root = Path(directory)
+        (root / "paper").mkdir()
+
+        def mock_no_models(page):
+            page.route("**/api/models*", lambda r: r.fulfill(json={"providers": []}))
+
+        with open_install(browser, binary, root, before_navigate=mock_no_models) as page:
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            uploads = []
+            page.route("**/upload", lambda r: (uploads.append(True), r.continue_()))
+            page.get_by_role("button", name="Investigate a paper", exact=True).click()
+            page.get_by_label("Primary paper", exact=True).set_input_files(
+                {"name": "dynamics.txt", "mimeType": "text/plain", "buffer": body.encode()}
+            )
+            page.get_by_role("button", name="Find main results").click()
+            expect(page.locator("#settings-dialog")).to_be_visible()
+            assert uploads == [], "upload must not run when no model is connected"
+            assert not errors, errors
+
+        def mock_provider(page):
+            page.add_init_script("""const listen = EventSource.prototype.addEventListener;
+                EventSource.prototype.addEventListener = function(name, ...args) {
+                  if (name === 'turn_complete') window.fixtureEventStream = this;
+                  return listen.call(this, name, ...args);
+                };""")
+            page.route("**/api/models*", lambda r: r.fulfill(json={"providers": [
+                {"id": "antigravity", "label": "Antigravity", "route": "antigravity",
+                 "models": [{"id": "gemini-carbon-fixture", "label": "Gemini fixture", "default": True}]}]}))
+
+        with open_install(browser, binary, root, before_navigate=mock_provider) as page:
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.get_by_role("button", name="Investigate a paper", exact=True).click()
+            sid = page.evaluate("async () => (await (await import('/assets/api.js')).listSessions()).sessions[0].id")
+            state = {"map": None, "map_seq": None, "mapping_requested": False, "answers": [],
+                     "corrections": [], "activities": [], "branches": []}
+            scenario = {"running": False, "upload": None}
+            sends = []
+
+            def session_view(route):
+                response = route.fetch()
+                data = response.json()
+                data["investigation"] = dict(state)
+                data["running"] = scenario["running"]
+                route.fulfill(response=response, json=data)
+
+            def upload(route):
+                response = route.fetch()
+                scenario["upload"] = response.json()["ingested"][0]
+                route.fulfill(response=response)
+
+            def send(route):
+                req = route.request.post_data_json
+                sends.append(req)
+                source = req.get("investigation_source_id") or state.get("source_id")
+                path = scenario["upload"]["primary_path"]
+                state["source_id"] = source
+                if req.get("investigation_scope") == "map":
+                    anchor = {"source_id": source, "path": path,
+                              "file_sha256": hashlib.sha256(body.encode()).hexdigest(),
+                              "source_seq": scenario["upload"]["event_seq"],
+                              "start_line": 2, "end_line": 2, "kind": "passage", "excerpt": lines[1]}
+                    state.update(
+                        question=req["prompt"], mapping_requested=True, map_seq=11,
+                        map={"title": "Dynamics of a unit mass", "coverage": "partial",
+                             "answer_node_ids": ["force"], "limitations": [],
+                             "nodes": [{"id": "force", "sentence": lines[1], "main": True,
+                                        "kind": "result", "anchors": [anchor], "questions": []}],
+                             "edges": []},
+                    )
+                elif len(state["answers"]) == 0:
+                    state["answers"] = [{
+                        "seq": 3, "question": req["prompt"], "status": "answered",
+                        "text": "Unit mass [L1] connects force [L2].",
+                        "cites": [{"start": 1, "end": 1, "read": True}, {"start": 2, "end": 2, "read": False}],
+                    }]
+                else:
+                    state["answers"] = [*state["answers"], {
+                        "seq": 20, "question": req["prompt"], "status": "answered",
+                        "text": "The measured force uses unit mass [L3].",
+                        "cites": [{"start": 3, "end": 3, "read": True}],
+                    }]
+                scenario["running"] = True
+                route.fulfill(status=202, json={"status": "running"})
+
+            page.route("**/api/sessions/" + sid, session_view)
+            page.route("**/" + sid + "/upload", upload)
+            page.route("**/" + sid + "/messages", send)
+
+            question = "Which assumption connects the result?"
+            page.get_by_label("Your question").fill(question)
+            expect(page.locator("#investigation-setup button[type='submit']")).to_have_text("Answer my question")
+            page.get_by_label("Primary paper", exact=True).set_input_files(
+                {"name": "dynamics.txt", "mimeType": "text/plain", "buffer": body.encode()}
+            )
+            page.get_by_role("button", name="Answer my question").click()
+            assert sends[0]["investigation_scope"] == "question"
+            assert sends[0]["prompt"] == question
+            scenario["running"] = False
+            page.evaluate("() => window.fixtureEventStream.dispatchEvent(new MessageEvent('turn_complete',{data:'{}'}))")
+
+            answer = page.locator("#investigation-answer")
+            expect(answer).to_be_visible()
+            expect(answer).to_contain_text("Unit mass [L1] connects force [L2].")
+            expect(page.locator("#investigation-setup")).to_be_hidden()
+            expect(page.locator("#investigation-summary")).to_be_hidden()
+            expect(page.locator("#investigation-conventions")).to_be_hidden()
+            expect(page.locator("#composer-input")).to_be_visible()
+            expect(page.locator("#composer-input")).to_have_attribute("placeholder", "Ask a follow-up about this paper…")
+
+            cite = answer.locator(".line-cite")
+            expect(cite).to_have_count(1)
+            expect(cite).to_have_text("L1")
+            cite.click()
+            expect(page.locator("#source-reader-dialog")).to_be_visible()
+            expect(page.locator("#source-reader-status")).to_contain_text("Line 1")
+            page.keyboard.press("Escape")
+
+            answer.get_by_role("button", name="Find main results").click()
+            assert sends[1]["investigation_scope"] == "map"
+            assert sends[1]["prompt"] == question
+            scenario["running"] = False
+            page.evaluate("() => window.fixtureEventStream.dispatchEvent(new MessageEvent('turn_complete',{data:'{}'}))")
+            expect(page.get_by_role("heading", name="Dynamics of a unit mass")).to_be_visible()
+            expect(page.locator("#investigation-map .investigation-index")).to_contain_text("Selected for your question")
+            page.locator('#investigation-map [data-node="force"]').click()
+            expect(page.locator("#investigation-map").get_by_label("Focus question")).to_have_value(question)
+
+            page.locator("#composer-input").fill("How is the force measured?")
+            page.locator("#composer-send").click()
+            assert sends[2]["prompt"] == "How is the force measured?"
+            scenario["running"] = False
+            page.evaluate("() => window.fixtureEventStream.dispatchEvent(new MessageEvent('turn_complete',{data:'{}'}))")
+            expect(answer).to_contain_text("The measured force uses unit mass [L3].")
+            expect(answer.locator("details > summary")).to_have_text("Earlier questions (1)")
+            assert not errors, errors
+

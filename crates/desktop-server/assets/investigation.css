@@ -5,7 +5,8 @@
 .investigation-origin details { max-width: 820px; margin: auto; }
 .investigation-origin summary, .investigation-anchor summary, .investigation-reason summary { cursor: pointer; }
 #app-shell[data-project-overview="true"] :is(#investigation-panel, #investigation-nav, #investigation-origin),
-#app-shell[data-investigation-view="map"] :is(#pipeline-bar, #message-stream, #composer-input, #composer-send, #composer-files, .upload-label) { display: none; }
+#app-shell[data-investigation-view="map"] :is(#pipeline-bar, #message-stream, #composer-files, .upload-label),
+#app-shell[data-investigation-view="map"]:not([data-investigation-has-paper="true"]) :is(#composer-input, #composer-send) { display: none; }
 #investigation-panel { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 24px clamp(14px, 3vw, 40px); }
 .investigation-inner { max-width: 790px; margin: 0 auto; color: var(--ink-primary); line-height: 1.5; overflow-wrap: anywhere; }
 .investigation-inner h2 { font-size: clamp(1.3rem, 2vw, 1.65rem); line-height: 1.32; margin: .25rem 0 .65rem; }
@@ -23,6 +24,16 @@
 .investigation-setup textarea, .investigation-action-form textarea { resize: vertical; min-height: 3.5rem; height: auto; padding-block: .5rem; }
 .investigation-setup > button { justify-self: start; margin-top: .4rem; }
 #investigation-status, .investigation-notice { margin: 1rem 0; color: var(--ink-secondary); }
+.investigation-status-action { margin-left: .5rem; }
+#investigation-answer { border-bottom: 1px solid var(--border-subtle); margin-bottom: 1.3rem; padding-bottom: .9rem; }
+.investigation-answer-question { font-weight: 600; color: var(--ink-primary); }
+.investigation-answer-note { font-size: .84rem; margin-top: .45rem; }
+.investigation-earlier-answers { margin-top: .75rem; }
+.investigation-earlier-answers > summary { cursor: pointer; color: var(--ink-secondary); font-size: .88rem; }
+.investigation-earlier-item { border-top: 1px solid var(--border-subtle); margin-top: .7rem; padding-top: .65rem; }
+.line-cite { appearance: none; background: none; border: 0; padding: 0; margin: 0; font: inherit;
+  color: var(--accent); cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.line-cite:hover, .line-cite:focus-visible { text-decoration-style: solid; }
 #investigation-original { margin: .5rem 0; }
 #investigation-summary { border-bottom: 1px solid var(--border-subtle); margin-bottom: 1.3rem; padding-bottom: .8rem; }
 .investigation-summary-part { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: .65rem; margin: .75rem 0; }

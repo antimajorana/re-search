@@ -32,6 +32,7 @@ let stopRequest = null;
 let defaultSendHtml = '';
 let currentRoute = null;
 let defaultPlaceholder = 'Ask a derivation, verify a theorem, or audit a paper...';
+let placeholderOverride = null;
 
 export function initComposer(opts = {}) {
   callbacks = opts;
@@ -95,7 +96,9 @@ export function initComposer(opts = {}) {
   document.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Escape' || ev.defaultPrevented || ev.repeat || ev.isComposing || ev.keyCode === 229) return;
     if (wsDialogEl?.open || document.getElementById('settings-dialog')?.open ||
-        document.getElementById('source-reader-dialog')?.open) return;
+        document.getElementById('source-reader-dialog')?.open ||
+        document.querySelector?.('dialog[open]')) return;
+    if (ev.target?.closest?.('#investigation-panel :is(input,textarea,select)')) return;
     const effortPop = document.getElementById('effort-popover');
     if (effortPop && !effortPop.hidden) {
       ev.preventDefault();
@@ -252,7 +255,7 @@ function syncButtons() {
     }
   }
   if (inputEl) {
-    inputEl.placeholder = steerMode ? 'Steer the active turn (injected at next step)...' : defaultPlaceholder;
+    inputEl.placeholder = steerMode ? 'Steer the active turn (injected at next step)...' : (placeholderOverride || defaultPlaceholder);
   }
   if (stopEl) {
     stopEl.hidden = !turnRunning;
@@ -262,6 +265,11 @@ function syncButtons() {
     topbarStopEl.hidden = !turnRunning;
     topbarStopEl.disabled = Boolean(stopRequest);
   }
+}
+
+export function setComposerPlaceholder(text) {
+  placeholderOverride = text || null;
+  syncButtons();
 }
 
 export function setComposerBusy(busy) {

@@ -112,9 +112,12 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
     return link;
   }
 
-  function sources(parent, anchors) {
+  function sources(parent, anchors, { openFirst = false } = {}) {
+    let first = true;
     for (const anchor of anchors || []) {
       const box = element('details', 'investigation-anchor');
+      if (openFirst && first) box.open = true;
+      first = false;
       box.dataset.anchor = JSON.stringify([anchor.source_id,anchor.path,anchor.start_line,anchor.end_line]);
       const location = anchor.start_line === anchor.end_line ? 'line ' + anchor.start_line :
         'lines ' + anchor.start_line + '–' + anchor.end_line;
@@ -380,7 +383,7 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
     const heading = math('h2', node.sentence, 'investigation-claim-title');
     heading.tabIndex = -1;
     main.append(element('span', 'investigation-kind', nameOf(node.kind)), heading);
-    sources(main, node.anchors);
+    sources(main, node.anchors, { openFirst: true });
     for (const change of corrections.filter(c => c.node_id === node.id)) {
       const note = element('aside', 'investigation-correction');
       const upstream = change.edge_from && inv.map.nodes.find(n => n.id === change.edge_from);

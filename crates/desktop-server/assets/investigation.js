@@ -1,13 +1,16 @@
 import * as api from '/assets/api.js';
-import { arrayBufferToBase64 } from '/assets/composer.js';
+import { arrayBufferToBase64, setComposerPlaceholder } from '/assets/composer.js';
 import { renderMathTextInto } from '/assets/math.js';
 import { createPaperMap, DEFAULT_PAPER_REQUEST } from '/assets/investigation_map.js';
 import { openOriginalPdf } from '/assets/pdf_preview.js';
 import { createConventionCatalog } from '/assets/investigation_conventions.js';
 import { citedPaperLinks } from '/assets/source_links.js';
+import { createAnswerCard } from '/assets/investigation_answer.js';
+import { latestRequestEvent, paperViewState, setupButtonLabel } from '/assets/investigation_state.js';
 
-let callbacks, paperMap, conventionCatalog, sessionId, session, view, readRevision = 0, submitting = false;
-let summaryTimer = null;
+let callbacks, paperMap, conventionCatalog, answerCard, sessionId, session, view, readRevision = 0, submitting = false;
+let summaryTimer = null, statusTimer = null, uploadingKind = null, runStartedAt = null;
+let approvalWaiting = false, localStatus = '';
 const byId = id => document.getElementById(id);
 const setupDrafts = new Map();
 
@@ -24,11 +27,33 @@ export function initInvestigation(options) {
     },
     act: handleClaimAction,
   });
+  let answerHost = byId('investigation-answer');
+  if (!answerHost) {
+    answerHost = document.createElement('section');
+    answerHost.id = 'investigation-answer';
+    answerHost.setAttribute('aria-live', 'polite');
+    answerHost.hidden = true;
+    byId('investigation-status').after(answerHost);
+  }
+  answerCard = createAnswerCard(answerHost, {
+    onFindMainResults: findMainResultsFromAnswer,
+    onOpenConversation: () => selectView('chat'),
+    openCite: (start, end) => {
+      const source = primarySource();
+      const path = source?.primary_path || source?.files?.[0];
+      if (source?.source_id && path) {
+        callbacks.openSource(sessionId, { source_id: source.source_id, path, start_line: start, end_line: end });
+      }
+    },
+  });
   conventionCatalog = createConventionCatalog(byId('investigation-conventions'), paperMap.renderAnchors, async mapSeq => {
     const id = sessionId;
     if (!id || session?.investigation?.map_seq !== mapSeq) throw new Error('The active paper changed. Open its conventions again.');
-    await api.findInvestigationConventions(id, { ...callbacks.requestOptions(), map_seq: mapSeq });
-    if (id === sessionId) await refreshInvestigation(id);
+    const res = await api.findInvestigationConventions(id, { ...callbacks.requestOptions(), map_seq: mapSeq });
+    if (id === sessionId) {
+      if (res?.status !== 'complete') { callbacks.setBusy?.(true); runStartedAt = Date.now(); }
+      await refreshInvestigation(id);
+    }
   });
   byId('new-investigation-btn').addEventListener('click', async event => {
     const button = event.currentTarget;
@@ -38,6 +63,7 @@ export function initInvestigation(options) {
   });
   byId('show-paper-map').addEventListener('click', () => selectView('map'));
   byId('show-investigation-chat').addEventListener('click', () => selectView('chat'));
+  byId('investigation-question').addEventListener('input', syncSetupButton);
   byId('investigation-file').addEventListener('change', () => {
     if (byId('investigation-file').files.length) byId('investigation-existing').value = '';
     syncPdfButton();
@@ -51,11 +77,26 @@ export function initInvestigation(options) {
     if (source) openOriginalPdf({ sessionId, sourceId: source.source_id, label: source.title || source.origin });
   });
   byId('investigation-setup').addEventListener('submit', buildMap);
+  document.addEventListener?.('research:approvals', event => {
+    if (event?.detail?.sessionId !== sessionId || session?.mode !== 'investigation') return;
+    approvalWaiting = Boolean(event.detail.waiting);
+    syncStatus();
+  });
+}
+
+function primarySource() {
+  const id = session?.investigation?.source_id || byId('investigation-existing').value;
+  return session?.sources?.find(s => s.source_id === id) || null;
 }
 
 function primaryPdf() {
-  const id = session?.investigation?.source_id || byId('investigation-existing').value;
-  return session?.sources?.find(s => s.source_id === id && s.format === 'pdf');
+  const source = primarySource();
+  return source?.format === 'pdf' ? source : null;
+}
+
+function syncSetupButton() {
+  const btn = byId('investigation-setup')?.querySelector('button');
+  if (btn) btn.textContent = setupButtonLabel(byId('investigation-question')?.value);
 }
 
 function syncPdfButton() {
@@ -81,10 +122,57 @@ function selectView(next) {
   }
 }
 
-function showStatus(text) {
+function clearStatusTimer() {
+  if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+}
+
+function renderStatus(text, showApprovalButton = false) {
   const el = byId('investigation-status');
-  if (el.textContent !== (text || '')) el.textContent = text || '';
   el.hidden = !text;
+  if (!text) {
+    if (el.dataset) el.dataset.approval = '';
+    if (el.textContent || el.children?.length) el.replaceChildren();
+    return;
+  }
+  if (!showApprovalButton) {
+    if (el.dataset) el.dataset.approval = '';
+    if (el.children?.length || el.textContent !== text) el.textContent = text;
+    return;
+  }
+  if (el.dataset?.approval === 'true' && el.querySelector?.('button')) return;
+  el.replaceChildren();
+  if (el.dataset) el.dataset.approval = 'true';
+  const span = document.createElement('span');
+  span.textContent = text;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'pill-btn sm investigation-status-action';
+  btn.textContent = 'Review in Conversation';
+  btn.addEventListener('click', () => selectView('chat'));
+  el.append(span, document.createTextNode(' '), btn);
+}
+
+function showStatus(text) {
+  localStatus = text || '';
+  renderStatus(localStatus, false);
+}
+
+function syncStatus() {
+  if (session?.mode !== 'investigation') { clearStatusTimer(); return; }
+  const inv = session.investigation || {};
+  const state = paperViewState(inv, {
+    ...session, uploading: uploadingKind, startedAtMs: runStartedAt, approvalWaiting,
+  }, Date.now());
+  if (localStatus && !state.timerActive && !state.showApprovalButton) {
+    renderStatus(localStatus, false);
+  } else {
+    renderStatus(state.statusText, state.showApprovalButton);
+  }
+  if (state.timerActive) {
+    if (!statusTimer) statusTimer = setInterval(syncStatus, 1000);
+  } else {
+    clearStatusTimer();
+  }
 }
 
 function renderOrigin(origin) {
@@ -232,8 +320,14 @@ export function showInvestigationSession(id, data) {
     sessionId = id;
     view = 'map';
     submitting = false;
+    uploadingKind = null;
+    runStartedAt = null;
+    approvalWaiting = false;
+    localStatus = '';
+    clearStatusTimer();
     paperMap.reset();
     conventionCatalog.reset();
+    answerCard.reset();
     byId('investigation-setup').reset();
     byId('investigation-existing').replaceChildren();
     byId('investigation-question').value = setupDrafts.get(id)?.question || '';
@@ -246,10 +340,29 @@ export function showInvestigationSession(id, data) {
   session = data;
   selectView(view);
   renderOrigin(data?.investigation?.origin);
-  if (data?.mode !== 'investigation') return;
+  if (data?.mode !== 'investigation') {
+    clearStatusTimer();
+    answerCard.reset();
+    byId('app-shell').setAttribute('data-investigation-has-paper', 'false');
+    setComposerPlaceholder(null);
+    return;
+  }
   const inv = data.investigation || {};
-  paperMap.updateSummary(inv.summary, Boolean(data.running), Boolean(inv.source_id || inv.map), inv.summary_is_current);
+  approvalWaiting = Array.isArray(data.pending_approvals) && data.pending_approvals.length > 0;
+  if (!data.running && !uploadingKind) runStartedAt = null;
+  else if (data.running && runStartedAt === null && latestRequestEvent(data.events)?.ts_ms == null) runStartedAt = Date.now();
+  const state = paperViewState(inv, { ...data, uploading: uploadingKind, startedAtMs: runStartedAt, approvalWaiting }, Date.now());
+  byId('app-shell').setAttribute('data-investigation-has-paper', state.hasPaper ? 'true' : 'false');
+  setComposerPlaceholder(state.composerPlaceholder);
+  paperMap.updateSummary(inv.summary, Boolean(data.running) && state.showSummary, state.showSummary, inv.summary_is_current);
   conventionCatalog.update(inv, Boolean(data.running));
+  const primary = primarySource();
+  answerCard.update(state.answers, {
+    hasMap: state.hasMap,
+    running: Boolean(data.running),
+    sourceId: inv.source_id || null,
+    primaryPath: primary?.primary_path || primary?.files?.[0] || null,
+  });
   scheduleSummaryRefresh();
   const select = byId('investigation-existing');
   const previous = select.value || setupDrafts.get(id)?.source || inv.source_id;
@@ -265,25 +378,23 @@ export function showInvestigationSession(id, data) {
     byId('investigation-page-end').value = inv.page_end || '';
   }
   const pinned = Boolean(inv.source_id) || submitting;
-  for (const id of ['investigation-page-start','investigation-page-end','investigation-existing','investigation-file']) byId(id).disabled = pinned;
+  for (const fieldId of ['investigation-page-start','investigation-page-end','investigation-existing','investigation-file']) byId(fieldId).disabled = pinned;
   byId('investigation-question').disabled = submitting;
   const setup = byId('investigation-setup');
-  setup.hidden = Boolean(inv.map) || Boolean(data.running);
+  setup.hidden = !state.showSetup;
   setup.querySelector('button').disabled = submitting;
-  if (data.running) showStatus(inv.summary && !inv.map ? 'The paper overview is ready. The model is identifying the main results.' :
-    'The selected model is working. Open Conversation to follow its progress or approve a tool.');
-  else if (!submitting) {
-    if (inv.mapping_error) showStatus((inv.map ? 'Showing the saved main results. The latest reading failed. ' : '') + inv.mapping_error);
-    else showStatus(!inv.map && inv.source_id ? 'The main results are unavailable. Try again or read the conversation.' : '');
-  }
-  if (!byId('investigation-question').value && inv.question) byId('investigation-question').value = inv.question;
+  if (state.refillQuestion && !byId('investigation-question').value && inv.question) byId('investigation-question').value = inv.question;
+  syncSetupButton();
+  if (!submitting) localStatus = '';
+  syncStatus();
   paperMap.update(inv, Boolean(data.running), data.events || []);
 }
 
 function scheduleSummaryRefresh() {
   if (summaryTimer || session?.mode !== 'investigation' || !session.running) return;
   const inv = session.investigation || {};
-  const summaryPending = !inv.summary || inv.summary_is_current === false;
+  const state = paperViewState(inv, session, Date.now());
+  const summaryPending = state.pollSummary && (!inv.summary || inv.summary_is_current === false);
   const conventionsPending = inv.conventions_requested && (!inv.conventions?.done || inv.conventions_is_current === false);
   if (!summaryPending && !conventionsPending) return;
   const id = sessionId;
@@ -302,6 +413,28 @@ export async function refreshInvestigation(id) {
     if (revision === readRevision && id === sessionId) showInvestigationSession(id, data);
   } catch (error) {
     if (revision === readRevision && id === sessionId) showStatus(error.message);
+  }
+}
+
+async function findMainResultsFromAnswer(question) {
+  const id = sessionId;
+  const inv = session?.investigation;
+  if (!id || !inv?.source_id || submitting || session?.running) return;
+  const pageRange = {};
+  if (inv.page_start && inv.page_end) {
+    pageRange.investigation_page_start = inv.page_start;
+    pageRange.investigation_page_end = inv.page_end;
+  }
+  try {
+    const options = callbacks.requestOptions();
+    localStatus = '';
+    runStartedAt = Date.now();
+    await callbacks.send(id, question.trim() || DEFAULT_PAPER_REQUEST, {
+      ...options, ...pageRange, investigation_source_id: inv.source_id, investigation_scope: 'map',
+    });
+    if (sessionId === id) await refreshInvestigation(id);
+  } catch (error) {
+    if (sessionId === id) { runStartedAt = null; clearStatusTimer(); showStatus(error.message); }
   }
 }
 
@@ -324,19 +457,28 @@ async function buildMap(event) {
       pageRange.investigation_page_end = end;
     }
   }
+  let options;
+  try { options = callbacks.requestOptions(); }
+  catch (error) { showStatus(error.message); return; }
   const readingQuestion = byId('investigation-question').value.trim();
+  const scope = readingQuestion ? 'question' : 'map';
   const button = event.currentTarget.querySelector('button');
   const controls = [...event.currentTarget.querySelectorAll('input, textarea, select')];
   submitting = true;
+  localStatus = '';
   button.disabled = true;
   for (const control of controls) control.disabled = true;
   try {
     if (file) {
-      showStatus('Adding paper to this session…');
+      uploadingKind = /\.pdf$/i.test(file.name) ? 'pdf' : 'other';
+      runStartedAt = Date.now();
+      syncStatus();
       const content = arrayBufferToBase64(await file.arrayBuffer());
       if (sessionId !== id) return;
       const upload = await api.uploadFilesBase64(id, [{ name: file.name, content_base64: content }]);
       if (sessionId !== id) return;
+      uploadingKind = null;
+      clearStatusTimer();
       const source = upload.ingested?.[0];
       if (!source?.source_id) throw new Error('Could not confirm ingestion. Check Sources before uploading again.');
       sourceId = source.source_id;
@@ -351,15 +493,21 @@ async function buildMap(event) {
     if (session.sources?.some(item => item.source_id === sourceId && item.status === 'empty_text_layer')) {
       throw new Error('This PDF has no readable text layer. Open the original PDF, or choose a searchable PDF or TeX source to build a map.');
     }
-    const options = callbacks.requestOptions();
+    runStartedAt = Date.now();
     await callbacks.send(id, readingQuestion || DEFAULT_PAPER_REQUEST, {
-      ...options, ...pageRange, investigation_source_id: sourceId,
+      ...options, ...pageRange, investigation_source_id: sourceId, investigation_scope: scope,
     });
     if (sessionId === id) await refreshInvestigation(id);
   } catch (error) {
-    if (sessionId === id) showStatus(error.message);
+    if (sessionId === id) {
+      uploadingKind = null;
+      runStartedAt = null;
+      clearStatusTimer();
+      showStatus(error.message);
+    }
   } finally {
     if (sessionId === id) {
+      uploadingKind = null;
       submitting = false;
       button.disabled = false;
       for (const control of controls) control.disabled = control.id !== 'investigation-question' && Boolean(session?.investigation?.source_id);
@@ -379,9 +527,11 @@ async function handleClaimAction(action, target, text, edgeFrom) {
     await api.correctInvestigation(id, { ...target, text, ...(edgeFrom ? { edge_from: edgeFrom } : {}) });
   } else if (action === 'branch') {
     await api.developInvestigation(id, { ...callbacks.requestOptions(), ...target, question: text });
+    if (id === sessionId) { callbacks.setBusy?.(true); runStartedAt = Date.now(); }
   } else {
     await api.checkInvestigation(id, { ...callbacks.requestOptions(), ...target, action,
       ...(edgeFrom ? { edge_from: edgeFrom } : {}), ...(text ? { prompt: text } : {}) });
+    if (id === sessionId) { callbacks.setBusy?.(true); runStartedAt = Date.now(); }
   }
   if (id === sessionId) await refreshInvestigation(id);
 }

@@ -122,7 +122,7 @@ export function createConventionCatalog(host, renderAnchors, find) {
     resume.hidden = running || mapSeq == null || (catalog?.done && inv.conventions_is_current !== false);
     resume.disabled = pending;
     resume.textContent = catalog || inv.conventions_requested ? 'Continue conventions review' : 'Find paper conventions';
-    host.hidden = !(catalog || inv.conventions_requested || inv.source_id || mapSeq != null);
+    host.hidden = !(catalog || inv.conventions_requested || mapSeq != null);
     if (host.hidden) return;
     const mapEl = document.getElementById('investigation-map'), panel = document.getElementById('investigation-panel');
     const before = mapEl.getBoundingClientRect().top;
