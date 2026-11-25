@@ -61,13 +61,14 @@ pub(super) fn payload(args: &Value, index: &mut SourceIndex<'_>) -> Result<Value
                         "Give a short '{name}' statement and one to three verbatim anchors."
                     ));
                 }
-                for anchor in anchors {
+                for (idx, anchor) in anchors.iter_mut().enumerate() {
                     if anchor.source_id != summary.source_id {
                         return Err(format!(
                             "The '{name}' summary must cite the selected paper."
                         ));
                     }
-                    index.verify(anchor)?;
+                    let owner = format!("{name}.anchors[{idx}]");
+                    index.verify_any(&owner, anchor).map_err(|f| f.to_error_string())?;
                 }
             }
             Part::Unstated { unstated: true } if name != "what" => {}

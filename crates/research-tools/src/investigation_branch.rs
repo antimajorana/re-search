@@ -181,12 +181,14 @@ pub(super) fn payload(
     union.edges.append(&mut branch.edges);
     validate_map(&union, MAX_TOTAL_NODES, MAX_TOTAL_EDGES)?;
     for node in &mut union.nodes[start_node..] {
-        for anchor in &mut node.anchors {
-            index.verify(anchor)?;
+        for (idx, anchor) in node.anchors.iter_mut().enumerate() {
+            let owner = format!("nodes[{}].anchors[{idx}]", node.id);
+            index.verify_any(&owner, anchor).map_err(|f| f.to_error_string())?;
         }
     }
     for edge in &mut union.edges[start_edge..] {
-        index.verify(&mut edge.anchor)?;
+        let owner = format!("edges[{}->{}].anchor", edge.from, edge.to);
+        index.verify_any(&owner, &mut edge.anchor).map_err(|f| f.to_error_string())?;
     }
     Ok(
         json!({"source_id":union.source_id,"map_seq":base.seq,"node_id":target,"question":question,"nodes":&union.nodes[start_node..],"edges":&union.edges[start_edge..],"limitations":branch.limitations}),

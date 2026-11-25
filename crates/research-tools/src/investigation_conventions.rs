@@ -180,11 +180,12 @@ pub(super) fn payload<'a>(
                 item.id
             ));
         }
-        for anchor in &mut item.anchors {
+        for (idx, anchor) in item.anchors.iter_mut().enumerate() {
             if anchor.source_id != batch.source_id {
                 return Err("Conventions must cite the selected paper.".into());
             }
-            index.verify(anchor)?;
+            let owner = format!("items[{}].anchors[{idx}]", item.id);
+            index.verify_any(&owner, anchor).map_err(|f| f.to_error_string())?;
         }
     }
     let mut payload = serde_json::to_value(batch).map_err(|e| e.to_string())?;

@@ -7,10 +7,13 @@ pub mod fs_tools;
 pub mod http_client;
 pub mod ingest;
 pub mod investigation;
+pub mod investigation_anchor_shim;
+pub mod investigation_evidence;
 pub mod latex_compile;
 pub mod latex_repair;
 pub mod lean_check;
 pub mod literature;
+pub mod paper_lines_shim;
 pub mod paper_passages;
 pub mod pdf;
 pub mod policy_preset;
@@ -23,6 +26,11 @@ mod tex_audit_sources;
 pub mod tex_bundle;
 pub mod tex_scan;
 pub mod write_tools;
+
+pub use investigation_evidence::{
+    note_evidence_def, register_reader_tools, EvidenceRecord, EVIDENCE_EVENT, NOTE_EVIDENCE,
+    READER_CALLER_PREFIX,
+};
 
 pub use arxiv::{
     arxiv_search_def, normalize_arxiv_id, run_arxiv_search, ArxivPaper, ArxivSearchRequest,
