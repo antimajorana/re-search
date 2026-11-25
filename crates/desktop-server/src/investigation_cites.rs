@@ -239,7 +239,6 @@ pub(crate) fn answer_cites(
     cites
 }
 
-#[allow(dead_code)] // Wired into investigation_question::finish_question when ux-rust merges.
 pub(crate) fn source_total_lines(
     state: &DesktopState,
     session: &str,
@@ -270,7 +269,6 @@ pub(crate) fn source_total_lines(
     })
 }
 
-#[allow(dead_code)] // Wired into investigation_question::finish_question when ux-rust merges.
 pub(crate) fn answer_cites_for_session(
     state: &DesktopState,
     ledger: &Ledger,

@@ -121,32 +121,30 @@ pub(crate) fn prepare_question(
 }
 
 pub(crate) fn finish_question(
+    state: &crate::state::DesktopState,
     ledger: &Ledger,
     session: &str,
     seq: u64,
     outcome: std::result::Result<String, String>,
 ) -> std::result::Result<String, String> {
-    let (status, text, error) = match &outcome {
-        Ok(reply) => (
-            "answered",
-            json!(reply.chars().take(24_000).collect::<String>()),
-            Value::Null,
-        ),
+    let events = ledger.read_session(session).unwrap_or_default();
+    let (status, text, error, cites) = match &outcome {
+        Ok(reply) => {
+            let clipped = reply.chars().take(24_000).collect::<String>();
+            let cites = crate::investigation_cites::answer_cites_for_session(
+                state, ledger, session, &events, seq, &clipped,
+            );
+            ("answered", json!(clipped), Value::Null, cites)
+        }
         Err(err) => {
-            let stopped = ledger
-                .read_session(session)
-                .map(|events| {
-                    events.iter().any(|e| {
-                        e.seq > seq
-                            && e.kind == "session.abort"
-                            && e.payload["stopped"] == true
-                    })
-                })
-                .unwrap_or(false);
+            let stopped = events.iter().any(|e| {
+                e.seq > seq && e.kind == "session.abort" && e.payload["stopped"] == true
+            });
             (
                 if stopped { "stopped" } else { "failed" },
                 Value::Null,
                 json!(err.chars().take(2_000).collect::<String>()),
+                Vec::new(),
             )
         }
     };
@@ -159,6 +157,7 @@ pub(crate) fn finish_question(
             "status": status,
             "text": text,
             "error": error,
+            "cites": cites,
         }),
     );
     outcome

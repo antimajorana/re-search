@@ -74,6 +74,7 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
                     "status": "interrupted",
                     "text": Value::Null,
                     "error": Value::Null,
+                    "cites": [],
                 });
                 answer_positions.insert(event.seq, answers.len());
                 answers.push(row);
@@ -87,6 +88,11 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
                     row["status"] = event.payload["status"].clone();
                     row["text"] = event.payload["text"].clone();
                     row["error"] = event.payload["error"].clone();
+                    row["cites"] = event
+                        .payload
+                        .get("cites")
+                        .cloned()
+                        .unwrap_or_else(|| json!([]));
                 }
             }
             _ => (),

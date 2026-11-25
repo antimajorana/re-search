@@ -10,7 +10,9 @@ pub(crate) fn finish(
 ) -> std::result::Result<String, String> {
     if let Some(seq) = req["_paper_question_request"].as_u64() {
         return match state.open_ledger() {
-            Ok(ledger) => crate::investigation_question::finish_question(&ledger, session, seq, outcome),
+            Ok(ledger) => {
+                crate::investigation_question::finish_question(state, &ledger, session, seq, outcome)
+            }
             Err(_) => outcome,
         };
     }
