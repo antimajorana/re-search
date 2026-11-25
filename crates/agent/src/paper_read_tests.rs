@@ -437,20 +437,35 @@ fn resume_rebuilds_20kb_with_interleaved_reader_tool_results() {
     let main_router = Router::new(main_reg, research_policy(), Ledger::open(f.tmp.path()).unwrap(), SID, Arc::new(AllowAll));
     let ledger = Ledger::open(f.tmp.path()).unwrap();
 
-    // Pre-seed 50 pointers so reader call returns ~18-22 KB while ALSO performing interleaved reader tool calls.
-    for (idx, line) in lines[..50].iter().enumerate() {
-        let gist = format!("Important result {idx:02}: {}", "y".repeat(170));
-        rr.try_call("worker:paper_reader:anthropic-messages:s-paper-read:r0", NOTE_EVIDENCE, &json!({
-            "items": [{"source_id": f.source_id, "start_line": idx + 1, "end_line": idx + 1, "quote": line, "kind": "passage", "role": "result", "gist": gist}]
-        })).unwrap();
-    }
-    let (src_id, q51) = (f.source_id.clone(), lines[50].clone());
+    // Emit 51 pointers inside the reader turn so mode="read" returns ~18-22 KB while testing interleaved tool results.
+    let (src_id, reader_lines) = (f.source_id.clone(), lines[..51].to_vec());
     let reader_t = FnTransport::new(move |req| {
         if req.messages.len() == 1 {
-            Ok(resp(StopReason::ToolUse, vec![ContentBlock::ToolUse {
-                id: "rn".into(), name: NOTE_EVIDENCE.into(),
-                input: json!({"items":[{"source_id":src_id,"start_line":51,"end_line":51,"quote":q51,"kind":"passage","role":"result","gist":"Extra interleaved note."}]}),
-            }]))
+            let calls: Vec<ContentBlock> = reader_lines
+                .chunks(10)
+                .enumerate()
+                .map(|(chunk_idx, chunk)| {
+                    let items: Vec<Value> = chunk
+                        .iter()
+                        .enumerate()
+                        .map(|(offset, line)| {
+                            let idx = chunk_idx * 10 + offset;
+                            let gist = if idx < 50 {
+                                format!("Important result {idx:02}: {}", "y".repeat(170))
+                            } else {
+                                "Extra interleaved note.".to_string()
+                            };
+                            json!({"source_id": src_id, "start_line": idx + 1, "end_line": idx + 1, "quote": line, "kind": "passage", "role": "result", "gist": gist})
+                        })
+                        .collect();
+                    ContentBlock::ToolUse {
+                        id: format!("rn{chunk_idx}"),
+                        name: NOTE_EVIDENCE.into(),
+                        input: json!({"items": items}),
+                    }
+                })
+                .collect();
+            Ok(resp(StopReason::ToolUse, calls))
         } else {
             Ok(resp(StopReason::EndTurn, vec![ContentBlock::Text { text: "done".into() }]))
         }

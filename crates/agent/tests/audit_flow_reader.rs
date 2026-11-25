@@ -429,3 +429,168 @@ fn second_delegate_read_paper_call_reports_error_when_all_its_slices_fail() {
         ends[1].payload
     );
 }
+
+#[test]
+fn review_reader_read_mode_returns_only_current_call_evidence() {
+    let f = build_fixture(20);
+    let (main_router, reader_router) = make_routers(&f);
+    let ledger = Ledger::open(f.tmp.path()).unwrap();
+    let src_id = f.source_id.clone();
+
+    let reader_transport = FnTransport::new(move |req| {
+        let user_text = match &req.messages[0].content[0] {
+            ContentBlock::Text { text } => text.as_str(),
+            _ => "",
+        };
+        let (line_no, quote, gist) = if user_text.contains("Section II") {
+            (11, "Verified statement 11 with coupling g_11 = 1.", "Statement 11")
+        } else {
+            (1, "Verified statement 1 with coupling g_1 = 1.", "Statement 1")
+        };
+        if req.messages.len() == 1 {
+            Ok(model_reply(
+                StopReason::ToolUse,
+                vec![ContentBlock::ToolUse {
+                    id: format!("tu_note_{line_no}"),
+                    name: "note_evidence".into(),
+                    input: json!({
+                        "items": [{
+                            "source_id": src_id,
+                            "start_line": line_no,
+                            "end_line": line_no,
+                            "quote": quote,
+                            "kind": "passage",
+                            "role": "result",
+                            "gist": gist
+                        }]
+                    }),
+                }],
+            ))
+        } else {
+            Ok(model_reply(
+                StopReason::EndTurn,
+                vec![ContentBlock::Text { text: "Done.".into() }],
+            ))
+        }
+    });
+
+    let orch_step = AtomicUsize::new(0);
+    let orch_transport = FnTransport::new(move |_req| match orch_step.fetch_add(1, Ordering::SeqCst)
+    {
+        0 => Ok(model_reply(
+            StopReason::ToolUse,
+            vec![ContentBlock::ToolUse {
+                id: "call_read_1".into(),
+                name: "delegate_read_paper".into(),
+                input: json!({"focus": "Section I", "sections": [{"start_line": 1, "end_line": 10, "goal": "Section I"}]}),
+            }],
+        )),
+        1 => Ok(model_reply(
+            StopReason::ToolUse,
+            vec![ContentBlock::ToolUse {
+                id: "call_read_2".into(),
+                name: "delegate_read_paper".into(),
+                input: json!({"focus": "Section II", "sections": [{"start_line": 11, "end_line": 20, "goal": "Section II"}]}),
+            }],
+        )),
+        2 => Ok(model_reply(
+            StopReason::ToolUse,
+            vec![ContentBlock::ToolUse {
+                id: "call_list_all".into(),
+                name: "delegate_read_paper".into(),
+                input: json!({"focus": "all statements", "mode": "list"}),
+            }],
+        )),
+        _ => Ok(model_reply(
+            StopReason::EndTurn,
+            vec![ContentBlock::Text { text: "All mapped.".into() }],
+        )),
+    });
+
+    let roles = AutonomousRoles {
+        delegation: Some(DelegationConfig {
+            paper_reader: Some(PaperReaderConfig {
+                worker: DelegatedWorkerSpec {
+                    role: "paper_reader".into(),
+                    display_name: "Paper Reader".into(),
+                    transport: &reader_transport,
+                    model: "claude-haiku-4-5".into(),
+                    routing_reason: "test".into(),
+                    system_prompt: "Read paper.".into(),
+                    allowed_tools: paper_reader_tools(),
+                    max_turns: 4,
+                    max_tokens: 1024,
+                    reasoning_effort: Some("low".into()),
+                },
+                reader_router: &reader_router,
+                source_id: f.source_id.clone(),
+                primary_path: f.primary_path.clone(),
+                marker_seq: f.marker_seq,
+                total_lines: f.total_lines,
+                page_lines: vec![],
+                default_slices: vec![PaperReaderSlice {
+                    start_line: 1,
+                    end_line: 10,
+                    goal: "Slice 1".into(),
+                }],
+                max_parallel: 2,
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let cfg = AgentConfig {
+        prompt: "Map paper".into(),
+        model_requested: "claude-sonnet-4-6".into(),
+        model: "claude-sonnet-4-6".into(),
+        system_prompt: RESEARCH_SYSTEM_PROMPT.into(),
+        max_turns: 6,
+        max_tokens: DEFAULT_MAX_TOKENS,
+        containment: "none".into(),
+        contained: false,
+        reasoning_effort: None,
+    };
+    let mut sink = NoopSink;
+    run_autonomous_research_loop(
+        &orch_transport,
+        &roles,
+        &main_router,
+        &ledger,
+        &f.env,
+        &cfg,
+        &AutonomousConfig::default(),
+        None,
+        &mut sink,
+    )
+    .unwrap();
+
+    let events = ledger.read_session(SID).unwrap();
+    let ends: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind == "delegate.end" && e.payload["worker"] == "paper_reader")
+        .collect();
+    assert_eq!(ends.len(), 3);
+
+    let decode = |e: &ledger::Event| -> serde_json::Value {
+        let blob = e.payload["raw_blob"].as_str().unwrap();
+        serde_json::from_slice(&ledger.get_blob(blob).unwrap()).unwrap()
+    };
+
+    // Call 1 (mode="read"): only Statement 1
+    assert_eq!(ends[0].payload["evidence_count"], 1);
+    let out1 = decode(ends[0]);
+    let lines1: Vec<&str> = out1["evidence"].as_array().unwrap().iter().map(|r| r["l"].as_str().unwrap()).collect();
+    assert_eq!(lines1, vec!["1-1"]);
+
+    // Call 2 (mode="read"): only Statement 11 (NOT Statement 1 from Call 1)
+    assert_eq!(ends[1].payload["evidence_count"], 1);
+    let out2 = decode(ends[1]);
+    let lines2: Vec<&str> = out2["evidence"].as_array().unwrap().iter().map(|r| r["l"].as_str().unwrap()).collect();
+    assert_eq!(lines2, vec!["11-11"]);
+
+    // Call 3 (mode="list"): all pointers from earlier + current calls
+    assert_eq!(ends[2].payload["evidence_count"], 2);
+    let out3 = decode(ends[2]);
+    let lines3: Vec<&str> = out3["evidence"].as_array().unwrap().iter().map(|r| r["l"].as_str().unwrap()).collect();
+    assert_eq!(lines3, vec!["1-1", "11-11"]);
+}

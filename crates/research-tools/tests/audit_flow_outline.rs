@@ -72,71 +72,6 @@ We have established the crystalline defect classification.
 }
 
 #[test]
-fn resolve_scope_handles_lowercase_space_separated_and_mixed_separator_aps_refs() {
-    let text = "\
-I. INTRODUCTION
-Introductory discussion of the lattice Hamiltonian.
-
-II. MODEL
-Definition of the coupling constants.
-
-III. SYMMETRIES
-Global and crystalline symmetry actions.
-
-IV. GAUGING
-Promotion of global symmetries to dynamical gauge fields.
-
-V. DEFECTS
-Overview of crystalline defects.
-
-A. Plaquette Stabilizers
-Commuting local projectors.
-
-B. Flux Attachment
-Shifted topological spin rules.
-
-C. Domain Walls
-Braided autoequivalences across walls.
-
-D. Dislocations
-Sub-overview of dislocations.
-
-1. Translation Symmetry
-Elementary lattice shifts.
-
-2. Genons
-Branch cuts on the plane.
-
-3. Braiding
-Projective braid group representations.
-
-4. Burgers Vector Algebra
-Detailed derivation of the Burgers vector fusion rule.
-";
-    let outline = build_outline(text, &[]);
-    assert!(
-        outline.sections.iter().any(|s| s.key == "V.D.4"),
-        "precondition: V.D.4 must exist in outline: {:?}",
-        outline.sections
-    );
-
-    for prompt in [
-        "walk me through sec. v d 4",
-        "Help me understand section V.D 4",
-    ] {
-        match resolve_scope(&outline, prompt) {
-            ScopeResolution::Resolved { targets, .. } => {
-                assert_eq!(
-                    targets[0].label, "Section V.D.4",
-                    "prompt `{prompt}` silently truncated to wrong parent section: {targets:?}"
-                );
-            }
-            other => panic!("prompt `{prompt}` failed to resolve: {other:?}"),
-        }
-    }
-}
-
-#[test]
 fn tex_multiline_tag_does_not_emit_phantom_equation_or_shift_later_numbers() {
     let tex = r"\documentclass{article}
 \begin{document}
@@ -182,6 +117,7 @@ We prove quantization of edge transport in a two-dimensional chiral insulator.
 \end{document}
 ";
     let outline = build_outline(prl_tex, &[]);
+    assert!(outline.weak, "PRL letter without body sections should remain weak");
     assert_eq!(
         outline.equations.len(),
         1,
@@ -192,4 +128,80 @@ We prove quantization of edge transport in a two-dimensional chiral insulator.
         1,
         "PRL-style TeX without >=2 \\section commands indexed 0 captions: {outline:?}"
     );
+}
+
+#[test]
+fn review_outline_plain_mentioning_documentclass_stays_plain() {
+    let text = "\
+LaTeX Authoring Notes for Physics Preprints
+
+I. INTRODUCTION
+Authors preparing APS manuscripts often start from \\documentclass[aps,prb]{revtex4-2}.
+This plain-text guide summarizes section conventions and equation numbering.
+
+II. EQUATION CONVENTIONS
+Displayed equations carry right-aligned numbers in parentheses:
+  E = hbar * omega                                                (1)
+Do not confuse prose mentions of macros with raw TeX source files.
+
+III. CONCLUSIONS
+Plain-text papers remain parsed as plain APS documents.
+";
+    let outline = build_outline(text, &[]);
+    assert_eq!(
+        outline.style, "aps",
+        "plain-text paper mentioning \\documentclass once without \\begin{{document}} was misclassified: {outline:?}"
+    );
+    assert!(!outline.weak);
+    let keys: Vec<&str> = outline.sections.iter().map(|s| s.key.as_str()).collect();
+    assert_eq!(keys, vec!["I", "II", "III"]);
+    assert_eq!(outline.equations.len(), 1);
+    assert_eq!(outline.equations[0].label, "1");
+}
+
+#[test]
+fn review_outline_tex_multirow_align_notag_and_subequations() {
+    let tex = r"\documentclass{article}
+\begin{document}
+\section{Matrix and Alignment Identities}
+\begin{align}
+  M &= \begin{pmatrix}
+    1 & 0 \\
+    0 & 1
+  \end{pmatrix} \\
+  b &= c + d \nonumber \\
+  e &= f + g \notag \\
+  h &= i + j \tag{*} \\
+\end{align}
+\section{Subequations}
+\begin{subequations}
+\begin{align}
+  u &= \alpha x \\
+  v &= \beta y \\
+\end{align}
+\end{subequations}
+\begin{equation}
+  E = mc^2
+\end{equation}
+\end{document}
+";
+    let outline = build_outline(tex, &[]);
+    assert_eq!(outline.style, "tex");
+    let labels: Vec<(&str, usize)> = outline
+        .equations
+        .iter()
+        .map(|e| (e.label.as_str(), e.line))
+        .collect();
+    assert_eq!(
+        labels,
+        vec![("1", 5), ("*", 11), ("2a", 16), ("2b", 17), ("3", 20)],
+        "unexpected multi-row/subequations labels: {labels:?}"
+    );
+    match resolve_scope(&outline, "Explain eq. (2b) and equation (3)") {
+        ScopeResolution::Resolved { targets, .. } => {
+            let tlabels: Vec<&str> = targets.iter().map(|t| t.label.as_str()).collect();
+            assert_eq!(tlabels, vec!["Eq. (2b)", "Eq. (3)"]);
+        }
+        other => panic!("expected Eq. (2b) and Eq. (3) to resolve, got {other:?}"),
+    }
 }

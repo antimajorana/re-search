@@ -70,10 +70,9 @@ pub fn paper_read_tool_spec(pr: &PaperReaderConfig<'_>) -> ToolSpec {
         input_schema: json!({
             "type": "object",
             "properties": {
-                "focus": { "type": "string", "description": "Claims, definitions, conventions, or equations to locate (required for mode \"read\"; optional for mode \"list\")." },
+                "focus": { "type": "string", "description": "Claims, definitions, conventions, or equations to locate." },
                 "sections": {
                     "type": "array",
-                    "maxItems": MAX_PAPER_READER_SLICES,
                     "items": {
                         "type": "object",
                         "properties": {
@@ -88,6 +87,7 @@ pub fn paper_read_tool_spec(pr: &PaperReaderConfig<'_>) -> ToolSpec {
                 "roles": { "type": "array", "items": { "type": "string", "enum": VALID_ROLES } },
                 "mode": { "type": "string", "enum": ["read", "list"] }
             },
+            "required": ["focus"],
             "additionalProperties": false
         }),
     }
@@ -218,8 +218,9 @@ fn run_single_reader(
                             Ok(CallOutcome::Ok(val)) => {
                                 if name == "read_paper_lines" {
                                     let meta = &val["a_meta"];
-                                    let primary_complete = meta["path"].as_str() == Some(pr.primary_path.as_str())
-                                        && meta["line_truncated"].as_bool() != Some(true);
+                                    let primary_complete = meta["path"].as_str().is_some_and(|p| {
+                                        norm_rel_path(p) == norm_rel_path(&pr.primary_path)
+                                    }) && meta["line_truncated"].as_bool() != Some(true);
                                     if let (true, Some(a), Some(b)) = (
                                         primary_complete,
                                         meta["start_line"].as_u64(),
@@ -260,6 +261,14 @@ fn run_single_reader(
         index: idx, range: [slice.start_line, slice.end_line], ok, cancelled,
         turns: turns_used, in_tok, out_tok, pointers, read_ranges, turn_records, error: err_msg,
     }
+}
+
+fn norm_rel_path(p: &str) -> String {
+    let mut s = p.trim().replace('\\', "/");
+    while let Some(rest) = s.strip_prefix("./") {
+        s = rest.to_string();
+    }
+    s
 }
 
 fn compute_gaps(range: [usize; 2], read_ranges: &[(usize, usize)]) -> (usize, Vec<[usize; 2]>) {
@@ -311,7 +320,7 @@ fn role_priority(role: &str) -> usize {
 }
 
 fn collect_evidence_rows(
-    events: &[Event], marker_seq: u64, primary_source_id: &str, roles_filter: &[String], page_lines: &[(usize, usize, usize)], focus: &str,
+    events: &[Event], marker_seq: u64, min_ev_seq: u64, primary_source_id: &str, roles_filter: &[String], page_lines: &[(usize, usize, usize)], focus: &str,
 ) -> Vec<EvidenceRow> {
     let start_idx = events.iter()
         .rposition(|e| matches!(e.kind.as_str(), "investigation.started" | "investigation.handoff"))
@@ -320,7 +329,7 @@ fn collect_evidence_rows(
     let f_tokens = focus_tokens(focus);
     let mut rows = Vec::new();
     for ev in &events[start_idx..] {
-        if ev.kind != EVIDENCE_EVENT { continue; }
+        if ev.kind != EVIDENCE_EVENT || ev.seq <= min_ev_seq { continue; }
         let Ok(rec) = serde_json::from_value::<EvidenceRecord>(ev.payload.clone()) else { continue };
         if rec.marker_seq != marker_seq { continue; }
         if !roles_filter.is_empty() && !roles_filter.iter().any(|r| r == &rec.role) { continue; }
@@ -459,12 +468,19 @@ pub(crate) fn run_paper_readers(
     }
     if mode == "list" {
         let events = audit.ledger.read_session(audit.session).map_err(|e| e.to_string())?;
-        let rows = collect_evidence_rows(&events, pr.marker_seq, &pr.source_id, &roles, &pr.page_lines, &focus);
+        let rows = collect_evidence_rows(&events, pr.marker_seq, 0, &pr.source_id, &roles, &pr.page_lines, &focus);
         let ev_count = rows.len();
         let (_, canonical, omitted) = assemble_return_json(&[], &json!({ "lines_read_pct": 0, "gaps": [] }), rows);
         return emit_end(audit, tool_use_id, pr, provider, started, true, 0, 0, 0, json!({ "mode": "list", "evidence_count": ev_count, "omitted": omitted }), canonical, false);
     }
 
+    let pre_call_seq = audit
+        .ledger
+        .read_session(audit.session)
+        .map_err(|e| e.to_string())?
+        .last()
+        .map(|e| e.seq)
+        .unwrap_or(0);
     let all_tools: Vec<ToolSpec> = pr.reader_router.registry().defs().iter()
         .filter(|d| allowed_set.contains(&d.id))
         .map(|d| ToolSpec { name: d.id.clone(), description: d.description.clone(), input_schema: d.input_schema.clone() })
@@ -536,7 +552,7 @@ pub(crate) fn run_paper_readers(
     let lines_read_pct = (total_covered * 100).checked_div(total_assigned).unwrap_or(0).min(100);
     let coverage_json = json!({ "lines_read_pct": lines_read_pct, "gaps": all_gaps });
     let events = audit.ledger.read_session(audit.session).map_err(|e| e.to_string())?;
-    let rows = collect_evidence_rows(&events, pr.marker_seq, &pr.source_id, &roles, &pr.page_lines, &focus);
+    let rows = collect_evidence_rows(&events, pr.marker_seq, pre_call_seq, &pr.source_id, &roles, &pr.page_lines, &focus);
     let ev_count = rows.len();
     let (_, canonical, omitted) = assemble_return_json(&readers_json, &coverage_json, rows);
     let call_pointers: usize = outcomes.iter().map(|o| o.pointers).sum();
