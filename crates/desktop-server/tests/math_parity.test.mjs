@@ -14,8 +14,8 @@ const katex = require(vendorKatexPath);
 
 const mathMod = await import(pathToFileURL(path.join(assetsDir, 'math.js')).href);
 const {
-  clearMathCache, katexOptions, markdownToHtml, markdownToRenderedHtml,
-  renderFormulaHtml, resetMathMacros,
+  clearMathCache, displayMathSource, katexOptions, latexDocumentToRenderedHtml,
+  markdownToHtml, markdownToRenderedHtml, renderFormulaHtml, resetMathMacros,
 } = mathMod;
 
 function render(md, opts = {}) {
@@ -246,4 +246,233 @@ test('WP2 fallback: throwing KaTeX renders code.math-error and missing KaTeX ren
   } finally {
     globalThis.window = prevWin;
   }
+});
+
+// --- WP3 parity cases ---
+
+test('Case 2 (WP3): inline \\(...\\) renders as inline math', () => {
+  resetMathMacros();
+  const html = render('see \\(x^2\\) here');
+  assert.equal(countInline(html), 1);
+  assert.equal(countDisplay(html), 0);
+  assertCleanDelims(html);
+});
+
+test('Case 3 (WP3): \\(...\\) inside bold and after hyphen renders inline', () => {
+  resetMathMacros();
+  const html = render('The **background \\(m\\) per unit cell** and background-\\(m\\) line.');
+  assert.equal(countInline(html), 2);
+  assert.match(html, /<strong>background <span class="katex">[\s\S]*?<\/span> per unit cell<\/strong>/);
+  assertCleanDelims(html);
+});
+
+test('Case 4 (WP3): $...$ holding a pmatrix environment renders inline', () => {
+  resetMathMacros();
+  const html = render('Let $M = \\begin{pmatrix}1&0\\\\0&-1\\end{pmatrix}$ be diagonal.');
+  assert.equal(countInline(html), 1);
+  assert.equal(countDisplay(html), 0);
+  assert.ok(!html.includes('katex-error'));
+  assertCleanDelims(html);
+});
+
+test('Case 5 (WP3): bare pmatrix mid-sentence renders inline in same paragraph', () => {
+  resetMathMacros();
+  const html = render('The matrix \\begin{pmatrix}1&0\\\\0&-1\\end{pmatrix} is diagonal.');
+  assert.equal(countInline(html), 1);
+  assert.equal(countDisplay(html), 0);
+  assert.equal((html.match(/<p>/g) || []).length, 1);
+  assertCleanDelims(html);
+});
+
+test('Case 6 (WP3): bare pmatrix alone on a line renders as display', () => {
+  resetMathMacros();
+  const html = render('\\begin{pmatrix}1&0\\\\0&-1\\end{pmatrix}');
+  assert.equal(countDisplay(html), 1);
+  assert.equal(countInline(html), 0);
+  assertCleanDelims(html);
+});
+
+test('Case 7 (WP3): currency "$5 and $6" produces no math', () => {
+  resetMathMacros();
+  const html = render('It costs $5 and $6 more');
+  assert.equal(countInline(html), 0);
+  assert.equal(countDisplay(html), 0);
+  assert.equal(visibleText(html).trim(), 'It costs $5 and $6 more');
+});
+
+test('Case 8 (WP3): currency guard rejects "$5 for apples ... 10$"', () => {
+  resetMathMacros();
+  const html = render('I paid $5 for apples and my friend paid 10$ for pears.');
+  assert.equal(countInline(html), 0);
+  assert.equal(countDisplay(html), 0);
+  assert.equal(visibleText(html).trim(), 'I paid $5 for apples and my friend paid 10$ for pears.');
+});
+
+test('Case 9 (WP3): "$5-$10" and "$ 5 + 3 $" produce no math', () => {
+  resetMathMacros();
+  const html = render('between $5-$10, and $ 5 + 3 $.');
+  assert.equal(countInline(html), 0);
+  assert.equal(countDisplay(html), 0);
+  assert.equal(visibleText(html).trim(), 'between $5-$10, and $ 5 + 3 $.');
+});
+
+test('Case 14 (WP3): punctuation glue wraps trailing punctuation on inline formulas only', () => {
+  resetMathMacros();
+  const html = render('Cases $a$, then $b$. And $(c)$; and $d$ alone');
+  const glues = [...html.matchAll(/<span class="math-glue">[\s\S]*?<\/span>([.,;:!?)\]\u2019\u201D]+)<\/span>/g)];
+  assert.equal((html.match(/class="math-glue"/g) || []).length, 3);
+  assert.ok(glues.length <= 3);
+  assert.ok(html.includes(',</span>'));
+  assert.ok(html.includes('.</span>'));
+  assert.ok(html.includes(';</span>'));
+  assert.equal(countInline(html), 4);
+  assertCleanDelims(html);
+});
+
+test('Case 15 (WP3): standalone $$ display between paragraphs', () => {
+  resetMathMacros();
+  const html = render('Before\n\n$$\nE = mc^2\n$$\n\nAfter');
+  assert.equal(countDisplay(html), 1);
+  assert.match(html, /^<p>Before<\/p>\n<div class="math-display math-block"[\s\S]*<\/div>\n<p>After<\/p>$/);
+  assertCleanDelims(html);
+});
+
+test('Case 16 (WP3): blank line inside display math stays one display', () => {
+  resetMathMacros();
+  const html = render('$$\na = b\n\n+ c\n$$');
+  assert.equal(countDisplay(html), 1);
+  assert.ok(!html.includes('katex-error'));
+  assertCleanDelims(html);
+});
+
+test('Case 17 (WP3): prose after mid-line $$ closer becomes a following paragraph', () => {
+  resetMathMacros();
+  const html = render('$$\nx = 1\n$$which follows.');
+  assert.equal(countDisplay(html), 1);
+  assert.match(html, /<\/div>\n<p>which follows\.<\/p>$/);
+  assertCleanDelims(html);
+});
+
+test('Case 18 (WP3): $$$$ closes one display and opens the next', () => {
+  resetMathMacros();
+  const html = render('$$\nU = s/V\n$$$$\nH = N^2 s\n$$');
+  assert.equal(countDisplay(html), 2);
+  assert.ok(!html.includes('katex-error'));
+  assertCleanDelims(html);
+});
+
+test('Case 19 (WP3): unclosed $$ stops at ATX heading and stays literal', () => {
+  resetMathMacros();
+  const html = render('$$\nx = 1\n\n## Next part\n\n$$ z = 2 $$ and $y$');
+  assert.match(html, /<p>\$\$ x = 1<\/p>/);
+  assert.match(html, /<h2>Next part<\/h2>/);
+  assert.equal(countDisplay(html), 1);
+  assert.equal(countInline(html), 1);
+});
+
+test('Case 20 (WP3): $$ x #1 $$ gives display wrapper with 1 katex-error and 0 katex-display', () => {
+  resetMathMacros();
+  const html = render('$$ x #1 $$');
+  assert.equal(countDisplay(html), 1);
+  assert.equal((html.match(/class="katex-error"/g) || []).length, 1);
+  assert.equal((html.match(/class="katex-display"/g) || []).length, 0);
+  assert.ok(!html.includes('<h1'));
+  assert.ok(visibleText(html).includes('x #1'));
+});
+
+test('Case 21 (WP3): unclosed mid-paragraph $$ stays literal without eating next paragraph', () => {
+  resetMathMacros();
+  const html = render('Type $$ to open a display.\n\nSecond paragraph with $x$.');
+  assert.equal(countDisplay(html), 0);
+  assert.equal(countInline(html), 1);
+  assert.match(html, /<p>Type \$\$ to open a display\.<\/p>/);
+});
+
+test('Case 22 (WP3): \\[...\\] at line start renders as display block', () => {
+  resetMathMacros();
+  const html = render('\\[\n\\sum_{n=1}^{\\infty} \\frac{1}{n^2}\n\\]');
+  assert.equal(countDisplay(html), 1);
+  assert.ok(!html.includes('katex-error'));
+  assertCleanDelims(html);
+});
+
+test('Case 23 (WP3): citation brackets \\[1\\] and \\[2, 3\\] are not math and drop backslash', () => {
+  resetMathMacros();
+  const html = render('As shown in \\[1\\] and \\[2, 3\\].');
+  assert.equal(countDisplay(html), 0);
+  assert.equal(countInline(html), 0);
+  assert.equal(visibleText(html).trim(), 'As shown in [1] and [2, 3].');
+  assertCleanDelims(html);
+});
+
+test('Case 24 (WP3): \\\\[4pt] is not math, later \\[ y \\] is a display span', () => {
+  resetMathMacros();
+  const html = render('Row one \\\\[4pt] row two, later \\[ y \\] done.');
+  assert.equal(countDisplay(html), 1);
+  assert.match(html, /<span class="math-display"/);
+  assert.ok(visibleText(html).includes('Row one \\\\[4pt] row two, later '));
+  assert.ok(!visibleText(html).includes('\\[ y'));
+  assert.ok(!visibleText(html).includes('\\]'));
+  assertCleanDelims(html, { allowBracket: true });
+});
+
+test('Case 25 (WP3): unclosed \\begin{align} stays literal while later math still renders', () => {
+  resetMathMacros();
+  const html = render('Use \\begin{align} for alignment, e.g. \\(x^2\\) or $y$.');
+  assert.equal(countDisplay(html), 0);
+  assert.equal(countInline(html), 2);
+  assert.ok(visibleText(html).includes('\\begin{align}'));
+  assertCleanDelims(html, { allowBegin: true });
+});
+
+test('Case 26 (WP3): display math inside blockquote strips > before TeX', () => {
+  resetMathMacros();
+  const html = render('> $$\n> a = b\n> $$');
+  assert.match(html, /<blockquote>[\s\S]*<div class="math-display math-block"[\s\S]*<\/blockquote>/);
+  assert.equal(countDisplay(html), 1);
+  assert.ok(!html.includes('data-tex=">'), `> leaked into TeX attribute: ${html}`);
+  assert.ok(!html.includes('data-tex="&gt;'), `> leaked into TeX attribute: ${html}`);
+  assertCleanDelims(html);
+});
+
+test('Case 57 (WP3): displayMathSource preserves mixed prose "$a$ and $b$"', () => {
+  resetMathMacros();
+  const html = render(displayMathSource('$a$ and $b$'));
+  assert.equal(countInline(html), 2);
+  assert.equal(countDisplay(html), 0);
+  assert.ok(visibleText(html).includes('and'));
+  assertCleanDelims(html);
+});
+
+test('Case 58 (WP3): TeX preview treats \\\\[2mm] as line break and renders \\[ x = 1 \\] cleanly', () => {
+  const tex = 'Line one\\\\[2mm]\nLine two is prose.\n\n\\[ x = 1 \\]\nAfter.';
+  const html = latexDocumentToRenderedHtml(tex, { katex });
+  assert.equal(countDisplay(html), 1);
+  assert.match(html, /Line one<br> Line two is prose\./);
+  assert.match(html, /data-tex="x = 1"/);
+  assert.match(html, /<p>After\.<\/p>/);
+  assertCleanDelims(html);
+});
+
+test('Case 59 (WP3): TeX preview harvests preamble macros into document-scoped table', () => {
+  resetMathMacros();
+  const tex = '\\documentclass{article}\n\\newcommand{\\tr}{\\operatorname{tr}}\n\\begin{document}\n$\\tr \\rho$\n\\end{document}';
+  const html = latexDocumentToRenderedHtml(tex, { katex });
+  assert.equal(countInline(html), 1);
+  assert.ok(!html.includes('var(--status-err)'), `Preamble macro \\tr must not render red: ${html}`);
+  // Verify preamble macro did not leak into the global session macro table
+  const leaked = render('$\\tr \\rho$');
+  assert.ok(leaked.includes('var(--status-err)'), 'Document preamble macro must not leak to session table');
+});
+
+test('Case 60 (WP3): streaming partial \\(E = mc renders without error, then closes cleanly', () => {
+  resetMathMacros();
+  const partial = render('Energy \\(E = mc');
+  assert.equal(countInline(partial), 0);
+  assert.ok(!partial.includes('katex-error'));
+  assert.ok(!partial.includes('math-error'));
+  const complete = render('Energy \\(E = mc^2\\) done');
+  assert.equal(countInline(complete), 1);
+  assert.ok(!complete.includes('katex-error'));
+  assertCleanDelims(complete);
 });

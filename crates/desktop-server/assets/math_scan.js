@@ -1,4 +1,5 @@
-// Math delimiter scanner and TeX environment normalization helpers.
+// Ported in part from Kandinsky (github.com/antimajorana/kandinsky, 833a95f), the same author's project.
+// Math delimiter scanner, block display closer, and TeX environment normalization helpers.
 import { escapeHtml } from './code_highlight.js';
 
 export const KATEX_NATIVE_ENVS = (
@@ -7,14 +8,13 @@ export const KATEX_NATIVE_ENVS = (
 ).split(' ');
 export const EXTRA_MATH_ENVS = 'flalign flalign* multline multline* eqnarray eqnarray* subequations'.split(' ');
 export const MATH_ENVS = new Set([...KATEX_NATIVE_ENVS, ...EXTRA_MATH_ENVS]);
+export const INLINE_MATH_ENVS = new Set(
+  'aligned gathered split cases dcases rcases matrix pmatrix bmatrix Bmatrix vmatrix Vmatrix smallmatrix array CD'.split(' ')
+);
 
-export const DELIMITERS_NO_DOLLAR = [
-  { left: '$$', right: '$$', display: true },
-  { left: '\\[', right: '\\]', display: true },
-  ...[...KATEX_NATIVE_ENVS, ...EXTRA_MATH_ENVS].map((e) => ({ left: `\\begin{${e}}`, right: `\\end{${e}}`, display: true })),
-  { left: '\\(', right: '\\)', display: false },
-];
-export const DELIMITERS = [...DELIMITERS_NO_DOLLAR, { left: '$', right: '$', display: false }];
+export const HEADING_LINE_RE = /^[ \t]{0,3}#{1,6}(?:[ \t]|$)/;
+const CITATION_BODY_RE = /^[\d,\s\u2013\u2014-]+$/;
+const GLUE_RE = /^[.,;:!?)\]\u2019\u201D]+/;
 
 export function normalizeEqnarrayBody(body) {
   return body.split('\\\\').map((r) => r.replace(/&\s*([^&\n]+?)\s*&/, '&$1 ')).join('\\\\');
@@ -40,7 +40,7 @@ export function isEscapedAt(text, pos) {
   return bs % 2 === 1;
 }
 
-export function findMatchingEnvEnd(text, env, pos) {
+export function findMatchingEnvEnd(text, env, pos, stopOnHeading = false) {
   const openTag = `\\begin{${env}}`;
   const closeTag = `\\end{${env}}`;
   let depth = 1;
@@ -48,10 +48,20 @@ export function findMatchingEnvEnd(text, env, pos) {
     const o = text.indexOf(openTag, pos);
     const c = text.indexOf(closeTag, pos);
     if (c === -1) return -1;
+    if (stopOnHeading) {
+      const seg = text.slice(pos, o !== -1 && o < c ? o : c);
+      if (/\n[ \t]{0,3}#{1,6}(?:[ \t]|$)/m.test(seg)) return -1;
+    }
     if (o !== -1 && o < c) { depth += 1; pos = o + openTag.length; }
     else { depth -= 1; pos = c + closeTag.length; if (depth === 0) return pos; }
   }
   return -1;
+}
+
+function isCurrencyBody(body) {
+  if (!/^\d/.test(body)) return false;
+  const stripped = body.replace(/\\[A-Za-z]+(?:\{[^{}]*\})?/g, ' ');
+  return /[ \t][A-Za-z]{2,}\b/.test(stripped);
 }
 
 export function findClosingInlineDollar(text, startIdx, protectCode = false) {
@@ -61,11 +71,11 @@ export function findClosingInlineDollar(text, startIdx, protectCode = false) {
     const ch = text[j];
     if (ch === '\u0000' || (ch === '\n' && text[j + 1] === '\n')) return -1;
     if (protectCode && ch === '`' && !isEscapedAt(text, j)) return -1;
-    if (ch === '\\' && (text[j + 1] === '[' || text[j + 1] === '(' || text.startsWith('\\begin{', j))) return -1;
     if (ch === '$' && !isEscapedAt(text, j)) {
       if (text[j + 1] === '$') return -1;
       const prev = text[j - 1];
       if (!prev || /\s/.test(prev) || /[0-9]/.test(text[j + 1] || '')) return -1;
+      if (isCurrencyBody(text.slice(startIdx, j))) return -1;
       return j;
     }
   }
@@ -81,18 +91,142 @@ export function findClosingDelim(text, delim, pos) {
   return -1;
 }
 
+function findClosingDelimInPara(text, delim, pos, protectCode = false) {
+  let limit = text.length;
+  const blank = text.indexOf('\n\n', pos);
+  if (blank !== -1 && blank < limit) limit = blank;
+  const nul = text.indexOf('\u0000', pos);
+  if (nul !== -1 && nul < limit) limit = nul;
+  while (pos < limit) {
+    const idx = text.indexOf(delim, pos);
+    if (idx === -1 || idx >= limit) return -1;
+    if (protectCode) {
+      const tick = text.indexOf('`', pos);
+      if (tick !== -1 && tick < idx && !isEscapedAt(text, tick)) return -1;
+    }
+    if (!isEscapedAt(text, idx)) return idx;
+    pos = idx + 1;
+  }
+  return -1;
+}
+
+function findClosingDoubleDollarBounded(text, pos) {
+  const seg = text.slice(pos);
+  const headMatch = /\n[ \t]{0,3}#{1,6}(?:[ \t]|$)/.exec(seg);
+  const limit = headMatch ? pos + headMatch.index : text.length;
+  let cur = pos;
+  while (cur < limit) {
+    const idx = text.indexOf('$$', cur);
+    if (idx === -1 || idx >= limit) return -1;
+    if (!isEscapedAt(text, idx)) return idx;
+    cur = idx + 2;
+  }
+  return -1;
+}
+
+function matchGlue(text, pos) {
+  const m = GLUE_RE.exec(text.slice(pos, pos + 4));
+  if (!m) return '';
+  let glue = m[0];
+  const bracketIdx = glue.indexOf(']');
+  if (bracketIdx >= 0 && text[pos + bracketIdx + 1] === '(') {
+    glue = glue.slice(0, bracketIdx);
+  }
+  return glue;
+}
+
+export function findDisplayClose(lines, startLine, openCol, closeDelim) {
+  const firstEnd = findClosingDelim(lines[startLine], closeDelim, openCol);
+  if (firstEnd !== -1) {
+    return {
+      body: lines[startLine].slice(openCol, firstEnd),
+      closeLine: startLine,
+      rest: lines[startLine].slice(firstEnd + closeDelim.length),
+    };
+  }
+  for (let l = startLine + 1; l < lines.length; l++) {
+    if (HEADING_LINE_RE.test(lines[l])) return null;
+    const endCol = findClosingDelim(lines[l], closeDelim, 0);
+    if (endCol !== -1) {
+      const parts = [lines[startLine].slice(openCol)];
+      for (let k = startLine + 1; k < l; k++) parts.push(lines[k]);
+      parts.push(lines[l].slice(0, endCol));
+      return {
+        body: parts.join('\n'),
+        closeLine: l,
+        rest: lines[l].slice(endCol + closeDelim.length),
+      };
+    }
+  }
+  return null;
+}
+
+export function findEnvBlockClose(lines, startLine, openStart, env) {
+  const openTag = `\\begin{${env}}`;
+  const closeTag = `\\end{${env}}`;
+  let depth = 1;
+  for (let l = startLine; l < lines.length; l++) {
+    if (l > startLine && HEADING_LINE_RE.test(lines[l])) return null;
+    let pos = l === startLine ? openStart + openTag.length : 0;
+    while (pos < lines[l].length) {
+      const o = lines[l].indexOf(openTag, pos);
+      const c = lines[l].indexOf(closeTag, pos);
+      if (c === -1) break;
+      if (o !== -1 && o < c) { depth += 1; pos = o + openTag.length; }
+      else {
+        depth -= 1;
+        pos = c + closeTag.length;
+        if (depth === 0) {
+          const parts = [];
+          for (let k = startLine; k <= l; k++) {
+            const from = k === startLine ? openStart : 0;
+            const to = k === l ? pos : lines[k].length;
+            parts.push(lines[k].slice(from, to));
+          }
+          return { body: parts.join('\n'), closeLine: l, rest: lines[l].slice(pos) };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export function hasUnescapedMathDelim(text) {
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\\') {
+      const next = text[i + 1];
+      if (next === '\\') { i += 1; continue; }
+      if (next === '(' || next === '[' || text.startsWith('\\begin{', i)) return true;
+      if (next === '$') { i += 1; continue; }
+      continue;
+    }
+    if (ch === '$') return true;
+  }
+  return false;
+}
+
 export function extractMath(text, mathTokens, opts = {}) {
   const protectCode = opts.protectInlineCode !== false;
   const allowDollar = opts.allowSingleDollar !== false;
+  const captureGlue = opts.captureGlue === true;
+  const dropFailedEscapes = opts.dropFailedEscapes === true;
+  const preserveRaw = opts.preserveRaw === true;
+  const midSentenceEnv = opts.midSentenceEnv === true;
+  const texMode = opts.texMode === true;
   let out = '';
   let i = 0;
-  const push = (raw, display) => {
-    const tex = normalizeMathTex(raw, display);
+
+  const push = (raw, display, { inlineDisplay = false, glue = '' } = {}) => {
+    const trimmed = String(raw ?? '').trim();
+    if (!trimmed) return '';
+    const tex = preserveRaw ? trimmed : normalizeMathTex(raw, display);
     if (!tex) return '';
     const id = mathTokens.length;
-    mathTokens.push({ tex, display });
+    mathTokens.push({ raw: trimmed, tex, display, inlineDisplay, glue });
     return `\u0000M${id}\u0000`;
   };
+
   while (i < text.length) {
     const ch = text[i];
     if (ch === '\u0000') {
@@ -110,28 +244,73 @@ export function extractMath(text, mathTokens, opts = {}) {
     }
     if (ch === '\\') {
       const next = text[i + 1];
+      if (next === '\\') { out += '\\\\'; i += 2; continue; }
       if (next === '$') { out += '\\$'; i += 2; continue; }
-      if (next === '[' || next === '(') {
-        const disp = next === '[';
-        const end = findClosingDelim(text, disp ? '\\]' : '\\)', i + 2);
-        if (end !== -1) { out += push(text.slice(i + 2, end), disp); i = end + 2; continue; }
+      if (next === '[') {
+        const end = texMode
+          ? findClosingDelim(text, '\\]', i + 2)
+          : findClosingDelimInPara(text, '\\]', i + 2, protectCode);
+        if (end !== -1) {
+          const body = text.slice(i + 2, end);
+          if (body.trim() && (texMode || !CITATION_BODY_RE.test(body.trim()))) {
+            out += push(body, true, { inlineDisplay: !texMode });
+            i = end + 2;
+            continue;
+          }
+        }
+        if (dropFailedEscapes) { out += '['; i += 2; continue; }
+        out += '\\['; i += 2; continue;
+      }
+      if (next === '(') {
+        const end = texMode
+          ? findClosingDelim(text, '\\)', i + 2)
+          : findClosingDelimInPara(text, '\\)', i + 2, protectCode);
+        if (end !== -1 && text.slice(i + 2, end).trim()) {
+          const glue = captureGlue ? matchGlue(text, end + 2) : '';
+          out += push(text.slice(i + 2, end), false, { glue });
+          i = end + 2 + glue.length;
+          continue;
+        }
+        if (dropFailedEscapes) { out += '('; i += 2; continue; }
+        out += '\\('; i += 2; continue;
+      }
+      if (dropFailedEscapes && (next === ']' || next === ')')) {
+        out += next; i += 2; continue;
       }
       if (text.startsWith('\\begin{', i)) {
         const bEnd = text.indexOf('}', i + 7);
         const env = bEnd !== -1 ? text.slice(i + 7, bEnd) : '';
         if (MATH_ENVS.has(env)) {
-          const end = findMatchingEnvEnd(text, env, bEnd + 1);
-          if (end !== -1) { out += push(text.slice(i, end), true); i = end; continue; }
+          const end = findMatchingEnvEnd(text, env, bEnd + 1, !texMode);
+          if (end !== -1) {
+            const isInline = midSentenceEnv && INLINE_MATH_ENVS.has(env);
+            const glue = isInline && captureGlue ? matchGlue(text, end) : '';
+            out += push(text.slice(i, end), !isInline, { inlineDisplay: !isInline && midSentenceEnv, glue });
+            i = end + glue.length;
+            continue;
+          }
         }
       }
     }
-    if (ch === '$' && text[i + 1] === '$' && !isEscapedAt(text, i)) {
-      const end = findClosingDelim(text, '$$', i + 2);
-      if (end !== -1 && text.slice(i + 2, end).trim()) { out += push(text.slice(i + 2, end), true); i = end + 2; continue; }
+    if (ch === '$' && text[i + 1] === '$') {
+      const end = texMode
+        ? findClosingDelim(text, '$$', i + 2)
+        : findClosingDoubleDollarBounded(text, i + 2);
+      if (end !== -1 && text.slice(i + 2, end).trim()) {
+        out += push(text.slice(i + 2, end), true, { inlineDisplay: !texMode });
+        i = end + 2;
+        continue;
+      }
+      out += '$$'; i += 2; continue;
     }
-    if (allowDollar && ch === '$' && text[i + 1] !== '$' && !isEscapedAt(text, i)) {
+    if (allowDollar && ch === '$' && text[i + 1] !== '$') {
       const end = findClosingInlineDollar(text, i + 1, protectCode);
-      if (end !== -1) { out += push(text.slice(i + 1, end), false); i = end + 1; continue; }
+      if (end !== -1) {
+        const glue = captureGlue ? matchGlue(text, end + 1) : '';
+        out += push(text.slice(i + 1, end), false, { glue });
+        i = end + 1 + glue.length;
+        continue;
+      }
     }
     out += ch; i += 1;
   }
@@ -139,5 +318,7 @@ export function extractMath(text, mathTokens, opts = {}) {
 }
 
 export function formatMathTokenHtml(tok) {
-  return !tok ? '' : tok.display ? `$$${escapeHtml(tok.tex)}$$` : `\\(${escapeHtml(tok.tex)}\\)`;
+  if (!tok) return '';
+  const body = tok.display ? `$$${escapeHtml(tok.tex)}$$` : `\\(${escapeHtml(tok.tex)}\\)`;
+  return tok.glue ? `${body}${escapeHtml(tok.glue)}` : body;
 }

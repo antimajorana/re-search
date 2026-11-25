@@ -1,6 +1,8 @@
 // Safe offline Markdown, LaTeX document preview, and KaTeX math rendering helpers.
 import { escapeHtml, highlightPython, highlightUnifiedDiff } from './code_highlight.js';
-import { extractMath, findClosingDelim, findClosingInlineDollar } from './math_scan.js';
+import {
+  extractMath, findClosingDelim, findClosingInlineDollar, hasUnescapedMathDelim,
+} from './math_scan.js';
 import { clearMathCache, katexOptions, renderFormulaHtml, resetMathMacros } from './math_katex.js';
 import { markdownToHtml, markdownToRenderedHtml } from './markdown.js';
 import { latexDocumentToHtml, latexDocumentToRenderedHtml } from './tex_preview.js';
@@ -83,14 +85,20 @@ export function firstMathSentence(text) {
 }
 
 export function displayMathSource(rawLatex) {
-  let tex = String(rawLatex ?? '').trim();
-  if (!tex || /^(\$\$|\\\[|\\begin\{)/.test(tex)) return tex;
-  if (tex.startsWith('\\(') && findClosingDelim(tex, '\\)', 2) === tex.length - 2) {
-    tex = tex.slice(2, -2);
-  } else if (tex.startsWith('$') && findClosingInlineDollar(tex, 1) === tex.length - 1) {
-    tex = tex.slice(1, -1);
+  const original = String(rawLatex ?? '').trim();
+  if (!original || /^(\$\$|\\\[|\\begin\{)/.test(original)) return original;
+  let inner = null;
+  if (original.startsWith('\\(') && findClosingDelim(original, '\\)', 2) === original.length - 2) {
+    inner = original.slice(2, -2);
+  } else if (original.startsWith('$') && findClosingInlineDollar(original, 1) === original.length - 1) {
+    inner = original.slice(1, -1);
   }
-  return `$$\n${tex}\n$$`;
+  if (inner !== null) {
+    if (hasUnescapedMathDelim(inner)) return original;
+    return `$$\n${inner}\n$$`;
+  }
+  if (hasUnescapedMathDelim(original)) return original;
+  return `$$\n${original}\n$$`;
 }
 
 export function renderRichInto(el, rawText, opts = {}) {

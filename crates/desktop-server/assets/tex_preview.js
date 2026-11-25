@@ -1,4 +1,4 @@
-// Offline LaTeX document preview renderer.
+// Offline LaTeX document preview renderer with preamble macro harvesting.
 import { escapeHtml } from './code_highlight.js';
 import { extractMath, findMatchingEnvEnd, formatMathTokenHtml } from './math_scan.js';
 import { createMathState, renderFormulaHtml } from './math_katex.js';
@@ -36,6 +36,53 @@ function extractTexCommand(src, cmdName) {
   const m = new RegExp(`\\\\${cmdName}\\*?\\s*\\{`).exec(src);
   const grp = m ? readBalancedGroup(src, m.index + m[0].length - 1) : null;
   return grp ? grp.content.trim() : '';
+}
+
+function skipSpaces(src, pos) {
+  let i = pos;
+  while (i < src.length && /[ \t\r\n]/.test(src[i])) i += 1;
+  return i;
+}
+
+export function harvestPreambleMacros(preamble) {
+  const macros = {};
+  const src = String(preamble ?? '');
+  let i = 0;
+  while (i < src.length) {
+    const rest = src.slice(i);
+    const nc = /^\\(?:re|provide)?newcommand\*?\s*(?:\{\\([A-Za-z]+)\}|\\([A-Za-z]+))/.exec(rest);
+    if (nc) {
+      const name = `\\${nc[1] || nc[2]}`;
+      let pos = skipSpaces(src, i + nc[0].length);
+      if (src[pos] === '[') {
+        const argc = readBalancedGroup(src, pos, '[', ']');
+        if (argc) pos = skipSpaces(src, argc.end);
+      }
+      if (src[pos] === '[') {
+        const opt = readBalancedGroup(src, pos, '[', ']');
+        if (opt) pos = skipSpaces(src, opt.end);
+      }
+      const body = src[pos] === '{' ? readBalancedGroup(src, pos) : null;
+      if (body) { macros[name] = body.content; i = body.end; continue; }
+    }
+    const dmo = /^\\DeclareMathOperator(\*?)\s*(?:\{\\([A-Za-z]+)\}|\\([A-Za-z]+))/.exec(rest);
+    if (dmo) {
+      const star = dmo[1];
+      const name = `\\${dmo[2] || dmo[3]}`;
+      const pos = skipSpaces(src, i + dmo[0].length);
+      const body = src[pos] === '{' ? readBalancedGroup(src, pos) : null;
+      if (body) { macros[name] = `\\operatorname${star}{${body.content}}`; i = body.end; continue; }
+    }
+    const def = /^\\(?:g|e|x)?def\s*\\([A-Za-z]+)([^{]*)/.exec(rest);
+    if (def) {
+      const name = `\\${def[1]}`;
+      const pos = i + def[0].length;
+      const body = src[pos] === '{' ? readBalancedGroup(src, pos) : null;
+      if (body) { macros[name] = body.content; i = body.end; continue; }
+    }
+    i += 1;
+  }
+  return macros;
 }
 
 function renderTexInline(src, mathTokens, renderCtx) {
@@ -162,20 +209,28 @@ function buildTexDocumentHtml(texSource, renderCtx) {
   const endDoc = body.indexOf('\\end{document}');
   if (endDoc >= 0) body = body.slice(0, endDoc);
 
+  let effectiveCtx = renderCtx;
+  if (renderCtx) {
+    const docMacros = harvestPreambleMacros(preamble);
+    const state = renderCtx.state ?? createMathState(docMacros);
+    effectiveCtx = { ...renderCtx, state };
+  }
+
   const rawTitle = extractTexCommand(preamble, 'title') || extractTexCommand(body, 'title');
   const rawAuthor = (extractTexCommand(preamble, 'author') || extractTexCommand(body, 'author')).replace(/\s*\\and\s*/g, ', ');
   const mathTokens = [];
-  const titleMarked = extractMath(rawTitle, mathTokens, { protectInlineCode: false });
-  const authorMarked = extractMath(rawAuthor, mathTokens, { protectInlineCode: false });
-  const bodyMarked = extractMath(body, mathTokens, { protectInlineCode: false });
+  const scanOpts = { protectInlineCode: false, texMode: true, preserveRaw: Boolean(effectiveCtx) };
+  const titleMarked = extractMath(rawTitle, mathTokens, scanOpts);
+  const authorMarked = extractMath(rawAuthor, mathTokens, scanOpts);
+  const bodyMarked = extractMath(body, mathTokens, scanOpts);
 
   const parts = [];
   if (titleMarked || authorMarked) {
-    const h1 = titleMarked ? `<h1>${renderTexInline(titleMarked, mathTokens, renderCtx)}</h1>` : '';
-    const auth = authorMarked ? `<p class="tex-doc-author">${renderTexInline(authorMarked, mathTokens, renderCtx)}</p>` : '';
+    const h1 = titleMarked ? `<h1>${renderTexInline(titleMarked, mathTokens, effectiveCtx)}</h1>` : '';
+    const auth = authorMarked ? `<p class="tex-doc-author">${renderTexInline(authorMarked, mathTokens, effectiveCtx)}</p>` : '';
     parts.push(`<header class="tex-doc-header">${h1}${auth}</header>`);
   }
-  const bodyHtml = renderTexBlocks(bodyMarked, mathTokens, renderCtx);
+  const bodyHtml = renderTexBlocks(bodyMarked, mathTokens, effectiveCtx);
   if (bodyHtml) parts.push(bodyHtml);
   return parts.join('\n');
 }
@@ -185,6 +240,5 @@ export function latexDocumentToHtml(texSource) {
 }
 
 export function latexDocumentToRenderedHtml(texSource, opts = {}) {
-  const state = opts.state ?? createMathState();
-  return buildTexDocumentHtml(texSource, { katex: opts.katex, state });
+  return buildTexDocumentHtml(texSource, { katex: opts.katex, state: opts.state });
 }
