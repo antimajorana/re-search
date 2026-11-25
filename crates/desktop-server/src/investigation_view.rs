@@ -39,6 +39,8 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
     });
     let mut activities = Vec::new();
     let mut positions = std::collections::HashMap::new();
+    let mut answers = Vec::new();
+    let mut answer_positions = std::collections::HashMap::new();
     let mut corrections = Vec::new();
     for event in events.iter().filter(|e| e.seq > start.seq) {
         match event.kind.as_str() {
@@ -65,21 +67,34 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
                     row["end_seq"] = json!(event.seq);
                 }
             }
+            "investigation.question_requested" => {
+                let row = json!({
+                    "seq": event.seq,
+                    "question": event.payload["question"],
+                    "status": "interrupted",
+                    "text": Value::Null,
+                    "error": Value::Null,
+                });
+                answer_positions.insert(event.seq, answers.len());
+                answers.push(row);
+            }
+            "investigation.answer" => {
+                if let Some(&index) = event.payload["request_seq"]
+                    .as_u64()
+                    .and_then(|seq| answer_positions.get(&seq))
+                {
+                    let row = &mut answers[index];
+                    row["status"] = event.payload["status"].clone();
+                    row["text"] = event.payload["text"].clone();
+                    row["error"] = event.payload["error"].clone();
+                }
+            }
             _ => (),
         }
     }
     if running {
-        if let Some(row) = activities
-            .last_mut()
-            .filter(|row| row["status"] == "interrupted")
-        {
-            let seq = row["seq"].as_u64().unwrap_or_default();
-            if !events.iter().any(|ev| {
-                ev.seq > seq && matches!(ev.kind.as_str(), "session.end" | "session.abort")
-            }) {
-                row["status"] = json!("running");
-            }
-        }
+        mark_last_running(&mut activities, events);
+        mark_last_running(&mut answers, events);
     }
     json!({"source_id":paper.and_then(|p| p.get("source_id")), "question":paper.and_then(|p| p.get("question")),
         "original_sha256":source.and_then(|e|e.payload.get("raw_blob")), "arxiv_cover_id":source.and_then(|e|e.payload.get("arxiv_cover_id")),
@@ -88,10 +103,25 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
         "conventions":conventions, "conventions_requested":mapping.is_some_and(|e|e.payload["conventions_requested"]==true || resumed==Some(e.seq)),
         "conventions_is_current":catalog_request.is_some() && catalog_request==mapping.map(|e|e.seq),
         "conventions_error":catalog_finish.map(|e|&e.payload["error"]).or_else(||finished.and_then(|e|e.payload.get("conventions_error"))),
+        "mapping_requested":mapping.is_some(),
         "mapping_status":finished.map(|e|&e.payload["status"]), "mapping_error":finished.and_then(|e|e.payload.get("error")),
         "page_start":paper.and_then(|p|p.get("page_start")), "page_end":paper.and_then(|p|p.get("page_end")),
         "map_seq":map.map(|e| e.seq), "map":map.map(|e|research_tools::investigation::expanded_map(events,e)),
-        "branches":branch_history(events,running), "corrections":corrections, "activities":activities})
+        "branches":branch_history(events,running), "corrections":corrections, "activities":activities, "answers":answers})
+}
+
+fn mark_last_running(rows: &mut [Value], events: &[Event]) {
+    if let Some(row) = rows
+        .last_mut()
+        .filter(|row| row["status"] == "interrupted")
+    {
+        let seq = row["seq"].as_u64().unwrap_or_default();
+        if !events.iter().any(|ev| {
+            ev.seq > seq && matches!(ev.kind.as_str(), "session.end" | "session.abort")
+        }) {
+            row["status"] = json!("running");
+        }
+    }
 }
 
 pub(crate) fn branch_history(events: &[Event], running: bool) -> Vec<Value> {
@@ -142,6 +172,7 @@ pub(crate) fn branch_history(events: &[Event], running: bool) -> Vec<Value> {
                         | "session.end"
                         | "investigation.mapping_requested"
                         | "investigation.conventions_resumed"
+                        | "investigation.question_requested"
                         | "investigation.requested"
                 )
         }) {

@@ -8,6 +8,12 @@ pub(crate) fn finish(
     req: &Value,
     outcome: std::result::Result<String, String>,
 ) -> std::result::Result<String, String> {
+    if let Some(seq) = req["_paper_question_request"].as_u64() {
+        return match state.open_ledger() {
+            Ok(ledger) => crate::investigation_question::finish_question(&ledger, session, seq, outcome),
+            Err(_) => outcome,
+        };
+    }
     if let Some(seq) = req["_paper_conventions_request"].as_u64() {
         let ledger = state.open_ledger()?;
         let events = ledger.read_session(session).map_err(|e| e.to_string())?;
@@ -75,7 +81,7 @@ pub(crate) fn finish(
         });
         let outcome = outcome.and_then(|reply| {
             if !recorded {
-                Err("The model returned without saving the main results with sources. Retry reading or choose another model.".into())
+                Err("The model finished without saving the main results with their sources. Try again, or choose another model.".into())
             } else if needs_conventions && !completed_catalog {
                 Err("The main results are saved. The model finished before its conventions review was complete.".into())
             } else { Ok(reply) }

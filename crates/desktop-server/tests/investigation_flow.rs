@@ -245,3 +245,123 @@ fn corrected_paper_claim_opens_fresh_research_with_its_evidence_and_assumptions(
         "investigation"
     );
 }
+
+#[test]
+fn question_turn_session_view_and_handoff_research_after_mapping() {
+    let temp = tempfile::tempdir().unwrap();
+    let server = start_desktop_server(test_cfg(temp.path(), None, None, None)).unwrap();
+    let sid = "s-question-handoff";
+    let path = format!("/api/sessions/{sid}");
+    call(
+        &server,
+        "POST",
+        "/api/sessions",
+        json!({"id":sid,"mode":"investigation"}),
+        200,
+    );
+    let env = ResearchEnv::new(temp.path().to_path_buf());
+    let ledger = Mutex::new(Ledger::open(temp.path()).unwrap());
+    let paper_text = "Assume a fixed boundary.\nThe boundary term vanishes.\n";
+    let src = ingest_bytes(
+        &env.sandbox(),
+        &ledger,
+        &IngestRequest {
+            session_id: sid,
+            file_name: "boundary.txt",
+            origin: "user upload",
+            raw_bytes: paper_text.as_bytes(),
+            source_id_hint: None,
+            section_filter: None,
+            title: Some("Boundary Paper"),
+        },
+    )
+    .unwrap();
+    let ledger = ledger.into_inner().unwrap();
+    ledger
+        .append(
+            sid,
+            "investigation.paper",
+            1,
+            &json!({"source_id":src.source_id,"question":"Does the boundary term vanish?"}),
+        )
+        .unwrap();
+    let q_seq = ledger
+        .append(
+            sid,
+            "investigation.question_requested",
+            1,
+            &json!({"source_id":src.source_id,"question":"Does the boundary term vanish?","page_start":null,"page_end":null,"map_seq":null}),
+        )
+        .unwrap();
+    ledger
+        .append(
+            sid,
+            "investigation.answer",
+            1,
+            &json!({"request_seq":q_seq,"status":"answered","text":"Yes, under fixed boundary [L1-2].","error":null}),
+        )
+        .unwrap();
+
+    let q_view = call(&server, "GET", &path, Value::Null, 200);
+    assert_eq!(q_view["investigation"]["mapping_requested"], false);
+    assert!(q_view["investigation"]["map"].is_null());
+    assert_eq!(q_view["investigation"]["answers"].as_array().unwrap().len(), 1);
+    assert_eq!(q_view["investigation"]["answers"][0]["status"], "answered");
+    assert_eq!(
+        q_view["investigation"]["answers"][0]["text"],
+        "Yes, under fixed boundary [L1-2]."
+    );
+
+    // Follow up with a map (conventions_requested=false, no catalog) and open a handoff Research session.
+    ledger
+        .append(
+            sid,
+            "investigation.mapping_requested",
+            1,
+            &json!({"source_id":src.source_id,"question":"Does the boundary term vanish?","conventions_requested":false,"overview_only":true}),
+        )
+        .unwrap();
+    let anchor = |line: usize, excerpt: &str| {
+        json!({"source_id":src.source_id,"path":src.primary_path,"start_line":line,"end_line":line,"excerpt":excerpt,"kind":"passage"})
+    };
+    let map = json!({
+        "source_id": src.source_id,
+        "title": "Boundary Paper",
+        "coverage": "paper",
+        "limitations": [],
+        "nodes": [
+            {"id":"a","kind":"assumption","main":true,"sentence":"Assume a fixed boundary.","anchors":[anchor(1,"Assume a fixed boundary.")]},
+            {"id":"b","kind":"result","main":true,"sentence":"The boundary term vanishes.","anchors":[anchor(2,"The boundary term vanishes.")]}
+        ],
+        "edges": [
+            {"from":"a","to":"b","kind":"depends_on","basis":"explicit","reason":"Fixed boundary eliminates the boundary term.","anchor":anchor(2,"The boundary term vanishes.")}
+        ]
+    });
+    record(&env, &ledger, sid, &map).unwrap();
+
+    let mapped = call(&server, "GET", &path, Value::Null, 200);
+    assert_eq!(mapped["investigation"]["mapping_requested"], true);
+    assert_eq!(mapped["investigation"]["conventions_requested"], false);
+    assert_eq!(mapped["investigation"]["answers"].as_array().unwrap().len(), 1);
+    let map_seq = mapped["investigation"]["map_seq"].as_u64().unwrap();
+
+    let handoff = call(
+        &server,
+        "POST",
+        &format!("{path}/investigation/research"),
+        json!({"map_seq":map_seq,"node_id":"b","question":"Test moving boundaries"}),
+        201,
+    );
+    let child = handoff["session_id"].as_str().unwrap();
+    let research = call(
+        &server,
+        "GET",
+        &format!("/api/sessions/{child}"),
+        Value::Null,
+        200,
+    );
+    assert_eq!(research["mode"], "research");
+    assert_eq!(research["investigation"]["origin"]["parent_session"], sid);
+    assert_eq!(research["sources"][0]["source_id"], src.source_id);
+}
+
