@@ -347,17 +347,21 @@ def check_question_first_investigation(browser, binary):
     body = "\n".join(lines)
     with tempfile.TemporaryDirectory(prefix="re-search-paper-question-") as directory:
         root = Path(directory)
-        (root / "paper").mkdir()
+        no_models_root = root / "no-models"
+        (no_models_root / "paper").mkdir(parents=True)
+        question_root = root / "question"
+        (question_root / "paper").mkdir(parents=True)
 
         def mock_no_models(page):
             page.route("**/api/models*", lambda r: r.fulfill(json={"providers": []}))
 
-        with open_install(browser, binary, root, before_navigate=mock_no_models) as page:
+        with open_install(browser, binary, no_models_root, before_navigate=mock_no_models) as page:
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             uploads = []
             page.route("**/upload", lambda r: (uploads.append(True), r.continue_()))
             page.get_by_role("button", name="Investigate a paper", exact=True).click()
+            expect(page.locator("#investigation-setup")).to_be_visible()
             page.get_by_label("Primary paper", exact=True).set_input_files(
                 {"name": "dynamics.txt", "mimeType": "text/plain", "buffer": body.encode()}
             )
@@ -376,10 +380,13 @@ def check_question_first_investigation(browser, binary):
                 {"id": "antigravity", "label": "Antigravity", "route": "antigravity",
                  "models": [{"id": "gemini-carbon-fixture", "label": "Gemini fixture", "default": True}]}]}))
 
-        with open_install(browser, binary, root, before_navigate=mock_provider) as page:
+        with open_install(browser, binary, question_root, before_navigate=mock_provider) as page:
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
+            expect(page.locator('#composer-model option:checked')).to_have_text('Gemini fixture')
             page.get_by_role("button", name="Investigate a paper", exact=True).click()
+            expect(page.locator("#investigation-setup")).to_be_visible()
+            expect(page.locator('#composer-model option:checked')).to_have_text('Gemini fixture')
             sid = page.evaluate("async () => (await (await import('/assets/api.js')).listSessions()).sessions[0].id")
             state = {"map": None, "map_seq": None, "mapping_requested": False, "answers": [],
                      "corrections": [], "activities": [], "branches": []}
@@ -442,7 +449,8 @@ def check_question_first_investigation(browser, binary):
             page.get_by_label("Primary paper", exact=True).set_input_files(
                 {"name": "dynamics.txt", "mimeType": "text/plain", "buffer": body.encode()}
             )
-            page.get_by_role("button", name="Answer my question").click()
+            with page.expect_response("**/" + sid + "/messages"):
+                page.get_by_role("button", name="Answer my question").click()
             assert sends[0]["investigation_scope"] == "question"
             assert sends[0]["prompt"] == question
             scenario["running"] = False
@@ -465,7 +473,8 @@ def check_question_first_investigation(browser, binary):
             expect(page.locator("#source-reader-status")).to_contain_text("Line 1")
             page.keyboard.press("Escape")
 
-            answer.get_by_role("button", name="Find main results").click()
+            with page.expect_response("**/" + sid + "/messages"):
+                answer.get_by_role("button", name="Find main results").click()
             assert sends[1]["investigation_scope"] == "map"
             assert sends[1]["prompt"] == question
             scenario["running"] = False
@@ -476,7 +485,8 @@ def check_question_first_investigation(browser, binary):
             expect(page.locator("#investigation-map").get_by_label("Focus question")).to_have_value(question)
 
             page.locator("#composer-input").fill("How is the force measured?")
-            page.locator("#composer-send").click()
+            with page.expect_response("**/" + sid + "/messages"):
+                page.locator("#composer-send").click()
             assert sends[2]["prompt"] == "How is the force measured?"
             scenario["running"] = False
             page.evaluate("() => window.fixtureEventStream.dispatchEvent(new MessageEvent('turn_complete',{data:'{}'}))")
