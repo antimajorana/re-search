@@ -1,5 +1,6 @@
 //! Synchronous HTTPS-allowlisted & loopback-mock HTTP client for literature tools.
 
+use crate::net_rate::{global_gate, NetRateGate, Service};
 use crate::LiteratureEndpoints;
 use std::io::Read;
 use std::time::Duration;
@@ -17,6 +18,15 @@ const ALLOWLISTED_HTTPS_HOSTS: &[&str] = &[
     "api.crossref.org",
     "api.semanticscholar.org",
 ];
+
+/// Bounded HTTP response returned by [`fetch_response_with_gate`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub final_url: String,
+    pub body: Vec<u8>,
+}
 
 fn parse_loopback_origin(base: &str) -> Option<(String, u16)> {
     let uri: Uri = base.trim().parse().ok()?;
@@ -109,18 +119,25 @@ fn build_agent(is_https: bool) -> ureq::Agent {
     ureq::Agent::new_with_config(cfg.build())
 }
 
-/// Performs a bounded GET request enforcing HTTPS allowlist (or loopback mock ports),
-/// following up to 3 redirects across allowlisted origins with the versioned reSearch user agent.
-pub fn fetch_bytes_allowlisted(
+/// Performs a bounded GET request through `gate`, enforcing the HTTPS allowlist (or loopback
+/// mock ports) and following up to 3 redirects across allowlisted origins.
+///
+/// Every outgoing hop passes `gate` after URL validation succeeds. Non-200 responses return
+/// `Ok(HttpResponse)` with at most 2048 bytes of error body so callers can distinguish HTTP
+/// 404/429 from transport errors without fragile string matching.
+pub fn fetch_response_with_gate(
     url: &str,
     endpoints: &LiteratureEndpoints,
     max_bytes: usize,
-) -> Result<Vec<u8>, String> {
+    service_hint: Option<Service>,
+    gate: &NetRateGate,
+) -> Result<HttpResponse, String> {
     let mut current: Uri = url.trim().parse().map_err(|e| format!("invalid URL `{url}`: {e}"))?;
     let mut redirects = 0usize;
 
     loop {
         let is_https = is_url_permitted(&current, endpoints)?;
+        let _grant = gate.acquire_for_url(&current, endpoints, service_hint);
         let agent = build_agent(is_https);
         let mut resp = agent
             .get(&current.to_string())
@@ -143,11 +160,21 @@ pub fn fetch_bytes_allowlisted(
             continue;
         }
 
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+
         if status != 200 {
             let mut err_buf = Vec::new();
             let _ = resp.body_mut().as_reader().take(2048).read_to_end(&mut err_buf);
-            let snippet = String::from_utf8_lossy(&err_buf);
-            return Err(format!("HTTP {status} from `{current}`: {}", snippet.trim()));
+            return Ok(HttpResponse {
+                status,
+                content_type,
+                final_url: current.to_string(),
+                body: err_buf,
+            });
         }
 
         let mut buf = Vec::new();
@@ -159,6 +186,49 @@ pub fn fetch_bytes_allowlisted(
         if buf.len() > max_bytes {
             return Err(format!("response from `{current}` exceeds {max_bytes} byte limit"));
         }
-        return Ok(buf);
+        return Ok(HttpResponse {
+            status,
+            content_type,
+            final_url: current.to_string(),
+            body: buf,
+        });
     }
+}
+
+/// Performs a bounded GET request through `gate`, returning an error for non-200 responses.
+pub fn fetch_bytes_with_gate(
+    url: &str,
+    endpoints: &LiteratureEndpoints,
+    max_bytes: usize,
+    service_hint: Option<Service>,
+    gate: &NetRateGate,
+) -> Result<Vec<u8>, String> {
+    let resp = fetch_response_with_gate(url, endpoints, max_bytes, service_hint, gate)?;
+    if resp.status != 200 {
+        let snippet = String::from_utf8_lossy(&resp.body);
+        return Err(format!("HTTP {} from `{}`: {}", resp.status, resp.final_url, snippet.trim()));
+    }
+    Ok(resp.body)
+}
+
+/// Performs a bounded GET request through the process-wide gate with an explicit logical
+/// [`Service`] hint (used by `arxiv.rs`, `literature.rs` and `paper_fetch.rs`).
+pub fn fetch_bytes_for_service(
+    service: Service,
+    url: &str,
+    endpoints: &LiteratureEndpoints,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    fetch_bytes_with_gate(url, endpoints, max_bytes, Some(service), global_gate())
+}
+
+/// Performs a bounded GET request enforcing HTTPS allowlist (or loopback mock ports),
+/// passing through the process-wide network rate gate and following up to 3 redirects
+/// across allowlisted origins with the versioned reSearch user agent.
+pub fn fetch_bytes_allowlisted(
+    url: &str,
+    endpoints: &LiteratureEndpoints,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    fetch_bytes_with_gate(url, endpoints, max_bytes, None, global_gate())
 }

@@ -1,8 +1,8 @@
 # Three modes, one foundation (2026-11)
 
 Plan and working files for the Investigate, Explore and Solve modes and the shared foundation
-packages F0 to F16 (F13 to F16 were added by the scope revision of 2026-11-25). The work branch is `claude/project-thread-caszr2`, based on
-`gemini/work/fixed`.
+packages F0 to F16 (F13 to F16 were added by the scope revision of 2026-11-25). The base branch is `gemini/work/fixed`; the integrator works on `claude/project-thread-caszr2`.
+Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it needs.
 
 | File | What it is |
 |---|---|
@@ -20,11 +20,17 @@ packages F0 to F16 (F13 to F16 were added by the scope revision of 2026-11-25). 
 | F0 guard rails | done | work branch |
 | F2 paper key | done | work branch, `crates/research-tools/src/paper_key.rs` |
 | F8 evaluation harness skeleton | done | work branch, `crates/agent/tests/eval_support/`, `tests/fixtures/eval/`, `docs/design/eval-2026-11/` |
-| F3 network gate and paper fetch | brief `agents/f3-net-gate.md` | `gemini/modes/f3-net-gate` |
+| F3 network gate and paper fetch | done, reviewed and merged | `net_rate.rs`, `paper_fetch*.rs`, `ledger/src/fulltext_cache.rs`; report `reports/f3-net-gate.md` |
 | F4 quote core, F9 run budget | brief `agents/f4-f9-quote-budget.md` | `gemini/modes/f4-f9-quote-budget` |
 | V1 skeleton core for TeX | brief `agents/v1-skeleton.md` | `gemini/modes/v1-skeleton` |
 | S2 Solve model, state fold, badge function | brief `agents/s2-solve-model.md` | `gemini/modes/s2-solve-model` |
-| F1 tool profiles | **not started: waits for the owner's decision 1** | - |
+| F1 tool profiles | brief `agents/f1-tool-profiles.md` | `gemini/modes/f1-tool-profiles` |
+| F6 graph view and shared UI parts | brief `agents/f6-graph-ui.md` | `gemini/modes/f6-graph-ui` |
+| F14a PDF text core | brief `agents/f14a-pdf-core.md` | `gemini/modes/f14a-pdf-core` |
+| F10 library | brief `agents/f10-library.md` | `gemini/modes/f10-library` |
+| F11 literature services | brief `agents/f11-lit-services.md` | `gemini/modes/f11-lit-services` |
+| X1 terms, queries, rank | brief `agents/x1-idea-terms.md` | `gemini/modes/x1-idea-terms` |
+| S3 router gate, S6 check process | brief `agents/s3-s6-gate-worker.md` | `gemini/modes/s3-s6-gate-worker` |
 | F13 paper sources and sync, F14 PDF and old papers, F15 write-up, F16 corrections and lessons | planned, no brief yet (overview 2.11 to 2.14; F14a in week 4, F13a in week 6) | - |
 | S16 formal tier (Lean) | cut | - |
 | S22 engine manager (Cadabra2, FORM), V14 prior work in Investigate, version tracking (half of V10) | deferred | - |

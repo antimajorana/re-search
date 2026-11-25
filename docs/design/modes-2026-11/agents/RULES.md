@@ -7,7 +7,7 @@ report, and keep going. These rules bind you; where a brief and these rules disa
 ## Setup
 
 ```bash
-git clone --branch claude/project-thread-caszr2 https://github.com/antimajorana/reSearch.git ~/reSearch
+git clone --branch gemini/work/fixed https://github.com/antimajorana/reSearch.git ~/reSearch
 cd ~/reSearch
 git rev-parse HEAD            # put this in your report as the base commit
 git switch -c work/<your-brief-name>
@@ -35,6 +35,13 @@ Never print, copy or store a credential. Your result goes back by pushing your b
   one named constant with a comment naming the decision, so that it can change in one place. F1
   (tool profiles) is approved; implement it only in the brief that owns it. Do not edit `crates/agent/src/resume.rs`,
   `crates/desktop-server/src/routes_session.rs`, `turn_runner.rs` or `http_srv.rs`.
+- **Base.** Briefs launched from 2026-11-26 on start from `gemini/work/fixed`, which holds F0, F2,
+  F3 and F8. (The first four briefs, f3-net-gate, f4-f9-quote-budget, v1-skeleton and
+  s2-solve-model, started from `claude/project-thread-caszr2`.) Shared package F3 is in your
+  checkout: `net_rate.rs` (every request to a literature host goes through
+  `http_client::fetch_bytes_for_service` or `fetch_response_with_gate`), `paper_fetch.rs`, and
+  `ledger::FulltextCache` over `<data_dir>/library/library.db`. Its report is
+  `reports/f3-net-gate.md`.
 - Shared package F2 is in your checkout: `crates/research-tools/src/paper_key.rs` (`PaperKey`,
   `PaperRef`, `NodeRef`, `Mode`, the id-prefix table, `node_tag`). Use these types; do not define
   another paper identity.
@@ -56,7 +63,7 @@ Never print, copy or store a credential. Your result goes back by pushing your b
 - **Source files stay at or under 600 lines**, tests included. Put the tests of a long module in a
   sibling `<name>_tests.rs` (see `paper_key.rs` and `paper_key_tests.rs`). Do not touch a file that
   is already over 600 lines. Run `python3 scripts/check_file_length.py --base
-  origin/claude/project-thread-caszr2` before you push; it must pass.
+  origin/gemini/work/fixed` before you push; it must pass.
 - No credentials, keys or tokens anywhere: not in code, tests, logs, ledger payloads or your report.
 - Tests make no real network calls, open no browser, and run no real vendor CLI.
 - **No third-party paper text in the repository.** Every fixture is written by you for this purpose.
@@ -124,7 +131,7 @@ When everything is committed on your branch, push it, and only it, to its own br
 git push origin HEAD:refs/heads/gemini/modes/<your-brief-name>
 ```
 
-Never push to `main`, `gemini/work/fixed`, `claude/project-thread-caszr2` or any other branch,
+Never push to `main`, `gemini/work/fixed`, any `claude/` branch or any other branch,
 never force-push, never open or merge a pull request. If the push succeeds, end your final reply
 with:
 
