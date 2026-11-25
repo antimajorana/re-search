@@ -388,3 +388,41 @@ The other changes are also sound. Giving each open_install its own data director
 
 - **M1**: Separate, older race the commit does not touch (in origin/gemini/work/merged as well; not the CI cause, low severity): #new-investigation-btn sits in the rail, so it can be clicked while an empty investigation A is open and A's setup form is visible. The button is disabled during createAndSelectSession, but A's file input is not. A file picked in A's form during that window is cleared when selectSession(B) resets the form. setupDrafts saves only the question, source and page fields, never the file. Possible fix: disable the setup inputs while a create is pending, or carry the File over to the new session.
 - **M2**: UX observation, not a bug: buildMap checks for a file before checking for a model. A user with no model and no file sees 'Choose a primary paper.' instead of the connect-a-model prompt. This ordering is why the test race showed up as 'settings dialog hidden'.
+
+## Review of the first honesty fix commits on gemini/work/fixed (ec79e63, bcd2329, 6233c82, f7f87cc, 58ba23f)
+
+Read from the diffs only; nothing was built. No test file was edited by these commits. Required changes:
+
+1. **bcd2329, F12: REVERT.** `crates/research-tools/src/investigation_anchor.rs:41` set `quote` `minLength` to
+   `MIN_WHOLE_LINE_NON_SPACE`. Design 01 section 2.1 fixes `quote` at 12-300 chars and says the schema changes once
+   so `def_hash` changes once. `anchor_schema()` is shared by all four `record_paper_*` definitions, so all four
+   hashes change; `resume.rs` accepts only the current hash, the no-`answer_node_ids` variant and `earlier_defs()`
+   (7c36a0e only), so sessions recorded with the merged schema fail with "tool definition drift". The 16-char rule
+   and the 3-char whole-line exception are already enforced at runtime (`investigation_anchor.rs:341-361`).
+   Restore `"minLength":12`. The proof test `recorder_anchor_schema_min_length_must_not_contradict_...`
+   (`audit_honesty_anchors.rs:371`) asserts something the design does not require: delete it and record why.
+2. **bcd2329, F2: REVERT.** `investigation_anchor.rs:396` changed the label window. Design 01 section 2.1 step 8
+   says `[min(s, start-3), start-1]`. The new window gives `label_not_found` for a theorem header 4+ lines above
+   the quote inside the model's own cited range. Restore `s.min(final_start.saturating_sub(LABEL_ABOVE_RADIUS))`;
+   delete the F2 proof test as by design.
+3. **ec79e63, F3: ADJUST.** `crates/desktop-server/src/investigation_cites.rs:166-172`: remove the `offset > 0`
+   start bump and the matching end trim. `offset` is fs_read's character offset into the file, so every paged read
+   after the first loses its first line and a line split across pages is never credited. Keep the `line_truncated`
+   skip (:133) and the 0-char past-EOF skip (:159). Update the unit test
+   `truncated_empty_and_partial_reads_excluded`.
+4. **ec79e63, F10: REVERT that part.** `investigation_cites.rs:279`: remove `MAX_CLICKABLE_CITE_SPAN` from the
+   `read` computation and the test `wide_citation_above_513_lines_stays_unread`; it marks received lines unread
+   (README UX decision 6 is about what the model received). Fix F10 in `investigation.js` `openCite` instead: clamp
+   the opened range (`start..start+512`) with a note.
+5. **f7f87cc, F8: REVERT.** `crates/desktop-server/src/agent_models.rs:333-345`, `paper_reader.rs:104-149`: restore
+   the request-body `paper_reader` override and the doc comment; every other role honours `req.get(role)`. Delete
+   the F8 proof test as not a bug.
+6. **6233c82, F5: ADJUST.** `crates/research-tools/src/investigation_conventions.rs:156,354`: forcing `done` false
+   while any item is pending means a run whose model cannot cite one item can never finish. Add an explicit way to
+   abandon pending items (a batch field listing ids to drop, recorded as a limitation), then let `done` stand. Keep
+   the cross-batch limitation merge, the F14 plural fix and the 12th-limitation replacement.
+7. **ec79e63, F1: ADJUST (minor).** `investigation_cites.rs:58`: replace the allowlist of caller prefixes with a
+   denylist (`worker:`, `user:`), so a future main-route caller is not silently unread. Keep the requirement of a
+   matching `tool.request`.
+
+Keep as they are: F9 hardening (both commits), F13 (`pg` omitted for non-primary rows), F4, F7, F11, F6, F15.
