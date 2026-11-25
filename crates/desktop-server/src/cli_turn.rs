@@ -405,7 +405,7 @@ pub(crate) fn run_cli_turn(
         eff_msg = format!("Pinned research conventions\n{text}\n\n{eff_msg}");
     }
     eff_msg = format!(
-        "Use `search_paper_passages` to locate exact passages in ingested papers and \
+        "Use `search_paper_passages` and `read_paper_lines` to locate and read exact numbered passages in ingested papers, and \
          `search_formal_library` to discover Lean declarations in the attached workspace. \
          Cite recorded source locations, and type-check any intended formal application.\n\n{eff_msg}"
     );

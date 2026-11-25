@@ -38,7 +38,14 @@ pub(crate) fn linked_session_sources(state: &DesktopState, ledger: &Ledger, even
         let Some(call) = evidence.resolve_call(reference.trim(), event.seq) else { continue };
         if !matches!(
             call.request.payload["tool"].as_str(),
-            Some("doc_ingest" | "fs_read" | "search_paper_passages" | "arxiv_search" | "literature_search")
+            Some(
+                "doc_ingest"
+                    | "fs_read"
+                    | "read_paper_lines"
+                    | "search_paper_passages"
+                    | "arxiv_search"
+                    | "literature_search"
+            )
         ) {
             continue;
         }
@@ -678,7 +685,7 @@ impl<'a> SessionEvidence<'a> {
                 "sympy_eval" => "computation",
                 "lean_check" => "lean",
                 "doc_ingest" => "source_ingested",
-                "fs_read" => "source_read",
+                "fs_read" | "read_paper_lines" => "source_read",
                 "search_paper_passages" => "paper_passages",
                 "search_formal_library" => "formal_library",
                 "arxiv_search" | "literature_search" => "literature",
@@ -770,6 +777,37 @@ impl<'a> SessionEvidence<'a> {
                     {
                         item["reader"] = link;
                     }
+                }
+            }
+            "read_paper_lines" => {
+                let meta = &result["a_meta"];
+                item["path"] = json!(self.scrub.path(&meta["path"]));
+                item["root"] = json!("sources");
+                item["start_line"] = json!(meta["start_line"].as_u64());
+                item["end_line"] = json!(meta["end_line"].as_u64());
+                item["file_sha256"] = json!(sha256(&meta["file_sha256"]));
+                item["excerpt"] = json!(self.scrub.field(&result["text"], TEXT_LIMIT));
+                let link = meta["path"].as_str().and_then(|path| {
+                    let digest = sha256(&meta["file_sha256"])?;
+                    let before = outcome?.seq;
+                    match meta["source_seq"].as_u64() {
+                        Some(seq) => {
+                            let source = self.source_receipts.get(&seq).filter(|source| {
+                                source.seq < before
+                                    && path.split_once('/').is_some_and(|(id, _)| source.payload["source_id"] == id)
+                                    && source.payload["files_sha256"][path] == digest
+                            })?;
+                            let lines = meta["start_line"]
+                                .as_u64()
+                                .zip(meta["end_line"].as_u64())
+                                .filter(|(start, end)| *start > 0 && end >= start);
+                            self.reader_link(source, path, digest, lines)
+                        }
+                        None => self.source_read_link(path, meta, outcome),
+                    }
+                });
+                if let Some(link) = link {
+                    item["reader"] = link;
                 }
             }
             "doc_ingest" => {
