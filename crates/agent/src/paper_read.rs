@@ -25,6 +25,7 @@ use tools::{CallOutcome, Router};
 
 pub const DELEGATE_READ_PAPER: &str = "delegate_read_paper";
 pub const PAPER_READER_MAX_TURNS: u32 = 12;
+pub const MAX_PAPER_READER_SLICES: usize = 8;
 pub const PAPER_READER_RETURN_MAX_BYTES: usize = 24 * 1024;
 const READER_TOOL_OUTPUT_CHARS: usize = 8_000;
 pub const PAPER_READER_TOOLS: &[&str] = &["search_paper_passages", "read_paper_lines", NOTE_EVIDENCE];
@@ -69,9 +70,10 @@ pub fn paper_read_tool_spec(pr: &PaperReaderConfig<'_>) -> ToolSpec {
         input_schema: json!({
             "type": "object",
             "properties": {
-                "focus": { "type": "string", "description": "Claims, definitions, conventions, or equations to locate." },
+                "focus": { "type": "string", "description": "Claims, definitions, conventions, or equations to locate (required for mode \"read\"; optional for mode \"list\")." },
                 "sections": {
                     "type": "array",
+                    "maxItems": MAX_PAPER_READER_SLICES,
                     "items": {
                         "type": "object",
                         "properties": {
@@ -86,7 +88,6 @@ pub fn paper_read_tool_spec(pr: &PaperReaderConfig<'_>) -> ToolSpec {
                 "roles": { "type": "array", "items": { "type": "string", "enum": VALID_ROLES } },
                 "mode": { "type": "string", "enum": ["read", "list"] }
             },
-            "required": ["focus"],
             "additionalProperties": false
         }),
     }
@@ -411,7 +412,11 @@ fn parse_input(
     }
     let mut slices = Vec::new();
     if let Some(sv) = input.get("sections").filter(|v| !v.is_null()) {
-        for item in sv.as_array().ok_or("`sections` must be an array")? {
+        let arr = sv.as_array().ok_or("`sections` must be an array")?;
+        if arr.len() > MAX_PAPER_READER_SLICES {
+            return Err(format!("`sections` accepts at most {MAX_PAPER_READER_SLICES} slices per call (got {})", arr.len()));
+        }
+        for item in arr {
             let s = item.get("start_line").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()).filter(|&n| n >= 1).ok_or("section `start_line` must be >= 1")?;
             let e = item.get("end_line").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()).filter(|&n| n >= s).ok_or("section `end_line` must be >= `start_line`")?;
             let goal = item.get("goal").and_then(Value::as_str).map(str::trim).filter(|g| !g.is_empty()).ok_or("section `goal` must be non-empty")?;
@@ -534,7 +539,8 @@ pub(crate) fn run_paper_readers(
     let rows = collect_evidence_rows(&events, pr.marker_seq, &pr.source_id, &roles, &pr.page_lines, &focus);
     let ev_count = rows.len();
     let (_, canonical, omitted) = assemble_return_json(&readers_json, &coverage_json, rows);
-    let any_ok = outcomes.iter().any(|o| o.ok) || ev_count > 0;
+    let call_pointers: usize = outcomes.iter().map(|o| o.pointers).sum();
+    let any_ok = outcomes.iter().any(|o| o.ok) || call_pointers > 0;
     audit.sink.on_thinking_delta(&format!(
         "[Paper Reader finished: {}/{} slices ok, {ev_count} pointer(s), {total_turns} turn(s), {total_in}+{total_out} tok]\n",
         outcomes.iter().filter(|o| o.ok).count(), outcomes.len(),
