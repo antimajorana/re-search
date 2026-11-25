@@ -2,6 +2,7 @@
 import { escapeHtml } from './code_highlight.js';
 import { extractMath, findMatchingEnvEnd, formatMathTokenHtml } from './math_scan.js';
 import { createMathState, renderFormulaHtml } from './math_katex.js';
+import { numberEquations } from './math_equations.js';
 
 const TEX_STRUCT_ENVS = new Set(
   'abstract theorem lemma proposition corollary definition remark example proof conjecture assumption claim note'.split(' ')
@@ -126,6 +127,13 @@ function renderTexInline(src, mathTokens, renderCtx) {
           if (cmd === 'textit' || cmd === 'emph') { out += `<em>${renderTexInline(grp.content, mathTokens, renderCtx)}</em>`; i = grp.end; continue; }
           if (cmd === 'texttt') { out += `<code>${escapeHtml(grp.content)}</code>`; i = grp.end; continue; }
           if (cmd === 'cite') { out += `<code>[cite:${escapeHtml(grp.content + (optArg ? `, ${optArg}` : ''))}]</code>`; i = grp.end; continue; }
+          if (cmd === 'eqref' && renderCtx) {
+            const id = grp.content.trim();
+            const resolved = renderCtx.eqRefs?.get(id);
+            const label = `(${resolved !== undefined ? resolved : id})`;
+            out += `<a class="eqref-link" data-eq-ref="${escapeHtml(id)}">${escapeHtml(label)}</a>`;
+            i = grp.end; continue;
+          }
           if (/^(?:eq|auto|c|C|page)?ref$/.test(cmd)) { out += `<code>[ref:${escapeHtml(grp.content)}]</code>`; i = grp.end; continue; }
           if (/^(?:label|bibliographystyle|bibliography|documentclass|usepackage|date|title|author)$/.test(cmd)) { i = grp.end; continue; }
         }
@@ -223,6 +231,9 @@ function buildTexDocumentHtml(texSource, renderCtx) {
   const titleMarked = extractMath(rawTitle, mathTokens, scanOpts);
   const authorMarked = extractMath(rawAuthor, mathTokens, scanOpts);
   const bodyMarked = extractMath(body, mathTokens, scanOpts);
+  if (effectiveCtx) {
+    effectiveCtx = { ...effectiveCtx, eqRefs: numberEquations(mathTokens) };
+  }
 
   const parts = [];
   if (titleMarked || authorMarked) {

@@ -4,13 +4,14 @@ import {
   extractMath, findClosingDelim, findClosingInlineDollar, hasUnescapedMathDelim,
 } from './math_scan.js';
 import { clearMathCache, katexOptions, renderFormulaHtml, resetMathMacros } from './math_katex.js';
+import { installEqrefNavigation, numberEquations } from './math_equations.js';
 import { markdownToHtml, markdownToRenderedHtml } from './markdown.js';
 import { latexDocumentToHtml, latexDocumentToRenderedHtml } from './tex_preview.js';
 
 export {
-  clearMathCache, escapeHtml, highlightPython, highlightUnifiedDiff, katexOptions,
-  latexDocumentToHtml, latexDocumentToRenderedHtml, markdownToHtml, markdownToRenderedHtml,
-  renderFormulaHtml, resetMathMacros,
+  clearMathCache, escapeHtml, highlightPython, highlightUnifiedDiff, installEqrefNavigation,
+  katexOptions, latexDocumentToHtml, latexDocumentToRenderedHtml, markdownToHtml,
+  markdownToRenderedHtml, numberEquations, renderFormulaHtml, resetMathMacros,
 };
 
 function renderMathTextInternal(text, opts = {}) {
@@ -104,6 +105,7 @@ export function displayMathSource(rawLatex) {
 export function renderRichInto(el, rawText, opts = {}) {
   if (!el) return;
   el.innerHTML = markdownToRenderedHtml(rawText, opts);
+  installEqrefNavigation(el);
 }
 
 export function renderLatexDocumentPreview(el, texSource, opts = {}) {
@@ -111,4 +113,5 @@ export function renderLatexDocumentPreview(el, texSource, opts = {}) {
   const html = latexDocumentToRenderedHtml(texSource, opts);
   if (!html) { el.innerHTML = '<p style="color:var(--ink-muted)">Empty TeX buffer.</p>'; return; }
   el.innerHTML = html;
+  installEqrefNavigation(el);
 }

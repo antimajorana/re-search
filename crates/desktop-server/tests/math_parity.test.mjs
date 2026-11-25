@@ -15,7 +15,8 @@ const katex = require(vendorKatexPath);
 const mathMod = await import(pathToFileURL(path.join(assetsDir, 'math.js')).href);
 const {
   clearMathCache, displayMathSource, katexOptions, latexDocumentToRenderedHtml,
-  markdownToHtml, markdownToRenderedHtml, renderFormulaHtml, resetMathMacros,
+  markdownToHtml, markdownToRenderedHtml, mathTextToHtml, renderFormulaHtml,
+  renderRichInto, resetMathMacros,
 } = mathMod;
 
 function render(md, opts = {}) {
@@ -475,4 +476,179 @@ test('Case 60 (WP3): streaming partial \\(E = mc renders without error, then clo
   assert.equal(countInline(complete), 1);
   assert.ok(!complete.includes('katex-error'));
   assertCleanDelims(complete);
+});
+
+// --- WP4 parity cases ---
+
+test('Case 33 (WP4): \\label numbers display and resolves \\eqref in prose', () => {
+  resetMathMacros();
+  const html = render('$$\na = b \\label{eq-first}\n$$\n\nSee \\eqref{eq-first}.');
+  assert.equal(countDisplay(html), 1);
+  assert.ok(html.includes('data-eq-id="eq-first"'));
+  assert.ok(html.includes('class="katex-tag"'));
+  assert.ok(!visibleText(html).includes('label'), `\\label leaked into visible text: ${visibleText(html)}`);
+  assert.match(html, /<a class="eqref-link" data-eq-ref="eq-first">\(1\)<\/a>/);
+  assert.ok(!html.includes('href='), 'eqref link must have no href');
+  assertHtmlOnlyNoEqnNum(html);
+});
+
+test('Case 34 (WP4): plain $$ display has no equation tag', () => {
+  resetMathMacros();
+  const html = render('$$ c = d $$');
+  assert.equal(countDisplay(html), 1);
+  assert.ok(!html.includes('katex-tag'));
+  assertHtmlOnlyNoEqnNum(html);
+});
+
+test('Case 35 (WP4): explicit \\tag{D1} keeps its tag without advancing the counter', () => {
+  resetMathMacros();
+  const md = '$$ g \\tag{D1} \\label{eq-own} $$\n\nSee \\eqref{eq-own}.\n\n$$ h \\label{x} $$';
+  const html = render(md);
+  assert.equal(countDisplay(html), 2);
+  assert.match(html, /<a class="eqref-link" data-eq-ref="eq-own">\(D1\)<\/a>/);
+  assert.ok(visibleText(html).includes('(D1)'));
+  assert.ok(visibleText(html).includes('(1)'));
+  assert.ok(!visibleText(html).includes('(2)'));
+  assertHtmlOnlyNoEqnNum(html);
+});
+
+test('Case 36 (WP4): \\notag suppresses numbering even with \\label', () => {
+  resetMathMacros();
+  const html = render('$$ i \\notag \\label{eq-none} $$');
+  assert.equal(countDisplay(html), 1);
+  assert.ok(!html.includes('katex-tag'));
+  assertHtmlOnlyNoEqnNum(html);
+});
+
+test('Case 37 (WP4): consecutive equation blocks get app numbers (1) and (2) with no eqn-num', () => {
+  resetMathMacros();
+  const md = '\\begin{equation}\na=b\n\\end{equation}\n\n\\begin{equation}\nc=d\n\\end{equation}';
+  const html = render(md);
+  assert.equal(countDisplay(html), 2);
+  assert.equal((html.match(/class="katex-tag"/g) || []).length, 2);
+  const text = visibleText(html);
+  assert.ok(text.includes('(1)') && text.includes('(2)'));
+  assertHtmlOnlyNoEqnNum(html);
+});
+
+test('Case 38 (WP4): multi-row align handles per-row \\label, \\notag, and \\tag{T} without error', () => {
+  resetMathMacros();
+  const md = [
+    '\\begin{align}',
+    'a &= b \\label{r1} \\\\',
+    'c &= d \\notag \\\\',
+    'e &= f \\tag{T} \\\\',
+    'g &= h \\label{r2}',
+    '\\end{align}',
+    '',
+    'Refs \\eqref{r1} and \\eqref{r2}.',
+  ].join('\n');
+  const html = render(md);
+  assert.ok(!html.includes('katex-error'), `Multi-row align must not error: ${html}`);
+  assert.equal(countDisplay(html), 1);
+  assert.match(html, /<a class="eqref-link" data-eq-ref="r1">\(1\)<\/a>/);
+  assert.match(html, /<a class="eqref-link" data-eq-ref="r2">\(2\)<\/a>/);
+  const text = visibleText(html);
+  assert.ok(text.includes('(1)') && text.includes('(T)') && text.includes('(2)'));
+  assert.ok(!text.includes('(3)'));
+  assertHtmlOnlyNoEqnNum(html);
+});
+
+test('Case 39 (WP4): nested cases \\\\ inside align does not split rows', () => {
+  resetMathMacros();
+  const md = '\\begin{align}\nf &= \\begin{cases} 1 \\\\ 0 \\end{cases} \\\\\ng &= 2\n\\end{align}';
+  const html = render(md);
+  assert.ok(!html.includes('katex-error'), `align with nested cases errored: ${html}`);
+  assert.equal(countDisplay(html), 1);
+  const text = visibleText(html);
+  assert.ok(text.includes('(1)') && text.includes('(2)'));
+  assert.ok(!text.includes('(3)'), `Nested cases \\\\ must not create a 3rd tag: ${text}`);
+  assertHtmlOnlyNoEqnNum(html);
+});
+
+test('Case 40 (WP4): eqnarray normalizes columns and numbers rows (1) and (2)', () => {
+  resetMathMacros();
+  const md = '\\begin{eqnarray}\na &=& b \\\\\nc &=& d\n\\end{eqnarray}';
+  const html = render(md);
+  assert.ok(!html.includes('katex-error'), `eqnarray errored: ${html}`);
+  assert.equal(countDisplay(html), 1);
+  const text = visibleText(html);
+  assert.ok(text.includes('(1)') && text.includes('(2)'));
+  assertHtmlOnlyNoEqnNum(html);
+});
+
+test('Case 41 (WP4): starred align* produces display with no tags', () => {
+  resetMathMacros();
+  const html = render('\\begin{align*}\na &= b \\\\\nc &= d\n\\end{align*}');
+  assert.equal(countDisplay(html), 1);
+  assert.ok(!html.includes('katex-tag'));
+  assertHtmlOnlyNoEqnNum(html);
+});
+
+test('Case 42 (WP4): unknown \\eqref{nope} renders link text (nope)', () => {
+  resetMathMacros();
+  const html = render('See \\eqref{nope}.');
+  assert.match(html, /<a class="eqref-link" data-eq-ref="nope">\(nope\)<\/a>/);
+});
+
+test('Case 43 (WP4): \\eqref inside inline formula renders upright (1) with no red', () => {
+  resetMathMacros();
+  const md = '$$\na = b \\label{eq-first}\n$$\n\nInline $x \\eqref{eq-first}$ here.';
+  const html = render(md);
+  assert.equal(countInline(html), 1);
+  assert.ok(!html.includes('katex-error'));
+  assert.ok(!html.includes('var(--status-err)'), `\\eqref in formula must not render red: ${html}`);
+  assert.ok(visibleText(html).includes('(1)'));
+});
+
+test('Case 55 (WP4): mathTextToHtml inlineOnly strips \\tag{3} cleanly', () => {
+  resetMathMacros();
+  const html = mathTextToHtml('Step $E=mc^2 \\tag{3}$', { inlineOnly: true, katex });
+  assert.equal(countInline(html), 1);
+  assert.equal(countDisplay(html), 0);
+  assert.ok(!html.includes('katex-error'));
+});
+
+test('Case 56 (WP4): mathTextToHtml inlineOnly converts align to aligned cleanly', () => {
+  resetMathMacros();
+  const html = mathTextToHtml('\\begin{align} a&=b \\end{align}', { inlineOnly: true, katex });
+  assert.equal(countInline(html), 1);
+  assert.equal(countDisplay(html), 0);
+  assert.ok(!html.includes('katex-error'));
+});
+
+test('Case 65 (WP4): installEqrefNavigation handles fake root without addEventListener and installs once', () => {
+  resetMathMacros();
+  const fakeRoot = { innerHTML: '' };
+  assert.doesNotThrow(() => renderRichInto(fakeRoot, '$$\na = b \\label{eq-1}\n$$\nSee \\eqref{eq-1}.', { katex }));
+
+  const listeners = [];
+  const scrolled = [];
+  const realishRoot = {
+    innerHTML: '',
+    addEventListener(type, fn) { listeners.push({ type, fn }); },
+    querySelector(sel) {
+      if (sel === '[data-eq-id="eq-1"]') return { scrollIntoView: (o) => scrolled.push(o) };
+      return null;
+    },
+  };
+  renderRichInto(realishRoot, '$$\na = b \\label{eq-1}\n$$\nSee \\eqref{eq-1}.', { katex });
+  renderRichInto(realishRoot, '$$\na = b \\label{eq-1}\n$$\nSee \\eqref{eq-1}.', { katex });
+  assert.equal(listeners.length, 1, 'Repeated renderRichInto must install only one click listener');
+
+  const prevCss = globalThis.CSS;
+  try {
+    globalThis.CSS = { escape: (s) => s };
+    let prevented = false;
+    listeners[0].fn({
+      target: {
+        closest: (sel) => (sel.includes('eqref-link') ? { getAttribute: () => 'eq-1' } : null),
+      },
+      preventDefault: () => { prevented = true; },
+    });
+    assert.equal(prevented, true);
+    assert.deepEqual(scrolled, [{ block: 'center', behavior: 'smooth' }]);
+  } finally {
+    globalThis.CSS = prevCss;
+  }
 });

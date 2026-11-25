@@ -189,10 +189,48 @@ button, input, select, textarea { font-family: inherit; color: inherit; }
   text-align: center;
 }
 .math-display > .katex-display { margin: 0; padding: 0; overflow: visible; }
+.math-display > .katex-display > .katex > .katex-html:has(> .katex-tag) {
+  display: flex;
+  align-items: baseline;
+  min-width: max-content;
+}
+.math-display > .katex-display > .katex > .katex-html:has(> .katex-tag)::before {
+  content: "";
+  flex: 1 1 0;
+}
+.math-display > .katex-display > .katex > .katex-html > .katex-tag {
+  position: static;
+  flex: 1 1 0;
+  text-align: right;
+  padding-left: 1.5em;
+  padding-right: 2px;
+}
+.katex .katex-tag { padding-right: 2px; }
 .math-glue { white-space: nowrap; }
 .katex .katex-error { color: var(--status-err) !important; }
 .math-error { color: var(--status-err); font-family: var(--font-mono); font-size: 0.88em; }
 .math-pending { font-family: var(--font-mono); font-size: 0.88em; color: var(--ink-muted); }
+.rich-prose a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.rich-prose a:hover {
+  color: var(--accent-hover);
+  border-bottom-color: var(--accent-hover);
+}
+.rich-prose a.eqref-link, a.eqref-link {
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.rich-prose a.eqref-link:hover, a.eqref-link:hover {
+  color: var(--accent-hover);
+  border-bottom-color: var(--accent-hover);
+}
 .rich-prose .tex-doc-header { margin-bottom: 1em; padding-bottom: 0.75em; border-bottom: 1px solid var(--border-subtle); }
 .rich-prose .tex-doc-author { margin: 0.25em 0 0; font-size: 0.92em; color: var(--ink-secondary); }
 .rich-prose .tex-env { margin: 0.85em 0; padding: 10px 14px; border-left: 3px solid var(--accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--bg-subtle); }

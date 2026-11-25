@@ -2,6 +2,7 @@
 // KaTeX option builder, session/document macro tables, compatibility rewrites, caching, and error rendering.
 import { escapeHtml } from './code_highlight.js';
 import { normalizeEqnarrayBody } from './math_scan.js';
+import { replaceEqrefsInTex } from './math_equations.js';
 
 export const SEED_MACROS = Object.freeze({
   '\\R': '\\mathbb{R}',
@@ -135,11 +136,15 @@ export function normalizeDisplayEnvsForKatex(rawTex) {
   return s.trim();
 }
 
-export function prepareTex(rawTex, { display = false, inlineOnly = false, katex = null, state = defaultState, eqPrep = null } = {}) {
+export function prepareTex(rawTex, {
+  display = false, inlineOnly = false, katex = null, state = defaultState,
+  eqPrep = null, eqRefs = null, eqNumbered = false,
+} = {}) {
   let s = String(rawTex ?? '');
   if (typeof eqPrep === 'function') s = eqPrep(s);
+  if (s.includes('\\eqref{')) s = replaceEqrefsInTex(s, eqRefs);
   if (inlineOnly || !display) s = prepareInlineTex(s);
-  else if (typeof eqPrep !== 'function') s = normalizeDisplayEnvsForKatex(s);
+  else if (!eqNumbered && typeof eqPrep !== 'function') s = normalizeDisplayEnvsForKatex(s);
   s = rewriteNewcommands(s, katex, state);
   s = repairTextCmd(s);
   return s;
@@ -208,6 +213,8 @@ export function renderFormulaHtml(tok, ctx = {}) {
     katex: katexImpl,
     state,
     eqPrep: tok.eqPrep ?? ctx.eqPrep ?? null,
+    eqRefs: ctx.eqRefs ?? null,
+    eqNumbered: Boolean(tok.eqNumbered),
   });
 
   const key = `${display ? '1' : '0'}\u0000${prepared}\u0000${state.fp}`;
@@ -236,8 +243,11 @@ export function renderFormulaHtml(tok, ctx = {}) {
     const tag = tok.inlineDisplay ? 'span' : 'div';
     const cls = tok.inlineDisplay ? 'math-display' : 'math-display math-block';
     const eqIdAttr = tok.eqId ? ` data-eq-id="${escapeHtml(tok.eqId)}"` : '';
+    const extraIds = Array.isArray(tok.eqIds) && tok.eqIds.length > 1
+      ? ` data-eq-ids="${escapeHtml(tok.eqIds.join(' '))}"`
+      : '';
     const texAttr = ` data-tex="${escapeHtml(source)}" aria-label="${escapeHtml(source)}"`;
-    return `<${tag} class="${cls}"${eqIdAttr}${texAttr}>${rendered}</${tag}>`;
+    return `<${tag} class="${cls}"${eqIdAttr}${extraIds}${texAttr}>${rendered}</${tag}>`;
   }
 
   if (threw) return glue ? `<span class="math-glue">${rendered}${escapeHtml(glue)}</span>` : rendered;

@@ -6,6 +6,7 @@ import {
   formatMathTokenHtml, isEscapedAt, normalizeMathTex,
 } from './math_scan.js';
 import { renderFormulaHtml } from './math_katex.js';
+import { numberEquations } from './math_equations.js';
 
 const CITATION_BODY_RE = /^[\d,\s\u2013\u2014-]+$/;
 
@@ -33,7 +34,7 @@ function renderInlineMarkdown(text, mathTokens, parseOpts, alreadyExtracted = fa
   const marked = alreadyExtracted ? String(text ?? '') : scanInlineText(String(text ?? ''), mathTokens, parseOpts);
   const codeTokens = [];
   const linkTokens = [];
-  const s = marked
+  let s = marked
     .replace(/(`+)(?!`)([^\n]+?)(?<!`)\1(?!`)/g, (_, _t, code) => {
       codeTokens.push(`<code>${escapeHtml(code)}</code>`);
       return `\u0000C${codeTokens.length - 1}\u0000`;
@@ -43,6 +44,15 @@ function renderInlineMarkdown(text, mathTokens, parseOpts, alreadyExtracted = fa
       linkTokens.push(`<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${applyEmphasis(escapeHtml(label))}</a>`);
       return `\u0000L${linkTokens.length - 1}\u0000`;
     });
+  if (parseOpts.rendered && parseOpts.eqrefTokens) {
+    s = s.replace(/\\eqref\{([^}\n{}]+)\}/g, (m, rawId) => {
+      const id = rawId.trim();
+      if (!id) return m;
+      const idx = parseOpts.eqrefTokens.length;
+      parseOpts.eqrefTokens.push(id);
+      return `\u0000E${idx}\u0000`;
+    });
+  }
   return applyEmphasis(escapeHtml(s))
     .replace(/\u0000L(\d+)\u0000/g, (_, i) => linkTokens[Number(i)] || '')
     .replace(/\u0000C(\d+)\u0000/g, (_, i) => codeTokens[Number(i)] || '')
@@ -208,19 +218,28 @@ function renderMarkdownBlocks(inputLines, mathTokens, parseOpts) {
   return out.join('\n');
 }
 
-function substituteTokens(template, mathTokens, renderCtx) {
+function substituteTokens(template, mathTokens, eqrefTokens, renderCtx) {
+  const eqRefs = renderCtx ? numberEquations(mathTokens) : null;
+  const ctx = renderCtx ? { ...renderCtx, eqRefs } : null;
   return template
     .replace(/\u0000D(\d+)\u0000/g, (_, idx) => {
       const tok = mathTokens[Number(idx)];
       if (!tok) return '';
-      return renderCtx
-        ? renderFormulaHtml(tok, renderCtx)
+      return ctx
+        ? renderFormulaHtml(tok, ctx)
         : `<div class="math-block">$$\n${escapeHtml(tok.tex)}\n$$</div>`;
     })
     .replace(/\u0000M(\d+)\u0000/g, (_, idx) => {
       const tok = mathTokens[Number(idx)];
       if (!tok) return '';
-      return renderCtx ? renderFormulaHtml(tok, renderCtx) : formatMathTokenHtml(tok);
+      return ctx ? renderFormulaHtml(tok, ctx) : formatMathTokenHtml(tok);
+    })
+    .replace(/\u0000E(\d+)\u0000/g, (_, idx) => {
+      const id = eqrefTokens[Number(idx)];
+      if (!id) return '';
+      const resolved = eqRefs?.get(id);
+      const label = `(${resolved !== undefined ? resolved : id})`;
+      return `<a class="eqref-link" data-eq-ref="${escapeHtml(id)}">${escapeHtml(label)}</a>`;
     });
 }
 
@@ -228,14 +247,15 @@ export function markdownToHtml(raw) {
   const src = String(raw ?? '').replace(/\u0000/g, '').replace(/\r\n?/g, '\n');
   const mathTokens = [];
   const template = renderMarkdownBlocks(src.split('\n'), mathTokens, { rendered: false });
-  return substituteTokens(template, mathTokens, null);
+  return substituteTokens(template, mathTokens, [], null);
 }
 
 export function markdownToRenderedHtml(raw, opts = {}) {
   const src = String(raw ?? '').replace(/\u0000/g, '').replace(/\r\n?/g, '\n');
   const mathTokens = [];
-  const template = renderMarkdownBlocks(src.split('\n'), mathTokens, { rendered: true });
-  return substituteTokens(template, mathTokens, {
+  const eqrefTokens = [];
+  const template = renderMarkdownBlocks(src.split('\n'), mathTokens, { rendered: true, eqrefTokens });
+  return substituteTokens(template, mathTokens, eqrefTokens, {
     katex: opts.katex,
     state: opts.state,
     inlineOnly: Boolean(opts.inlineOnly),
