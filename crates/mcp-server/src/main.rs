@@ -224,7 +224,31 @@ fn build_router() -> Result<Router, String> {
         None
     };
     let mut registry = Registry::new();
-    let policy = cli_route::core_tools::register_core_tools(&mut registry, sympy_epoch, sympy_handler, research);
+    let (policy, active_profile) = match research {
+        Some(r_env) => {
+            let profile_name = match env("CORE_TOOL_PROFILE") {
+                Some(name) => name,
+                None => {
+                    let events = ledger.read_session(&session).map_err(|e| e.to_string())?;
+                    research_tools::tool_profile::profile_for_session_events(&events)?
+                        .name
+                        .to_string()
+                }
+            };
+            let policy = cli_route::core_tools::register_core_tools_for_profile(
+                &mut registry,
+                sympy_epoch,
+                sympy_handler,
+                r_env,
+                &profile_name,
+            )?;
+            (policy, Some(profile_name))
+        }
+        None => (
+            cli_route::core_tools::register_core_tools(&mut registry, sympy_epoch, sympy_handler, None),
+            None,
+        ),
+    };
 
     let approver: Arc<dyn tools::Approver> = match (env("CORE_APPROVAL_ADDR"), env("CORE_SESSION_TOKEN")) {
         (Some(addr), Some(token)) => {
@@ -232,7 +256,11 @@ fn build_router() -> Result<Router, String> {
         }
         _ => Arc::new(DenyAll),
     };
-    Ok(Router::new(registry, policy, ledger, &session, approver))
+    let mut router = Router::new(registry, policy, ledger, &session, approver);
+    if let Some(profile_name) = active_profile {
+        router = router.with_tool_profile(profile_name);
+    }
+    Ok(router)
 }
 
 /// Resolve the fixed caller identity for this server process: `antigravity:<session>` when
