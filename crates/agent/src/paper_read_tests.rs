@@ -226,9 +226,17 @@ fn try_call_err_aborts_all_and_fails_turn() {
     let res = run_paper_readers(&mut audit, &cfg, "c_abort", &json!({"focus":"all"}), None);
     assert!(res.is_err(), "try_call Err must fail the turn: {res:?}");
     // Restore permissions so TempDir cleans up cleanly.
-    let mut p2 = std::fs::metadata(&db_path).unwrap().permissions();
-    p2.set_readonly(false);
-    let _ = std::fs::set_permissions(&db_path, p2);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&db_path, std::fs::Permissions::from_mode(0o644));
+    }
+    #[cfg(not(unix))]
+    {
+        let mut p2 = std::fs::metadata(&db_path).unwrap().permissions();
+        p2.set_readonly(false);
+        let _ = std::fs::set_permissions(&db_path, p2);
+    }
 }
 
 #[test]
