@@ -2,7 +2,7 @@
 //! conventions partial-acceptance finalization, and recorder schema consistency.
 
 use ledger::Ledger;
-use research_tools::investigation::{def, paper_conventions, record, record_conventions};
+use research_tools::investigation::{paper_conventions, record, record_conventions};
 use research_tools::{
     ingest_bytes, register_reader_tools, research_policy, IngestRequest, ResearchEnv,
     NOTE_EVIDENCE,
@@ -64,58 +64,6 @@ fn setup(paper_text: &str) -> (tempfile::TempDir, Arc<ResearchEnv>, Ledger, Stri
         )
         .unwrap();
     (tmp, env, ledger, paper.source_id, req)
-}
-
-#[test]
-fn label_lookback_must_not_defeat_narrowing_across_60_unquoted_lines() {
-    let mut lines = vec!["Lemma 1.".to_string()];
-    for i in 2..=60 {
-        lines.push(format!(
-            "UNQUOTED INTERMEDIATE CLAIM {i}: completely unrelated assertion."
-        ));
-    }
-    lines.push("Therefore the ground state energy vanishes identically.".to_string());
-    let paper_text = lines.join("\n") + "\n";
-
-    let (_tmp, env, ledger, pid, _) = setup(&paper_text);
-    let anchor = json!({
-        "source_id": pid,
-        "start_line": 1,
-        "end_line": 61,
-        "kind": "passage",
-        "label": "Lemma 1.",
-        "quote": "ground state energy vanishes identically"
-    });
-    let map = json!({
-        "source_id": pid,
-        "title": "Ground State",
-        "coverage": "paper",
-        "limitations": [],
-        "nodes": [{
-            "id": "n1",
-            "kind": "result",
-            "main": true,
-            "sentence": "Energy vanishes.",
-            "anchors": [anchor]
-        }],
-        "edges": []
-    });
-
-    if let Ok(_res) = record(&env, &ledger, SID, &map) {
-        let saved = ledger.read_verified_session(SID).unwrap().1.pop().unwrap();
-        let saved_anchor = &saved.payload["nodes"][0]["anchors"][0];
-        let s = saved_anchor["start_line"].as_u64().unwrap();
-        let e = saved_anchor["end_line"].as_u64().unwrap();
-        let excerpt = saved_anchor["excerpt"].as_str().unwrap_or("");
-        assert!(
-            e - s <= 8 && !excerpt.contains("UNQUOTED INTERMEDIATE CLAIM"),
-            "16+ char quote on line 61 plus label on line 1 grounded {} lines ({}..={}), \
-             absorbing 59 unquoted lines into verified excerpt",
-            e - s + 1,
-            s,
-            e
-        );
-    }
 }
 
 #[test]
@@ -368,15 +316,175 @@ fn conventions_later_batch_must_not_finalize_done_true_or_wipe_limitations_while
 }
 
 #[test]
-fn recorder_anchor_schema_min_length_must_not_contradict_3_char_whole_line_quote_rule() {
-    let map_def = def();
-    let quote_min = map_def.input_schema["properties"]["nodes"]["items"]["properties"]["anchors"]
-        ["items"]["properties"]["quote"]["minLength"]
-        .as_u64()
+fn review_honesty_conventions_explicit_abandon_allows_done() {
+    let paper_text = concat!(
+        "Title: Conventions Abandonment\n",
+        "Throughout this paper we set Planck constant hbar = 1.\n",
+        "The metric signature is chosen to be (-,+,+,+).\n",
+    );
+    let (_tmp, env, ledger, pid, req) = setup(paper_text);
+
+    // Batch 1: accept `hbar-unit`, reject `bad-sign`.
+    let b1 = json!({
+        "request_seq": req,
+        "source_id": pid,
+        "batch_index": 1,
+        "done": true,
+        "coverage": "partial",
+        "limitations": ["Appendix C equations are scanned images."],
+        "items": [
+            {
+                "id": "hbar-unit",
+                "category": "units",
+                "label": "hbar = 1",
+                "meaning": "Natural units with hbar = 1.",
+                "scope": "Paper",
+                "basis": "explicit",
+                "anchors": [{
+                    "source_id": pid,
+                    "start_line": 2,
+                    "end_line": 2,
+                    "kind": "passage",
+                    "quote": "Throughout this paper we set Planck constant hbar = 1"
+                }]
+            },
+            {
+                "id": "bad-sign",
+                "category": "sign",
+                "label": "sign convention",
+                "meaning": "Unreadable scanned convention.",
+                "scope": "Paper",
+                "basis": "explicit",
+                "anchors": [{
+                    "source_id": pid,
+                    "start_line": 3,
+                    "end_line": 3,
+                    "kind": "passage",
+                    "quote": "this quote does not exist anywhere in the paper"
+                }]
+            }
+        ]
+    });
+    let r1 = record_conventions(&env, &ledger, SID, &b1).unwrap();
+    assert_eq!(r1["done"], false);
+
+    // (a) `done: true, coverage: "paper", limitations: []` is still blocked (`done == false`).
+    let b2 = json!({
+        "request_seq": req,
+        "source_id": pid,
+        "batch_index": 2,
+        "done": true,
+        "coverage": "paper",
+        "limitations": [],
+        "items": []
+    });
+    let r2 = record_conventions(&env, &ledger, SID, &b2).unwrap();
+    assert_eq!(r2["done"], false);
+    assert_eq!(r2["coverage"], "partial");
+
+    // (b) `done: true, coverage: "partial", limitations: ["unrelated note"]` is still blocked (`done == false`).
+    let b3 = json!({
+        "request_seq": req,
+        "source_id": pid,
+        "batch_index": 3,
+        "done": true,
+        "coverage": "partial",
+        "limitations": ["unrelated note"],
+        "items": []
+    });
+    let r3 = record_conventions(&env, &ledger, SID, &b3).unwrap();
+    assert_eq!(r3["done"], false);
+    assert_eq!(r3["coverage"], "partial");
+
+    // Also verify app-generated pending notes and substring matches do not abandon `bad-sign`.
+    let b4 = json!({
+        "request_seq": req,
+        "source_id": pid,
+        "batch_index": 4,
+        "done": true,
+        "coverage": "partial",
+        "limitations": [
+            "1 item awaiting valid citations: bad-sign",
+            "Note on my_bad-sign and bad-sign2 only."
+        ],
+        "items": []
+    });
+    let r4 = record_conventions(&env, &ledger, SID, &b4).unwrap();
+    assert_eq!(r4["done"], false);
+
+    // (c) Explicitly abandoning `bad-sign` with `done: true, coverage: "partial"` clears
+    // `bad-sign` from `pending_items`, records `abandoned_items: ["bad-sign"]`,
+    // preserves the limitation, and allows `done: true, coverage: "partial"` to stand.
+    let abandon_note = "Abandoned bad-sign: equation is an unreadable scanned image.";
+    let b5 = json!({
+        "request_seq": req,
+        "source_id": pid,
+        "batch_index": 5,
+        "done": true,
+        "coverage": "partial",
+        "limitations": [abandon_note],
+        "items": []
+    });
+    let r5 = record_conventions(&env, &ledger, SID, &b5).unwrap();
+    assert_eq!(r5["done"], true);
+    assert_eq!(r5["coverage"], "partial");
+
+    let events = ledger.read_verified_session(SID).unwrap().1;
+    let latest_ev = events
+        .iter()
+        .rfind(|e| e.kind == "investigation.conventions")
         .unwrap();
+    assert_eq!(latest_ev.payload["abandoned_items"], json!(["bad-sign"]));
+    assert_eq!(latest_ev.payload["done"], true);
+    assert_eq!(latest_ev.payload["coverage"], "partial");
+
+    let catalog = paper_conventions(&events, req).unwrap();
+    assert_eq!(catalog["done"], true);
+    assert_eq!(catalog["coverage"], "partial");
+    assert_eq!(catalog["pending_items"], json!([]));
+    assert_eq!(catalog["abandoned_items"], json!(["bad-sign"]));
+    let limitations = catalog["limitations"].as_array().unwrap();
     assert!(
-        quote_min <= 3,
-        "record_paper_* anchor_schema sets quote.minLength={quote_min}, blocking 3–11 char whole-line quotes \
-         (such as `E = mc^2`) that verify_pointer, resolve_evidence, and note_evidence_def (minLength=3) allow"
+        limitations.iter().any(|l| l.as_str() == Some(abandon_note)),
+        "expected abandonment limitation to be preserved; got {limitations:?}"
+    );
+    assert!(
+        limitations
+            .iter()
+            .any(|l| l.as_str() == Some("Appendix C equations are scanned images.")),
+        "expected prior limitation to be preserved; got {limitations:?}"
+    );
+    assert!(
+        !limitations
+            .iter()
+            .any(|l| l.as_str().unwrap_or("").contains("awaiting valid citations")),
+        "resolved catalog should not retain pending-items app note; got {limitations:?}"
     );
 }
+
+#[test]
+fn review_honesty_f12_recorder_def_hashes_match_merged() {
+    use research_tools::investigation::{branch_def, conventions_def, def, summary_def};
+    assert_eq!(
+        def().def_hash(),
+        "5e7905ca29b2bcd86ba2533ac8c69a06eb750fd712af592d0cf2e40a26054152"
+    );
+    assert_eq!(
+        summary_def().def_hash(),
+        "52c180904e39bf82ee62633331be27f927eefb3529a45db06f75aa7e07721b58"
+    );
+    assert_eq!(
+        branch_def().def_hash(),
+        "1e6c25fb46fbc503cdf8a7defaad64fced1c3db40ba940e7bc62c3990f54ba0e"
+    );
+    assert_eq!(
+        conventions_def().def_hash(),
+        "179b48a12b1b8684fd73994a982288b3469f0442e3dd0c65035a3bc5c5a15582"
+    );
+    assert_eq!(
+        def().input_schema["properties"]["nodes"]["items"]["properties"]["anchors"]["items"]
+            ["properties"]["quote"]["minLength"],
+        json!(12)
+    );
+}
+

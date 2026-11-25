@@ -196,3 +196,83 @@ fn audit_honesty_excerpt_window_must_center_on_cited_match_not_prepended_label_l
         &excerpt[excerpt.len().saturating_sub(80)..]
     );
 }
+
+#[test]
+fn review_honesty_bare_section_preserves_real_labels() {
+    let paper_text = concat!(
+        "Appendix A: Supplementary calculations are collected below.\n",
+        "§2 Methods: Experimental apparatus and readout protocol.\n",
+        "II.A Discussion: Comparison with prior numerical benchmarks.\n",
+        "Lemma A.1: The effective Hamiltonian commutes with parity.\n",
+        "Appendix B, eq. (52): The partition function factorizes cleanly.\n",
+        "Theorem 1: Every gapped local phase has finite correlation length.\n",
+    );
+    let (_tmp, env, db, pid) = setup_session(paper_text);
+
+    // Bare section headings must be rejected with `label_is_section_name`.
+    for (line, label, quote) in [
+        (1, "Appendix A", "Supplementary calculations are collected below."),
+        (2, "§2 Methods", "Experimental apparatus and readout protocol."),
+        (3, "II.A Discussion", "Comparison with prior numerical benchmarks."),
+    ] {
+        let out = note_evidence(
+            &env,
+            &db,
+            SID,
+            READER_CALLER,
+            &json!({
+                "items": [{
+                    "source_id": pid,
+                    "start_line": line,
+                    "end_line": line,
+                    "quote": quote,
+                    "kind": "passage",
+                    "role": "result",
+                    "label": label,
+                    "gist": "Section heading test"
+                }]
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            out["noted"], 0,
+            "expected bare section label `{label}` to be rejected; got {out}"
+        );
+        assert_eq!(
+            out["results"][0]["fault"]["code"], "label_is_section_name",
+            "expected `label_is_section_name` for `{label}`; got {out}"
+        );
+    }
+
+    // Real labels (including ones starting with `Appendix`) must be preserved.
+    for (line, label, quote) in [
+        (4, "Lemma A.1", "effective Hamiltonian commutes with parity."),
+        (5, "Appendix B, eq. (52)", "partition function factorizes cleanly."),
+        (6, "Theorem 1", "Every gapped local phase has finite correlation length."),
+    ] {
+        let out = note_evidence(
+            &env,
+            &db,
+            SID,
+            READER_CALLER,
+            &json!({
+                "items": [{
+                    "source_id": pid,
+                    "start_line": line,
+                    "end_line": line,
+                    "quote": quote,
+                    "kind": "passage",
+                    "role": "result",
+                    "label": label,
+                    "gist": "Real label test"
+                }]
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            out["noted"], 1,
+            "expected real label `{label}` to be accepted; got {out}"
+        );
+    }
+}
+

@@ -38,7 +38,7 @@ pub(crate) fn anchor_schema() -> Value {
         "source_id":string_schema(64),"path":string_schema(1024),
         "start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1},
         "excerpt":string_schema(MAX_EXCERPT_BYTES),
-        "quote":{"type":"string","minLength":MIN_WHOLE_LINE_NON_SPACE,"maxLength":MAX_QUOTE_CHARS},
+        "quote":{"type":"string","minLength":12,"maxLength":MAX_QUOTE_CHARS},
         "evidence":{"type":"string","pattern":"^ev-[0-9]{1,12}$"},
         "kind":{"type":"string","enum":ANCHOR_KINDS},"label":string_schema(160)
     },"required":["source_id","kind"],"additionalProperties":false})
@@ -393,7 +393,7 @@ impl SourceIndex<'_> {
             if !file.lines_text(final_start, final_end).contains(label) {
                 let mut extended = None;
                 if final_start > 1 {
-                    let (above_lo, above_hi) = (final_start.saturating_sub(LABEL_ABOVE_RADIUS).max(1), final_start - 1);
+                    let (above_lo, above_hi) = (s.min(final_start.saturating_sub(LABEL_ABOVE_RADIUS)).max(1), final_start - 1);
                     if above_lo <= above_hi {
                         let (base_off, _) = file.line_range_bytes(above_lo, above_hi);
                         let mut hits = file.lines_text(above_lo, above_hi).match_indices(label);

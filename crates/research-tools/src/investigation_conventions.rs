@@ -104,12 +104,36 @@ fn is_pending_items_note(s: &str) -> bool {
             || rest.starts_with("items awaiting valid citations: "))
 }
 
+fn is_id_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '-' | '_')
+}
+
+fn mentions_item_id(text: &str, id: &str) -> bool {
+    if id.is_empty() {
+        return false;
+    }
+    text.match_indices(id).any(|(start, _)| {
+        let end = start + id.len();
+        let left_ok = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !is_id_char(c));
+        let right_ok = text[end..]
+            .chars()
+            .next()
+            .is_none_or(|c| !is_id_char(c));
+        left_ok && right_ok
+    })
+}
+
 /// Present accepted batches for one run. Later requests do not inherit the coverage claim.
 pub fn paper_conventions(events: &[Event], request_seq: u64) -> Option<Value> {
     let mut items = Vec::new();
     let mut accepted_ids = BTreeSet::new();
     let mut rejected_order = Vec::new();
     let mut rejected_seen = BTreeSet::new();
+    let mut abandoned_order = Vec::new();
+    let mut abandoned_ids = BTreeSet::new();
     let mut limitations = Vec::new();
     let mut limitations_seen = BTreeSet::new();
     let mut latest = None;
@@ -118,13 +142,22 @@ pub fn paper_conventions(events: &[Event], request_seq: u64) -> Option<Value> {
         for item in event.payload["items"].as_array()? {
             if let Some(id) = item["id"].as_str() {
                 accepted_ids.insert(id.to_owned());
+                abandoned_ids.remove(id);
             }
             items.push(item.clone());
         }
         for rejected in event.payload["rejected_items"].as_array().into_iter().flatten() {
             if let Some(id) = rejected["id"].as_str() {
+                abandoned_ids.remove(id);
                 if rejected_seen.insert(id.to_owned()) {
                     rejected_order.push(id.to_owned());
+                }
+            }
+        }
+        for abandoned in event.payload["abandoned_items"].as_array().into_iter().flatten() {
+            if let Some(id) = abandoned.as_str() {
+                if abandoned_ids.insert(id.to_owned()) && !abandoned_order.iter().any(|x| x == id) {
+                    abandoned_order.push(id.to_owned());
                 }
             }
         }
@@ -137,9 +170,13 @@ pub fn paper_conventions(events: &[Event], request_seq: u64) -> Option<Value> {
         }
     }
     let latest = latest?;
+    let abandoned_items: Vec<String> = abandoned_order
+        .into_iter()
+        .filter(|id| abandoned_ids.contains(id) && !accepted_ids.contains(id))
+        .collect();
     let pending_items: Vec<String> = rejected_order
         .into_iter()
-        .filter(|id| !accepted_ids.contains(id))
+        .filter(|id| !accepted_ids.contains(id) && !abandoned_ids.contains(id))
         .collect();
     if !pending_items.is_empty() {
         let note = pending_items_note(&pending_items);
@@ -152,6 +189,9 @@ pub fn paper_conventions(events: &[Event], request_seq: u64) -> Option<Value> {
     result["limitations"] = Value::Array(limitations);
     result["conventions_seq"] = json!(latest.seq);
     result["pending_items"] = json!(pending_items);
+    if !abandoned_items.is_empty() {
+        result["abandoned_items"] = json!(abandoned_items);
+    }
     if !pending_items.is_empty() {
         result["done"] = json!(false);
         result["coverage"] = json!("partial");
@@ -203,6 +243,7 @@ pub(super) fn payload<'a>(
     let mut prior_ids = BTreeSet::new();
     let mut prior_rejected_order = Vec::new();
     let mut prior_rejected_seen = BTreeSet::new();
+    let mut prior_abandoned_ids = BTreeSet::new();
     let mut labels = BTreeSet::new();
     let mut next = 1;
     let mut previous = None;
@@ -225,14 +266,21 @@ pub(super) fn payload<'a>(
                 item["scope"].as_str(),
             ) {
                 prior_ids.insert(id.to_owned());
+                prior_abandoned_ids.remove(id);
                 labels.insert((label.trim().to_owned(), scope.trim().to_owned()));
             }
         }
         for rejected in event.payload["rejected_items"].as_array().into_iter().flatten() {
             if let Some(id) = rejected["id"].as_str() {
+                prior_abandoned_ids.remove(id);
                 if prior_rejected_seen.insert(id.to_owned()) {
                     prior_rejected_order.push(id.to_owned());
                 }
+            }
+        }
+        for abandoned in event.payload["abandoned_items"].as_array().into_iter().flatten() {
+            if let Some(id) = abandoned.as_str() {
+                prior_abandoned_ids.insert(id.to_owned());
             }
         }
         next += 1;
@@ -332,18 +380,41 @@ pub(super) fn payload<'a>(
     // Rebuild accepted sets from accepted items only (prior accepted items + accepted_items).
     for item in &accepted_items {
         prior_ids.insert(item.id.clone());
+        prior_abandoned_ids.remove(&item.id);
         labels.insert((item.label.trim().to_owned(), item.scope.trim().to_owned()));
     }
+    let mut newly_rejected_ids = BTreeSet::new();
     for rejected in &rejected_items {
         if let Some(id) = rejected["id"].as_str() {
+            newly_rejected_ids.insert(id.to_owned());
+            prior_abandoned_ids.remove(id);
             if prior_rejected_seen.insert(id.to_owned()) {
                 prior_rejected_order.push(id.to_owned());
             }
         }
     }
+    let mut abandoned_items = Vec::new();
+    if batch.done && batch.coverage == "partial" {
+        for id in &prior_rejected_order {
+            if prior_ids.contains(id)
+                || prior_abandoned_ids.contains(id)
+                || newly_rejected_ids.contains(id)
+            {
+                continue;
+            }
+            if batch
+                .limitations
+                .iter()
+                .any(|lim| !is_pending_items_note(lim) && mentions_item_id(lim, id))
+            {
+                abandoned_items.push(id.clone());
+                prior_abandoned_ids.insert(id.clone());
+            }
+        }
+    }
     let pending_items: Vec<String> = prior_rejected_order
         .into_iter()
-        .filter(|id| !prior_ids.contains(id))
+        .filter(|id| !prior_ids.contains(id) && !prior_abandoned_ids.contains(id))
         .collect();
     batch.items = accepted_items;
     let mut done_requested = None;
@@ -356,7 +427,13 @@ pub(super) fn payload<'a>(
         let note = pending_items_note(&pending_items);
         if !batch.limitations.iter().any(|s| s == &note) {
             if batch.limitations.len() >= 12 {
-                batch.limitations.truncate(11);
+                if let Some(pos) = batch.limitations.iter().rposition(|lim| {
+                    !abandoned_items.iter().any(|id| mentions_item_id(lim, id))
+                }) {
+                    batch.limitations.remove(pos);
+                } else {
+                    batch.limitations.truncate(11);
+                }
             }
             batch.limitations.push(note);
         }
@@ -365,6 +442,11 @@ pub(super) fn payload<'a>(
     payload["coverage_basis"] = json!("model_reported");
     if !rejected_items.is_empty() {
         payload["rejected_items"] = Value::Array(rejected_items);
+    }
+    if !abandoned_items.is_empty() {
+        payload["abandoned_items"] = Value::Array(
+            abandoned_items.into_iter().map(Value::String).collect(),
+        );
     }
     if let (Some(done_req), Some(cov_rep)) = (done_requested, coverage_reported) {
         payload["done_requested"] = json!(done_req);
