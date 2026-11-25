@@ -493,4 +493,5 @@ def check_question_first_investigation(browser, binary):
             expect(answer).to_contain_text("The measured force uses unit mass [L3].")
             expect(answer.locator("details > summary")).to_have_text("Earlier questions (1)")
             assert not errors, errors
+            page.unroute_all(behavior="ignoreErrors")
 
