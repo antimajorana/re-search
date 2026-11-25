@@ -1,0 +1,46 @@
+{
+  "format_version": 1,
+  "set": "Q",
+  "tier": "fixed",
+  "cases": [
+    {
+      "id": "Q-selftest-gaussian",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "calculate",
+        "statement": "Evaluate the integral of exp(-x^2) over the whole real line."
+      },
+      "answer_key": {
+        "final_answer": "sqrt(pi)",
+        "steps": [
+          { "id": "s1", "expected_tier": "Computed" }
+        ],
+        "planted_step": null
+      },
+      "notes": "Harness self-test case, not part of the evaluation set. Closed form checked by hand: the square of the integral is pi in polar coordinates. Its scripted model responses are in scripts/Q-selftest-gaussian.json."
+    },
+    {
+      "id": "Q-selftest-planted",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "check_derivation",
+        "statement": "Differentiate x^2 * exp(x) with respect to x.",
+        "steps": [
+          "By the product rule the derivative is 2*x*exp(x) + x^2*exp(x).",
+          "Factoring out exp(x) gives (x^2 + 2)*exp(x)."
+        ]
+      },
+      "answer_key": {
+        "final_answer": "(x^2 + 2*x)*exp(x)",
+        "steps": [
+          { "id": "s1", "expected_tier": "Computed" },
+          { "id": "s2", "expected_tier": "Failed" }
+        ],
+        "planted_step": "s2"
+      },
+      "notes": "Harness self-test case, not part of the evaluation set. Step s2 carries the planted error: the factor should be (x^2 + 2*x). No Solve code exists yet, so nothing runs this case; it only exercises the format."
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+% Harness self-test fixture, written for this repository. Not a real paper
+% and not part of the evaluation set. It has no theorem environments.
+\documentclass{article}
+\begin{document}
+
+\section{Setup}
+\label{sec:setup}
+A point mass $m$ on a spring of stiffness $k$ has the Lagrangian
+\begin{equation}
+\label{eq:lagrangian}
+L = \frac{1}{2} m \dot{x}^2 - \frac{1}{2} k x^2 .
+\end{equation}
+
+\section{Equation of motion}
+\label{sec:motion}
+The Euler--Lagrange equation of (\ref{eq:lagrangian}) is
+\begin{equation}
+\label{eq:motion}
+m \ddot{x} = - k x ,
+\end{equation}
+with the general solution
+\begin{equation}
+\label{eq:solution}
+x(t) = A \cos(\omega t + \varphi), \qquad \omega = \sqrt{k/m} .
+\end{equation}
+
+\section{Energy}
+\label{sec:energy}
+On the solution (\ref{eq:solution}) the energy
+$E = \frac{1}{2} m \dot{x}^2 + \frac{1}{2} k x^2$ is constant,
+\begin{equation}
+\label{eq:energy}
+E = \frac{1}{2} k A^2 ,
+\end{equation}
+because $m \omega^2 = k$.
+
+\end{document}

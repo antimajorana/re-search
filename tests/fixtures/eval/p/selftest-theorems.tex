@@ -1,0 +1,45 @@
+% Harness self-test fixture, written for this repository. Not a real paper
+% and not part of the evaluation set.
+\documentclass{article}
+\usepackage{amsthm}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\begin{document}
+
+\section{Introduction}
+\label{sec:intro}
+This note records two elementary facts about even integers. It exists so
+that the evaluation harness has a small paper with theorem environments.
+
+\section{Even integers}
+\label{sec:even}
+
+\begin{definition}
+\label{def:even}
+An integer $n$ is \emph{even} if $n = 2k$ for some integer $k$.
+\end{definition}
+
+\begin{lemma}
+\label{lem:sum}
+If $a$ and $b$ are even in the sense of Definition~\ref{def:even}, then
+$a + b$ is even.
+\end{lemma}
+\begin{proof}
+By Definition~\ref{def:even} write $a = 2j$ and $b = 2k$. Then
+$a + b = 2(j + k)$.
+\end{proof}
+
+\begin{theorem}
+\label{thm:finite-sum}
+Let $m \geq 1$ and let $a_1, \dots, a_m$ be even in the sense of
+Definition~\ref{def:even}. Then $a_1 + \dots + a_m$ is even.
+\end{theorem}
+\begin{proof}
+Induction on $m$. For $m = 1$ there is nothing to show. If the claim holds
+for $m$, then $a_1 + \dots + a_m$ is even, and adding $a_{m+1}$ gives an
+even integer by Lemma~\ref{lem:sum}.
+\end{proof}
+
+\end{document}

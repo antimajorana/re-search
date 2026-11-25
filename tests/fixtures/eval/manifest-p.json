@@ -1,0 +1,38 @@
+{
+  "format_version": 1,
+  "set": "P",
+  "tier": "fixed",
+  "cases": [
+    {
+      "id": "P-selftest-theorems",
+      "mode": "investigate",
+      "input": { "kind": "fixture", "files": ["p/selftest-theorems.tex"] },
+      "answer_key": {
+        "statements": [
+          { "label": "def:even", "kind": "definition" },
+          { "label": "lem:sum", "kind": "lemma" },
+          { "label": "thm:finite-sum", "kind": "theorem" }
+        ],
+        "sections": ["Introduction", "Even integers"],
+        "uses_edges": [
+          { "from": "lem:sum", "to": "def:even", "role": "statement", "right": true },
+          { "from": "lem:sum", "to": "def:even", "role": "proof", "right": true },
+          { "from": "thm:finite-sum", "to": "def:even", "role": "statement", "right": true },
+          { "from": "thm:finite-sum", "to": "lem:sum", "role": "proof", "right": true }
+        ]
+      },
+      "notes": "Harness self-test case, not part of the evaluation set. The TeX and this key were written by the builder of the harness; a real key is written by a reviewer who is not the builder."
+    },
+    {
+      "id": "P-selftest-oscillator",
+      "mode": "investigate",
+      "input": { "kind": "fixture", "files": ["p/selftest-oscillator.tex"] },
+      "answer_key": {
+        "statements": [],
+        "sections": ["Setup", "Equation of motion", "Energy"],
+        "uses_edges": []
+      },
+      "notes": "Harness self-test case, not part of the evaluation set. A self-written physics-style note with no theorem environments."
+    }
+  ]
+}
