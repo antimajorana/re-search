@@ -7,18 +7,98 @@ function element(tag, className, text) {
   if (text) el.textContent = text;
   return el;
 }
-
 function math(tag, text, className) {
-  const el = element(tag, className);
-  renderMathTextInto(el, String(text || ''));
-  return el;
+  const el = element(tag, className); renderMathTextInto(el, String(text || '')); return el;
+}
+function button(text, handler, cls = 'pill-btn sm') {
+  const el = element('button', cls, text); el.type = 'button'; el.addEventListener('click', handler); return el;
 }
 
-function button(text, handler, cls = 'pill-btn sm') {
-  const el = element('button', cls, text);
-  el.type = 'button';
-  el.addEventListener('click', handler);
-  return el;
+function foldWithIndexMap(raw) {
+  let folded = '', pendingWs = -1;
+  const map = [];
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (/\s/.test(ch)) { if (folded.length && pendingWs === -1) pendingWs = i; continue; }
+    if (pendingWs !== -1) { folded += ' '; map.push(pendingWs); pendingWs = -1; }
+    folded += ch; map.push(i);
+  }
+  return { folded, map };
+}
+
+function isEscaped(text, pos) {
+  let bs = 0; for (let i = pos - 1; i >= 0 && text[i] === '\\'; i--) bs++; return bs % 2 === 1;
+}
+
+const MATH_ENVS = new Set((
+  'equation equation* align align* aligned gather gather* gathered multline multline* eqnarray eqnarray* ' +
+  'alignat alignat* flalign flalign* split cases dcases rcases matrix pmatrix bmatrix Bmatrix vmatrix Vmatrix ' +
+  'smallmatrix array subequations CD'
+).split(' '));
+
+function mathSpans(text) {
+  const spans = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '$' && !isEscaped(text, i)) {
+      if (text[i + 1] === '$') {
+        for (let j = i + 2; j < text.length; ) {
+          const c = text.indexOf('$$', j);
+          if (c === -1) break;
+          if (!isEscaped(text, c)) { spans.push([i, c + 2]); i = c + 1; break; }
+          j = c + 2;
+        }
+      } else if (text[i + 1] && !/\s/.test(text[i + 1])) {
+        for (let j = i + 1; j < text.length && !(text[j] === '\n' && text[j + 1] === '\n'); j++) {
+          if (text[j] !== '$' || isEscaped(text, j)) continue;
+          const b = text.slice(i + 1, j);
+          if (text[j + 1] === '$' || /\s/.test(text[j - 1]) || /[0-9]/.test(text[j + 1] || '') || (/^\d/.test(b) && /[ \t][A-Za-z]{2,}\b/.test(b.replace(/\\[A-Za-z]+(?:\{[^{}]*\})?/g, ' ')))) break;
+          spans.push([i, j + 1]); i = j; break;
+        }
+      }
+    } else if (text[i] === '\\' && !isEscaped(text, i)) {
+      if (text[i + 1] === '(' || text[i + 1] === '[') {
+        const c = text.indexOf(text[i + 1] === '(' ? '\\)' : '\\]', i + 2);
+        if (c !== -1) { spans.push([i, c + 2]); i = c + 1; }
+      } else if (text.startsWith('\\begin{', i)) {
+        const bEnd = text.indexOf('}', i + 7), env = bEnd !== -1 ? text.slice(i + 7, bEnd) : '';
+        if (MATH_ENVS.has(env)) {
+          const openTag = `\\begin{${env}}`, closeTag = `\\end{${env}}`;
+          let depth = 1, p = bEnd + 1;
+          while (p < text.length && depth > 0) {
+            const o = text.indexOf(openTag, p), c = text.indexOf(closeTag, p);
+            if (c === -1 || /\n[ \t]{0,3}#{1,6}(?:[ \t]|$)/m.test(text.slice(p, o !== -1 && o < c ? o : c))) { depth = -1; break; }
+            if (o !== -1 && o < c) { depth++; p = o + openTag.length; }
+            else { depth--; p = c + closeTag.length; }
+          }
+          if (depth === 0) { spans.push([i, p]); i = p - 1; }
+        }
+      }
+    }
+  }
+  return spans;
+}
+
+export function foldSearchSpan(excerpt, quote) {
+  const raw = String(excerpt || ''), { folded: needle } = foldWithIndexMap(String(quote || ''));
+  if (!needle) return null;
+  const { folded, map } = foldWithIndexMap(raw), pos = folded.indexOf(needle);
+  if (pos === -1) return null;
+  let start = map[pos], end = map[pos + needle.length - 1] + 1;
+  for (const [mStart, mEnd] of mathSpans(raw)) {
+    if (start > mStart && start < mEnd) start = mStart;
+    if (end > mStart && end < mEnd) end = mEnd;
+  }
+  return [start, end];
+}
+
+export function renderAnchorExcerptInto(el, excerpt, quote) {
+  const raw = String(excerpt || ''), span = quote ? foldSearchSpan(raw, quote) : null;
+  el.replaceChildren();
+  if (!span) { renderMathTextInto(el, raw); return; }
+  const [pre, mid, post] = [raw.slice(0, span[0]), raw.slice(span[0], span[1]), raw.slice(span[1])];
+  if (pre) el.append(math('span', pre));
+  el.append(math('mark', mid));
+  if (post) el.append(math('span', post));
 }
 
 export function visibleMapNodes(nodes, full, query) {
@@ -46,13 +126,9 @@ const readingQuestion = inv => [DEFAULT_PAPER_REQUEST, 'Map the main results and
 
 export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act }) {
   let inv = {}, busy = false, full = false, query = '', selected = '', signature = '', generation = 0;
-  const forms = new Map();
-  const savedFocus = new Map();
-  const expanded = new Set();
+  const forms = new Map(), savedFocus = new Map(), expanded = new Set();
   let layout = 'graph', highlight = true, disconnectGraph = () => {};
-  let indexScroll = 0, actionPending = false, notice = '', formType = '', resultId = '';
-  let runEvents = [];
-  let summarySignature = '';
+  let indexScroll = 0, actionPending = false, notice = '', formType = '', resultId = '', runEvents = [], summarySignature = '';
   const panel = document.getElementById('investigation-panel');
 
   function reset(sessionChanged = true) {
@@ -112,25 +188,27 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
     return link;
   }
 
-  function sources(parent, anchors) {
+  function sources(parent, anchors, { openFirst = false } = {}) {
+    let first = true;
     for (const anchor of anchors || []) {
       const box = element('details', 'investigation-anchor');
+      if (openFirst && first) box.open = true; first = false;
       box.dataset.anchor = JSON.stringify([anchor.source_id,anchor.path,anchor.start_line,anchor.end_line]);
-      const location = anchor.start_line === anchor.end_line ? 'line ' + anchor.start_line :
-        'lines ' + anchor.start_line + '–' + anchor.end_line;
+      const location = anchor.start_line === anchor.end_line ? 'line ' + anchor.start_line : 'lines ' + anchor.start_line + '–' + anchor.end_line;
       const title = element('summary', '', [anchor.label || nameOf(anchor.kind), location].join(' · '));
-      const quote = math('blockquote', anchor.excerpt);
+      const quote = element('blockquote'); renderAnchorExcerptInto(quote, anchor.excerpt, anchor.quote);
       const open = button('Open cited lines', () => openSource(anchor));
-      box.append(title, quote, element('small', '', anchor.path), open);
-      const original = openPdf?.(anchor, true);
-      if (original) box.append(button('Open original PDF page', () => openPdf(anchor, false)));
+      box.append(title, quote, element('small', '', anchor.path));
+      if (Array.isArray(anchor.cited_range) && anchor.cited_range.length === 2) {
+        const [a, b] = anchor.cited_range;
+        if (a !== anchor.start_line || b !== anchor.end_line) box.append(element('small', 'investigation-anchor-note', 'lines corrected by the app (cited ' + (a === b ? a : a + '–' + b) + ')'));
+      }
+      if (anchor.excerpt_basis === 'evidence') box.append(element('small', 'investigation-anchor-basis', 'located by reader'));
+      box.append(open);
+      if (openPdf?.(anchor, true)) box.append(button('Open original PDF page', () => openPdf(anchor, false)));
       if (anchor.kind === 'reference') {
         for (const link of citedPaperLinks?.(anchor.excerpt) || []) {
-          const external = element('a', 'pill-btn sm', link.label);
-          external.href = link.url;
-          external.target = '_blank';
-          external.rel = 'noopener noreferrer';
-          box.append(external);
+          box.append(Object.assign(element('a', 'pill-btn sm', link.label), { href: link.url, target: '_blank', rel: 'noopener noreferrer' }));
         }
       }
       parent.append(box);
@@ -144,28 +222,19 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
     summarySignature = signature;
     const before = host.getBoundingClientRect().top;
     const preserve = !panel.hidden && panel.scrollTop > 0 && before <= panel.getBoundingClientRect().top;
-    box.hidden = !(summary || running || hasPaper);
-    box.replaceChildren();
+    box.hidden = !(summary || running || hasPaper); box.replaceChildren();
     if (box.hidden) return;
-    const heading = element('h2', '', 'What, Why, and How');
-    heading.id = 'investigation-summary-title';
-    box.append(heading);
+    const heading = element('h2', '', 'What, Why, and How'); heading.id = 'investigation-summary-title'; box.append(heading);
     if (summary && current === false) box.append(element('p', 'investigation-meta', 'Saved overview from an earlier reading of this paper.'));
     if (!summary) {
       box.append(element('p', 'investigation-meta', running ? 'Reading the paper for a source-backed overview…' :
         'A source-backed overview is unavailable for this paper.'));
     } else {
       for (const [key, title] of [['what','What'], ['why','Why'], ['how','How']]) {
-        const part = summary[key];
-        const row = element('section', 'investigation-summary-part');
+        const part = summary[key], row = element('section', 'investigation-summary-part'), body = element('div');
         row.append(element('h3', '', title));
-        const body = element('div');
-        if (part?.text && part.anchors?.length) {
-          body.append(math('p', part.text));
-          sources(body, part.anchors);
-        } else {
-          body.append(element('p', 'investigation-meta', part?.unstated ? 'The reviewed passages do not state this explicitly.' : 'No source-backed statement is available.'));
-        }
+        if (part?.text && part.anchors?.length) { body.append(math('p', part.text)); sources(body, part.anchors); }
+        else body.append(element('p', 'investigation-meta', part?.unstated ? 'The reviewed passages do not state this explicitly.' : 'No source-backed statement is available.'));
         row.append(body); box.append(row);
       }
     }
@@ -380,7 +449,7 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
     const heading = math('h2', node.sentence, 'investigation-claim-title');
     heading.tabIndex = -1;
     main.append(element('span', 'investigation-kind', nameOf(node.kind)), heading);
-    sources(main, node.anchors);
+    sources(main, node.anchors, { openFirst: true });
     for (const change of corrections.filter(c => c.node_id === node.id)) {
       const note = element('aside', 'investigation-correction');
       const upstream = change.edge_from && inv.map.nodes.find(n => n.id === change.edge_from);

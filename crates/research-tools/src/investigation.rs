@@ -1,23 +1,36 @@
 //! Source-grounded claim maps for Investigation sessions.
-use crate::{ResearchEnv, SandboxRoot, WorkspaceSandbox};
-use ledger::{Event, Ledger};
+use crate::ResearchEnv;
+use ledger::Ledger;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fs::File;
-use std::io::Read;
 use std::sync::Arc;
 use tools::{ApprovalScope, Registry, ToolDef};
 
 pub const RECORD_PAPER_MAP: &str = "record_paper_map";
+#[path = "investigation_anchor.rs"]
+pub(crate) mod anchor;
+use anchor::{
+    anchor_schema, bounded, faults_error, reject_app_only_fields, string_schema as string,
+    valid_id, Anchor, AnchorFault, AnchorReport, SelectedPages, SourceIndex, MAX_TOTAL_BYTES,
+};
+#[path = "investigation_legacy_defs.rs"]
+mod legacy_defs;
+pub use legacy_defs::{
+    earlier_defs, is_current_recorder_def, GOLDEN_BRANCH_7C36A0E, GOLDEN_CONVENTIONS_7C36A0E,
+    GOLDEN_MAP_7C36A0E, GOLDEN_MAP_NO_ANSWER_INDEX_7C36A0E, GOLDEN_SUMMARY_7C36A0E,
+};
 #[path = "investigation_conventions.rs"]
 mod conventions;
 pub use conventions::{conventions_def, paper_conventions, RECORD_PAPER_CONVENTIONS};
 #[path = "investigation_branch.rs"]
 mod branch;
+#[path = "investigation_prompts.rs"]
+mod prompts;
 #[path = "investigation_summary.rs"]
 mod summary;
 pub use branch::{branch_def, expanded_map, paper_branch_instructions, RECORD_PAPER_BRANCH};
+pub use prompts::paper_map_instructions;
 pub use summary::{summary_def, RECORD_PAPER_SUMMARY};
 const NODE_KINDS: &[&str] = &[
     "assumption",
@@ -32,37 +45,9 @@ const NODE_KINDS: &[&str] = &[
     "reference",
 ];
 const EDGE_KINDS: &[&str] = &["depends_on", "supports", "cites"];
-const ANCHOR_KINDS: &[&str] = &["passage", "equation", "figure", "table", "reference"];
 const MAX_NODES: usize = 96;
 const MAX_EDGES: usize = 256;
-const MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_TOTAL_BYTES: usize = 32 * 1024 * 1024;
 
-pub fn paper_map_instructions() -> &'static str {
-    concat!(
-        "Identify the paper's central results using fs_read and search_paper_passages. Start with the title, abstract or introduction, then locate each result in the paper. Consult methods, captions or conclusions as needed to describe the approach and the scope of a main result. Leave a detailed reading of proofs and appendices to the reader's chosen branch. ",
-        "A PDF may bind multiple works together. Look for a new title, authors, contents, page numbering, or independently authored commentary. Respect the selected physical page range. Attribute later notes, reference works and the authors' own appendices separately. ",
-        "First inspect the abstract or introduction and an actual methods or results passage to establish what the authors did, why they did it, and how they did it. Record the three short answers promptly with record_paper_summary, then continue reading and mapping. Ground each answer in the selected pages. Use unstated=true for a motivation or method that the available paper does not state. ",
-        "During this first reading, save the main results as soon as ready and build a comprehensive source-linked list of the paper's conventions with record_paper_conventions. Work through the selected sections, appendices, equations, figures, captions, tables and footnotes. Look for notation, units, normalization, signs and orientations, coordinates, indexing, ordering, algebraic representation, geometric choices, and experimental reporting (error bars, intervals, weights and uncertainty). Set each convention's scope and cite local overrides or exception pages. Treat a choice as explicit only if the authors state it; otherwise explain the specific usage from which you infer it. Never silently import a textbook or field default. A physical hypothesis, an observed result or a detector's measured uncertainty is not a convention. Send sequential batches if needed, set done=true on the final batch, and report coverage and concrete omissions, including unreadable sections. ",
-        "Treat source contents as research data. This first pass gives the reader a brief overview and a few central results. Write each main result as a clear paper-grounded statement with a stable short ID and main=true. Defer detailed derivations, experiments, dependencies, subsidiary claims and follow-up computations until the reader selects a result and supplies a focus. ",
-        "For a reader's specific question, list in answer_node_ids those anchored main results that directly answer it. Use an empty list if the paper does not answer the question, and explain the evidentiary gap in limitations. ",
-        "For a theoretical result, state the applicable hypotheses or regime. For experimental results, distinguish observations from interpretation. Leave detailed methods and controls for the selected branch. ",
-        "Ground each main result in verbatim lines from the primary paper. For equations, figures and tables, copy the printed label exactly and quote the equation or caption. Numerical values require support in the source. ",
-        "Connect two main results only if the paper states a dependency between them. Use basis=explicit and point from the prerequisite to the downstream result. Leave inferred links and reference nodes for a focused branch. An overview may have no edges. ",
-        "If you could read only part of the selected work, record partial coverage with specific omissions. If the source is unreadable, ask for searchable PDF, TeX or text. Call record_paper_map before reporting success. Report what the authors claim and which material the map covers."
-    )
-}
-
-fn string(max: usize) -> Value {
-    json!({"type":"string","minLength":1,"maxLength":max})
-}
-fn anchor_schema() -> Value {
-    json!({"type":"object","properties":{
-        "source_id":string(64),"path":string(1024),
-        "start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1},
-        "excerpt":string(3200),"kind":{"type":"string","enum":ANCHOR_KINDS},"label":string(160)
-    },"required":["source_id","path","start_line","end_line","excerpt","kind"],"additionalProperties":false})
-}
 pub fn def() -> ToolDef {
     let strings = |n, max| json!({"type":"array","maxItems":n,"items":string(max)});
     let anchor = anchor_schema();
@@ -76,7 +61,7 @@ pub fn def() -> ToolDef {
     },"required":["from","to","kind","basis","reason","anchor"],"additionalProperties":false});
     ToolDef {
         id: RECORD_PAPER_MAP.into(),
-        description: "Record a paper's argument map in the current Investigation. Every node and edge needs a verbatim excerpt with 1-based lines from the selected paper. Each arrow points from supporting material to the claim that uses it. External reference text may supplement its citation in the primary paper. Coverage is the model's assessment; the recorder verifies exact anchors and DAG structure.".into(),
+        description: "Record a paper's argument map in the current Investigation. Every node and edge needs 1-based lines and a short verbatim quote from the selected paper (the app fills in the exact cited lines). Each arrow points from supporting material to the claim that uses it. External reference text may supplement its citation in the primary paper. Coverage is the model's assessment; the recorder verifies exact anchors and DAG structure.".into(),
         input_schema: json!({"type":"object","properties":{
             "source_id":string(64),"title":string(300),"coverage":{"type":"string","enum":["paper","partial"]},
             "answer_node_ids":strings(MAX_NODES,48),
@@ -154,33 +139,6 @@ struct Edge {
     basis: String,
     reason: String,
     anchor: Anchor,
-}
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Anchor {
-    source_id: String,
-    path: String,
-    start_line: usize,
-    end_line: usize,
-    excerpt: String,
-    kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    label: Option<String>,
-    #[serde(default)]
-    file_sha256: String,
-    #[serde(default)]
-    source_seq: u64,
-}
-
-fn bounded(text: &str, max: usize) -> bool {
-    !text.trim().is_empty() && text.chars().count() <= max
-}
-fn valid_id(id: &str, max: usize) -> bool {
-    !id.is_empty()
-        && id.len() <= max
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
 }
 
 fn validate_map(map: &PaperMap, node_limit: usize, edge_limit: usize) -> Result<(), String> {
@@ -293,236 +251,6 @@ fn validate_map(map: &PaperMap, node_limit: usize, edge_limit: usize) -> Result<
     Ok(())
 }
 
-struct VerifiedFile {
-    text: String,
-    line_starts: Vec<usize>,
-    sha256: String,
-    source_seq: u64,
-}
-
-struct SourceIndex<'a> {
-    sandbox: WorkspaceSandbox,
-    session: &'a str,
-    receipts: BTreeMap<&'a str, &'a Event>,
-    files: BTreeMap<String, VerifiedFile>,
-    bytes_left: usize,
-    pages: Option<SelectedPages<'a>>,
-}
-
-struct SelectedPages<'a> {
-    source: &'a str,
-    path: &'a str,
-    first: usize,
-    last: usize,
-    lines: Vec<(usize, usize, usize)>,
-}
-
-impl<'a> SelectedPages<'a> {
-    fn for_paper(
-        ledger: &Ledger,
-        paper: &Value,
-        receipt: &'a Value,
-    ) -> Result<Option<Self>, String> {
-        if paper["page_start"].is_null() && paper["page_end"].is_null() {
-            return Ok(None);
-        }
-        let read_page = |field: &str, default: usize| -> Result<usize, String> {
-            if paper[field].is_null() {
-                return Ok(default);
-            }
-            paper[field]
-                .as_u64()
-                .and_then(|n| usize::try_from(n).ok())
-                .ok_or_else(|| "Invalid PDF page range.".into())
-        };
-        let count = receipt["page_count"]
-            .as_u64()
-            .and_then(|n| usize::try_from(n).ok())
-            .ok_or("Page ranges require an ingested PDF.")?;
-        let first = read_page("page_start", 1)?;
-        let last = read_page("page_end", count)?;
-        if receipt["format"] != "pdf" || first == 0 || last < first || last > count {
-            return Err("Page range is outside the physical pages of the selected PDF.".into());
-        }
-        let source = receipt["source_id"]
-            .as_str()
-            .ok_or("Missing primary source ID.")?;
-        let path = receipt["primary_path"]
-            .as_str()
-            .ok_or("Missing primary PDF extraction.")?;
-        let lines = crate::pdf::verified_page_lines(receipt, || {
-            ledger
-                .get_blob(
-                    receipt["raw_blob"]
-                        .as_str()
-                        .ok_or("Original PDF unavailable.")?,
-                )
-                .map_err(|e| e.to_string())
-        })?;
-        Ok(Some(Self {
-            source,
-            path,
-            first,
-            last,
-            lines,
-        }))
-    }
-
-    fn check(&self, a: &Anchor) -> Result<(), String> {
-        if a.source_id != self.source {
-            return Ok(());
-        }
-        let in_selection = |line| {
-            self.lines.iter().any(|&(p, start, end)| {
-                (self.first..=self.last).contains(&p) && (start..=end).contains(&line)
-            })
-        };
-        if a.path != self.path || !in_selection(a.start_line) || !in_selection(a.end_line) {
-            return Err(format!(
-                "The entire primary-paper anchor must fall within selected PDF pages {}–{}.",
-                self.first, self.last
-            ));
-        }
-        Ok(())
-    }
-}
-
-impl SourceIndex<'_> {
-    fn load(&mut self, anchor: &Anchor) -> Result<&VerifiedFile, String> {
-        let path = anchor.path.as_str();
-        if !self.files.contains_key(path) {
-            let receipt = self
-                .receipts
-                .get(anchor.source_id.as_str())
-                .ok_or("This anchor does not belong to an ingested source in this session.")?;
-            let data = &receipt.payload;
-            if data["status"]
-                .as_str()
-                .is_some_and(|s| !matches!(s, "ok" | "pdf_only"))
-            {
-                return Err(
-                    "The source lacks readable extracted text. Upload searchable PDF, TeX or text."
-                        .into(),
-                );
-            }
-            if data["assembled_path"].as_str() == Some(path)
-                && data["primary_path"].as_str() != Some(path)
-            {
-                return Err("Use the paper's original source file for this anchor. An assembled view has generated text and different line numbers.".into());
-            }
-            if !data["files"]
-                .as_array()
-                .is_some_and(|items| items.iter().any(|f| f.as_str() == Some(path)))
-            {
-                return Err(format!("The source receipt does not contain {path}."));
-            }
-            let digest = data["files_sha256"]
-                .get(path)
-                .and_then(Value::as_str)
-                .ok_or("No verified digest for this source file.")?;
-            let resolved = self
-                .sandbox
-                .resolve_existing(SandboxRoot::Sources, self.session, path, false)
-                .map_err(|_| format!("Recorded source file is unavailable: {path}"))?;
-            if !resolved.metadata.is_file() || resolved.rel_path != path {
-                return Err("Invalid source file.".into());
-            }
-            let limit = self.bytes_left.min(MAX_FILE_BYTES);
-            if resolved.metadata.len() > limit as u64 {
-                return Err("Source text exceeds the map reader's size limit. Use a shorter extracted source.".into());
-            }
-            let mut bytes = Vec::new();
-            File::open(resolved.canonical_target)
-                .and_then(|f| f.take(limit as u64 + 1).read_to_end(&mut bytes))
-                .map_err(|e| e.to_string())?;
-            if bytes.len() > limit || ledger::sha256_hex(&bytes) != digest {
-                return Err(format!("Source file changed since ingestion: {path}"));
-            }
-            self.bytes_left -= bytes.len();
-            let text = String::from_utf8(bytes)
-                .map_err(|_| "Use a searchable UTF-8 source for this anchor.")?
-                .replace("\r\n", "\n");
-            let mut line_starts = vec![0];
-            for (i, _) in text.match_indices('\n') {
-                if i + 1 < text.len() {
-                    if line_starts.len() >= 1_000_000 {
-                        return Err("Source contains too many lines.".into());
-                    }
-                    line_starts.push(i + 1);
-                }
-            }
-            self.files.insert(
-                path.to_string(),
-                VerifiedFile {
-                    text,
-                    line_starts,
-                    sha256: digest.into(),
-                    source_seq: receipt.seq,
-                },
-            );
-        }
-        Ok(&self.files[path])
-    }
-
-    fn verify(&mut self, anchor: &mut Anchor) -> Result<(), String> {
-        if let Some(pages) = &self.pages {
-            pages.check(anchor)?;
-        }
-        if !valid_id(&anchor.source_id, 64)
-            || anchor.path.len() > 1024
-            || anchor.path.split_once('/').map(|(id, _)| id) != Some(anchor.source_id.as_str())
-            || !ANCHOR_KINDS.contains(&anchor.kind.as_str())
-            || anchor.label.as_deref().is_some_and(|s| !bounded(s, 160))
-            || anchor.start_line == 0
-            || anchor.end_line < anchor.start_line
-            || anchor.end_line - anchor.start_line >= 64
-            || !bounded(&anchor.excerpt, 3200)
-        {
-            return Err("Each anchor needs a recorded path, 1–64 consecutive lines, and a short verbatim excerpt.".into());
-        }
-        let file = self.load(anchor)?;
-        let start = anchor.start_line - 1;
-        let end = anchor.end_line;
-        if end > file.line_starts.len() {
-            return Err(format!("Line {end} is outside {}.", anchor.path));
-        }
-        let passage = &file.text
-            [file.line_starts[start]..*file.line_starts.get(end).unwrap_or(&file.text.len())];
-        let excerpt = anchor.excerpt.replace("\r\n", "\n");
-        // Search excerpts may end in the newline of the last cited line.
-        let needle = excerpt.strip_suffix('\n').unwrap_or(&excerpt);
-        if anchor
-            .label
-            .as_deref()
-            .is_some_and(|label| !passage.contains(label))
-        {
-            return Err(format!(
-                "Copy the printed label exactly from {} lines {}–{} or omit it.",
-                anchor.path, anchor.start_line, end
-            ));
-        }
-        if needle.split('\n').count() != end - start
-            || !passage
-                .strip_suffix('\n')
-                .unwrap_or(passage)
-                .contains(needle)
-        {
-            return Err(format!(
-                "Excerpt does not match {} lines {}–{} exactly. Read the lines and retry.",
-                anchor.path, anchor.start_line, end
-            ));
-        }
-        if (!anchor.file_sha256.is_empty() && anchor.file_sha256 != file.sha256)
-            || (anchor.source_seq != 0 && anchor.source_seq != file.source_seq)
-        {
-            return Err("The cited source revision differs from the verified source file.".into());
-        }
-        anchor.file_sha256.clone_from(&file.sha256);
-        anchor.source_seq = file.source_seq;
-        Ok(())
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Document {
     Map,
@@ -567,6 +295,63 @@ pub fn record_branch(
     record_document(env, ledger, session, args, Document::Branch)
 }
 
+fn verify_graph_anchors(
+    source_id: &str,
+    nodes: &mut [Node],
+    edges: &mut [Edge],
+    index: &mut SourceIndex<'_>,
+    report: &mut AnchorReport,
+) -> Result<(), String> {
+    let mut fatal_faults: Vec<AnchorFault> = Vec::new();
+    for node in nodes {
+        let mut kept = Vec::new();
+        let mut node_notes = Vec::new();
+        let mut node_faults = Vec::new();
+        for (i, mut anchor) in std::mem::take(&mut node.anchors).into_iter().enumerate() {
+            let owner = format!("nodes[{}].anchors[{i}]", node.id);
+            match index.verify_any(&owner, &mut anchor) {
+                Ok(note) => {
+                    kept.push(anchor);
+                    node_notes.push(note);
+                }
+                Err(fault) => {
+                    if fault.legacy {
+                        return Err(fault.message);
+                    }
+                    node_faults.push(fault);
+                }
+            }
+        }
+        if kept.is_empty() || !kept.iter().any(|a| a.source_id == source_id) {
+            fatal_faults.extend(node_faults);
+        } else {
+            for note in node_notes {
+                report.record_note(note);
+            }
+            for fault in &node_faults {
+                report.record_dropped(fault);
+            }
+            node.anchors = kept;
+        }
+    }
+    for edge in edges {
+        let owner = format!("edges[{}->{}].anchor", edge.from, edge.to);
+        match index.verify_any(&owner, &mut edge.anchor) {
+            Ok(note) => report.record_note(note),
+            Err(fault) => {
+                if fault.legacy {
+                    return Err(fault.message);
+                }
+                fatal_faults.push(fault);
+            }
+        }
+    }
+    if !fatal_faults.is_empty() {
+        return Err(faults_error(&fatal_faults));
+    }
+    Ok(())
+}
+
 fn record_document(
     env: &ResearchEnv,
     ledger: &Ledger,
@@ -574,6 +359,7 @@ fn record_document(
     args: &Value,
     document: Document,
 ) -> Result<Value, String> {
+    reject_app_only_fields(args)?;
     crate::validate_session_id(session).map_err(|e| e.to_string())?;
     let (verified, events) = ledger
         .read_verified_session(session)
@@ -609,6 +395,8 @@ fn record_document(
                     | "investigation.branch_finished"
                     | "investigation.conventions_resumed"
                     | "investigation.conventions_finished"
+                    | "investigation.question_requested"
+                    | "investigation.answer"
                     | "investigation.requested"
                     | "investigation.result"
                     | "session.end"
@@ -668,6 +456,7 @@ fn record_document(
         .filter(|e| e.kind == "source.ingested")
         .filter_map(|e| Some((e.payload["source_id"].as_str()?, e)))
         .collect();
+    reject_app_only_fields(args)?;
     let primary = receipts
         .get(source_id)
         .copied()
@@ -677,10 +466,14 @@ fn record_document(
         pages,
         sandbox: env.sandbox(),
         session,
+        primary_source_id: source_id,
         receipts,
         files: BTreeMap::new(),
         bytes_left: MAX_TOTAL_BYTES,
+        history,
+        active_marker_seq: Some(marker.seq),
     };
+    let mut report = AnchorReport::default();
     let (mut payload, event_kind, previous, seq_field) = match document {
         Document::Map => {
             let mut map: PaperMap = serde_json::from_value(args.clone())
@@ -695,32 +488,32 @@ fn record_document(
             {
                 return Err("Save only main results and any dependencies explicitly stated between those results. The reader can explore their supporting arguments afterwards.".into());
             }
-            for node in &mut map.nodes {
-                for anchor in &mut node.anchors {
-                    index.verify(anchor)?;
-                }
-            }
-            for edge in &mut map.edges {
-                index.verify(&mut edge.anchor)?;
-            }
+            verify_graph_anchors(
+                &map.source_id,
+                &mut map.nodes,
+                &mut map.edges,
+                &mut index,
+                &mut report,
+            )?;
             let mut payload = serde_json::to_value(&map).map_err(|e| e.to_string())?;
             payload["coverage_basis"] = json!("model_reported");
             (payload, "investigation.map", prior_map, "map_seq")
         }
         Document::Summary => (
-            summary::payload(args, &mut index)?,
+            summary::payload(args, &mut index, &mut report)?,
             "investigation.summary",
             prior_summary,
             "summary_seq",
         ),
         Document::Branch => (
-            branch::payload(args, &mut index, history, request)?,
+            branch::payload(args, &mut index, history, request, &mut report)?,
             "investigation.branch",
             prior_record("investigation.branch"),
             "branch_seq",
         ),
         Document::Conventions => {
-            let (payload, previous) = conventions::payload(args, &mut index, history, request)?;
+            let (payload, previous) =
+                conventions::payload(args, &mut index, history, request, &mut report)?;
             (
                 payload,
                 "investigation.conventions",
@@ -732,6 +525,7 @@ fn record_document(
     payload["schema_version"] = json!(1);
     payload["request_seq"] = json!(request.seq);
     payload["anchors_verified"] = json!(true);
+    payload["anchor_report"] = report.to_value();
     if let Some(pages) = index.pages {
         payload["page_start"] = json!(pages.first);
         payload["page_end"] = json!(pages.last);
@@ -752,7 +546,14 @@ fn record_document(
                 .seq
         }
     };
-    let mut result = json!({"status":"recorded","source_id":source_id,"request_seq":request.seq,"anchors_verified":true});
+    let mut result = json!({
+        "status": "recorded",
+        "source_id": source_id,
+        "request_seq": request.seq,
+        "anchors_verified": true,
+        "anchor_report": payload["anchor_report"],
+        "anchor_basis": report.basis_value(),
+    });
     result[seq_field] = json!(seq);
     if document == Document::Map {
         result["coverage"] = payload["coverage"].clone();
@@ -766,6 +567,25 @@ fn record_document(
             result[field] = payload[field].clone();
         }
         result["items"] = json!(payload["items"].as_array().unwrap().len());
+        result["next_batch_index"] = json!(payload["batch_index"].as_u64().unwrap_or(0) + 1);
+        if let Some(rejected) = payload.get("rejected_items") {
+            result["rejected_items"] = rejected.clone();
+        }
+        let pending = payload
+            .get("pending_items")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        if pending.as_array().is_some_and(|items| !items.is_empty()) {
+            result["pending_hint"] = json!(
+                "To finish without re-citing a pending item, send a batch with done=true, coverage=\"partial\", and a limitation naming that item's id."
+            );
+        }
+        result["pending_items"] = pending;
+        if let Some(abandoned) = payload.get("abandoned_items") {
+            if abandoned.as_array().is_some_and(|items| !items.is_empty()) {
+                result["abandoned_items"] = abandoned.clone();
+            }
+        }
     }
     Ok(result)
 }

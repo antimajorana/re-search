@@ -221,7 +221,11 @@ result.
   ingestion enforce anti-bomb byte/file/page caps, reject archive symlinks, and
   record `"source.ingested"` `"raw_blob"` digests.
 - **Three new effect classes and how the policy treats them.** Stage 6 adds
-  `read-workspace` (`fs_list`, `fs_read`, `doc_ingest`, `tex_audit`),
+  `read-workspace` (`fs_list`, `fs_read`, `read_paper_lines`,
+  `search_paper_passages`, `search_formal_library`, `doc_ingest`, `tex_audit`,
+  `record_paper_summary`, `record_paper_map`, `record_paper_branch`,
+  `record_paper_conventions`, plus worker-only `note_evidence` registered
+  exclusively on the isolated `paper_reader` router),
   `write-workspace` (`fs_write`, `latex_patch`) and `network-read`
   (`arxiv_search`, `literature_search`). The research policy `v0.4-research`
   allows `read-workspace` and `observe-local` without asking, asks for
@@ -348,12 +352,15 @@ result.
     `user@`, a query string, a fragment or a backslash, is refused, and a
     stored value that fails the same check is not echoed.
   - KaTeX `0.19.1` is served offline from the binary; the UI loads nothing
-    from the network. Markdown/LaTeX rendering (`math.js`) strips NUL bytes,
-    passes all untrusted prose, TeX commands, and link URLs through
-    `escapeHtml` (allowing only `http(s)://` links), is tested against the
-    vendored KaTeX bundle by `tests/math_render.test.mjs` (`tests/ui_math.rs`),
-    and has been visually verified inside `re-search-app` on Windows 11
-    (WebView2 158; `cargo test` itself opens no WebView2 display window).
+    from the network. Markdown/LaTeX rendering (`math.js`, `math_katex.js`,
+    `math_scan.js`, `math_equations.js`, `markdown.js`, `tex_preview.js`, and
+    `code_highlight.js`) strips NUL bytes, passes all untrusted prose, TeX
+    commands, and link URLs through `escapeHtml` (allowing only `http(s)://`
+    links), is tested against the vendored KaTeX bundle by
+    `tests/math_render.test.mjs` and `tests/math_parity.test.mjs`
+    (`tests/ui_math.rs`), and has been visually verified inside `re-search-app`
+    on Windows 11 (WebView2 158; `cargo test` itself opens no WebView2 display
+    window).
 
 ## The desktop window (`re-search-app`, `crates/desktop-app`)
 

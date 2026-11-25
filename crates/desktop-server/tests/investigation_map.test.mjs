@@ -1,13 +1,18 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import test from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
+const require = createRequire(import.meta.url);
+const katex = require(fileURLToPath(new URL('../vendor/katex/katex.min.js', import.meta.url)));
+const mathUrl = pathToFileURL(fileURLToPath(new URL('../assets/math.js', import.meta.url))).href;
 const source = await readFile(new URL('../assets/investigation_map.js', import.meta.url), 'utf8');
 const graphSource = await readFile(new URL('../assets/investigation_graph.js', import.meta.url), 'utf8');
 const graphUrl = 'data:text/javascript;base64,' + Buffer.from(graphSource).toString('base64');
 const { mappedQuestionMatches, paperQuestionFocus, projectedPaperGraph, resultDependencies, savedFocusMap } = await import(graphUrl);
-const local = source.replace("import { renderMathTextInto } from '/assets/math.js';", '').replace('/assets/investigation_graph.js', graphUrl);
-const { visibleMapNodes, claimNeighbors } = await import('data:text/javascript;base64,' + Buffer.from(local).toString('base64'));
+const local = source.replace("'/assets/math.js'", JSON.stringify(mathUrl)).replace('/assets/investigation_graph.js', graphUrl);
+const { visibleMapNodes, claimNeighbors, foldSearchSpan, renderAnchorExcerptInto, createPaperMap } = await import('data:text/javascript;base64,' + Buffer.from(local).toString('base64'));
 const nodes = [
   { id: 'mass', kind: 'assumption', sentence: 'Assume a unit mass.', main: false },
   { id: 'force', kind: 'result', sentence: 'Force equals acceleration.', main: true },
@@ -102,4 +107,118 @@ test('focus membership follows edges between existing statements, including a la
   assert.deepEqual(pairs(4), ['control→result','unit→control']);
   assert.deepEqual(pairs(6), ['calibration→readout','readout→result']);
   assert.deepEqual(pairs(8), []);
+});
+
+function makeFakeDom() {
+  const mk = (tag = 'div') => {
+    let text = '', html = '', innerHtmlWrites = 0;
+    const node = {
+      tagName: tag.toUpperCase(), className: '', dataset: {}, children: [], type: '', hidden: false,
+      get innerHtmlWrites() { return innerHtmlWrites; },
+      get textContent() { return this.children.length ? this.children.map(c => c.textContent ?? '').join('') : text; },
+      set textContent(v) { this.children = []; text = String(v ?? ''); html = ''; },
+      get innerHTML() { return html || (this.children.length ? this.children.map(c => c.innerHTML || c.textContent || '').join('') : text); },
+      set innerHTML(v) { innerHtmlWrites++; this.children = []; html = String(v ?? ''); text = html.replace(/<[^>]+>/g, ''); },
+      append(...nodes) { this.children.push(...nodes); },
+      replaceChildren(...nodes) { this.children = [...nodes]; text = ''; html = ''; },
+      addEventListener() {},
+      setAttribute() {},
+      getBoundingClientRect() { return { top: 0 }; },
+      querySelectorAll(sel) {
+        const out = [];
+        const visit = n => {
+          for (const c of n.children || []) {
+            if (sel.startsWith('.') ? String(c.className || '').split(/\s+/).includes(sel.slice(1)) : c.tagName === sel.toUpperCase()) out.push(c);
+            visit(c);
+          }
+        };
+        visit(this);
+        return out;
+      },
+    };
+    return node;
+  };
+  const prevDoc = globalThis.document, prevWin = globalThis.window;
+  globalThis.window = { katex };
+  globalThis.document = {
+    createElement: mk,
+    getElementById: () => mk('div'),
+  };
+  return {
+    mk,
+    restore() { globalThis.document = prevDoc; globalThis.window = prevWin; },
+  };
+}
+
+test('quote_mark_uses_text_nodes', () => {
+  const dom = makeFakeDom();
+  try {
+    const quoteEl = dom.mk('blockquote');
+    renderAnchorExcerptInto(quoteEl, 'We assume\nstrictly positive mass in this model.', 'strictly positive mass');
+    assert.equal(quoteEl.innerHtmlWrites, 0);
+    const marks = quoteEl.querySelectorAll('mark');
+    assert.equal(marks.length, 1);
+    assert.equal(marks[0].innerHtmlWrites, 0);
+    assert.equal(marks[0].textContent, 'strictly positive mass');
+    assert.equal(quoteEl.textContent, 'We assume\nstrictly positive mass in this model.');
+  } finally {
+    dom.restore();
+  }
+});
+
+test('quote_with_html_chars_escaped', () => {
+  const dom = makeFakeDom();
+  try {
+    const payload = '<img src=x onerror=alert(1)> & <b>bold</b>';
+    const quoteEl = dom.mk('blockquote');
+    renderAnchorExcerptInto(quoteEl, 'Before ' + payload + ' after.', payload);
+    const marks = quoteEl.querySelectorAll('mark');
+    assert.equal(marks.length, 1);
+    assert.equal(marks[0].innerHtmlWrites, 0);
+    assert.equal(marks[0].textContent, payload);
+    // Also verify when math is present alongside HTML chars inside the marked segment.
+    const mathPayload = 'For $x < y$ and <script>alert(1)</script> end';
+    renderAnchorExcerptInto(quoteEl, mathPayload, '$x < y$ and <script>alert(1)</script>');
+    const mark2 = quoteEl.querySelectorAll('mark')[0];
+    assert.ok(!mark2.innerHTML.includes('<script>'), 'script tag must be escaped: ' + mark2.innerHTML);
+    assert.ok(mark2.innerHTML.includes('&lt;script&gt;'), 'expected escaped script tag: ' + mark2.innerHTML);
+  } finally {
+    dom.restore();
+  }
+});
+
+test('mark_widened_to_math_span', () => {
+  const dom = makeFakeDom();
+  try {
+    const excerpt = 'We define $E = mc^2$ in natural units.';
+    const span = foldSearchSpan(excerpt, 'define $E = mc');
+    assert.equal(excerpt.slice(span[0], span[1]), 'define $E = mc^2$');
+    const quoteEl = dom.mk('blockquote');
+    renderAnchorExcerptInto(quoteEl, excerpt, 'define $E = mc');
+    const mark = quoteEl.querySelectorAll('mark')[0];
+    assert.ok(mark.innerHTML.includes('katex'), 'widened math span should render via KaTeX: ' + mark.innerHTML);
+    assert.equal(quoteEl.children[0].textContent, 'We ');
+    assert.equal(quoteEl.children[2].textContent, ' in natural units.');
+  } finally {
+    dom.restore();
+  }
+});
+
+test('corrected_note_rendered', () => {
+  const dom = makeFakeDom();
+  try {
+    const host = dom.mk('div');
+    const mapApi = createPaperMap(host, { openSource() {}, openPdf: () => false, citedPaperLinks: () => [], act() {} });
+    const container = dom.mk('div');
+    mapApi.renderAnchors(container, [{
+      source_id: 'paper', path: 'paper/main.txt', start_line: 20, end_line: 22,
+      excerpt: 'Line twenty text here.', quote: 'twenty text', kind: 'passage',
+      cited_range: [12, 16], range_basis: ['relocated'],
+    }]);
+    const notes = container.querySelectorAll('.investigation-anchor-note');
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0].textContent, 'lines corrected by the app (cited 12–16)');
+  } finally {
+    dom.restore();
+  }
 });

@@ -26,16 +26,24 @@ export function filterConventions(items, query) {
     .some(value => String(value || '').toLocaleLowerCase().includes(term)));
 }
 
-export function conventionStatus(catalog, requested, running, selectedPages, current = true) {
+export function pendingCitationsLabel(count) {
+  return count + (count === 1 ? ' citation pending' : ' citations pending');
+}
+
+export function conventionStatus(catalog, requested, running, selectedPages, current = true, expanding = false) {
   const count = catalog?.items?.length || 0;
+  const pending = Array.isArray(catalog?.pending_items) ? catalog.pending_items.length : 0;
   const scope = selectedPages ? 'selected pages' : 'paper';
   if (!catalog && requested) return running ? 'Reading the paper…' : 'Review stopped before the first batch';
   if (!catalog) return 'No catalog recorded';
   if (!current) return (count ? count + (count === 1 ? ' entry' : ' entries') + ' from an earlier reading' : 'Earlier reading') +
     (requested && running ? ' · reading again…' : '');
-  if (!catalog.done) return running ? (count ? count + ' found so far' : 'Reading the paper…') : 'Incomplete catalog';
-  if (!count) return catalog.coverage === 'partial' ? 'None located in the reviewed passages' : 'None reported in the ' + scope;
-  return count + (count === 1 ? ' entry' : ' entries') + (catalog.coverage === 'partial' ? ' · partial coverage' : '');
+  const suffix = pending ? ' · ' + pendingCitationsLabel(pending) : '';
+  if (!catalog.done) return (running ? (count ? count + ' found so far' : 'Reading the paper…') : 'Incomplete catalog') + suffix;
+  const sectionTag = catalog.coverage_scope === 'section' ? ' · section catalog' : '';
+  const expandingTag = running && expanding ? ' · reading whole paper…' : '';
+  if (!count) return (catalog.coverage === 'partial' ? 'None located in the reviewed passages' : 'None reported in the ' + (catalog.coverage_scope === 'section' ? 'section' : scope)) + sectionTag + suffix + expandingTag;
+  return count + (count === 1 ? ' entry' : ' entries') + sectionTag + (catalog.coverage === 'partial' ? ' · partial coverage' : '') + suffix + expandingTag;
 }
 
 export function createConventionCatalog(host, renderAnchors, find) {
@@ -114,25 +122,29 @@ export function createConventionCatalog(host, renderAnchors, find) {
     }
   });
   function update(inv, running) {
-    const next = JSON.stringify([inv.conventions, inv.conventions_requested, inv.conventions_is_current, inv.conventions_error, inv.page_start, inv.source_id, inv.map_seq, running]);
+    const next = JSON.stringify([inv.conventions, inv.conventions_requested, inv.conventions_is_current, inv.conventions_expanding, inv.conventions_error, inv.page_start, inv.source_id, inv.map_seq, running]);
     if (next === signature) return;
     signature = next;
     catalog = inv.conventions || null;
     mapSeq = inv.map_seq;
-    resume.hidden = running || mapSeq == null || (catalog?.done && inv.conventions_is_current !== false);
+    const pendingCount = inv.conventions_is_current !== false && Array.isArray(catalog?.pending_items) ? catalog.pending_items.length : 0;
+    const sectionDone = Boolean(catalog?.done && !pendingCount && catalog.coverage_scope === 'section' && inv.conventions_is_current !== false);
+    resume.hidden = running || mapSeq == null || (catalog?.done && !pendingCount && !sectionDone && inv.conventions_is_current !== false);
     resume.disabled = pending;
-    resume.textContent = catalog || inv.conventions_requested ? 'Continue conventions review' : 'Find paper conventions';
-    host.hidden = !(catalog || inv.conventions_requested || inv.source_id || mapSeq != null);
+    resume.textContent = sectionDone ? 'Catalog all conventions'
+      : (catalog || inv.conventions_requested ? 'Continue conventions review' : 'Find paper conventions');
+    host.hidden = !(catalog || inv.conventions_requested || mapSeq != null);
     if (host.hidden) return;
     const mapEl = document.getElementById('investigation-map'), panel = document.getElementById('investigation-panel');
     const before = mapEl.getBoundingClientRect().top;
     const preserve = !panel.hidden && panel.scrollTop > 0 && before <= panel.getBoundingClientRect().top;
-    title.textContent = 'Conventions · ' + conventionStatus(catalog, inv.conventions_requested, running, inv.page_start, inv.conventions_is_current !== false);
+    title.textContent = 'Conventions · ' + conventionStatus(catalog, inv.conventions_requested, running, inv.page_start, inv.conventions_is_current !== false, Boolean(inv.conventions_expanding));
     notes.replaceChildren();
     if (catalog && inv.conventions_is_current === false) notes.append(textElement('p', 'Saved catalog from an earlier reading of this paper.'));
-    if (inv.conventions_error && !running && (!catalog?.done || inv.conventions_is_current === false)) {
+    if (inv.conventions_error && !running && (!catalog?.done || pendingCount > 0 || sectionDone || inv.conventions_is_current === false)) {
       notes.append(textElement('p', 'Conventions review stopped. ' + inv.conventions_error));
     }
+    if (pendingCount) notes.append(textElement('p', pendingCitationsLabel(pendingCount), 'investigation-meta'));
     for (const limitation of catalog?.limitations || []) notes.append(mathElement('p', limitation));
     search.hidden = (catalog?.items?.length || 0) < 7;
     if (search.hidden) search.value = '';

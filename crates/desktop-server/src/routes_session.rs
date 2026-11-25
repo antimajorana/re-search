@@ -78,16 +78,11 @@ pub(crate) fn model_session_title(events: &[ledger::Event]) -> Option<&str> {
 
 pub(crate) fn session_title(meta: Option<&SessionMeta>, events: &[ledger::Event], id: &str) -> String {
     if meta.is_some_and(SessionMeta::allows_model_title) {
-        if crate::investigation::is_investigation(events) {
-            if let Some(title) = events.iter().find_map(|event| {
-                matches!(event.kind.as_str(), "investigation.summary" | "investigation.map")
-                    .then(|| event.payload["title"].as_str()).flatten().filter(|s| !s.trim().is_empty())
-            }) {
-                return clip_title(title, 80);
-            }
-        }
-        if let Some(title) = model_session_title(events) {
-            return title.to_string();
+        if let Some(title) = crate::investigation_title::reading_title(events)
+            .or_else(|| model_session_title(events).map(str::to_string))
+            .or_else(|| crate::investigation_title::paper_title(events))
+        {
+            return title;
         }
     }
     meta.map(|meta| meta.title.as_str())
@@ -304,6 +299,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
     }
     crate::cli_turn::sweep_session_tool_config(state, session_id);
     let meta = state.load_meta(session_id);
+    let running = is_turn_running(state, session_id);
     let ledger = state.open_ledger().map_err(internal)?;
     let events = ledger
         .read_session(session_id)
@@ -327,7 +323,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
                 "ts_ms": ev.ts_ms,
                 "kind": ev.kind,
                 "schema_version": ev.schema_version,
-                "payload": ev.payload,
+                "payload": crate::paper_reader::poll_event_payload(&ev.kind, &ev.payload),
                 "prev_hash": ev.prev_hash,
                 "event_hash": ev.event_hash,
             });
@@ -353,14 +349,14 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
             "project_id": project.map(|p| p.id),
             "events": events_json,
             "mode": if crate::investigation::is_investigation(&events) { "investigation" } else { "research" },
-            "investigation": crate::investigation::view(&events, is_turn_running(state, session_id)),
+            "investigation": crate::investigation::view(&events, running),
             "messages": messages,
             "traces": traces,
             "sources": sources,
             "linked_sources": linked_sources,
             "stats": stats,
             "archived": meta.as_ref().is_some_and(|m| m.archived),
-            "running": is_turn_running(state, session_id),
+            "running": running,
             "session_grants": list_session_grants(state, session_id),
             "pending_approvals": pending,
             "pending_checkpoints": state.hitl.list_pending(session_id),
@@ -541,6 +537,7 @@ pub fn handle_put_settings(state: &DesktopState, body: &[u8]) -> ApiResult {
         }
         None => None,
     };
+    let reader_patch = crate::paper_reader::parse_reader_settings_patch(&val)?;
 
     if let Some(roles_val) = val.get("roles") {
         let parsed: RoleAssignment =
@@ -588,24 +585,14 @@ pub fn handle_put_settings(state: &DesktopState, body: &[u8]) -> ApiResult {
     store.save_to_data_dir(&state.cfg.data_dir).map_err(internal)?;
     state
         .update_ui_settings(|ui| {
-            if let Some(dp) = next_provider {
-                ui.default_provider = Some(dp);
-            }
-            if let Some(dm) = next_model {
-                ui.default_model = dm;
-            }
-            if let Some(conv) = next_conv {
-                ui.pinned_conventions = Some(conv);
-            }
-            if let Some(rp) = next_role_presets {
-                ui.role_presets = Some(rp);
-            }
-            if let Some(auto) = next_auto_approve {
-                ui.auto_approve_tools = auto;
-            }
-            if let Some(am) = next_agent_models {
-                ui.agent_models = am;
-            }
+            if let Some(dp) = next_provider { ui.default_provider = Some(dp); }
+            if let Some(dm) = next_model { ui.default_model = dm; }
+            if let Some(conv) = next_conv { ui.pinned_conventions = Some(conv); }
+            if let Some(rp) = next_role_presets { ui.role_presets = Some(rp); }
+            if let Some(auto) = next_auto_approve { ui.auto_approve_tools = auto; }
+            if let Some(am) = next_agent_models { ui.agent_models = am; }
+            if let Some(en) = reader_patch.enabled { ui.paper_readers_enabled = en; }
+            if let Some(mp) = reader_patch.max_parallel { ui.paper_reader_max_parallel = mp; }
         })
         .map_err(internal)?;
     if val.get("keys").is_some() || val.get("base_urls").is_some() {

@@ -10,7 +10,7 @@ use agent::{
     AgentConfig, AutonomousConfig, AutonomousRoles, CancelToken, CustomSubagentDelegation,
     DelegatedWorkerSpec, DelegationConfig, GuardrailConfig, ResumeConfig, SessionOutcome,
     DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_WORKER_MAX_TURNS, EXPLORE_BRANCH_MAX_TURNS,
-    RESEARCH_SYSTEM_PROMPT, WORKER_MAX_TOKENS,
+    WORKER_MAX_TOKENS,
 };
 use research_tools::{register_lean_tool, register_research_tools, research_policy, ResearchEnv};
 use serde_json::{json, Value};
@@ -78,7 +78,14 @@ pub(crate) fn spawn_turn_thread(
         }
     };
 
-    if let Err(error) = crate::investigation::prepare(&state, &session_id, &mut req_json, &prompt) {
+    let paper_route = if on_cli_route.is_some() {
+        crate::investigation::PaperRoute::Cli
+    } else {
+        crate::investigation::PaperRoute::InCore
+    };
+    if let Err(error) =
+        crate::investigation::prepare(&state, &session_id, &mut req_json, &prompt, paper_route)
+    {
         if let Ok(mut active) = state.active_turns.lock() { active.remove(&session_id); }
         return Err(error);
     }
@@ -130,13 +137,14 @@ pub(crate) fn spawn_turn_thread(
     Ok(())
 }
 
-fn make_worker_spec<'a>(
+pub(crate) fn make_worker_spec<'a>(
     role: &str,
     display_name: &str,
     built: &'a crate::agent_models::BuiltWorkerTransport,
     system_prompt: &str,
     allowed_tools: Vec<String>,
     max_turns: u32,
+    effort: Option<String>,
 ) -> DelegatedWorkerSpec<'a> {
     DelegatedWorkerSpec {
         role: role.to_string(),
@@ -148,7 +156,7 @@ fn make_worker_spec<'a>(
         allowed_tools,
         max_turns,
         max_tokens: WORKER_MAX_TOKENS,
-        reasoning_effort: None,
+        reasoning_effort: effort,
     }
 }
 
@@ -187,7 +195,19 @@ fn run_session_turn(
         .unwrap_or(DEFAULT_MAX_TOKENS);
 
     let env = Arc::new(state.research_env_for_session(session_id)?);
-    let project_context = crate::investigation::turn_context(crate::project_context::brief(state, session_id)?, req);
+    let prepared_paper_reader = crate::paper_reader::prepare_for_turn(
+        state,
+        &env,
+        &ui,
+        req,
+        session_id,
+        provider,
+        &model,
+    )?;
+    let project_context = crate::paper_reader::append_reader_guidance(
+        crate::investigation::turn_context(crate::project_context::brief(state, session_id)?, req),
+        prepared_paper_reader.is_some(),
+    );
     let transport = state.build_transport(provider, &model)?;
     let v_built = crate::agent_models::resolve_optional_role_transport(
         state,
@@ -271,8 +291,14 @@ fn run_session_turn(
             .or(ui.pinned_conventions),
         ..GuardrailConfig::default()
     };
+    let ledger = state.open_ledger()?;
+    let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
+    let is_investigation = crate::investigation::is_investigation(&existing);
+    let paper_reading_turn = req.get("_paper_map_request").is_some()
+        || req.get("_paper_branch_request").is_some()
+        || req.get("_paper_conventions_request").is_some();
     let delegation_cfg = DelegationConfig {
-        compute_worker: compute_built.as_ref().map(|b| {
+        compute_worker: if paper_reading_turn { None } else { compute_built.as_ref().map(|b| {
             make_worker_spec(
                 "compute_worker",
                 "Compute Worker",
@@ -287,21 +313,23 @@ fn run_session_turn(
                  Use `set_random_seed(seed)` for stochastic calculations. Leave the final answer to the Orchestrator.",
                 compute_worker_tools(),
                 DEFAULT_WORKER_MAX_TURNS,
+                None,
             )
-        }),
+        }) },
         literature_worker: lit_built.as_ref().map(|b| {
             make_worker_spec(
                 "literature_worker",
                 "Literature Worker",
                 b,
                 "You are the isolated Literature Worker for reSearch. Use `arxiv_search`, `literature_search`, and `doc_ingest` to find or ingest papers. \
-                 Use `search_paper_passages` to find supporting passages in ingested papers and `fs_read` to inspect surrounding context. \
+                 Use `search_paper_passages` to find supporting passages in ingested papers, `read_paper_lines` for numbered line ranges, and `fs_read` to inspect surrounding context. \
                  Return exact passages, source paths, line ranges and tool references alongside terms, conventions, and arXiv IDs or DOIs.",
                 literature_worker_tools(),
                 DEFAULT_WORKER_MAX_TURNS,
+                None,
             )
         }),
-        lean_worker: lean_built.as_ref().map(|b| {
+        lean_worker: if paper_reading_turn { None } else { lean_built.as_ref().map(|b| {
             make_worker_spec(
                 "lean_worker",
                 "Lean Prover Worker",
@@ -311,10 +339,11 @@ fn run_session_turn(
                  Report reusable declarations, verified status, diagnostics, and recorded Proof DAG entries.",
                 lean_worker_tools(),
                 DEFAULT_WORKER_MAX_TURNS,
+                None,
             )
-        }),
-        lean_router: lean_router.as_ref(),
-        explorer_worker: explore_built.as_ref().map(|b| {
+        }) },
+        lean_router: if paper_reading_turn { None } else { lean_router.as_ref() },
+        explorer_worker: if paper_reading_turn { None } else { explore_built.as_ref().map(|b| {
             make_worker_spec(
                 "explorer_worker",
                 "Ultramath Explorer",
@@ -322,23 +351,30 @@ fn run_session_turn(
                 "You are an isolated Ultramath Parallel Explorer branch for reSearch. Test only your assigned approach independently using allowed read/compute tools without modifying the Proof DAG. Report viability, exact symbolic/numerical checks, obstructions or counterexamples, and key equations concisely.",
                 explore_worker_tools(),
                 EXPLORE_BRANCH_MAX_TURNS,
+                None,
             )
-        }),
-        custom_subagents: custom_built
-            .iter()
-            .map(|(sa, b)| CustomSubagentDelegation {
-                id: sa.id.clone(),
-                name: sa.name.clone(),
-                description: sa.description.clone(),
-                tools_profile: sa.tools_profile.clone(),
-                system_prompt: sa.system_prompt.clone(),
-                transport: &*b.transport,
-                model: b.model.clone(),
-                routing_reason: b.routing_reason.clone(),
-                reasoning_effort: sa.reasoning_effort.clone(),
-            })
-            .collect(),
+        }) },
+        paper_reader: prepared_paper_reader.as_ref().map(|r| r.as_config()),
+        custom_subagents: if paper_reading_turn {
+            Vec::new()
+        } else {
+            custom_built
+                .iter()
+                .map(|(sa, b)| CustomSubagentDelegation {
+                    id: sa.id.clone(),
+                    name: sa.name.clone(),
+                    description: sa.description.clone(),
+                    tools_profile: sa.tools_profile.clone(),
+                    system_prompt: sa.system_prompt.clone(),
+                    transport: &*b.transport,
+                    model: b.model.clone(),
+                    routing_reason: b.routing_reason.clone(),
+                    reasoning_effort: sa.reasoning_effort.clone(),
+                })
+                .collect()
+        },
         pinned_conventions: guardrails.pinned_conventions.clone(),
+        is_investigation,
     };
     let interactive_plan_mode = req.get("interactive_plan_mode").and_then(Value::as_bool).unwrap_or(false);
     let pause_after_explore = req.get("pause_after_explore").and_then(Value::as_bool).unwrap_or(false);
@@ -358,8 +394,6 @@ fn run_session_turn(
         ..AutonomousConfig::default()
     };
 
-    let ledger = state.open_ledger()?;
-    let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
     let mut sink = SseEventSink::new(Arc::clone(&state.sse), session_id).with_model_title(
         meta.as_ref().is_some_and(crate::state::SessionMeta::allows_model_title)
             && crate::routes_session::model_session_title(&existing).is_none(),
@@ -367,9 +401,10 @@ fn run_session_turn(
 
     let has_started = existing.iter().any(|e| e.kind == "session.start");
     let outcome = if !has_started {
+        let base_prompt = crate::investigation_system_prompt::base_system_prompt(&existing);
         let system_prompt = match &subagent {
-            Some(sa) => crate::subagents::apply_subagent_to_system_prompt(RESEARCH_SYSTEM_PROMPT, sa),
-            None => RESEARCH_SYSTEM_PROMPT.to_string(),
+            Some(sa) => crate::subagents::apply_subagent_to_system_prompt(base_prompt, sa),
+            None => base_prompt.to_string(),
         };
         let cfg = AgentConfig {
             prompt: prompt.to_string(),

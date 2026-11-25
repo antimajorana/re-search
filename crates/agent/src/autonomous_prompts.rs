@@ -36,9 +36,9 @@ especially excluded points, counterexamples, or convergence failures. Agreement 
 Use `set_random_seed(seed)` before stochastic Python calculations. Record the precision, \
 tolerance, and relevant assumptions for numerical checks. \
 Delegate arXiv/literature searches, ingestion, and bulky `.tex` reading under `sources` to \
-`delegate_literature` (or use `arxiv_search`, `literature_search`, `fs_list`, `fs_read` directly \
+`delegate_literature` (or use `arxiv_search`, `literature_search`, `fs_list`, `fs_read`, `read_paper_lines` directly \
 rather than guessing citations from memory). \
-Use `search_paper_passages` to retrieve exact file and line references from ingested sources. \
+Use `search_paper_passages` and `read_paper_lines` to retrieve and read exact numbered file and line references from ingested sources. \
 Quote only passages that support the claim, and include the source path, lines, and tool reference. \
 For formal physics, use `search_formal_library` in the attached workspace to find existing Physlib or Lean declarations. \
 Match the declaration's assumptions and statement to the current claim before calling `lean_check`. \

@@ -245,3 +245,312 @@ fn corrected_paper_claim_opens_fresh_research_with_its_evidence_and_assumptions(
         "investigation"
     );
 }
+
+#[test]
+fn question_turn_session_view_and_handoff_research_after_mapping() {
+    let temp = tempfile::tempdir().unwrap();
+    let server = start_desktop_server(test_cfg(temp.path(), None, None, None)).unwrap();
+    let sid = "s-question-handoff";
+    let path = format!("/api/sessions/{sid}");
+    call(
+        &server,
+        "POST",
+        "/api/sessions",
+        json!({"id":sid,"mode":"investigation"}),
+        200,
+    );
+    let env = ResearchEnv::new(temp.path().to_path_buf());
+    let ledger = Mutex::new(Ledger::open(temp.path()).unwrap());
+    let paper_text = "Assume a fixed boundary.\nThe boundary term vanishes.\n";
+    let src = ingest_bytes(
+        &env.sandbox(),
+        &ledger,
+        &IngestRequest {
+            session_id: sid,
+            file_name: "boundary.txt",
+            origin: "user upload",
+            raw_bytes: paper_text.as_bytes(),
+            source_id_hint: None,
+            section_filter: None,
+            title: Some("Boundary Paper"),
+        },
+    )
+    .unwrap();
+    let ledger = ledger.into_inner().unwrap();
+    ledger
+        .append(
+            sid,
+            "investigation.paper",
+            1,
+            &json!({"source_id":src.source_id,"question":"Does the boundary term vanish?"}),
+        )
+        .unwrap();
+    let q_seq = ledger
+        .append(
+            sid,
+            "investigation.question_requested",
+            1,
+            &json!({"source_id":src.source_id,"question":"Does the boundary term vanish?","page_start":null,"page_end":null,"map_seq":null}),
+        )
+        .unwrap();
+    ledger
+        .append(
+            sid,
+            "investigation.answer",
+            1,
+            &json!({"request_seq":q_seq,"status":"answered","text":"Yes, under fixed boundary [L1-2].","error":null}),
+        )
+        .unwrap();
+
+    let q_view = call(&server, "GET", &path, Value::Null, 200);
+    assert_eq!(q_view["investigation"]["mapping_requested"], false);
+    assert!(q_view["investigation"]["map"].is_null());
+    assert_eq!(q_view["investigation"]["answers"].as_array().unwrap().len(), 1);
+    assert_eq!(q_view["investigation"]["answers"][0]["status"], "answered");
+    assert_eq!(
+        q_view["investigation"]["answers"][0]["text"],
+        "Yes, under fixed boundary [L1-2]."
+    );
+
+    // Follow up with a map (conventions_requested=false, no catalog) and open a handoff Research session.
+    ledger
+        .append(
+            sid,
+            "investigation.mapping_requested",
+            1,
+            &json!({"source_id":src.source_id,"question":"Does the boundary term vanish?","conventions_requested":false,"overview_only":true}),
+        )
+        .unwrap();
+    let anchor = |line: usize, excerpt: &str| {
+        json!({"source_id":src.source_id,"path":src.primary_path,"start_line":line,"end_line":line,"excerpt":excerpt,"kind":"passage"})
+    };
+    let map = json!({
+        "source_id": src.source_id,
+        "title": "Boundary Paper",
+        "coverage": "paper",
+        "limitations": [],
+        "nodes": [
+            {"id":"a","kind":"assumption","main":true,"sentence":"Assume a fixed boundary.","anchors":[anchor(1,"Assume a fixed boundary.")]},
+            {"id":"b","kind":"result","main":true,"sentence":"The boundary term vanishes.","anchors":[anchor(2,"The boundary term vanishes.")]}
+        ],
+        "edges": [
+            {"from":"a","to":"b","kind":"depends_on","basis":"explicit","reason":"Fixed boundary eliminates the boundary term.","anchor":anchor(2,"The boundary term vanishes.")}
+        ]
+    });
+    record(&env, &ledger, sid, &map).unwrap();
+
+    let mapped = call(&server, "GET", &path, Value::Null, 200);
+    assert_eq!(mapped["investigation"]["mapping_requested"], true);
+    assert_eq!(mapped["investigation"]["conventions_requested"], false);
+    assert_eq!(mapped["investigation"]["answers"].as_array().unwrap().len(), 1);
+    let map_seq = mapped["investigation"]["map_seq"].as_u64().unwrap();
+
+    let handoff = call(
+        &server,
+        "POST",
+        &format!("{path}/investigation/research"),
+        json!({"map_seq":map_seq,"node_id":"b","question":"Test moving boundaries"}),
+        201,
+    );
+    let child = handoff["session_id"].as_str().unwrap();
+    let research = call(
+        &server,
+        "GET",
+        &format!("/api/sessions/{child}"),
+        Value::Null,
+        200,
+    );
+    assert_eq!(research["mode"], "research");
+    assert_eq!(research["investigation"]["origin"]["parent_session"], sid);
+    assert_eq!(research["sources"][0]["source_id"], src.source_id);
+}
+
+fn start_openai_capture_mock() -> (String, std::sync::Arc<Mutex<Vec<Value>>>) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let seen_cl = std::sync::Arc::clone(&seen);
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let seen_inner = std::sync::Arc::clone(&seen_cl);
+            std::thread::spawn(move || {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut reader = BufReader::new(stream);
+                let mut len = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some((k, v)) = line.split_once(':') {
+                        if k.eq_ignore_ascii_case("content-length") {
+                            len = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                }
+                let mut buf = vec![0u8; len];
+                let _ = reader.read_exact(&mut buf);
+                let body: Value = serde_json::from_slice(&buf).unwrap_or(Value::Null);
+                seen_inner.lock().unwrap().push(body);
+                let reply = serde_json::to_vec(&json!({
+                    "id": "chatcmpl_1", "object": "chat.completion", "model": "gpt-4.1",
+                    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Done."}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+                })).unwrap();
+                let mut s = reader.into_inner();
+                let hdr = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    reply.len()
+                );
+                let _ = s.write_all(hdr.as_bytes());
+                let _ = s.write_all(&reply);
+                let _ = s.flush();
+            });
+        }
+    });
+    (format!("http://{addr}"), seen)
+}
+
+fn wait_idle(server: &RunningDesktopServer, sid: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        let view = call(server, "GET", &format!("/api/sessions/{sid}"), Value::Null, 200);
+        if view["running"] != true {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+    panic!("session {sid} stayed running");
+}
+
+fn tool_names(body: &Value) -> Vec<String> {
+    body["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t["function"]["name"].as_str().map(str::to_string))
+        .collect()
+}
+
+fn setup_worker_server(temp: &std::path::Path, mock_url: &str) -> RunningDesktopServer {
+    std::fs::write(
+        temp.join("providers.json"),
+        serde_json::to_vec(&json!({"keys": {"openai": "sk-test-key"}})).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        temp.join("subagents.json"),
+        serde_json::to_vec(&json!([
+            {
+                "id": "tensor-helper",
+                "name": "Tensor Helper",
+                "description": "Checks tensor algebra.",
+                "tools_profile": "read_only",
+                "system_prompt": "Check tensor algebra carefully."
+            }
+        ]))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut cfg = test_cfg(temp, None, None, None);
+    cfg.api_base_override = Some(mock_url.to_string());
+    start_desktop_server(cfg).unwrap()
+}
+
+#[test]
+fn mapping_turn_offers_no_compute_lean_explore_subagent() {
+    let (mock_url, seen) = start_openai_capture_mock();
+    let temp = tempfile::tempdir().unwrap();
+    let server = setup_worker_server(temp.path(), &mock_url);
+    let sid = "s-map-gate";
+    call(&server, "POST", "/api/sessions", json!({"id": sid, "mode": "investigation"}), 200);
+    let env = ResearchEnv::new(temp.path().to_path_buf());
+    let db = Mutex::new(Ledger::open(temp.path()).unwrap());
+    let src = ingest_bytes(
+        &env.sandbox(),
+        &db,
+        &IngestRequest {
+            session_id: sid,
+            file_name: "paper.txt",
+            origin: "upload",
+            raw_bytes: b"We assume positive mass.\nEquation (1) holds.\n",
+            source_id_hint: None,
+            section_filter: None,
+            title: None,
+        },
+    )
+    .unwrap();
+    drop(db);
+    call(
+        &server,
+        "POST",
+        &format!("/api/sessions/{sid}/messages"),
+        json!({"prompt": "Map the paper.", "provider": "openai", "model": "gpt-4.1", "investigation_source_id": src.source_id}),
+        202,
+    );
+    wait_idle(&server, sid);
+    let reqs = seen.lock().unwrap().clone();
+    assert!(!reqs.is_empty());
+    let names = tool_names(&reqs[0]);
+    for forbidden in ["delegate_compute", "delegate_lean", "delegate_explore", "delegate_subagent"] {
+        assert!(!names.iter().any(|n| n == forbidden), "unexpected {forbidden} in {names:?}");
+    }
+    assert!(names.iter().any(|n| n == "read_paper_lines"), "missing read_paper_lines in {names:?}");
+    let body_str = reqs[0].to_string();
+    assert!(body_str.contains("Other worker delegation is unavailable during paper reading."));
+    assert!(!body_str.contains("delegate_read_paper"));
+    server.shutdown();
+}
+
+#[test]
+fn check_action_keeps_workers() {
+    let (mock_url, seen) = start_openai_capture_mock();
+    let temp = tempfile::tempdir().unwrap();
+    let server = setup_worker_server(temp.path(), &mock_url);
+    let sid = "s-check-workers";
+    call(&server, "POST", "/api/sessions", json!({"id": sid, "mode": "investigation"}), 200);
+    let env = ResearchEnv::new(temp.path().to_path_buf());
+    let db = Mutex::new(Ledger::open(temp.path()).unwrap());
+    let src = ingest_bytes(
+        &env.sandbox(),
+        &db,
+        &IngestRequest {
+            session_id: sid,
+            file_name: "paper.txt",
+            origin: "upload",
+            raw_bytes: b"We assume positive mass.\nThe boundary term vanishes.\n",
+            source_id_hint: None,
+            section_filter: None,
+            title: None,
+        },
+    )
+    .unwrap();
+    let ledger = db.into_inner().unwrap();
+    ledger.append(sid, "investigation.paper", 1, &json!({"source_id": src.source_id, "question": "Check?"})).unwrap();
+    ledger.append(sid, "investigation.mapping_requested", 1, &json!({"source_id": src.source_id})).unwrap();
+    let anchor = json!({"source_id": src.source_id, "start_line": 2, "end_line": 2, "quote": "boundary term vanishes", "kind": "passage"});
+    let map_res = record(&env, &ledger, sid, &json!({
+        "source_id": src.source_id, "title": "Boundary", "coverage": "paper", "limitations": [],
+        "nodes": [{"id": "b", "kind": "result", "main": true, "sentence": "Boundary term vanishes.", "anchors": [anchor]}],
+        "edges": []
+    })).unwrap();
+    let map_seq = map_res["map_seq"].as_u64().unwrap();
+    call(
+        &server,
+        "POST",
+        &format!("/api/sessions/{sid}/investigation/rechecks"),
+        json!({"map_seq": map_seq, "node_id": "b", "action": "check", "provider": "openai", "model": "gpt-4.1"}),
+        202,
+    );
+    wait_idle(&server, sid);
+    let reqs = seen.lock().unwrap().clone();
+    assert!(!reqs.is_empty());
+    let names = tool_names(&reqs[0]);
+    for expected in ["delegate_compute", "delegate_lean", "delegate_explore", "delegate_subagent"] {
+        assert!(names.iter().any(|n| n == expected), "missing {expected} in {names:?}");
+    }
+    server.shutdown();
+}

@@ -203,7 +203,7 @@ fn format_linked_checks(
     };
     for check in recorded_tool_checks(
         events, Some(ledger),
-        &["lean_check", "sympy_eval", "check_expression_sanity", "search_paper_passages", "search_formal_library"],
+        &["lean_check", "sympy_eval", "check_expression_sanity", "search_paper_passages", "read_paper_lines", "search_formal_library"],
     ).into_iter().rev() {
         let relevant_ids: Vec<_> = ancestors.iter()
                 .filter(|entry| entry.status != ProofStatus::Superseded && (include_rejected || entry.status != ProofStatus::Rejected))
@@ -291,16 +291,27 @@ fn format_linked_checks(
                 "max_abs_diff": check.result["max_abs_diff"],
                 "issues": preview(&check.result["issues"], 350),
             }));
-        } else if sources.len() < 5 && matches!(check.tool, "search_paper_passages" | "search_formal_library") {
-            let paper = check.tool == "search_paper_passages";
-            let rows: Vec<_> = check.result[if paper { "passages" } else { "results" }]
-                .as_array().into_iter().flatten().take(2).map(|row| json!({
-                    "path": preview(&row["path"], 180),
-                    "first_line": row[if paper { "start_line" } else { "line" }].as_u64(),
-                    "last_line": row["end_line"].as_u64(),
-                    "file_sha256": preview(&row[if paper { "file_sha256" } else { "source_sha256" }], 64),
-                    "source_text": preview(&row[if paper { "excerpt" } else { "signature" }], 700),
-                })).collect();
+        } else if sources.len() < 5 && matches!(check.tool, "search_paper_passages" | "read_paper_lines" | "search_formal_library") {
+            let rows: Vec<_> = if check.tool == "read_paper_lines" {
+                let meta = &check.result["a_meta"];
+                vec![json!({
+                    "path": preview(&meta["path"], 180),
+                    "first_line": meta["start_line"].as_u64(),
+                    "last_line": meta["end_line"].as_u64(),
+                    "file_sha256": preview(&meta["file_sha256"], 64),
+                    "source_text": preview(&check.result["text"], 700),
+                })]
+            } else {
+                let paper = check.tool == "search_paper_passages";
+                check.result[if paper { "passages" } else { "results" }]
+                    .as_array().into_iter().flatten().take(2).map(|row| json!({
+                        "path": preview(&row["path"], 180),
+                        "first_line": row[if paper { "start_line" } else { "line" }].as_u64(),
+                        "last_line": row["end_line"].as_u64(),
+                        "file_sha256": preview(&row[if paper { "file_sha256" } else { "source_sha256" }], 64),
+                        "source_text": preview(&row[if paper { "excerpt" } else { "signature" }], 700),
+                    })).collect()
+            };
             sources.push(json!({
                 "proof_entries": relevant_ids,
                 "tool": check.tool,

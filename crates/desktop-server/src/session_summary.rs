@@ -130,8 +130,9 @@ pub(crate) fn summarize_session_events(events: &[ledger::Event]) -> Value {
                     model = m.to_string();
                 }
                 if let Some(u) = ev.payload.get("usage") {
-                    input_tokens += u.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-                    output_tokens += u.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
+                    let (inp, out) = extract_usage_tokens(u);
+                    input_tokens += inp;
+                    output_tokens += out;
                 }
             }
             "delegate.end" | "explore.end" => {
@@ -197,4 +198,20 @@ pub(crate) fn summarize_session_events(events: &[ledger::Event]) -> Value {
         "campaign_phase": campaign_phase,
         "model": model,
     })
+}
+
+fn extract_usage_tokens(usage: &Value) -> (u64, u64) {
+    let inp = usage
+        .get("input_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| usage.get("prompt_tokens").and_then(Value::as_u64))
+        .or_else(|| usage.get("promptTokenCount").and_then(Value::as_u64))
+        .unwrap_or(0);
+    let out = usage
+        .get("output_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| usage.get("completion_tokens").and_then(Value::as_u64))
+        .or_else(|| usage.get("candidatesTokenCount").and_then(Value::as_u64))
+        .unwrap_or(0);
+    (inp, out)
 }

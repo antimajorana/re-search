@@ -3,6 +3,13 @@
 
 pub mod agent_models;
 mod investigation;
+mod investigation_cites;
+mod investigation_finish;
+mod investigation_question;
+mod investigation_scope;
+mod investigation_system_prompt;
+mod investigation_title;
+mod investigation_view;
 pub mod antigravity;
 pub mod approver;
 pub mod assets;
@@ -22,6 +29,7 @@ pub mod launcher;
 mod manuscript_drafts;
 pub mod model_catalog;
 mod original_pdf;
+pub mod paper_reader;
 mod projects;
 pub mod routes_session;
 pub mod routes_subagents;
