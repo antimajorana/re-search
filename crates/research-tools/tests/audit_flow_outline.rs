@@ -205,3 +205,58 @@ fn review_outline_tex_multirow_align_notag_and_subequations() {
         other => panic!("expected Eq. (2b) and Eq. (3) to resolve, got {other:?}"),
     }
 }
+
+#[test]
+fn review3_outline_tex_substack_inside_align_does_not_split_row() {
+    let tex = r"\documentclass{article}
+\begin{document}
+\section{Sums and Braces}
+\begin{align}
+ S = \sum_{\substack{i<j \\ k}} x_i + \{ a \}
+\end{align}
+\begin{equation}
+ E = mc^2
+\end{equation}
+\section{Text Breaks and Real Rows}
+\begin{align}
+ f &= \text{a \\ b} + \text{c \\{d} e} \\
+ g &= h + \{ x \}
+\end{align}
+\end{document}
+";
+    let outline = build_outline(tex, &[]);
+    assert_eq!(outline.style, "tex");
+    let labels: Vec<(&str, usize)> = outline
+        .equations
+        .iter()
+        .map(|e| (e.label.as_str(), e.line))
+        .collect();
+    assert_eq!(
+        labels,
+        vec![("1", 5), ("2", 7), ("3", 12), ("4", 13)],
+        "line break inside braces split a phantom row or shifted equation numbers: {labels:?}"
+    );
+
+    let eq2 = outline.equations.iter().find(|e| e.label == "2").unwrap();
+    let tex_lines: Vec<&str> = tex.lines().collect();
+    match resolve_scope(&outline, "Explain eq. (2)") {
+        ScopeResolution::Resolved { targets, .. } => {
+            assert_eq!(targets.len(), 1);
+            assert_eq!(targets[0].kind, "equation");
+            assert_eq!(targets[0].label, "Eq. (2)");
+            assert!(
+                targets[0].start_line <= eq2.line && eq2.line <= targets[0].end_line,
+                "expected Eq. (2) range {:?}..={:?} to include line {}",
+                targets[0].start_line,
+                targets[0].end_line,
+                eq2.line
+            );
+            let slice = tex_lines[targets[0].start_line - 1..targets[0].end_line].join("\n");
+            assert!(
+                slice.contains("E = mc^2"),
+                "expected resolved scope for eq. (2) to point to E = mc^2, got:\n{slice}"
+            );
+        }
+        other => panic!("expected Eq. (2) to resolve, got {other:?}"),
+    }
+}

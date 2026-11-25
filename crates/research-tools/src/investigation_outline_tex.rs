@@ -114,6 +114,7 @@ fn split_multirow_body(body_lines: &[(usize, String, String)]) -> Vec<MathRow> {
     let mut rows: Vec<MathRow> = Vec::new();
     let mut cur = MathRow::default();
     let mut nested_depth = 0usize;
+    let mut brace_depth = 0usize;
 
     for (line_no, seg, _) in body_lines {
         let bytes = seg.as_bytes();
@@ -130,28 +131,46 @@ fn split_multirow_body(body_lines: &[(usize, String, String)]) -> Vec<MathRow> {
                 i += len;
                 continue;
             }
-            if nested_depth == 0 && seg[i..].starts_with("\\\\") {
-                cur.push(*line_no, &seg[seg_start..i]);
-                rows.push(std::mem::take(&mut cur));
-                i += 2;
-                while i < bytes.len() && matches!(bytes[i], b' ' | b'\t') {
-                    i += 1;
-                }
-                if i < bytes.len() && bytes[i] == b'*' {
-                    i += 1;
-                }
-                while i < bytes.len() && matches!(bytes[i], b' ' | b'\t') {
-                    i += 1;
-                }
-                if i < bytes.len() && bytes[i] == b'[' {
-                    if let Some(rel_end) = seg[i + 1..].find(']') {
-                        let arg = &seg[i + 1..i + 1 + rel_end];
-                        if !arg.contains('=') && !arg.contains("\\begin") {
-                            i = i + 1 + rel_end + 1;
+            if seg[i..].starts_with("\\\\") {
+                if nested_depth == 0 && brace_depth == 0 {
+                    cur.push(*line_no, &seg[seg_start..i]);
+                    rows.push(std::mem::take(&mut cur));
+                    i += 2;
+                    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t') {
+                        i += 1;
+                    }
+                    if i < bytes.len() && bytes[i] == b'*' {
+                        i += 1;
+                    }
+                    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t') {
+                        i += 1;
+                    }
+                    if i < bytes.len() && bytes[i] == b'[' {
+                        if let Some(rel_end) = seg[i + 1..].find(']') {
+                            let arg = &seg[i + 1..i + 1 + rel_end];
+                            if !arg.contains('=') && !arg.contains("\\begin") {
+                                i = i + 1 + rel_end + 1;
+                            }
                         }
                     }
+                    seg_start = i;
+                } else {
+                    i += 2;
                 }
-                seg_start = i;
+                continue;
+            }
+            if seg[i..].starts_with("\\{") || seg[i..].starts_with("\\}") {
+                i += 2;
+                continue;
+            }
+            if bytes[i] == b'{' {
+                brace_depth += 1;
+                i += 1;
+                continue;
+            }
+            if bytes[i] == b'}' {
+                brace_depth = brace_depth.saturating_sub(1);
+                i += 1;
                 continue;
             }
             i += seg[i..].chars().next().map_or(1, char::len_utf8);
