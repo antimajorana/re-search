@@ -136,6 +136,24 @@ pub(super) fn payload<'a>(
                 .into(),
         );
     }
+    let active_marker = history
+        .iter()
+        .rev()
+        .find(|e| {
+            e.seq >= request.seq
+                && matches!(
+                    e.kind.as_str(),
+                    "investigation.mapping_requested" | "investigation.conventions_resumed"
+                )
+        })
+        .unwrap_or(request);
+    let paper_resume = active_marker.kind == "investigation.conventions_resumed"
+        && active_marker.payload["scope"].as_str() == Some("paper");
+    let derived_scope = if active_marker.kind == "investigation.conventions_resumed" {
+        active_marker.payload["scope"].as_str()
+    } else {
+        request.payload["conventions_scope"].as_str()
+    };
     let mut prior_ids = BTreeSet::new();
     let mut labels = BTreeSet::new();
     let mut next = 1;
@@ -146,7 +164,11 @@ pub(super) fn payload<'a>(
             break;
         }
         if event.payload["done"] == true {
-            return Err("The conventions list for this request is already finalized.".into());
+            let section_upgrade =
+                event.payload["coverage_scope"].as_str() == Some("section") && paper_resume;
+            if !section_upgrade {
+                return Err("The conventions list for this request is already finalized.".into());
+            }
         }
         for item in event.payload["items"].as_array().into_iter().flatten() {
             if let (Some(id), Some(label), Some(scope)) = (
@@ -285,6 +307,13 @@ pub(super) fn payload<'a>(
         payload["rejected_items"] = Value::Array(rejected_items);
         payload["done_requested"] = json!(done_requested.unwrap());
         payload["coverage_reported"] = json!(coverage_reported.unwrap());
+    }
+    if let Some(prev) = previous {
+        if let Some(prev_scope) = prev.payload.get("coverage_scope") {
+            payload["coverage_scope"] = prev_scope.clone();
+        }
+    } else if let Some(scope @ ("section" | "paper")) = derived_scope {
+        payload["coverage_scope"] = json!(scope);
     }
     Ok((payload, previous))
 }

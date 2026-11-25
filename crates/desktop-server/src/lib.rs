@@ -6,6 +6,7 @@ mod investigation;
 mod investigation_cites;
 mod investigation_finish;
 mod investigation_question;
+mod investigation_scope;
 mod investigation_system_prompt;
 mod investigation_title;
 mod investigation_view;

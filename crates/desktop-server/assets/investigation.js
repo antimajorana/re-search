@@ -4,11 +4,12 @@ import { renderMathTextInto } from '/assets/math.js';
 import { createPaperMap, DEFAULT_PAPER_REQUEST } from '/assets/investigation_map.js';
 import { openOriginalPdf } from '/assets/pdf_preview.js';
 import { createConventionCatalog } from '/assets/investigation_conventions.js';
+import { createScopeChip } from '/assets/investigation_scope.js';
 import { citedPaperLinks } from '/assets/source_links.js';
 import { createAnswerCard } from '/assets/investigation_answer.js';
 import { latestRequestEvent, paperViewState, setupButtonLabel } from '/assets/investigation_state.js';
 
-let callbacks, paperMap, conventionCatalog, answerCard, sessionId, session, view, readRevision = 0, submitting = false;
+let callbacks, paperMap, conventionCatalog, answerCard, scopeChip, sessionId, session, view, readRevision = 0, submitting = false;
 let summaryTimer = null, statusTimer = null, uploadingKind = null, runStartedAt = null;
 let approvalWaiting = false, localStatus = '';
 const byId = id => document.getElementById(id);
@@ -16,6 +17,7 @@ const setupDrafts = new Map();
 
 export function initInvestigation(options) {
   callbacks = options;
+  scopeChip = createScopeChip(byId('investigation-status'));
   paperMap = createPaperMap(byId('investigation-map'), {
     citedPaperLinks,
     openSource: anchor => callbacks.openSource(sessionId, anchor),
@@ -328,6 +330,7 @@ export function showInvestigationSession(id, data) {
     paperMap.reset();
     conventionCatalog.reset();
     answerCard.reset();
+    scopeChip.reset();
     byId('investigation-setup').reset();
     byId('investigation-existing').replaceChildren();
     byId('investigation-question').value = setupDrafts.get(id)?.question || '';
@@ -343,6 +346,7 @@ export function showInvestigationSession(id, data) {
   if (data?.mode !== 'investigation') {
     clearStatusTimer();
     answerCard.reset();
+    scopeChip.reset();
     byId('app-shell').setAttribute('data-investigation-has-paper', 'false');
     setComposerPlaceholder(null);
     return;
@@ -354,6 +358,7 @@ export function showInvestigationSession(id, data) {
   const state = paperViewState(inv, { ...data, uploading: uploadingKind, startedAtMs: runStartedAt, approvalWaiting }, Date.now());
   byId('app-shell').setAttribute('data-investigation-has-paper', state.hasPaper ? 'true' : 'false');
   setComposerPlaceholder(state.composerPlaceholder);
+  scopeChip.update(inv.scope);
   paperMap.updateSummary(inv.summary, Boolean(data.running) && state.showSummary, state.showSummary, inv.summary_is_current);
   conventionCatalog.update(inv, Boolean(data.running));
   const primary = primarySource();
@@ -395,7 +400,7 @@ function scheduleSummaryRefresh() {
   const inv = session.investigation || {};
   const state = paperViewState(inv, session, Date.now());
   const summaryPending = state.pollSummary && (!inv.summary || inv.summary_is_current === false);
-  const conventionsPending = inv.conventions_requested && (!inv.conventions?.done || inv.conventions_is_current === false);
+  const conventionsPending = inv.conventions_requested && (!inv.conventions?.done || inv.conventions_is_current === false || inv.conventions_expanding === true);
   if (!summaryPending && !conventionsPending) return;
   const id = sessionId;
   summaryTimer = setTimeout(async () => {

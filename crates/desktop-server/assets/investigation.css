@@ -34,6 +34,8 @@
 .line-cite { appearance: none; background: none; border: 0; padding: 0; margin: 0; font: inherit;
   color: var(--accent); cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
 .line-cite:hover, .line-cite:focus-visible { text-decoration-style: solid; }
+.investigation-scope-chip { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: .35rem 0 .85rem; padding: .28rem .65rem; border: 1px solid var(--border-subtle); border-radius: 999px; background: var(--bg-surface); font-size: .84rem; color: var(--ink-secondary); }
+.investigation-scope-chip-label { color: var(--ink-primary); font-weight: 600; }
 #investigation-original { margin: .5rem 0; }
 #investigation-summary { border-bottom: 1px solid var(--border-subtle); margin-bottom: 1.3rem; padding-bottom: .8rem; }
 .investigation-summary-part { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: .65rem; margin: .75rem 0; }

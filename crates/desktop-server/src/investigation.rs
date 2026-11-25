@@ -298,9 +298,12 @@ pub(crate) fn prepare(
                 .ok_or_else(|| bad("This map is missing its reading request."))?;
             let catalog = research_tools::investigation::paper_conventions(&events, seq)
                 .unwrap_or(Value::Null);
-            if catalog["done"] == true {
+            if !crate::investigation_scope::conventions_resume_allows(&catalog) {
                 return Err(conflict("The conventions review is already saved."));
             }
+            let expanding = crate::investigation_scope::conventions_expanding_to_paper(
+                &events, seq, &catalog,
+            );
             let prior = context_text(&catalog);
             let next_batch = catalog["batch_index"].as_u64().unwrap_or(0) + 1;
             let text = prompts::conventions_resume_instructions(
@@ -311,13 +314,19 @@ pub(crate) fn prepare(
                 next_batch,
                 &catalog,
                 &prior,
+                expanding,
             );
+            let mut resumed_payload =
+                json!({"for_request_seq":seq,"source_id":source_id,"map_seq":map.seq});
+            if expanding {
+                resumed_payload["scope"] = json!("paper");
+            }
             ledger
                 .append(
                     session,
                     "investigation.conventions_resumed",
                     1,
-                    &json!({"for_request_seq":seq,"source_id":source_id,"map_seq":map.seq}),
+                    &resumed_payload,
                 )
                 .map_err(storage)?;
             req["_paper_conventions_request"] = json!(seq);
@@ -388,28 +397,63 @@ pub(crate) fn prepare(
                     )
                     .map_err(storage)?;
             }
+            let prepared_scope = crate::investigation_scope::compute_scope(
+                state,
+                &ledger,
+                session,
+                source,
+                prompt,
+                (page_start, page_end),
+            );
+            let mut mapping_payload = json!({"source_id":source_id,"question":prompt,"summary_requested":true,"conventions_requested":false,"overview_only":true});
+            if let Some(resolved) = prepared_scope
+                .as_ref()
+                .and_then(crate::investigation_scope::PreparedScope::resolved_json)
+            {
+                mapping_payload["scope"] = resolved;
+                mapping_payload["conventions_scope"] = json!("section");
+            }
             let seq = ledger
                 .append(
                     session,
                     "investigation.mapping_requested",
                     1,
-                    &json!({"source_id":source_id,"question":prompt,"summary_requested":true,"conventions_requested":false,"overview_only":true}),
+                    &mapping_payload,
                 )
                 .map_err(storage)?;
+            let mut text =
+                prompts::map_base_instructions(route, &source_id, &source.payload["primary_path"]);
+            if let Some(ref scope_info) = prepared_scope {
+                ledger
+                    .append(session, "investigation.scope", 1, &scope_info.event_payload(seq))
+                    .map_err(storage)?;
+                text.push_str(&scope_info.mapping_instructions_suffix());
+            }
             req["_paper_map_request"] = json!(seq);
-            prompts::map_base_instructions(route, &source_id, &source.payload["primary_path"])
+            text
         }
-        Scope::Question => prepare_question(
-            &ledger,
-            session,
-            &events,
-            pinned,
-            &source_id,
-            source.payload["primary_path"].as_str().unwrap_or_default(),
-            (page_start, page_end),
-            req,
-            prompt,
-        )?,
+        Scope::Question => {
+            let prepared_scope = crate::investigation_scope::compute_scope(
+                state,
+                &ledger,
+                session,
+                source,
+                prompt,
+                (page_start, page_end),
+            );
+            prepare_question(
+                &ledger,
+                session,
+                &events,
+                pinned,
+                &source_id,
+                source.payload["primary_path"].as_str().unwrap_or_default(),
+                (page_start, page_end),
+                req,
+                prompt,
+                prepared_scope.as_ref(),
+            )?
+        }
     };
     if turn_scope != Scope::Question {
         if let (Some(a), Some(b)) = (page_start, page_end) {
@@ -447,7 +491,7 @@ pub(crate) fn handle(
             .as_u64()
             .ok_or_else(|| bad("This map is missing its reading request."))?;
         if research_tools::investigation::paper_conventions(&events, seq)
-            .is_some_and(|c| c["done"] == true)
+            .is_some_and(|c| !crate::investigation_scope::conventions_resume_allows(&c))
         {
             return Ok((200, json!({"session":session,"status":"complete"})));
         }

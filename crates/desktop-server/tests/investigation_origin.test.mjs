@@ -122,6 +122,7 @@ async function setupHarness(t, hooks = {}) {
     'pdf_preview.js': 'export const openOriginalPdf = () => {};',
     'investigation_conventions.js': 'export const createConventionCatalog = () => ({ reset() {}, update() {} });',
     'investigation_answer.js': 'export const createAnswerCard = () => ({ reset() {}, update() {} });',
+    'investigation_scope.js': 'export const createScopeChip = () => ({ reset() {}, update() {} });',
     'source_links.js': 'export const citedPaperLinks = () => [];',
   };
   source = source.replace("'/assets/math.js'", JSON.stringify(mathHref));
