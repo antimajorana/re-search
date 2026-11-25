@@ -1,5 +1,5 @@
 // Ported in part from Kandinsky (github.com/antimajorana/kandinsky, 833a95f), the same author's project.
-// Offline Markdown parser and HTML renderer with container-aware block display math.
+// Offline Markdown parser and HTML renderer with container-aware block display math, lists, tables, and headings.
 import { escapeHtml } from './code_highlight.js';
 import {
   MATH_ENVS, extractMath, findDisplayClose, findEnvBlockClose,
@@ -10,10 +10,18 @@ import { numberEquations } from './math_equations.js';
 
 const CITATION_BODY_RE = /^[\d,\s\u2013\u2014-]+$/;
 
+/** Strips HTML comments (`<!-- ... -->`) outside fenced and inline code. */
+export function stripComments(text) {
+  return String(text ?? '').replace(
+    /(^ {0,3}(`{3,}|~{3,})[^]*?(?:^ {0,3}\2[`~]*[ \t]*$|$(?![\s\S])))|(`+)[^`\n]*?\3|<!--[^]*?-->/gm,
+    (m, fence, _f, tick) => (fence || tick ? m : ''),
+  );
+}
+
 export function applyEmphasis(escapedText) {
   return escapedText
-    .replace(/\*\*\*(?=\S)([^*\n]*?\S)\*\*\*/g, '<strong><em>$1</em></strong>')
-    .replace(/\*\*(?=\S)(.+?)(?<=\S)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^\w*])\*\*\*(?=\S)([^*\n]*?\S)\*\*\*(?=[^\w*]|$)/g, '$1<strong><em>$2</em></strong>')
+    .replace(/(^|[^\w*])\*\*(?=\S)(.+?)(?<=\S)\*\*(?=[^\w*]|$)/g, '$1<strong>$2</strong>')
     .replace(/(^|[^\w])__(?=\S)(.+?)(?<=\S)__(?=[^\w]|$)/g, '$1<strong>$2</strong>')
     .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?=[^\w*]|$)/g, '$1<em>$2</em>')
     .replace(/(^|[^\w])_(?=\S)([^_\n]*?\S)_(?=[^\w]|$)/g, '$1<em>$2</em>');
@@ -76,9 +84,9 @@ function splitTableRow(line) {
 
 function isTableDelimiterLine(line) {
   const t = line.trim();
-  if (!t.includes('-')) return false;
+  if (!t.includes('-') || !t.includes('|')) return false;
   const cells = splitTableRow(t);
-  return cells.length >= 1 && cells.every((c) => /^:?-{3,}:?$/.test(c));
+  return cells.length >= 1 && cells.every((c) => /^:?-{1,}:?$/.test(c));
 }
 
 function renderParagraphLines(paraLines, mathTokens, parseOpts) {
@@ -119,17 +127,136 @@ function matchBlockDisplay(lines, i) {
   return null;
 }
 
+function leadingIndent(line) {
+  const m = /^[ \t]*/.exec(line);
+  return m ? m[0].replace(/\t/g, '  ').length : 0;
+}
+
+function stripIndent(line, cols) {
+  let removed = 0;
+  let i = 0;
+  while (i < line.length && removed < cols) {
+    if (line[i] === ' ') { removed += 1; i += 1; }
+    else if (line[i] === '\t') { removed += 2; i += 1; }
+    else break;
+  }
+  return line.slice(i);
+}
+
+function parseListMarker(line) {
+  const ul = /^([ \t]*)([-*+])[ \t]+(.*)$/.exec(line);
+  if (ul) {
+    const indent = ul[1].replace(/\t/g, '  ').length;
+    const afterMarker = line.slice(ul[1].length + 1);
+    const spaces = (/^[ \t]+/.exec(afterMarker)?.[0] || ' ').replace(/\t/g, '  ').length;
+    return { tag: 'ul', indent, contentIndent: indent + 1 + spaces, start: 1, firstLine: ul[3] };
+  }
+  const ol = /^([ \t]*)(\d+)[.)][ \t]+(.*)$/.exec(line);
+  if (ol) {
+    const indent = ol[1].replace(/\t/g, '  ').length;
+    const markerLen = ol[2].length + 1;
+    const afterMarker = line.slice(ol[1].length + markerLen);
+    const spaces = (/^[ \t]+/.exec(afterMarker)?.[0] || ' ').replace(/\t/g, '  ').length;
+    return {
+      tag: 'ol',
+      indent,
+      contentIndent: indent + markerLen + spaces,
+      start: Number.parseInt(ol[2], 10),
+      firstLine: ol[3],
+    };
+  }
+  return null;
+}
+
+function formatListItemHtml(itemLines, mathTokens, parseOpts) {
+  const body = renderMarkdownBlocks(itemLines, mathTokens, parseOpts);
+  const singlePara = /^<p>([\s\S]*?)<\/p>$/.exec(body);
+  if (singlePara && !singlePara[1].includes('</p>')) return `<li>${singlePara[1]}</li>`;
+  const leadParaList = /^<p>([\s\S]*?)<\/p>\n(<(?:ul|ol)\b[\s\S]*)$/.exec(body);
+  if (leadParaList && !leadParaList[1].includes('</p>')) return `<li>${leadParaList[1]}\n${leadParaList[2]}</li>`;
+  return `<li>${body}</li>`;
+}
+
+function consumeList(lines, startIdx, mathTokens, parseOpts) {
+  const first = parseListMarker(lines[startIdx]);
+  const { tag, indent: listIndent, start: startNum } = first;
+  const items = [];
+  let i = startIdx;
+
+  while (i < lines.length) {
+    const m = parseListMarker(lines[i]);
+    if (!m || m.tag !== tag || m.indent !== listIndent) break;
+    const itemLines = [m.firstLine];
+    const { contentIndent } = m;
+    let inFence = null;
+    i += 1;
+
+    while (i < lines.length) {
+      const cur = lines[i];
+      if (inFence) {
+        const stripped = stripIndent(cur, contentIndent);
+        itemLines.push(stripped);
+        if (inFence.test(stripped)) inFence = null;
+        i += 1;
+        continue;
+      }
+      if (!cur.trim()) {
+        let j = i + 1;
+        while (j < lines.length && !lines[j].trim()) j += 1;
+        if (j >= lines.length) break;
+        const nextLine = lines[j];
+        const nextMarker = parseListMarker(nextLine);
+        if (nextMarker && nextMarker.tag === tag && nextMarker.indent === listIndent) {
+          i = j;
+          break;
+        }
+        if (leadingIndent(nextLine) >= contentIndent || (nextMarker && nextMarker.indent > listIndent)) {
+          for (let k = i; k < j; k++) itemLines.push('');
+          i = j;
+          continue;
+        }
+        break;
+      }
+      const curIndent = leadingIndent(cur);
+      const curMarker = parseListMarker(cur);
+      if (curIndent >= contentIndent) {
+        const stripped = stripIndent(cur, contentIndent);
+        const fence = stripped.match(/^[ \t]{0,3}(`{3,}|~{3,})([^\n]*)$/);
+        if (fence) inFence = new RegExp(`^[ \\t]{0,3}${fence[1][0]}{${fence[1].length},}[ \\t]*$`);
+        itemLines.push(stripped);
+        i += 1;
+        continue;
+      }
+      if (curMarker && curMarker.indent > listIndent) {
+        itemLines.push(stripIndent(cur, Math.min(curIndent, contentIndent)));
+        i += 1;
+        continue;
+      }
+      break;
+    }
+    items.push(formatListItemHtml(itemLines, mathTokens, parseOpts));
+  }
+
+  const startAttr = tag === 'ol' && Number.isInteger(startNum) && startNum !== 1 ? ` start="${startNum}"` : '';
+  return { html: `<${tag}${startAttr}>${items.join('\n')}</${tag}>`, nextIdx: i };
+}
+
+function matchAtxHeading(line) {
+  const m = /^ {0,3}(#{1,6})[ \t]+(.+)$/.exec(line);
+  if (!m) return null;
+  const text = m[2].replace(/[ \t]+#+[ \t]*$/, '').trim();
+  return text ? { level: m[1].length, text } : null;
+}
+
 function renderMarkdownBlocks(inputLines, mathTokens, parseOpts) {
   const lines = inputLines.slice();
   const out = [];
   let para = [];
   let quote = [];
-  const lists = [];
 
   const flushPara = () => { if (para.length) { out.push(renderParagraphLines(para, mathTokens, parseOpts)); para = []; } };
   const flushQuote = () => { if (quote.length) { out.push(`<blockquote>${renderMarkdownBlocks(quote, mathTokens, parseOpts)}</blockquote>`); quote = []; } };
-  const closeLists = () => { while (lists.length) out.push(`</li></${lists.pop().tag}>`); };
-  const flushAll = () => { flushPara(); flushQuote(); closeLists(); };
+  const flushAll = () => { flushPara(); flushQuote(); };
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -150,7 +277,7 @@ function renderMarkdownBlocks(inputLines, mathTokens, parseOpts) {
     if (!line.trim()) { flushAll(); continue; }
 
     // Blockquote: collect prefix-stripped lines and recurse
-    if (/^\s*>\s?/.test(line)) { flushPara(); closeLists(); quote.push(line.replace(/^\s*>\s?/, '')); continue; }
+    if (/^\s*>\s?/.test(line)) { flushPara(); quote.push(line.replace(/^\s*>\s?/, '')); continue; }
     flushQuote();
 
     // Block display math ($$, \[, \begin{env})
@@ -173,11 +300,15 @@ function renderMarkdownBlocks(inputLines, mathTokens, parseOpts) {
       continue;
     }
 
-    const hMatch = line.match(/^(#{1,6})\s+(.+)$/);
-    if (hMatch) { flushPara(); closeLists(); out.push(`<h${hMatch[1].length}>${renderInlineMarkdown(hMatch[2], mathTokens, parseOpts)}</h${hMatch[1].length}>`); continue; }
-    if (/^[ \t]*(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(line)) { flushPara(); closeLists(); out.push('<hr>'); continue; }
+    const heading = matchAtxHeading(line);
+    if (heading) {
+      flushPara();
+      out.push(`<h${heading.level}>${renderInlineMarkdown(heading.text, mathTokens, parseOpts)}</h${heading.level}>`);
+      continue;
+    }
+    if (/^[ \t]*(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(line)) { flushPara(); out.push('<hr>'); continue; }
     if (line.includes('|') && i + 1 < lines.length && isTableDelimiterLine(lines[i + 1])) {
-      flushPara(); closeLists();
+      flushPara();
       const headMarked = scanInlineText(line, mathTokens, parseOpts);
       const headers = splitTableRow(headMarked);
       const aligns = splitTableRow(lines[i + 1]).map((c) => (c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : 'left'));
@@ -189,29 +320,18 @@ function renderMarkdownBlocks(inputLines, mathTokens, parseOpts) {
         rows.push(`<tr>${headers.map((_, idx) => `<td style="text-align:${aligns[idx] || 'left'}">${renderInlineMarkdown(cols[idx] ?? '', mathTokens, parseOpts, true)}</td>`).join('')}</tr>`);
       }
       i -= 1;
-      out.push(`<table><thead><tr>${ths}</tr></thead><tbody>${rows.join('')}</tbody></table>`);
+      out.push(`<div class="table-wrap"><table><thead><tr>${ths}</tr></thead><tbody>${rows.join('')}</tbody></table></div>`);
       continue;
     }
-    const ulMatch = line.match(/^([ \t]*)([-*+])\s+(.+)$/);
-    const olMatch = !ulMatch && line.match(/^([ \t]*)\d+[.)]\s+(.+)$/);
-    if (ulMatch || olMatch) {
+
+    if (parseListMarker(line)) {
       flushPara();
-      const tag = ulMatch ? 'ul' : 'ol';
-      const indent = (ulMatch ? ulMatch[1] : olMatch[1]).replace(/\t/g, '  ').length;
-      const body = renderInlineMarkdown(ulMatch ? ulMatch[3] : olMatch[2], mathTokens, parseOpts);
-      while (lists.length && indent < lists[lists.length - 1].indent) out.push(`</li></${lists.pop().tag}>`);
-      if (lists.length && indent === lists[lists.length - 1].indent && lists[lists.length - 1].tag !== tag) {
-        out.push(`</li></${lists.pop().tag}>`);
-      }
-      if (!lists.length || indent > lists[lists.length - 1].indent) {
-        lists.push({ tag, indent });
-        out.push(`<${tag}><li>${body}`);
-      } else {
-        out.push(`</li>\n<li>${body}`);
-      }
+      const { html, nextIdx } = consumeList(lines, i, mathTokens, parseOpts);
+      out.push(html);
+      i = nextIdx - 1;
       continue;
     }
-    closeLists();
+
     para.push(line);
   }
   flushAll();
@@ -244,14 +364,14 @@ function substituteTokens(template, mathTokens, eqrefTokens, renderCtx) {
 }
 
 export function markdownToHtml(raw) {
-  const src = String(raw ?? '').replace(/\u0000/g, '').replace(/\r\n?/g, '\n');
+  const src = stripComments(String(raw ?? '').replace(/\u0000/g, '').replace(/\r\n?/g, '\n'));
   const mathTokens = [];
   const template = renderMarkdownBlocks(src.split('\n'), mathTokens, { rendered: false });
   return substituteTokens(template, mathTokens, [], null);
 }
 
 export function markdownToRenderedHtml(raw, opts = {}) {
-  const src = String(raw ?? '').replace(/\u0000/g, '').replace(/\r\n?/g, '\n');
+  const src = stripComments(String(raw ?? '').replace(/\u0000/g, '').replace(/\r\n?/g, '\n'));
   const mathTokens = [];
   const eqrefTokens = [];
   const template = renderMarkdownBlocks(src.split('\n'), mathTokens, { rendered: true, eqrefTokens });

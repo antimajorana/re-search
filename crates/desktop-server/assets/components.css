@@ -253,7 +253,9 @@ button, input, select, textarea { font-family: inherit; color: inherit; }
 .rich-prose code { font-family: var(--font-mono); font-size: 0.89em; background: var(--bg-subtle); padding: 1px 5px; border-radius: 5px; }
 .rich-prose pre code { background: transparent; padding: 0; }
 .rich-prose blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--accent); color: var(--ink-secondary); }
+.rich-prose .table-wrap { overflow-x: auto; max-width: 100%; margin: 10px 0; }
 .rich-prose table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13.5px; }
+.rich-prose .table-wrap > table { margin: 0; }
 .rich-prose th, .rich-prose td { border: 1px solid var(--border-subtle); padding: 6px 10px; text-align: left; }
 .rich-prose th { background: var(--bg-subtle); }
 
