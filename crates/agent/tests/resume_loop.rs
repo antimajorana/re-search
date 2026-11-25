@@ -546,3 +546,42 @@ fn fail_closed_rejections_write_zero_new_ledger_events() {
         assert!(!asst_text.is_empty(), "Anthropic rejects empty text blocks");
     }
 }
+
+#[test]
+fn resume_uses_stored_custom_system_prompt_without_drift() {
+    use agent::{resume_autonomous_research_loop, run_autonomous_research_loop, AutonomousConfig, AutonomousRoles};
+    let tmp = TempDir::new("resume-custom-prompt");
+    let session = "s-custom-sys";
+    let env = research_tools::ResearchEnv::new(tmp.path.clone());
+    let router = make_router(
+        &tmp.path, session, Arc::new(MockApprover::new(true)), Arc::new(MockEpoch::new(1, false)), Arc::new(AtomicUsize::new(0)),
+    );
+    let ledger = Ledger::open(&tmp.path).unwrap();
+    let custom_prompt = "Custom Investigation reading assistant prompt [Lstart-end].";
+    let reply = |id: &str, text: &str| {
+        Ok(anthropic_resp(
+            id, StopReason::EndTurn, vec![ContentBlock::Text { text: text.into() }],
+            json!({"id":id,"type":"message","role":"assistant","model":"claude-haiku-4-5","stop_reason":"end_turn","content":[{"type":"text","text":text}]}),
+        ))
+    };
+    let t1 = ScriptedTransport::new("anthropic-messages", vec![reply("m1", "First reply")]);
+    let mut cfg1 = default_cfg("Explain section 2", false);
+    cfg1.system_prompt = custom_prompt.into();
+    let (roles, auto_cfg) = (AutonomousRoles::default(), AutonomousConfig::default());
+    run_autonomous_research_loop(&t1, &roles, &router, &ledger, &env, &cfg1, &auto_cfg, None, &mut NoopSink).unwrap();
+
+    let insp = inspect_session_for_resume(&ledger, session, builtin::POLICY_VERSION, &defs_of(&router)).unwrap();
+    assert!(insp.system_prompt.contains(custom_prompt));
+
+    let t2 = ScriptedTransport::new("anthropic-messages", vec![reply("m2", "Second reply")]);
+    let rcfg = resume_cfg("Follow-up question", "claude-haiku-4-5", 2, false);
+    assert!(rcfg.system_prompt.is_none());
+    resume_autonomous_research_loop(&t2, &roles, &router, &ledger, &env, &rcfg, &auto_cfg, None, &mut NoopSink).unwrap();
+
+    let reqs = t2.requests();
+    assert_eq!(reqs.len(), 1);
+    let sent_sys = reqs[0].system.as_deref().unwrap();
+    assert!(sent_sys.contains(custom_prompt));
+    assert!(!sent_sys.contains("Maintain the Proof DAG"));
+}
+
