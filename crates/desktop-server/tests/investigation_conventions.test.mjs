@@ -24,3 +24,14 @@ test('convention lookup matches scientific notation, meaning, scope, rationale a
   assert.equal(filterConventions(items,'$m$')[0].id, 'm');
   assert.deepEqual(filterConventions(items,'unknown'), []);
 });
+
+test('pending_count_shown', () => {
+  assert.equal(
+    conventionStatus({ items: [{}], done: false, pending_items: ['metric-sign', 'fourier-norm'] }, true, false),
+    'Incomplete catalog · 2 citations pending',
+  );
+  assert.equal(
+    conventionStatus({ items: [{}], done: false, pending_items: ['metric-sign'] }, true, true),
+    '1 found so far · 1 citation pending',
+  );
+});
