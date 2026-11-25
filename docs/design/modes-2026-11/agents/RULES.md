@@ -93,6 +93,9 @@ by running it on the base commit, record it as pre-existing, and move on without
 Known on the base commit: with Rust 1.97 clippy reports one `manual_unwrap_or` in
 `crates/desktop-server/src/evidence.rs` (line 744). That file is over 600 lines and not yours:
 leave it, and check that clippy reports nothing else.
+Also known on the base commit: `paper_read::tests::try_call_err_aborts_all_and_fails_turn`
+(`crates/agent/src/paper_read_tests.rs:227`) fails when the tests run as root, because it relies on
+a read-only file refusing writes. Record it as pre-existing if you see it; do not change it.
 
 You may start your own subagents on separate files. You stay responsible for what they write:
 read it and run its tests before you commit it.

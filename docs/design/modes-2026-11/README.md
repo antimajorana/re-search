@@ -19,7 +19,7 @@ packages F0 to F12. The work branch is `claude/project-thread-caszr2`, based on
 |---|---|---|
 | F0 guard rails | done | work branch |
 | F2 paper key | done | work branch, `crates/research-tools/src/paper_key.rs` |
-| F8 evaluation harness skeleton | in progress (coordinator) | - |
+| F8 evaluation harness skeleton | done | work branch, `crates/agent/tests/eval_support/`, `tests/fixtures/eval/`, `docs/design/eval-2026-11/` |
 | F3 network gate and paper fetch | brief `agents/f3-net-gate.md` | `gemini/modes/f3-net-gate` |
 | F4 quote core, F9 run budget | brief `agents/f4-f9-quote-budget.md` | `gemini/modes/f4-f9-quote-budget` |
 | V1 skeleton core for TeX | brief `agents/v1-skeleton.md` | `gemini/modes/v1-skeleton` |
