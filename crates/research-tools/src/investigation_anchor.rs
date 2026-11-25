@@ -38,7 +38,7 @@ pub(crate) fn anchor_schema() -> Value {
         "source_id":string_schema(64),"path":string_schema(1024),
         "start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1},
         "excerpt":string_schema(MAX_EXCERPT_BYTES),
-        "quote":{"type":"string","minLength":12,"maxLength":MAX_QUOTE_CHARS},
+        "quote":{"type":"string","minLength":MIN_WHOLE_LINE_NON_SPACE,"maxLength":MAX_QUOTE_CHARS},
         "evidence":{"type":"string","pattern":"^ev-[0-9]{1,12}$"},
         "kind":{"type":"string","enum":ANCHOR_KINDS},"label":string_schema(160)
     },"required":["source_id","kind"],"additionalProperties":false})
@@ -393,7 +393,7 @@ impl SourceIndex<'_> {
             if !file.lines_text(final_start, final_end).contains(label) {
                 let mut extended = None;
                 if final_start > 1 {
-                    let (above_lo, above_hi) = (s.min(final_start.saturating_sub(LABEL_ABOVE_RADIUS)).max(1), final_start - 1);
+                    let (above_lo, above_hi) = (final_start.saturating_sub(LABEL_ABOVE_RADIUS).max(1), final_start - 1);
                     if above_lo <= above_hi {
                         let (base_off, _) = file.line_range_bytes(above_lo, above_hi);
                         let mut hits = file.lines_text(above_lo, above_hi).match_indices(label);
@@ -410,6 +410,10 @@ impl SourceIndex<'_> {
                     return fail("label_not_found", format!("Label '{label}' was not found in {path} lines {final_start}–{final_end} or immediately above."), Some([s, e]), tt_at(final_start, final_end));
                 }
             }
+        }
+        if [final_start, final_end] == [s, e] {
+            cited_range = None;
+            range_basis.clear();
         }
         if final_end < final_start || final_end - final_start >= MAX_ANCHOR_LINES {
             return fail("range_too_long", "Final anchor range exceeds the 64-line limit.".into(), Some([s, e]), None);
@@ -432,6 +436,14 @@ impl SourceIndex<'_> {
             let q_pos = folded_full.find(&folded_quote).unwrap_or(0);
             let q_start = orig_map.get(q_pos).copied().unwrap_or(0);
             let q_end = orig_map.get(q_pos + folded_quote.len().saturating_sub(1)).map(|&b| b + 1).unwrap_or(q_start);
+            if q_end.saturating_sub(q_start) > MAX_EXCERPT_BYTES {
+                return fail(
+                    "quote_span_too_wide",
+                    format!("Matched quote spans {} bytes in {path}, exceeding the {MAX_EXCERPT_BYTES}-byte excerpt limit.", q_end - q_start),
+                    Some([s, e]),
+                    None,
+                );
+            }
             let (w0, w1) = window_around(full_lines, q_start, q_end, MAX_EXCERPT_BYTES);
             (full_lines[w0..w1].to_string(), Some([w0, w1]))
         };
@@ -515,16 +527,16 @@ fn strip_section_number_prefix(s: &str) -> Option<&str> {
 fn window_around(text: &str, q_start: usize, q_end: usize, max_bytes: usize) -> (usize, usize) {
     let len = text.len();
     if len <= max_bytes { return (0, len); }
-    let (q_start, q_end) = (q_start.min(len), q_end.clamp(q_start.min(len), len));
+    let (mut q_start, mut q_end) = (q_start.min(len), q_end.clamp(q_start.min(len), len));
+    while q_start > 0 && !text.is_char_boundary(q_start) { q_start -= 1; }
+    while q_end < len && !text.is_char_boundary(q_end) { q_end += 1; }
     let q_len = q_end - q_start;
     let mut w0 = q_start.saturating_sub(max_bytes.saturating_sub(q_len) / 2).min(len.saturating_sub(max_bytes));
     while w0 < q_start && !text.is_char_boundary(w0) { w0 += 1; }
-    while w0 > 0 && !text.is_char_boundary(w0) { w0 -= 1; }
     let mut w1 = (w0 + max_bytes).min(len);
     while w1 > w0 && !text.is_char_boundary(w1) { w1 -= 1; }
     if w1 < q_end && q_len <= max_bytes {
         w1 = q_end;
-        while w1 < len && !text.is_char_boundary(w1) { w1 += 1; }
         w0 = w1.saturating_sub(max_bytes);
         while w0 < q_start && !text.is_char_boundary(w0) { w0 += 1; }
     }

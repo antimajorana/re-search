@@ -367,7 +367,7 @@ pub(crate) fn resolve_evidence(
     if derived != rec.excerpt {
         return Err(fault("evidence_excerpt_mismatch", format!("Re-derived lines do not match stored excerpt of `{ev_id}`.")));
     }
-    if let Some(label) = anchor.label.as_deref().filter(|l| !derived.contains(*l)) {
+    if let Some(label) = anchor.label.as_deref().filter(|l| !full_lines.contains(*l)) {
         return Err(fault("label_not_found", format!("Label `{label}` not found in evidence `{ev_id}`.")));
     }
     let ns_len = quote_raw.chars().filter(|c| !c.is_whitespace()).count();
