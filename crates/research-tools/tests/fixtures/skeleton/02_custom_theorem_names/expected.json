@@ -1,0 +1,187 @@
+{
+  "paper_key": "arxiv:2601.00002",
+  "version": "v1",
+  "primary_path": "main.tex",
+  "quality": "full",
+  "quality_notes_contains": [],
+  "theorem_defs": [
+    {
+      "env_name": "boxedres",
+      "kind": "theorem",
+      "display_title": "Main Result",
+      "shared_counter": null,
+      "parent_counter": "section",
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "cav",
+      "kind": "remark",
+      "display_title": "Caveat",
+      "shared_counter": null,
+      "parent_counter": null,
+      "starred": false,
+      "style": "remark"
+    },
+    {
+      "env_name": "coro",
+      "kind": "corollary",
+      "display_title": "Corollary",
+      "shared_counter": "mainres",
+      "parent_counter": null,
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "keylem",
+      "kind": "lemma",
+      "display_title": "Key Lemma",
+      "shared_counter": "mainres",
+      "parent_counter": null,
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "mainres",
+      "kind": "theorem",
+      "display_title": "Main Result",
+      "shared_counter": null,
+      "parent_counter": "section",
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "obs",
+      "kind": "claim",
+      "display_title": "Observation",
+      "shared_counter": null,
+      "parent_counter": null,
+      "starred": false,
+      "style": "plain"
+    },
+    {
+      "env_name": "standassump",
+      "kind": "assumption",
+      "display_title": "Standing Assumption",
+      "shared_counter": null,
+      "parent_counter": null,
+      "starred": true,
+      "style": null
+    }
+  ],
+  "macros": [],
+  "nodes": [
+    {
+      "kind": "section",
+      "env_name": "section",
+      "title": "Weighted sequence spaces",
+      "label": "sec:weighted",
+      "parent_order": null,
+      "spans": [{ "path": "main.tex", "start_line": 12, "end_line": 33 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "assumption",
+      "env_name": "standassump",
+      "title": "Positive weight sequence",
+      "label": "ass:weight",
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 13, "end_line": 15 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "lemma",
+      "env_name": "keylem",
+      "title": "Shift boundedness",
+      "label": "lem:shift",
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 16, "end_line": 18 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "proof",
+      "env_name": "myproof",
+      "title": null,
+      "label": null,
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 19, "end_line": 21 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": { "kind": "adjacent", "target_order": 2 }
+    },
+    {
+      "kind": "theorem",
+      "env_name": "boxedres",
+      "title": "Weighted contraction fixed point",
+      "label": "thm:fixed",
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 22, "end_line": 24 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "corollary",
+      "env_name": "coro",
+      "title": "Geometric convergence",
+      "label": "cor:geom",
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 25, "end_line": 27 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "claim",
+      "env_name": "obs",
+      "title": null,
+      "label": null,
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 28, "end_line": 30 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "remark",
+      "env_name": "cav",
+      "title": null,
+      "label": null,
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 31, "end_line": 33 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    }
+  ]
+}

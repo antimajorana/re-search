@@ -1,0 +1,36 @@
+\documentclass{article}
+\usepackage{amsmath,amsthm}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{definition}{Definition}
+\newtheorem{remark}{Remark}
+\begin{document}
+\section{Convex cones}
+\begin{definition}
+A subset $K \subseteq \mathbb{R}^d$ is a convex cone if $\alpha x + \beta y \in K$ for all $x,y\in K$ and $\alpha,\beta \ge 0$.
+\end{definition}
+\begin{lemma}
+The dual cone $K^* = \{y \in \mathbb{R}^d : \langle x, y \rangle \ge 0 \text{ for all } x\in K\}$ is closed and convex.
+\end{lemma}
+\begin{theorem}[Bipolar identity]
+If $K$ is a nonempty closed convex cone, then $(K^*)^* = K$.
+\[
+x \in K \iff \langle x, y \rangle \ge 0 \quad \forall y \in K^*.
+\]
+\end{theorem}
+\begin{proof}
+Separation of a point $z \notin K$ from the closed convex cone $K$ yields a hyperplane passing through the origin.
+\end{proof}
+\begin{remark}
+Closure is essential for the bipolar identity.
+\end{remark}
+\begin{remark}
+Closure is essential for the bipolar identity.
+\end{remark}
+\begin{equation}\label{eq:selfdual}
+(\mathbb{R}_+^d)^* = \mathbb{R}_+^d.
+\end{equation}
+$$
+\langle x, y \rangle \ge 0.
+$$
+\end{document}

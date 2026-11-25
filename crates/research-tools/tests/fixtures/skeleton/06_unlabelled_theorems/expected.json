@@ -1,0 +1,160 @@
+{
+  "paper_key": "arxiv:2601.00006",
+  "version": "v1",
+  "primary_path": "main.tex",
+  "quality": "full",
+  "quality_notes_contains": [],
+  "theorem_defs": [
+    {
+      "env_name": "definition",
+      "kind": "definition",
+      "display_title": "Definition",
+      "shared_counter": null,
+      "parent_counter": null,
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "lemma",
+      "kind": "lemma",
+      "display_title": "Lemma",
+      "shared_counter": null,
+      "parent_counter": null,
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "remark",
+      "kind": "remark",
+      "display_title": "Remark",
+      "shared_counter": null,
+      "parent_counter": null,
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "theorem",
+      "kind": "theorem",
+      "display_title": "Theorem",
+      "shared_counter": null,
+      "parent_counter": null,
+      "starred": false,
+      "style": null
+    }
+  ],
+  "macros": [],
+  "nodes": [
+    {
+      "kind": "section",
+      "env_name": "section",
+      "title": "Convex cones",
+      "label": null,
+      "parent_order": null,
+      "spans": [{ "path": "main.tex", "start_line": 8, "end_line": 35 }],
+      "head_cites": [],
+      "eq_count": 1,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "definition",
+      "env_name": "definition",
+      "title": null,
+      "label": null,
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 9, "end_line": 11 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "lemma",
+      "env_name": "lemma",
+      "title": null,
+      "label": null,
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 12, "end_line": 14 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "theorem",
+      "env_name": "theorem",
+      "title": "Bipolar identity",
+      "label": null,
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 15, "end_line": 20 }],
+      "head_cites": [],
+      "eq_count": 1,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "proof",
+      "env_name": "proof",
+      "title": null,
+      "label": null,
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 21, "end_line": 23 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": { "kind": "adjacent", "target_order": 3 }
+    },
+    {
+      "kind": "remark",
+      "env_name": "remark",
+      "title": null,
+      "label": null,
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 24, "end_line": 26 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "remark",
+      "env_name": "remark",
+      "title": null,
+      "label": null,
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 27, "end_line": 29 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "equation",
+      "env_name": "equation",
+      "title": null,
+      "label": "eq:selfdual",
+      "parent_order": 0,
+      "spans": [{ "path": "main.tex", "start_line": 30, "end_line": 32 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    }
+  ]
+}

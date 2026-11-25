@@ -1,0 +1,26 @@
+\documentclass{article}
+\usepackage{amsmath,amsthm}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem*{remark}{Remark}
+\begin{document}
+\section{Discrete heat kernel}\label{sec:heat}
+\begin{theorem}[L2 decay]\label{thm:decay}
+% Added clarifying comment in v2 without changing the statement.
+For a mean-zero initial datum $u_0$ on $\mathbb{Z}_N$, $\|e^{-t\Delta} u_0\|_2 \le e^{-\lambda_1 t}\|u_0\|_2$.
+\end{theorem}
+\begin{lemma}[Discrete Fourier diagonalization]\label{lem:fourier}
+The characters $e^{2\pi i k x / N}$ form an orthonormal eigenbasis of $\Delta$ on $\mathbb{Z}_N$.
+\end{lemma}
+\begin{proposition}[Spectral gap]\label{prop:gap}
+The smallest nonzero eigenvalue on $\mathbb{Z}_N$ satisfies $\lambda_1 = 4\sin^2(\pi/N) \ge 16/N^2$.
+\end{proposition}
+\begin{theorem}[Sup-norm bound]\label{thm:sup}
+For all $t>0$, $\|e^{-t\Delta} u_0\|_\infty \le N^{1/2} e^{-\lambda_1 t}\|u_0\|_2$.
+\end{theorem}
+\begin{corollary}[Uniform relaxation]\label{cor:uniform}
+After time $t \ge \lambda_1^{-1}\log N$, the oscillation drops below $\|u_0\|_2$.
+\end{corollary}
+\end{document}

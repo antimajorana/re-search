@@ -1,0 +1,55 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amsthm,amssymb}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Lap}[1]{\Delta_{#1}}
+\DeclareMathOperator{\Deg}{deg}
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+\title{Discrete Harmonic Functions on Finite Weighted Graphs}
+\begin{document}
+\maketitle
+\begin{abstract}
+We establish a maximum principle and an energy identity for discrete harmonic functions on finite connected weighted graphs.
+\end{abstract}
+\section{Graph Laplacian and harmonicity}\label{sec:setup}
+Let $G=(V,E)$ be a finite connected graph with positive edge weights $w_{uv}=w_{vu}>0$.
+\begin{definition}[Weighted Laplacian]\label{def:lap}
+For any function $f:V\to\R$, the weighted Laplacian at $u\in V$ is
+\begin{equation}\label{eq:lap}
+(\Lap{G} f)(u) = \sum_{v\sim u} w_{uv}(f(u) - f(v)).
+\end{equation}
+We call $f$ harmonic on $U\subseteq V$ if $\Lap{G} f(u)=0$ for every $u\in U$.
+\end{definition}
+\begin{lemma}[Dirichlet form identity \cite[Proposition 2.1]{keller2020}]\label{lem:dirichlet}
+For all $f,g:V\to\R$,
+\[
+\sum_{u\in V} f(u)(\Lap{G} g)(u) = \frac{1}{2}\sum_{u\sim v} w_{uv}(f(u)-f(v))(g(u)-g(v)).
+\]
+\end{lemma}
+\begin{proof}
+Reindexing the sum by swapping $u$ and $v$ and using symmetry $w_{uv}=w_{vu}$ yields the identity directly.
+\end{proof}
+\section{Maximum principle and uniqueness}\label{sec:max}
+\begin{theorem}[Discrete maximum principle]\label{thm:max}
+Let $U\subsetneq V$ be a nonempty proper subset. If $f:V\to\R$ is harmonic on $U$, then
+\begin{equation}\label{eq:max-bound}
+\max_{u\in U} f(u) \le \max_{v\in V\setminus U} f(v).
+\end{equation}
+\end{theorem}
+\begin{proof}
+Suppose the maximum is attained at an interior vertex $u_0\in U$. Since $f(u_0)$ is the weighted average of its neighbours, every neighbour attains the same value. Connectivity propagates this value to $V\setminus U$.
+\end{proof}
+\begin{corollary}[Uniqueness of the Dirichlet problem]\label{cor:unique}
+Given boundary values on $V\setminus U$, there is at most one function harmonic on $U$ agreeing with those values.
+\end{corollary}
+\begin{remark}
+The positivity hypothesis $w_{uv}>0$ cannot be relaxed to nonnegative weights without risking disconnected components.
+\end{remark}
+\end{document}

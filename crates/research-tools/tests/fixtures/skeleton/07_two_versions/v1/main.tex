@@ -1,0 +1,22 @@
+\documentclass{article}
+\usepackage{amsmath,amsthm}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem*{remark}{Remark}
+\begin{document}
+\section{Discrete heat kernel}\label{sec:heat}
+\begin{theorem}[L2 decay]\label{thm:decay}
+For a mean-zero initial datum $u_0$ on $\mathbb{Z}_N$, $\|e^{-t\Delta} u_0\|_2 \le e^{-\lambda_1 t}\|u_0\|_2$.
+\end{theorem}
+\begin{proposition}[Spectral gap]\label{prop:gap}
+The smallest nonzero eigenvalue on $\mathbb{Z}_N$ satisfies $\lambda_1 = 4\sin^2(\pi/N)$.
+\end{proposition}
+\begin{theorem}[Sup-norm bound]\label{thm:sup}
+For all $t>0$, $\|e^{-t\Delta} u_0\|_\infty \le N^{1/2} e^{-\lambda_1 t}\|u_0\|_2$.
+\end{theorem}
+\begin{remark}
+The factor $N^{1/2}$ is crude for small $t$.
+\end{remark}
+\end{document}
