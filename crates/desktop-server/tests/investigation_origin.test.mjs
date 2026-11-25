@@ -116,6 +116,7 @@ async function setupHarness(t, hooks = {}) {
     'investigation_map.js': `export const DEFAULT_PAPER_REQUEST = 'Identify'; export const createPaperMap = () => ({ reset() {}, update() {}, updateSummary() {}, renderAnchors() {}, openNode: (...a) => globalThis.__originMapOpen?.(...a) ?? true });`,
     'pdf_preview.js': 'export const openOriginalPdf = () => {};',
     'investigation_conventions.js': 'export const createConventionCatalog = () => ({ reset() {}, update() {} });',
+    'investigation_scope.js': 'export const createScopeChip = () => ({ reset() {}, update() {} });',
     'source_links.js': 'export const citedPaperLinks = () => [];',
   };
   source = source.replace("'/assets/math.js'", JSON.stringify(mathHref));

@@ -23,6 +23,8 @@
 .investigation-setup textarea, .investigation-action-form textarea { resize: vertical; min-height: 3.5rem; height: auto; padding-block: .5rem; }
 .investigation-setup > button { justify-self: start; margin-top: .4rem; }
 #investigation-status, .investigation-notice { margin: 1rem 0; color: var(--ink-secondary); }
+.investigation-scope-chip { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin: .35rem 0 .85rem; padding: .28rem .65rem; border: 1px solid var(--border-subtle); border-radius: 999px; background: var(--bg-surface); font-size: .84rem; color: var(--ink-secondary); }
+.investigation-scope-chip-label { color: var(--ink-primary); font-weight: 600; }
 #investigation-original { margin: .5rem 0; }
 #investigation-summary { border-bottom: 1px solid var(--border-subtle); margin-bottom: 1.3rem; padding-bottom: .8rem; }
 .investigation-summary-part { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: .65rem; margin: .75rem 0; }

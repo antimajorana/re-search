@@ -34,8 +34,9 @@ export function conventionStatus(catalog, requested, running, selectedPages, cur
   if (!current) return (count ? count + (count === 1 ? ' entry' : ' entries') + ' from an earlier reading' : 'Earlier reading') +
     (requested && running ? ' · reading again…' : '');
   if (!catalog.done) return running ? (count ? count + ' found so far' : 'Reading the paper…') : 'Incomplete catalog';
-  if (!count) return catalog.coverage === 'partial' ? 'None located in the reviewed passages' : 'None reported in the ' + scope;
-  return count + (count === 1 ? ' entry' : ' entries') + (catalog.coverage === 'partial' ? ' · partial coverage' : '');
+  const sectionTag = catalog.coverage_scope === 'section' ? ' · section catalog' : '';
+  if (!count) return (catalog.coverage === 'partial' ? 'None located in the reviewed passages' : 'None reported in the ' + (catalog.coverage_scope === 'section' ? 'section' : scope)) + sectionTag;
+  return count + (count === 1 ? ' entry' : ' entries') + sectionTag + (catalog.coverage === 'partial' ? ' · partial coverage' : '');
 }
 
 export function createConventionCatalog(host, renderAnchors, find) {
@@ -119,9 +120,11 @@ export function createConventionCatalog(host, renderAnchors, find) {
     signature = next;
     catalog = inv.conventions || null;
     mapSeq = inv.map_seq;
-    resume.hidden = running || mapSeq == null || (catalog?.done && inv.conventions_is_current !== false);
+    const sectionDone = Boolean(catalog?.done && catalog.coverage_scope === 'section' && inv.conventions_is_current !== false);
+    resume.hidden = running || mapSeq == null || (catalog?.done && !sectionDone && inv.conventions_is_current !== false);
     resume.disabled = pending;
-    resume.textContent = catalog || inv.conventions_requested ? 'Continue conventions review' : 'Find paper conventions';
+    resume.textContent = sectionDone ? 'Catalog all conventions'
+      : (catalog || inv.conventions_requested ? 'Continue conventions review' : 'Find paper conventions');
     host.hidden = !(catalog || inv.conventions_requested || inv.source_id || mapSeq != null);
     if (host.hidden) return;
     const mapEl = document.getElementById('investigation-map'), panel = document.getElementById('investigation-panel');

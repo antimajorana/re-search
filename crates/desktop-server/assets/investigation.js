@@ -4,15 +4,17 @@ import { renderMathTextInto } from '/assets/math.js';
 import { createPaperMap, DEFAULT_PAPER_REQUEST } from '/assets/investigation_map.js';
 import { openOriginalPdf } from '/assets/pdf_preview.js';
 import { createConventionCatalog } from '/assets/investigation_conventions.js';
+import { createScopeChip } from '/assets/investigation_scope.js';
 import { citedPaperLinks } from '/assets/source_links.js';
 
-let callbacks, paperMap, conventionCatalog, sessionId, session, view, readRevision = 0, submitting = false;
+let callbacks, paperMap, conventionCatalog, scopeChip, sessionId, session, view, readRevision = 0, submitting = false;
 let summaryTimer = null;
 const byId = id => document.getElementById(id);
 const setupDrafts = new Map();
 
 export function initInvestigation(options) {
   callbacks = options;
+  scopeChip = createScopeChip(byId('investigation-status'));
   paperMap = createPaperMap(byId('investigation-map'), {
     citedPaperLinks,
     openSource: anchor => callbacks.openSource(sessionId, anchor),
@@ -234,6 +236,7 @@ export function showInvestigationSession(id, data) {
     submitting = false;
     paperMap.reset();
     conventionCatalog.reset();
+    scopeChip.reset();
     byId('investigation-setup').reset();
     byId('investigation-existing').replaceChildren();
     byId('investigation-question').value = setupDrafts.get(id)?.question || '';
@@ -248,6 +251,7 @@ export function showInvestigationSession(id, data) {
   renderOrigin(data?.investigation?.origin);
   if (data?.mode !== 'investigation') return;
   const inv = data.investigation || {};
+  scopeChip.update(inv.scope);
   paperMap.updateSummary(inv.summary, Boolean(data.running), Boolean(inv.source_id || inv.map), inv.summary_is_current);
   conventionCatalog.update(inv, Boolean(data.running));
   scheduleSummaryRefresh();
@@ -284,7 +288,7 @@ function scheduleSummaryRefresh() {
   if (summaryTimer || session?.mode !== 'investigation' || !session.running) return;
   const inv = session.investigation || {};
   const summaryPending = !inv.summary || inv.summary_is_current === false;
-  const conventionsPending = inv.conventions_requested && (!inv.conventions?.done || inv.conventions_is_current === false);
+  const conventionsPending = inv.conventions_requested && (!inv.conventions?.done || inv.conventions_is_current === false || inv.conventions_expanding === true);
   if (!summaryPending && !conventionsPending) return;
   const id = sessionId;
   summaryTimer = setTimeout(async () => {
