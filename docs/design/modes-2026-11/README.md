@@ -21,7 +21,7 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | F2 paper key | done | work branch, `crates/research-tools/src/paper_key.rs` |
 | F8 evaluation harness skeleton | done | work branch, `crates/agent/tests/eval_support/`, `tests/fixtures/eval/`, `docs/design/eval-2026-11/` |
 | F3 network gate and paper fetch | done, reviewed and merged | `net_rate.rs`, `paper_fetch*.rs`, `ledger/src/fulltext_cache.rs`; report `reports/f3-net-gate.md` |
-| F4 quote core, F9 run budget | brief `agents/f4-f9-quote-budget.md` | `gemini/modes/f4-f9-quote-budget` |
+| F4 quote core, F9 run budget | done, reviewed and merged | `quote_core.rs`, `lines_sent.rs`, `run_budget.rs`; report `reports/f4-f9-quote-budget.md` |
 | V1 skeleton core for TeX | brief `agents/v1-skeleton.md` | `gemini/modes/v1-skeleton` |
 | S2 Solve model, state fold, badge function | brief `agents/s2-solve-model.md` | `gemini/modes/s2-solve-model` |
 | F1 tool profiles | brief `agents/f1-tool-profiles.md` | `gemini/modes/f1-tool-profiles` |
