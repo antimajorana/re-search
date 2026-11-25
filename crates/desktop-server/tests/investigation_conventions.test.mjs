@@ -43,7 +43,7 @@ test('header_hidden_with_paper_but_no_mapping', t => {
   globalThis.document = {
     createElement: mk,
     createTextNode: s => ({ textContent: s }),
-    getElementById: id => (id === 'investigation-map' ? mapEl : id === 'investigation-panel' ? panelEl : null),
+    getElementById: id => (id === 'investigation-map' ? mapEl : id === 'investigation_panel' || id === 'investigation-panel' ? panelEl : null),
     activeElement: null,
   };
   t.after(() => Object.assign(globalThis, prev));
@@ -57,4 +57,15 @@ test('header_hidden_with_paper_but_no_mapping', t => {
 
   catalog.update({ source_id: 'src-1', map_seq: 11, conventions: null, conventions_requested: false }, false);
   assert.equal(host.hidden, false);
+});
+
+test('pending_count_shown', () => {
+  assert.equal(
+    conventionStatus({ items: [{}], done: false, pending_items: ['metric-sign', 'fourier-norm'] }, true, false),
+    'Incomplete catalog · 2 citations pending',
+  );
+  assert.equal(
+    conventionStatus({ items: [{}], done: false, pending_items: ['metric-sign'] }, true, true),
+    '1 found so far · 1 citation pending',
+  );
 });

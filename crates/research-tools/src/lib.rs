@@ -11,6 +11,7 @@ pub mod latex_compile;
 pub mod latex_repair;
 pub mod lean_check;
 pub mod literature;
+pub mod paper_lines;
 pub mod paper_passages;
 pub mod pdf;
 pub mod policy_preset;
@@ -229,6 +230,7 @@ pub fn all_research_tool_defs() -> Vec<ToolDef> {
         arxiv::arxiv_search_def(),
         literature::literature_search_def(),
         formal_library::search_formal_library_def(),
+        paper_lines::def(),
         paper_passages::def(),
         investigation::def(),
         investigation::summary_def(),
@@ -251,6 +253,7 @@ pub fn register_research_tools(registry: &mut Registry, env: Arc<ResearchEnv>) {
     arxiv::register(registry, env.clone());
     literature::register(registry, env.clone());
     formal_library::register_formal_library(registry, env.clone());
+    paper_lines::register(registry, env.clone());
     paper_passages::register(registry, env.clone());
     investigation::register(registry, env);
     proof_dag::register(registry);

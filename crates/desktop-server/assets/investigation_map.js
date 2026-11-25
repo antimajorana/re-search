@@ -21,6 +21,73 @@ function button(text, handler, cls = 'pill-btn sm') {
   return el;
 }
 
+function foldWithIndexMap(raw) {
+  let folded = '', pendingWs = -1;
+  const map = [];
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (/\s/.test(ch)) { if (folded.length && pendingWs === -1) pendingWs = i; continue; }
+    if (pendingWs !== -1) { folded += ' '; map.push(pendingWs); pendingWs = -1; }
+    folded += ch; map.push(i);
+  }
+  return { folded, map };
+}
+
+function isEscaped(text, pos) {
+  let bs = 0;
+  for (let i = pos - 1; i >= 0 && text[i] === '\\'; i--) bs++;
+  return bs % 2 === 1;
+}
+
+function mathSpans(text) {
+  const spans = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '$' && !isEscaped(text, i)) {
+      if (text[i + 1] === '$') {
+        for (let j = i + 2; j < text.length; ) {
+          const c = text.indexOf('$$', j);
+          if (c === -1) break;
+          if (!isEscaped(text, c)) { spans.push([i, c + 2]); i = c + 1; break; }
+          j = c + 2;
+        }
+      } else if (text[i + 1] && !/\s/.test(text[i + 1])) {
+        for (let j = i + 1; j < text.length && !(text[j] === '\n' && text[j + 1] === '\n'); j++) {
+          if (text[j] === '$' && !isEscaped(text, j) && text[j + 1] !== '$' && !/\s/.test(text[j - 1])) {
+            spans.push([i, j + 1]); i = j; break;
+          }
+        }
+      }
+    } else if (text[i] === '\\' && !isEscaped(text, i) && (text[i + 1] === '(' || text[i + 1] === '[')) {
+      const c = text.indexOf(text[i + 1] === '(' ? '\\)' : '\\]', i + 2);
+      if (c !== -1) { spans.push([i, c + 2]); i = c + 1; }
+    }
+  }
+  return spans;
+}
+
+export function foldSearchSpan(excerpt, quote) {
+  const raw = String(excerpt || ''), { folded: needle } = foldWithIndexMap(String(quote || ''));
+  if (!needle) return null;
+  const { folded, map } = foldWithIndexMap(raw), pos = folded.indexOf(needle);
+  if (pos === -1) return null;
+  let start = map[pos], end = map[pos + needle.length - 1] + 1;
+  for (const [mStart, mEnd] of mathSpans(raw)) {
+    if (start > mStart && start < mEnd) start = mStart;
+    if (end > mStart && end < mEnd) end = mEnd;
+  }
+  return [start, end];
+}
+
+export function renderAnchorExcerptInto(el, excerpt, quote) {
+  const raw = String(excerpt || ''), span = quote ? foldSearchSpan(raw, quote) : null;
+  el.replaceChildren();
+  if (!span) { renderMathTextInto(el, raw); return; }
+  const [pre, mid, post] = [raw.slice(0, span[0]), raw.slice(span[0], span[1]), raw.slice(span[1])];
+  if (pre) el.append(math('span', pre));
+  el.append(math('mark', mid));
+  if (post) el.append(math('span', post));
+}
+
 export function visibleMapNodes(nodes, full, query) {
   const term = query.trim().toLowerCase();
   if (term) return nodes.filter(n => [n.sentence, n.kind].some(s => String(s || '').toLowerCase().includes(term)));
@@ -122,9 +189,16 @@ export function createPaperMap(host, { openSource, openPdf, citedPaperLinks, act
       const location = anchor.start_line === anchor.end_line ? 'line ' + anchor.start_line :
         'lines ' + anchor.start_line + '–' + anchor.end_line;
       const title = element('summary', '', [anchor.label || nameOf(anchor.kind), location].join(' · '));
-      const quote = math('blockquote', anchor.excerpt);
+      const quote = element('blockquote');
+      renderAnchorExcerptInto(quote, anchor.excerpt, anchor.quote);
       const open = button('Open cited lines', () => openSource(anchor));
-      box.append(title, quote, element('small', '', anchor.path), open);
+      box.append(title, quote, element('small', '', anchor.path));
+      if (Array.isArray(anchor.cited_range) && anchor.cited_range.length === 2) {
+        const [a, b] = anchor.cited_range;
+        const cited = a === b ? String(a) : a + '–' + b;
+        box.append(element('small', 'investigation-anchor-note', 'lines corrected by the app (cited ' + cited + ')'));
+      }
+      box.append(open);
       const original = openPdf?.(anchor, true);
       if (original) box.append(button('Open original PDF page', () => openPdf(anchor, false)));
       if (anchor.kind === 'reference') {

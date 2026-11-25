@@ -1,3 +1,4 @@
+use super::anchor::{faults_error, AnchorFault, AnchorReport};
 use super::{anchor_schema, bounded, string, valid_id, Anchor, SourceIndex};
 use ledger::Event;
 use serde::{Deserialize, Serialize};
@@ -32,7 +33,7 @@ pub fn conventions_def() -> ToolDef {
     },"required":["id","category","label","meaning","scope","basis","anchors"],"additionalProperties":false});
     ToolDef {
         id:RECORD_PAPER_CONVENTIONS.into(),
-        description:"Record the selected paper's notation and conventions from its actual text. Name the meaning and scope of each choice and cite exact excerpts, including local exceptions. Distinguish explicit author choices from inferences about usage, explaining each inference in rationale. Use reporting for statistical, uncertainty and experimental reporting conventions. Send sequential 1-based batches and mark the final batch done. Coverage is the model's assessment of the selected material. Explain any final partial coverage or empty extraction in limitations.".into(),
+        description:"Record the selected paper's notation and conventions from its actual text. Name the meaning and scope of each choice and cite each anchor with start_line, end_line, and a short verbatim quote (the app fills in the exact cited lines), including local exceptions. Distinguish explicit author choices from inferences about usage, explaining each inference in rationale. Use reporting for statistical, uncertainty and experimental reporting conventions. Send sequential 1-based batches and mark the final batch done. Coverage is the model's assessment of the selected material. Explain any final partial coverage or empty extraction in limitations.".into(),
         input_schema:json!({"type":"object","properties":{
             "request_seq":{"type":"integer","minimum":1},"source_id":string(64),"batch_index":{"type":"integer","minimum":1},
             "done":{"type":"boolean"},"coverage":{"type":"string","enum":["paper","partial"]},
@@ -80,15 +81,35 @@ fn batches(events: &[Event], request_seq: u64) -> impl Iterator<Item = &Event> {
 /// Present accepted batches for one run. Later requests do not inherit the coverage claim.
 pub fn paper_conventions(events: &[Event], request_seq: u64) -> Option<Value> {
     let mut items = Vec::new();
+    let mut accepted_ids = BTreeSet::new();
+    let mut rejected_order = Vec::new();
+    let mut rejected_seen = BTreeSet::new();
     let mut latest = None;
     for event in batches(events, request_seq) {
         latest = Some(event);
-        items.extend(event.payload["items"].as_array()?.iter().cloned());
+        for item in event.payload["items"].as_array()? {
+            if let Some(id) = item["id"].as_str() {
+                accepted_ids.insert(id.to_owned());
+            }
+            items.push(item.clone());
+        }
+        for rejected in event.payload["rejected_items"].as_array().into_iter().flatten() {
+            if let Some(id) = rejected["id"].as_str() {
+                if rejected_seen.insert(id.to_owned()) {
+                    rejected_order.push(id.to_owned());
+                }
+            }
+        }
     }
     let latest = latest?;
+    let pending_items: Vec<String> = rejected_order
+        .into_iter()
+        .filter(|id| !accepted_ids.contains(id))
+        .collect();
     let mut result = latest.payload.clone();
     result["items"] = Value::Array(items);
     result["conventions_seq"] = json!(latest.seq);
+    result["pending_items"] = json!(pending_items);
     Some(result)
 }
 
@@ -97,6 +118,7 @@ pub(super) fn payload<'a>(
     index: &mut SourceIndex<'_>,
     history: &'a [Event],
     request: &Event,
+    report: &mut AnchorReport,
 ) -> Result<(Value, Option<&'a Event>), String> {
     let mut batch: Batch = serde_json::from_value(args.clone())
         .map_err(|e| format!("Invalid conventions batch: {e}"))?;
@@ -154,14 +176,17 @@ pub(super) fn payload<'a>(
     {
         return Err("Explain any unexamined material, or why no paper-specific conventions were identified.".into());
     }
-    for item in &mut batch.items {
+    // Pass 1: structural validation against tentative sets (accepted prior items + this batch).
+    let mut tentative_ids = prior_ids.clone();
+    let mut tentative_labels = labels.clone();
+    for item in &batch.items {
         if !valid_id(&item.id, 48)
-            || !prior_ids.insert(item.id.clone())
+            || !tentative_ids.insert(item.id.clone())
             || !CATEGORIES.contains(&item.category.as_str())
             || !bounded(&item.label, 160)
             || !bounded(&item.meaning, 1000)
             || !bounded(&item.scope, 450)
-            || !labels.insert((item.label.trim().to_owned(), item.scope.trim().to_owned()))
+            || !tentative_labels.insert((item.label.trim().to_owned(), item.scope.trim().to_owned()))
         {
             return Err(format!("Convention '{}' needs a unique ID and label in its scope, a supported category, meaning and scope.",item.id));
         }
@@ -180,14 +205,86 @@ pub(super) fn payload<'a>(
                 item.id
             ));
         }
-        for anchor in &mut item.anchors {
+        for anchor in &item.anchors {
             if anchor.source_id != batch.source_id {
                 return Err("Conventions must cite the selected paper.".into());
             }
-            index.verify(anchor)?;
         }
+    }
+    // Pass 2: anchor verification; exclude items whose pointer anchors all fail, fail fast on legacy faults.
+    let had_items = !batch.items.is_empty();
+    let mut accepted_items = Vec::new();
+    let mut rejected_items = Vec::new();
+    let mut all_faults: Vec<AnchorFault> = Vec::new();
+    for mut item in std::mem::take(&mut batch.items) {
+        let mut kept = Vec::new();
+        let mut item_notes = Vec::new();
+        let mut item_faults = Vec::new();
+        for (i, mut anchor) in std::mem::take(&mut item.anchors).into_iter().enumerate() {
+            let owner = format!("items[{}].anchors[{i}]", item.id);
+            match index.verify_any(&owner, &mut anchor) {
+                Ok(note) => {
+                    kept.push(anchor);
+                    item_notes.push(note);
+                }
+                Err(fault) => {
+                    if fault.legacy {
+                        return Err(fault.message);
+                    }
+                    item_faults.push(fault);
+                }
+            }
+        }
+        if kept.is_empty() {
+            all_faults.extend(item_faults.iter().cloned());
+            rejected_items.push(json!({"id": item.id, "faults": item_faults}));
+        } else {
+            for note in item_notes {
+                report.record_note(note);
+            }
+            for fault in &item_faults {
+                report.record_dropped(fault);
+            }
+            item.anchors = kept;
+            accepted_items.push(item);
+        }
+    }
+    if had_items && accepted_items.is_empty() {
+        return Err(faults_error(&all_faults));
+    }
+    // Rebuild accepted sets from accepted items only (prior accepted items + accepted_items).
+    for item in &accepted_items {
+        prior_ids.insert(item.id.clone());
+        labels.insert((item.label.trim().to_owned(), item.scope.trim().to_owned()));
+    }
+    batch.items = accepted_items;
+    let mut done_requested = None;
+    let mut coverage_reported = None;
+    if !rejected_items.is_empty() {
+        done_requested = Some(batch.done);
+        coverage_reported = Some(batch.coverage.clone());
+        batch.done = false;
+        batch.coverage = "partial".into();
+        let ids: Vec<&str> = rejected_items
+            .iter()
+            .filter_map(|r| r["id"].as_str())
+            .collect();
+        let note: String = format!(
+            "{} items awaiting valid citations: {}",
+            rejected_items.len(),
+            ids.join(", ")
+        )
+        .chars()
+        .take(500)
+        .collect();
+        batch.limitations.push(note);
     }
     let mut payload = serde_json::to_value(batch).map_err(|e| e.to_string())?;
     payload["coverage_basis"] = json!("model_reported");
+    if !rejected_items.is_empty() {
+        payload["rejected_items"] = Value::Array(rejected_items);
+        payload["done_requested"] = json!(done_requested.unwrap());
+        payload["coverage_reported"] = json!(coverage_reported.unwrap());
+    }
     Ok((payload, previous))
 }

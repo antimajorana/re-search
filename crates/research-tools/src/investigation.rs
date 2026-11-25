@@ -8,6 +8,18 @@ use std::sync::Arc;
 use tools::{ApprovalScope, Registry, ToolDef};
 
 pub const RECORD_PAPER_MAP: &str = "record_paper_map";
+#[path = "investigation_anchor.rs"]
+pub(crate) mod anchor;
+use anchor::{
+    anchor_schema, bounded, faults_error, reject_app_only_fields, string_schema as string,
+    valid_id, Anchor, AnchorFault, AnchorReport, SelectedPages, SourceIndex, MAX_TOTAL_BYTES,
+};
+#[path = "investigation_legacy_defs.rs"]
+mod legacy_defs;
+pub use legacy_defs::{
+    earlier_defs, is_current_recorder_def, GOLDEN_BRANCH_7C36A0E, GOLDEN_CONVENTIONS_7C36A0E,
+    GOLDEN_MAP_7C36A0E, GOLDEN_MAP_NO_ANSWER_INDEX_7C36A0E, GOLDEN_SUMMARY_7C36A0E,
+};
 #[path = "investigation_conventions.rs"]
 mod conventions;
 pub use conventions::{conventions_def, paper_conventions, RECORD_PAPER_CONVENTIONS};
@@ -15,13 +27,10 @@ pub use conventions::{conventions_def, paper_conventions, RECORD_PAPER_CONVENTIO
 mod branch;
 #[path = "investigation_prompts.rs"]
 mod prompts;
-#[path = "investigation_sources.rs"]
-mod sources;
 #[path = "investigation_summary.rs"]
 mod summary;
 pub use branch::{branch_def, expanded_map, paper_branch_instructions, RECORD_PAPER_BRANCH};
 pub use prompts::paper_map_instructions;
-use sources::{SelectedPages, SourceIndex};
 pub use summary::{summary_def, RECORD_PAPER_SUMMARY};
 const NODE_KINDS: &[&str] = &[
     "assumption",
@@ -36,20 +45,9 @@ const NODE_KINDS: &[&str] = &[
     "reference",
 ];
 const EDGE_KINDS: &[&str] = &["depends_on", "supports", "cites"];
-const ANCHOR_KINDS: &[&str] = &["passage", "equation", "figure", "table", "reference"];
 const MAX_NODES: usize = 96;
 const MAX_EDGES: usize = 256;
 
-fn string(max: usize) -> Value {
-    json!({"type":"string","minLength":1,"maxLength":max})
-}
-fn anchor_schema() -> Value {
-    json!({"type":"object","properties":{
-        "source_id":string(64),"path":string(1024),
-        "start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1},
-        "excerpt":string(3200),"kind":{"type":"string","enum":ANCHOR_KINDS},"label":string(160)
-    },"required":["source_id","path","start_line","end_line","excerpt","kind"],"additionalProperties":false})
-}
 pub fn def() -> ToolDef {
     let strings = |n, max| json!({"type":"array","maxItems":n,"items":string(max)});
     let anchor = anchor_schema();
@@ -63,7 +61,7 @@ pub fn def() -> ToolDef {
     },"required":["from","to","kind","basis","reason","anchor"],"additionalProperties":false});
     ToolDef {
         id: RECORD_PAPER_MAP.into(),
-        description: "Record a paper's argument map in the current Investigation. Every node and edge needs a verbatim excerpt with 1-based lines from the selected paper. Each arrow points from supporting material to the claim that uses it. External reference text may supplement its citation in the primary paper. Coverage is the model's assessment; the recorder verifies exact anchors and DAG structure.".into(),
+        description: "Record a paper's argument map in the current Investigation. Every node and edge needs 1-based lines and a short verbatim quote from the selected paper (the app fills in the exact cited lines). Each arrow points from supporting material to the claim that uses it. External reference text may supplement its citation in the primary paper. Coverage is the model's assessment; the recorder verifies exact anchors and DAG structure.".into(),
         input_schema: json!({"type":"object","properties":{
             "source_id":string(64),"title":string(300),"coverage":{"type":"string","enum":["paper","partial"]},
             "answer_node_ids":strings(MAX_NODES,48),
@@ -141,33 +139,6 @@ struct Edge {
     basis: String,
     reason: String,
     anchor: Anchor,
-}
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Anchor {
-    source_id: String,
-    path: String,
-    start_line: usize,
-    end_line: usize,
-    excerpt: String,
-    kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    label: Option<String>,
-    #[serde(default)]
-    file_sha256: String,
-    #[serde(default)]
-    source_seq: u64,
-}
-
-fn bounded(text: &str, max: usize) -> bool {
-    !text.trim().is_empty() && text.chars().count() <= max
-}
-fn valid_id(id: &str, max: usize) -> bool {
-    !id.is_empty()
-        && id.len() <= max
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
 }
 
 fn validate_map(map: &PaperMap, node_limit: usize, edge_limit: usize) -> Result<(), String> {
@@ -324,6 +295,63 @@ pub fn record_branch(
     record_document(env, ledger, session, args, Document::Branch)
 }
 
+fn verify_graph_anchors(
+    source_id: &str,
+    nodes: &mut [Node],
+    edges: &mut [Edge],
+    index: &mut SourceIndex<'_>,
+    report: &mut AnchorReport,
+) -> Result<(), String> {
+    let mut fatal_faults: Vec<AnchorFault> = Vec::new();
+    for node in nodes {
+        let mut kept = Vec::new();
+        let mut node_notes = Vec::new();
+        let mut node_faults = Vec::new();
+        for (i, mut anchor) in std::mem::take(&mut node.anchors).into_iter().enumerate() {
+            let owner = format!("nodes[{}].anchors[{i}]", node.id);
+            match index.verify_any(&owner, &mut anchor) {
+                Ok(note) => {
+                    kept.push(anchor);
+                    node_notes.push(note);
+                }
+                Err(fault) => {
+                    if fault.legacy {
+                        return Err(fault.message);
+                    }
+                    node_faults.push(fault);
+                }
+            }
+        }
+        if kept.is_empty() || !kept.iter().any(|a| a.source_id == source_id) {
+            fatal_faults.extend(node_faults);
+        } else {
+            for note in node_notes {
+                report.record_note(note);
+            }
+            for fault in &node_faults {
+                report.record_dropped(fault);
+            }
+            node.anchors = kept;
+        }
+    }
+    for edge in edges {
+        let owner = format!("edges[{}->{}].anchor", edge.from, edge.to);
+        match index.verify_any(&owner, &mut edge.anchor) {
+            Ok(note) => report.record_note(note),
+            Err(fault) => {
+                if fault.legacy {
+                    return Err(fault.message);
+                }
+                fatal_faults.push(fault);
+            }
+        }
+    }
+    if !fatal_faults.is_empty() {
+        return Err(faults_error(&fatal_faults));
+    }
+    Ok(())
+}
+
 fn record_document(
     env: &ResearchEnv,
     ledger: &Ledger,
@@ -331,6 +359,7 @@ fn record_document(
     args: &Value,
     document: Document,
 ) -> Result<Value, String> {
+    reject_app_only_fields(args)?;
     crate::validate_session_id(session).map_err(|e| e.to_string())?;
     let (verified, events) = ledger
         .read_verified_session(session)
@@ -432,7 +461,16 @@ fn record_document(
         .copied()
         .ok_or("Primary paper receipt missing.")?;
     let pages = SelectedPages::for_paper(ledger, &paper.payload, &primary.payload)?;
-    let mut index = SourceIndex::new(env.sandbox(), session, receipts, pages);
+    let mut index = SourceIndex {
+        pages,
+        sandbox: env.sandbox(),
+        session,
+        primary_source_id: source_id,
+        receipts,
+        files: BTreeMap::new(),
+        bytes_left: MAX_TOTAL_BYTES,
+    };
+    let mut report = AnchorReport::default();
     let (mut payload, event_kind, previous, seq_field) = match document {
         Document::Map => {
             let mut map: PaperMap = serde_json::from_value(args.clone())
@@ -447,32 +485,32 @@ fn record_document(
             {
                 return Err("Save only main results and any dependencies explicitly stated between those results. The reader can explore their supporting arguments afterwards.".into());
             }
-            for node in &mut map.nodes {
-                for anchor in &mut node.anchors {
-                    index.verify(anchor)?;
-                }
-            }
-            for edge in &mut map.edges {
-                index.verify(&mut edge.anchor)?;
-            }
+            verify_graph_anchors(
+                &map.source_id,
+                &mut map.nodes,
+                &mut map.edges,
+                &mut index,
+                &mut report,
+            )?;
             let mut payload = serde_json::to_value(&map).map_err(|e| e.to_string())?;
             payload["coverage_basis"] = json!("model_reported");
             (payload, "investigation.map", prior_map, "map_seq")
         }
         Document::Summary => (
-            summary::payload(args, &mut index)?,
+            summary::payload(args, &mut index, &mut report)?,
             "investigation.summary",
             prior_summary,
             "summary_seq",
         ),
         Document::Branch => (
-            branch::payload(args, &mut index, history, request)?,
+            branch::payload(args, &mut index, history, request, &mut report)?,
             "investigation.branch",
             prior_record("investigation.branch"),
             "branch_seq",
         ),
         Document::Conventions => {
-            let (payload, previous) = conventions::payload(args, &mut index, history, request)?;
+            let (payload, previous) =
+                conventions::payload(args, &mut index, history, request, &mut report)?;
             (
                 payload,
                 "investigation.conventions",
@@ -484,6 +522,7 @@ fn record_document(
     payload["schema_version"] = json!(1);
     payload["request_seq"] = json!(request.seq);
     payload["anchors_verified"] = json!(true);
+    payload["anchor_report"] = report.to_value();
     if let Some(pages) = index.pages {
         payload["page_start"] = json!(pages.first);
         payload["page_end"] = json!(pages.last);
@@ -504,7 +543,14 @@ fn record_document(
                 .seq
         }
     };
-    let mut result = json!({"status":"recorded","source_id":source_id,"request_seq":request.seq,"anchors_verified":true});
+    let mut result = json!({
+        "status": "recorded",
+        "source_id": source_id,
+        "request_seq": request.seq,
+        "anchors_verified": true,
+        "anchor_report": payload["anchor_report"],
+        "anchor_basis": report.basis_value(),
+    });
     result[seq_field] = json!(seq);
     if document == Document::Map {
         result["coverage"] = payload["coverage"].clone();
@@ -518,6 +564,10 @@ fn record_document(
             result[field] = payload[field].clone();
         }
         result["items"] = json!(payload["items"].as_array().unwrap().len());
+        result["next_batch_index"] = json!(payload["batch_index"].as_u64().unwrap_or(0) + 1);
+        if let Some(rejected) = payload.get("rejected_items") {
+            result["rejected_items"] = rejected.clone();
+        }
     }
     Ok(result)
 }
