@@ -10,7 +10,7 @@ use agent::{
     AgentConfig, AutonomousConfig, AutonomousRoles, CancelToken, CustomSubagentDelegation,
     DelegatedWorkerSpec, DelegationConfig, GuardrailConfig, ResumeConfig, SessionOutcome,
     DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_WORKER_MAX_TURNS, EXPLORE_BRANCH_MAX_TURNS,
-    RESEARCH_SYSTEM_PROMPT, WORKER_MAX_TOKENS,
+    WORKER_MAX_TOKENS,
 };
 use research_tools::{register_lean_tool, register_research_tools, research_policy, ResearchEnv};
 use serde_json::{json, Value};
@@ -367,9 +367,10 @@ fn run_session_turn(
 
     let has_started = existing.iter().any(|e| e.kind == "session.start");
     let outcome = if !has_started {
+        let base_prompt = crate::investigation_system_prompt::base_system_prompt(&existing);
         let system_prompt = match &subagent {
-            Some(sa) => crate::subagents::apply_subagent_to_system_prompt(RESEARCH_SYSTEM_PROMPT, sa),
-            None => RESEARCH_SYSTEM_PROMPT.to_string(),
+            Some(sa) => crate::subagents::apply_subagent_to_system_prompt(base_prompt, sa),
+            None => base_prompt.to_string(),
         };
         let cfg = AgentConfig {
             prompt: prompt.to_string(),
