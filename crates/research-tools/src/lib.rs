@@ -13,6 +13,7 @@ pub mod latex_compile;
 pub mod latex_repair;
 pub mod lean_check;
 pub mod literature;
+pub mod paper_key;
 pub mod paper_lines;
 pub mod paper_passages;
 pub mod pdf;
