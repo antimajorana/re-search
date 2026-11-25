@@ -37,3 +37,6 @@ The coordinator sets the model when it launches the agent; an agent does not swi
 - Fix rounds (user's choice, 2026-11-25): one orchestrating agent (`gemini-pro-orchestrator` is refused for
   remote agents, "not available for remote agents"; the CLI falls back to Neon High),
   which hands each fix to Neon (High) subagents; the coordinator verifies its output at the end.
+- Orchestration from now on (user, 2026-11-25): **Gemini 4 Carbon (Medium)**, `--model gemini-4-carbon-medium`,
+  with the `/teamwork` command, which does what the Orchestrator model would. Agents already running are left
+  as they are.
