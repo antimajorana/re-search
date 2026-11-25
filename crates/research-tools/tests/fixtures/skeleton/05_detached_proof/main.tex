@@ -1,0 +1,35 @@
+\documentclass{article}
+\usepackage{amsmath,amsthm}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\begin{document}
+\section{Statements of results}\label{sec:statements}
+\begin{lemma}[Strict positivity preservation]\label{lem:pos}
+If $P$ is a stochastic matrix with strictly positive entries and $v\ge 0$ is nonzero, then $Pv > 0$ componentwise.
+\end{lemma}
+\begin{theorem}[Spectral gap for positive stochastic matrices]\label{thm:gap}
+Every strictly positive $n\times n$ stochastic matrix $P$ has simple eigenvalue $1$ and all other eigenvalues satisfy $|\lambda| < 1$.
+\end{theorem}
+\begin{corollary}[Exponential mixing]\label{cor:mix}
+There exist $C>0$ and $\rho\in(0,1)$ such that $\|P^k \mu - \pi\|_1 \le C \rho^k$ for every probability vector $\mu$.
+\end{corollary}
+\section{Proofs}\label{sec:proofs}
+\begin{proof}[Proof of Lemma~\ref{lem:pos}]
+Each entry $(Pv)_i = \sum_j P_{ij} v_j$ is a sum of nonnegative terms with at least one strictly positive term.
+\end{proof}
+\begin{proof}[Proof of Theorem 1.2]
+By Birkhoff's contraction in the Hilbert projective metric, the positive cone maps strictly inside itself, forcing uniqueness of the unit eigenvector.
+\end{proof}
+\begin{proof}[Proof of Corollary~\ref{cor:mix} \cite{seneta2006}]
+Expand $P^k \mu$ in the Jordan basis and apply the spectral bound $|\lambda| < 1$ on the subspace orthogonal to the invariant measure.
+\end{proof}
+\section{A short remark with attached proof}\label{sec:attached}
+\begin{proposition}[Row sum invariance]\label{prop:rowsum}
+The all-ones vector $\mathbf{1}$ satisfies $P^k \mathbf{1} = \mathbf{1}$ for every $k\ge 1$.
+\end{proposition}
+\begin{proof}
+Induction on $k$ using $P\mathbf{1}=\mathbf{1}$.
+\end{proof}
+\end{document}

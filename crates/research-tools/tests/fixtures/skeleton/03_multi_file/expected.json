@@ -1,0 +1,171 @@
+{
+  "paper_key": "arxiv:2601.00003",
+  "version": "v1",
+  "primary_path": "main.tex",
+  "quality": "full",
+  "quality_notes_contains": [],
+  "theorem_defs": [
+    {
+      "env_name": "defn",
+      "kind": "definition",
+      "display_title": "Definition",
+      "shared_counter": "thm",
+      "parent_counter": null,
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "lem",
+      "kind": "lemma",
+      "display_title": "Lemma",
+      "shared_counter": "thm",
+      "parent_counter": null,
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "thm",
+      "kind": "theorem",
+      "display_title": "Theorem",
+      "shared_counter": null,
+      "parent_counter": "section",
+      "starred": false,
+      "style": null
+    }
+  ],
+  "macros": [
+    { "name": "\\Hilb", "arity": 0, "body": "\\mathcal{H}" }
+  ],
+  "nodes": [
+    {
+      "kind": "section",
+      "env_name": "section",
+      "title": "Tight-binding model",
+      "label": "sec:model",
+      "parent_order": null,
+      "spans": [
+        { "path": "sections/setup.tex", "start_line": 1, "end_line": 8 },
+        { "path": "sections/sub_lemma.tex", "start_line": 1, "end_line": 6 },
+        { "path": "sections/setup.tex", "start_line": 10, "end_line": 10 }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "definition",
+      "env_name": "defn",
+      "title": "Chain Hamiltonian",
+      "label": "def:ham",
+      "parent_order": 0,
+      "spans": [{ "path": "sections/setup.tex", "start_line": 3, "end_line": 8 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "equation",
+      "env_name": "equation",
+      "title": null,
+      "label": "eq:ham",
+      "parent_order": 1,
+      "spans": [{ "path": "sections/setup.tex", "start_line": 5, "end_line": 7 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "lemma",
+      "env_name": "lem",
+      "title": "Norm bound",
+      "label": "lem:norm",
+      "parent_order": 0,
+      "spans": [{ "path": "sections/sub_lemma.tex", "start_line": 1, "end_line": 3 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "proof",
+      "env_name": "proof",
+      "title": null,
+      "label": null,
+      "parent_order": 0,
+      "spans": [{ "path": "sections/sub_lemma.tex", "start_line": 4, "end_line": 6 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": { "kind": "adjacent", "target_order": 3 }
+    },
+    {
+      "kind": "section",
+      "env_name": "section",
+      "title": "Boundary modes",
+      "label": "sec:modes",
+      "parent_order": null,
+      "spans": [{ "path": "sections/results.tex", "start_line": 1, "end_line": 8 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "theorem",
+      "env_name": "thm",
+      "title": "Edge-state criterion",
+      "label": "thm:edge",
+      "parent_order": 5,
+      "spans": [{ "path": "sections/results.tex", "start_line": 2, "end_line": 4 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "figure",
+      "env_name": "figure",
+      "title": "Localized amplitude profile $|\\psi_j|$ for $v_1=2t$.",
+      "label": "fig:edge",
+      "parent_order": 5,
+      "spans": [{ "path": "sections/results.tex", "start_line": 5, "end_line": 8 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "bibliography",
+      "env_name": "thebibliography",
+      "title": "References",
+      "label": null,
+      "parent_order": null,
+      "spans": [{ "path": "main.tex", "start_line": 7, "end_line": 9 }],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    }
+  ]
+}

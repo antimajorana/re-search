@@ -1,0 +1,38 @@
+\documentclass[aps,prb,twocolumn]{revtex4-2}
+\usepackage{amsmath}
+\begin{document}
+\title{Normal-Mode Splitting in Two Coupled Quartic Oscillators}
+\author{A. Researcher}
+\begin{abstract}
+We compute the first-order frequency shift of two linearly coupled quartic oscillators using canonical perturbation theory.
+\end{abstract}
+\maketitle
+\section{Model Hamiltonian}\label{sec:ham}
+Consider two identical oscillators of unit mass with frequency $\omega_0$, linear coupling $g$, and quartic anharmonicity $\lambda$:
+\begin{equation}\label{eq:ham-total}
+H = \frac{1}{2}(p_1^2 + p_2^2) + \frac{\omega_0^2}{2}(q_1^2 + q_2^2) + g q_1 q_2 + \frac{\lambda}{4}(q_1^4 + q_2^4).
+\end{equation}
+\subsection{Normal coordinates}\label{sec:normal}
+Introducing symmetric and antisymmetric coordinates $Q_{\pm} = (q_1 \pm q_2)/\sqrt{2}$, the quadratic part diagonalizes:
+\begin{align}
+\omega_+^2 &= \omega_0^2 + g, \label{eq:omega-plus} \\
+\omega_-^2 &= \omega_0^2 - g, \label{eq:omega-minus} \\
+\delta\omega^2 &= \omega_+^2 - \omega_-^2 = 2g. \nonumber
+\end{align}
+\section{Perturbative shift and numerical comparison}\label{sec:shift}
+To first order in $\lambda$, the averaged quartic potential shifts the symmetric frequency by
+\begin{equation}\label{eq:shift}
+\Delta\omega_+ = \frac{3\lambda}{8\omega_+} A_+^2.
+\end{equation}
+\begin{table}[h]
+\caption{Comparison of perturbative and numerical frequency shifts for $\omega_0=1$, $g=0.2$.}\label{tab:shifts}
+\begin{tabular}{ccc}
+$\lambda$ & Perturbative & Numerical \\
+0.01 & 0.0034 & 0.0034 \\
+\end{tabular}
+\end{table}
+\begin{figure}[t]
+\caption{Splitting $\omega_+ - \omega_-$ versus coupling $g$.}\label{fig:split}
+\end{figure}
+\bibliography{oscillators}
+\end{document}

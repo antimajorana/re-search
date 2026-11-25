@@ -1,0 +1,34 @@
+\documentclass{article}
+\usepackage{amsmath,amsthm,thmtools}
+\declaretheorem[name=Main Result, numberwithin=section]{mainres}
+\declaretheorem[name=Key Lemma, sibling=mainres]{keylem}
+\declaretheorem[name=Standing Assumption, numbered=no]{standassump}
+\declaretheorem[name=Observation, style=plain]{obs}
+\declaretheorem[name=Caveat, style=remark]{cav}
+\newtheorem{coro}[mainres]{Corollary}
+\newenvironment{boxedres}{\begin{mainres}}{\end{mainres}}
+\newenvironment{myproof}{\begin{proof}}{\end{proof}}
+\begin{document}
+\section{Weighted sequence spaces}\label{sec:weighted}
+\begin{standassump}[Positive weight sequence]\label{ass:weight}
+Throughout, $(w_n)_{n\ge 0}$ is a strictly positive sequence with $w_0=1$ and $\sup_n w_{n+1}/w_n < \infty$.
+\end{standassump}
+\begin{keylem}[Shift boundedness]\label{lem:shift}
+The right shift $S$ on $\ell^2_w$ satisfies $\|S\| = \sup_{n\ge 0} (w_{n+1}/w_n)^{1/2}$.
+\end{keylem}
+\begin{myproof}
+For any $x\in\ell^2_w$, $\|Sx\|_w^2 = \sum_{n\ge 0} w_{n+1}|x_n|^2 \le (\sup_n w_{n+1}/w_n)\|x\|_w^2$, and basis vectors saturate the bound.
+\end{myproof}
+\begin{boxedres}[Weighted contraction fixed point]\label{thm:fixed}
+If $T:\ell^2_w\to\ell^2_w$ satisfies $\|Tx-Ty\|_w \le q\|x-y\|_w$ for some $q\in(0,1)$, then $T$ has a unique fixed point $x^*\in\ell^2_w$.
+\end{boxedres}
+\begin{coro}[Geometric convergence]\label{cor:geom}
+The iterates $x_{k+1}=Tx_k$ satisfy $\|x_k - x^*\|_w \le q^k (1-q)^{-1}\|x_1 - x_0\|_w$.
+\end{coro}
+\begin{obs}
+When $w_n = e^{\alpha n}$ with $\alpha>0$, the norm bound equals $e^{\alpha/2}$.
+\end{obs}
+\begin{cav}
+Unbounded ratios $w_{n+1}/w_n$ break the boundedness of the shift operator.
+\end{cav}
+\end{document}
