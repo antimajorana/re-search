@@ -103,18 +103,9 @@ pub fn is_paper_recording_turn(req: &Value) -> bool {
 
 fn has_dedicated_reader_model(
     ui: &UiSettings,
-    req: &Value,
     primary_provider: ProviderKind,
     primary_model: &str,
 ) -> bool {
-    let parse_spec = |v: &Value| -> Option<(ProviderKind, String)> {
-        let p = ProviderKind::parse(v.get("provider")?.as_str()?).ok()?;
-        let raw_m = v.get("model").and_then(Value::as_str).unwrap_or("");
-        Some((p, p.resolve_model(raw_m)))
-    };
-    if let Some((p, m)) = req.get("paper_reader").and_then(parse_spec) {
-        return p != primary_provider || m != primary_model;
-    }
     if let Some(spec) = ui.agent_models.get("paper_reader") {
         if let Ok(p) = ProviderKind::parse(&spec.provider) {
             let m = p.resolve_model(&spec.model);
@@ -154,7 +145,7 @@ pub fn should_enable_readers(
     if let Some(opt_in) = ui.paper_readers_enabled {
         return opt_in;
     }
-    has_dedicated_reader_model(ui, req, primary_provider, primary_model)
+    has_dedicated_reader_model(ui, primary_provider, primary_model)
         || is_section_scoped(req, marker_payload)
 }
 
@@ -185,6 +176,31 @@ pub fn plan_slices(
     };
     let n_max = n_max.clamp(MIN_MAX_PARALLEL, MAX_MAX_PARALLEL);
 
+    let selected_bounds: Option<(usize, usize)> = match selected_pages {
+        Some((p_lo, p_hi)) if !page_lines.is_empty() => {
+            let bounds = page_lines
+                .iter()
+                .copied()
+                .filter(|&(p, _, _)| (p_lo..=p_hi).contains(&p))
+                .fold(None::<(usize, usize)>, |acc, (_, a, b)| {
+                    Some(match acc {
+                        Some((lo, hi)) => (lo.min(a), hi.max(b)),
+                        None => (a, b),
+                    })
+                });
+            let Some((s_lo, s_hi)) = bounds else {
+                return Vec::new();
+            };
+            let lo = s_lo.clamp(1, total_lines);
+            let hi = s_hi.min(total_lines);
+            if lo > hi {
+                return Vec::new();
+            }
+            Some((lo, hi))
+        }
+        _ => None,
+    };
+
     let active_pages: Vec<(usize, usize, usize)> = if scope_lines.is_none() && !page_lines.is_empty() {
         page_lines
             .iter()
@@ -196,7 +212,16 @@ pub fn plan_slices(
     };
 
     let (range_start, range_end) = if let Some((a, b)) = scope_lines {
-        (a.clamp(1, total_lines), b.clamp(a.clamp(1, total_lines), total_lines))
+        let mut lo = a.clamp(1, total_lines);
+        let mut hi = b.clamp(lo, total_lines);
+        if let Some((s_lo, s_hi)) = selected_bounds {
+            lo = lo.max(s_lo);
+            hi = hi.min(s_hi);
+            if lo > hi {
+                return Vec::new();
+            }
+        }
+        (lo, hi)
     } else if !active_pages.is_empty() {
         (active_pages.first().unwrap().1, active_pages.last().unwrap().2.min(total_lines))
     } else {
@@ -381,17 +406,26 @@ pub fn prepare_for_turn(
         .as_str()
         .ok_or("Primary source missing primary_path")?
         .to_string();
-    let page_lines: Vec<(usize, usize, usize)> = receipt
-        .payload
-        .get("pdf_page_lines")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
     let selected_pages = match (
         paper.payload["page_start"].as_u64(),
         paper.payload["page_end"].as_u64(),
     ) {
         (Some(a), Some(b)) => Some((a as usize, b as usize)),
         _ => None,
+    };
+    let page_lines = if receipt.payload["format"] == "pdf" {
+        match research_tools::pdf::verified_page_lines(&receipt.payload, || {
+            let blob = receipt.payload["raw_blob"]
+                .as_str()
+                .ok_or_else(|| "Original PDF unavailable.".to_string())?;
+            ledger.get_blob(blob).map_err(|e| e.to_string())
+        }) {
+            Ok(pages) => pages,
+            Err(_) if selected_pages.is_some() => return Ok(None),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
     };
     let scope_lines = req
         .get("_paper_scope")
@@ -419,18 +453,36 @@ pub fn prepare_for_turn(
             (min_s != usize::MAX && max_e >= min_s).then_some((min_s, max_e))
         });
 
+    let Some(expected_sha) = receipt.payload["files_sha256"]
+        .get(&primary_path)
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
     let resolved = env
         .sandbox()
         .resolve_existing(SandboxRoot::Sources, session_id, &primary_path, false)
         .map_err(|e| e.to_string())?;
+    if !resolved.metadata.is_file()
+        || resolved.rel_path != primary_path
+        || resolved.metadata.len() > MAX_PLAN_FILE_BYTES
+    {
+        return Ok(None);
+    }
     let mut bytes = Vec::new();
     File::open(resolved.canonical_target)
-        .and_then(|f| f.take(MAX_PLAN_FILE_BYTES).read_to_end(&mut bytes))
+        .and_then(|f| f.take(MAX_PLAN_FILE_BYTES + 1).read_to_end(&mut bytes))
         .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_PLAN_FILE_BYTES || ledger::sha256_hex(&bytes) != expected_sha {
+        return Ok(None);
+    }
     let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
     let total_lines = text.lines().count().max(1);
     let max_parallel = effective_max_parallel(ui, req, primary_provider);
     let default_slices = plan_slices(&text, &page_lines, selected_pages, scope_lines, max_parallel);
+    if default_slices.is_empty() {
+        return Ok(None);
+    }
     let reader_router = build_reader_router(Arc::clone(state), Arc::clone(env), session_id)?;
 
     Ok(Some(PreparedPaperReader {

@@ -61,16 +61,12 @@ impl PreparedScope {
             ..
         } = &self.resolution
         {
-            let range_str = ranges
-                .iter()
-                .map(|[a, b]| format!("lines {a}-{b}"))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let heading = format_scope_heading(label, ranges);
             let fm_hint = front_matter
                 .map(|[a, b]| format!(" (front matter lines {a}-{b})"))
                 .unwrap_or_default();
             out.push_str(&format!(
-                "\nQuestion scope: {label} ({range_str}). Answer from the scoped evidence; take the summary from front matter{fm_hint} and conclusions; map only the evidenced main results; record conventions for the scope plus global notation."
+                "\nQuestion scope: {heading}. Answer from the scoped evidence; take the summary from front matter{fm_hint} and conclusions; map only the evidenced main results; record conventions for the scope plus global notation."
             ));
         }
         out
@@ -83,17 +79,33 @@ impl PreparedScope {
             out.push_str(outline);
         }
         if let ScopeResolution::Resolved { label, ranges, .. } = &self.resolution {
-            let range_str = ranges
-                .iter()
-                .map(|[a, b]| format!("lines {a}-{b}"))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let heading = format_scope_heading(label, ranges);
             out.push_str(&format!(
-                "\nQuestion scope: {label} ({range_str}). Focus on the scoped lines first and answer from the scoped evidence."
+                "\nQuestion scope: {heading}. Focus on the scoped lines first and answer from the scoped evidence."
             ));
         }
         out
     }
+}
+
+fn format_scope_heading(label: &str, ranges: &[[usize; 2]]) -> String {
+    if ranges.is_empty() {
+        return label.to_string();
+    }
+    if ranges.len() == 1 {
+        let [a, b] = ranges[0];
+        if label.contains(&format!("(lines {a}–{b})"))
+            || label.contains(&format!("(lines {a}-{b})"))
+        {
+            return label.to_string();
+        }
+    }
+    let range_str = ranges
+        .iter()
+        .map(|[a, b]| format!("lines {a}-{b}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{label} ({range_str})")
 }
 
 /// Build the paper outline from the verified primary source file and resolve any scope in `prompt`.
@@ -147,7 +159,7 @@ pub(crate) fn compute_scope(
     let outline = build_outline(&text, &page_lines);
     let mut resolution = resolve_scope(&outline, prompt);
     if let (Some(ps), Some(pe)) = page_range {
-        resolution = clip_to_selected_pages(resolution, ps as usize, pe as usize);
+        resolution = clip_to_selected_pages(resolution, &page_lines, ps as usize, pe as usize);
     }
     let outline_prompt = (!outline.sections.is_empty()
         || !outline.equations.is_empty()
@@ -168,6 +180,7 @@ pub(crate) fn compute_scope(
 
 fn clip_to_selected_pages(
     resolution: ScopeResolution,
+    page_lines: &[(usize, usize, usize)],
     first_page: usize,
     last_page: usize,
 ) -> ScopeResolution {
@@ -179,11 +192,48 @@ fn clip_to_selected_pages(
     else {
         return resolution;
     };
+    let page_bounds = if page_lines.is_empty() {
+        None
+    } else {
+        let bounds = page_lines
+            .iter()
+            .copied()
+            .filter(|&(p, _, _)| (first_page..=last_page).contains(&p))
+            .fold(None::<(usize, usize)>, |acc, (_, a, b)| {
+                Some(match acc {
+                    Some((lo, hi)) => (lo.min(a), hi.max(b)),
+                    None => (a, b),
+                })
+            });
+        if bounds.is_none() {
+            return ScopeResolution::Unresolved {
+                reason: format!(
+                    "Referenced target lies outside selected PDF pages {first_page}-{last_page}."
+                ),
+            };
+        }
+        bounds
+    };
     let kept: Vec<_> = targets
         .into_iter()
-        .filter(|t| match (t.page_start, t.page_end) {
-            (Some(a), Some(b)) => a <= last_page && b >= first_page,
-            _ => true,
+        .filter_map(|mut t| {
+            if let (Some(a), Some(b)) = (t.page_start, t.page_end) {
+                if a > last_page || b < first_page {
+                    return None;
+                }
+            }
+            if let Some((min_line, max_line)) = page_bounds {
+                let start = t.start_line.max(min_line);
+                let end = t.end_line.min(max_line);
+                if start > end {
+                    return None;
+                }
+                t.start_line = start;
+                t.end_line = end;
+            }
+            t.page_start = t.page_start.map(|p| p.clamp(first_page, last_page));
+            t.page_end = t.page_end.map(|p| p.clamp(first_page, last_page));
+            Some(t)
         })
         .collect();
     if kept.is_empty() {
@@ -193,6 +243,15 @@ fn clip_to_selected_pages(
             ),
         };
     }
+    let front_matter = front_matter.and_then(|[a, b]| {
+        if let Some((min_line, max_line)) = page_bounds {
+            let lo = a.max(min_line);
+            let hi = b.min(max_line);
+            (lo <= hi).then_some([lo, hi])
+        } else {
+            Some([a, b])
+        }
+    });
     let label = if kept.len() == 1 {
         format!(
             "{} (lines {}–{})",
@@ -204,8 +263,18 @@ fn clip_to_selected_pages(
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let mut ranges: Vec<[usize; 2]> = kept.iter().map(|t| [t.start_line, t.end_line]).collect();
-    ranges.sort_by_key(|r| (r[0], r[1]));
+    let mut raw_ranges: Vec<[usize; 2]> = kept.iter().map(|t| [t.start_line, t.end_line]).collect();
+    raw_ranges.sort_by_key(|r| (r[0], r[1]));
+    let mut ranges: Vec<[usize; 2]> = Vec::new();
+    for r in raw_ranges {
+        if let Some(last) = ranges.last_mut() {
+            if r[0] <= last[1].saturating_add(1) {
+                last[1] = last[1].max(r[1]);
+                continue;
+            }
+        }
+        ranges.push(r);
+    }
     ScopeResolution::Resolved {
         label,
         targets: kept,
@@ -225,9 +294,13 @@ pub(crate) fn latest_scope(events: &[Event], mapping_seq: u64) -> Option<&Value>
         .map(|e| &e.payload)
 }
 
-/// A conventions resume is allowed if the catalog is unfinished, or if it is a finished section catalog.
+/// A conventions resume is allowed if the catalog is unfinished, has pending items, or is a finished section catalog.
 pub(crate) fn conventions_resume_allows(catalog: &Value) -> bool {
-    catalog["done"] != true || catalog["coverage_scope"] == "section"
+    catalog["done"] != true
+        || catalog["coverage_scope"] == "section"
+        || catalog["pending_items"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
 }
 
 /// Whether resuming conventions for `request_seq` is expanding a section-scoped catalog to the full paper.

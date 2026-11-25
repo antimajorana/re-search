@@ -331,19 +331,14 @@ pub fn resolve_worker_transport(
 }
 
 /// Resolves the `paper_reader` transport per Decision 4: uses the primary provider/model
-/// (`isolated_primary_model`) unless explicitly assigned in settings or request overrides.
+/// (`isolated_primary_model`) unless explicitly assigned in settings.
 pub fn resolve_paper_reader_transport(
     state: &DesktopState,
     ui: &UiSettings,
-    req: &Value,
+    _req: &Value,
     primary_provider: ProviderKind,
     primary_model: &str,
 ) -> Option<BuiltWorkerTransport> {
-    if let Some((p, m)) = req.get("paper_reader").and_then(parse_role_obj) {
-        if let Some(built) = build_worker_entry(state, p, m, "request_override") {
-            return Some(built);
-        }
-    }
     if let Some((p, m)) = role_in_core_model(ui, "paper_reader") {
         if let Some(built) = build_worker_entry(state, p, m, "assigned_in_settings") {
             return Some(built);
