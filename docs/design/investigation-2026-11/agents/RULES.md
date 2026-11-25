@@ -17,8 +17,8 @@ Read, in this order: `docs/design/investigation-2026-11/README.md`, this file, y
 `agents/`, then the design sections your brief names. `README.md` and `THREAT-MODEL.md` at the
 repository root describe the project.
 
-You have no GitHub credentials and must not try to obtain any. You cannot push. Your result goes
-back as a patch (see "Handing back").
+Never print, copy or store a credential. Your result goes back by pushing your branch (see
+"Handing back").
 
 ## What you must not break
 
@@ -68,7 +68,24 @@ bug you noticed but did not fix (file:line).
 
 ## Handing back
 
-When everything is committed on your branch, produce the patch and print it in pieces so the
+When everything is committed on your branch, push it, and only it, to its own branch:
+
+```bash
+git push origin HEAD:refs/heads/gemini/work/<your-brief-name>
+```
+
+Never push to `main`, `gemini/runner` or any other branch, never force-push, never open or merge a
+pull request. If the push succeeds, end your final reply with:
+
+```
+PUSHED
+brief: <your-brief-name>
+branch: gemini/work/<your-brief-name>
+head: <commit sha>
+END-PUSHED
+```
+
+Only if the push fails (no credentials), fall back to the patch below, printed in pieces so the
 coordinator can read it from the terminal:
 
 ```bash
