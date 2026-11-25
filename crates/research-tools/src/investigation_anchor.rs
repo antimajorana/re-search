@@ -344,7 +344,7 @@ impl SourceIndex<'_> {
         let in_range = find_folded_matches(file, s, e, &folded_quote);
         let mut range_basis = Vec::new();
         let mut cited_range = None;
-        let (match_a, match_b, relocated) = match in_range.len() {
+        let (matched, relocated) = match in_range.len() {
             1 => {
                 let m = in_range[0];
                 if non_space < MIN_QUOTE_NON_SPACE {
@@ -353,7 +353,7 @@ impl SourceIndex<'_> {
                         return fail("quote_too_short", "A quote under 16 non-space characters must match the entire cited range verbatim.".into(), Some([s, e]), tt_at(s, e));
                     }
                 }
-                (m.start_line, m.end_line, false)
+                (m, false)
             }
             n if n >= 2 => return fail("quote_ambiguous", format!("Quote matches multiple places in {path} (lines {}).", format_candidates(&in_range)), Some([s, e]), tt_at(s, e)),
             _ => {
@@ -365,7 +365,7 @@ impl SourceIndex<'_> {
                     1 => {
                         range_basis.push("relocated".into());
                         cited_range = Some([s, e]);
-                        (nearby[0].start_line, nearby[0].end_line, true)
+                        (nearby[0], true)
                     }
                     0 => return fail("quote_not_found", format!("Quote was not found in {path} around lines {s}–{e}."), Some([s, e]), tt_at(s, e)),
                     _ => return fail("quote_ambiguous", format!("Quote matches multiple places near lines {s}–{e} in {path} (lines {}).", format_candidates(&nearby)), Some([s, e]), tt_at(s, e)),
@@ -373,9 +373,9 @@ impl SourceIndex<'_> {
             }
         };
         let (mut final_start, mut final_end) = if relocated {
-            (match_a, match_b)
+            (matched.start_line, matched.end_line)
         } else {
-            let (ns, ne) = (s.max(match_a.saturating_sub(NARROW_PAD)), e.min(match_b + NARROW_PAD));
+            let (ns, ne) = (s.max(matched.start_line.saturating_sub(NARROW_PAD)), e.min(matched.end_line + NARROW_PAD));
             if [ns, ne] != [s, e] { range_basis.push("narrowed".into()); cited_range = Some([s, e]); }
             (ns, ne)
         };
@@ -411,10 +411,7 @@ impl SourceIndex<'_> {
                 }
             }
         }
-        if [final_start, final_end] == [s, e] {
-            cited_range = None;
-            range_basis.clear();
-        }
+        if [final_start, final_end] == [s, e] { cited_range = None; range_basis.clear(); }
         if final_end < final_start || final_end - final_start >= MAX_ANCHOR_LINES {
             return fail("range_too_long", "Final anchor range exceeds the 64-line limit.".into(), Some([s, e]), None);
         }
@@ -428,21 +425,15 @@ impl SourceIndex<'_> {
         {
             return fail("source_revision_mismatch", "The cited source revision differs from the verified source file.".into(), Some([s, e]), None);
         }
+        let (final_base, _) = file.line_range_bytes(final_start, final_end);
         let full_lines = file.lines_text(final_start, final_end);
         let (excerpt, excerpt_window) = if full_lines.len() <= MAX_EXCERPT_BYTES {
             (full_lines.to_string(), None)
         } else {
-            let (folded_full, orig_map) = fold_with_map(full_lines);
-            let q_pos = folded_full.find(&folded_quote).unwrap_or(0);
-            let q_start = orig_map.get(q_pos).copied().unwrap_or(0);
-            let q_end = orig_map.get(q_pos + folded_quote.len().saturating_sub(1)).map(|&b| b + 1).unwrap_or(q_start);
+            let q_start = matched.start_byte.saturating_sub(final_base);
+            let q_end = matched.end_byte.saturating_sub(final_base).min(full_lines.len());
             if q_end.saturating_sub(q_start) > MAX_EXCERPT_BYTES {
-                return fail(
-                    "quote_span_too_wide",
-                    format!("Matched quote spans {} bytes in {path}, exceeding the {MAX_EXCERPT_BYTES}-byte excerpt limit.", q_end - q_start),
-                    Some([s, e]),
-                    None,
-                );
+                return fail("quote_span_too_wide", format!("Matched quote spans {} bytes in {path}, exceeding the {MAX_EXCERPT_BYTES}-byte excerpt limit.", q_end - q_start), Some([s, e]), None);
             }
             let (w0, w1) = window_around(full_lines, q_start, q_end, MAX_EXCERPT_BYTES);
             (full_lines[w0..w1].to_string(), Some([w0, w1]))
@@ -464,7 +455,7 @@ impl SourceIndex<'_> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct FoldMatch { start_line: usize, end_line: usize }
+struct FoldMatch { start_line: usize, end_line: usize, start_byte: usize, end_byte: usize }
 
 /// Collapse every whitespace run (newlines included) to one space and trim ends.
 /// Returns `(folded, orig_byte)` mapping each byte of `folded` back to its byte index in `raw`.
@@ -493,10 +484,8 @@ fn find_folded_matches(file: &VerifiedFile, start_line: usize, end_line: usize, 
     while search_from <= folded.len() {
         let Some(rel) = folded[search_from..].find(folded_quote) else { break };
         let (pos, end_pos) = (search_from + rel, search_from + rel + folded_quote.len());
-        hits.push(FoldMatch {
-            start_line: file.line_of_byte(base_off + orig_byte[pos]),
-            end_line: file.line_of_byte(base_off + orig_byte[end_pos - 1]),
-        });
+        let (start_byte, end_byte) = (base_off + orig_byte[pos], base_off + orig_byte[end_pos - 1] + 1);
+        hits.push(FoldMatch { start_line: file.line_of_byte(start_byte), end_line: file.line_of_byte(end_byte - 1), start_byte, end_byte });
         search_from = pos + folded[pos..].chars().next().map_or(1, char::len_utf8);
     }
     hits
@@ -509,19 +498,30 @@ fn format_candidates(matches: &[FoldMatch]) -> String {
 
 pub(crate) fn is_bare_section_name(label: &str) -> bool {
     let mut s = label.trim().trim_end_matches(['.', ':']).trim();
-    if let Some(rest) = strip_section_number_prefix(s) { s = rest.trim(); }
+    if let Some(rest) = strip_section_prefix(s) {
+        s = rest.trim();
+        if is_section_num(s) { return true; }
+    }
+    if let Some((_, rest)) = s.split_once(char::is_whitespace).filter(|(f, _)| is_section_num(f)) {
+        s = rest.trim();
+    }
     SECTION_NAMES.contains(&s.to_ascii_lowercase().as_str())
 }
 
-fn strip_section_number_prefix(s: &str) -> Option<&str> {
-    let mut parts = s.splitn(2, char::is_whitespace);
-    let (first, rest) = (parts.next()?, parts.next()?);
-    let token = first.trim_end_matches('.');
-    if token.is_empty() { return None; }
-    let arabic = token.split('.').all(|seg| !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_digit()));
-    let roman = token.bytes().all(|b| matches!(b.to_ascii_uppercase(), b'I' | b'V' | b'X' | b'L' | b'C'));
-    let single_letter = token.len() == 1 && token.bytes().all(|b| b.is_ascii_alphabetic());
-    (arabic || roman || single_letter).then_some(rest)
+fn strip_section_prefix(s: &str) -> Option<&str> {
+    if let Some(rest) = s.strip_prefix('§') { return Some(rest); }
+    let (first, rest) = s.split_once(char::is_whitespace)?;
+    matches!(first.trim_end_matches(['.', ':']).to_ascii_lowercase().as_str(), "section" | "sec" | "appendix").then_some(rest)
+}
+
+fn is_section_num(token: &str) -> bool {
+    let tok = token.trim_end_matches(['.', ':']);
+    !tok.is_empty() && tok.split('.').all(|seg| {
+        !seg.is_empty() && (seg.bytes().all(|b| b.is_ascii_digit())
+            || seg.bytes().all(|b| matches!(b.to_ascii_uppercase(), b'I' | b'V' | b'X' | b'L' | b'C'))
+            || (seg.len() == 1 && seg.bytes().all(|b| b.is_ascii_alphabetic()))
+            || (seg.len() >= 2 && seg.as_bytes()[0].is_ascii_alphabetic() && seg.as_bytes()[1..].iter().all(u8::is_ascii_digit)))
+    })
 }
 
 fn window_around(text: &str, q_start: usize, q_end: usize, max_bytes: usize) -> (usize, usize) {
