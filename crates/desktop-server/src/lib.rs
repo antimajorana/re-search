@@ -3,6 +3,7 @@
 
 pub mod agent_models;
 mod investigation;
+mod investigation_scope;
 pub mod antigravity;
 pub mod approver;
 pub mod assets;

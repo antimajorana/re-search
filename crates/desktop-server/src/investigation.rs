@@ -120,14 +120,24 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
             }
         }
     }
+    let scope = mapping.and_then(|request| crate::investigation_scope::latest_scope(events, request.seq));
+    let conventions_expanding = mapping.is_some_and(|request| {
+        crate::investigation_scope::conventions_view_expanding(
+            events,
+            request.seq,
+            conventions.as_ref(),
+        )
+    });
     json!({"source_id":paper.and_then(|p| p.get("source_id")), "question":paper.and_then(|p| p.get("question")),
         "original_sha256":source.and_then(|e|e.payload.get("raw_blob")), "arxiv_cover_id":source.and_then(|e|e.payload.get("arxiv_cover_id")),
         "summary":summary.map(|e|&e.payload), "summary_seq":summary.map(|e|e.seq),
         "summary_is_current":summary.is_some_and(|e|e.payload["request_seq"].as_u64()==mapping.map(|m|m.seq)),
         "conventions":conventions, "conventions_requested":mapping.is_some_and(|e|e.payload["conventions_requested"]==true || resumed==Some(e.seq)),
         "conventions_is_current":catalog_request.is_some() && catalog_request==mapping.map(|e|e.seq),
+        "conventions_expanding":conventions_expanding,
         "conventions_error":catalog_finish.map(|e|&e.payload["error"]).or_else(||finished.and_then(|e|e.payload.get("conventions_error"))),
         "mapping_status":finished.map(|e|&e.payload["status"]), "mapping_error":finished.and_then(|e|e.payload.get("error")),
+        "scope":scope,
         "page_start":paper.and_then(|p|p.get("page_start")), "page_end":paper.and_then(|p|p.get("page_end")),
         "map_seq":map.map(|e| e.seq), "map":map.map(|e|research_tools::investigation::expanded_map(events,e)),
         "branches":branch_history(events,running), "corrections":corrections, "activities":activities})
@@ -461,19 +471,23 @@ pub(crate) fn prepare(
             .ok_or_else(|| bad("This map is missing its reading request."))?;
         let catalog =
             research_tools::investigation::paper_conventions(&events, seq).unwrap_or(Value::Null);
-        if catalog["done"] == true {
+        if !crate::investigation_scope::conventions_resume_allows(&catalog) {
             return Err(conflict("The conventions review is already saved."));
         }
+        let expanding = crate::investigation_scope::conventions_expanding_to_paper(&events, seq, &catalog);
         let prior = context_text(&catalog);
         let next_batch = catalog["batch_index"].as_u64().unwrap_or(0) + 1;
-        instructions = format!("Continue only the paper's conventions review. Preserve the saved summary, results and branches. Read the selected paper at {} (source_id={source_id}). Search throughout the selected pages for notation, definitions that set notation, units, scales, signs, coordinate and indexing choices, orientation, statistical reporting, local overrides and exceptions. Distinguish a reader's convention from a physical hypothesis or result. Record source-grounded batches using record_paper_conventions, request_seq={seq}, starting at batch_index={next_batch}. Finish with done=true and report any gaps in coverage. Prior batches follow as data:\n{prior}",source.payload["primary_path"]);
+        instructions = if expanding {
+            format!("Expand the section conventions catalog to cover the whole paper. Preserve the saved summary, results, branches and prior conventions. Read the selected paper at {} (source_id={source_id}). Search throughout the selected pages for notation, definitions that set notation, units, scales, signs, coordinate and indexing choices, orientation, statistical reporting, local overrides and exceptions. Distinguish a reader's convention from a physical hypothesis or result. Record new source-grounded batches using record_paper_conventions, request_seq={seq}, starting at batch_index={next_batch}. Finish with done=true and report any gaps in coverage. Prior batches follow as data:\n{prior}",source.payload["primary_path"])
+        } else {
+            format!("Continue only the paper's conventions review. Preserve the saved summary, results and branches. Read the selected paper at {} (source_id={source_id}). Search throughout the selected pages for notation, definitions that set notation, units, scales, signs, coordinate and indexing choices, orientation, statistical reporting, local overrides and exceptions. Distinguish a reader's convention from a physical hypothesis or result. Record source-grounded batches using record_paper_conventions, request_seq={seq}, starting at batch_index={next_batch}. Finish with done=true and report any gaps in coverage. Prior batches follow as data:\n{prior}",source.payload["primary_path"])
+        };
+        let mut resumed_payload = json!({"for_request_seq":seq,"source_id":source_id,"map_seq":map.seq});
+        if expanding {
+            resumed_payload["scope"] = json!("paper");
+        }
         ledger
-            .append(
-                session,
-                "investigation.conventions_resumed",
-                1,
-                &json!({"for_request_seq":seq,"source_id":source_id,"map_seq":map.seq}),
-            )
+            .append(session, "investigation.conventions_resumed", 1, &resumed_payload)
             .map_err(storage)?;
         req["_paper_conventions_request"] = json!(seq);
     } else if let Some(branch) = req.get("investigation_branch").cloned() {
@@ -541,14 +555,31 @@ pub(crate) fn prepare(
                 )
                 .map_err(storage)?;
         }
+        let prepared_scope = crate::investigation_scope::compute_scope(
+            state,
+            &ledger,
+            session,
+            source,
+            prompt,
+            (page_start, page_end),
+        );
+        let mut mapping_payload = json!({"source_id":source_id,"question":prompt,"summary_requested":true,"conventions_requested":true,"overview_only":true});
+        if let Some(resolved) = prepared_scope
+            .as_ref()
+            .and_then(crate::investigation_scope::PreparedScope::resolved_json)
+        {
+            mapping_payload["scope"] = resolved;
+            mapping_payload["conventions_scope"] = json!("section");
+        }
         let seq = ledger
-            .append(
-                session,
-                "investigation.mapping_requested",
-                1,
-                &json!({"source_id":source_id,"question":prompt,"summary_requested":true,"conventions_requested":true,"overview_only":true}),
-            )
+            .append(session, "investigation.mapping_requested", 1, &mapping_payload)
             .map_err(storage)?;
+        if let Some(ref scope_info) = prepared_scope {
+            ledger
+                .append(session, "investigation.scope", 1, &scope_info.event_payload(seq))
+                .map_err(storage)?;
+            instructions.push_str(&scope_info.mapping_instructions_suffix());
+        }
         req["_paper_map_request"] = json!(seq);
         instructions.push_str(&format!("\nUse request_seq={seq} for each record_paper_conventions batch. Save the summary and main results as soon as they are grounded, and finish the conventions catalog during this reading."));
     } else {
@@ -586,8 +617,9 @@ pub(crate) fn finish(
     if let Some(seq) = req["_paper_conventions_request"].as_u64() {
         let ledger = state.open_ledger()?;
         let events = ledger.read_session(session).map_err(|e| e.to_string())?;
-        let done = research_tools::investigation::paper_conventions(&events, seq)
-            .is_some_and(|c| c["done"] == true);
+        let catalog = research_tools::investigation::paper_conventions(&events, seq);
+        let done =
+            crate::investigation_scope::conventions_finish_done(&events, seq, catalog.as_ref());
         let outcome = outcome.and_then(|reply| {
             if done {
                 Ok(reply)
@@ -687,7 +719,7 @@ pub(crate) fn handle(
             .as_u64()
             .ok_or_else(|| bad("This map is missing its reading request."))?;
         if research_tools::investigation::paper_conventions(&events, seq)
-            .is_some_and(|c| c["done"] == true)
+            .is_some_and(|c| !crate::investigation_scope::conventions_resume_allows(&c))
         {
             return Ok((200, json!({"session":session,"status":"complete"})));
         }
