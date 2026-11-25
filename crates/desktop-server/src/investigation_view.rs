@@ -102,15 +102,32 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
         mark_last_running(&mut activities, events);
         mark_last_running(&mut answers, events);
     }
+    let latest_scope_req = events.iter().rev().find(|e| {
+        matches!(
+            e.kind.as_str(),
+            "investigation.mapping_requested" | "investigation.question_requested"
+        )
+    });
+    let scope =
+        latest_scope_req.and_then(|req| crate::investigation_scope::latest_scope(events, req.seq));
+    let conventions_expanding = mapping.is_some_and(|request| {
+        crate::investigation_scope::conventions_view_expanding(
+            events,
+            request.seq,
+            conventions.as_ref(),
+        )
+    });
     json!({"source_id":paper.and_then(|p| p.get("source_id")), "question":paper.and_then(|p| p.get("question")),
         "original_sha256":source.and_then(|e|e.payload.get("raw_blob")), "arxiv_cover_id":source.and_then(|e|e.payload.get("arxiv_cover_id")),
         "summary":summary.map(|e|&e.payload), "summary_seq":summary.map(|e|e.seq),
         "summary_is_current":summary.is_some_and(|e|e.payload["request_seq"].as_u64()==mapping.map(|m|m.seq)),
         "conventions":conventions, "conventions_requested":mapping.is_some_and(|e|e.payload["conventions_requested"]==true || resumed==Some(e.seq)),
         "conventions_is_current":catalog_request.is_some() && catalog_request==mapping.map(|e|e.seq),
+        "conventions_expanding":conventions_expanding,
         "conventions_error":catalog_finish.map(|e|&e.payload["error"]).or_else(||finished.and_then(|e|e.payload.get("conventions_error"))),
         "mapping_requested":mapping.is_some(),
         "mapping_status":finished.map(|e|&e.payload["status"]), "mapping_error":finished.and_then(|e|e.payload.get("error")),
+        "scope":scope,
         "page_start":paper.and_then(|p|p.get("page_start")), "page_end":paper.and_then(|p|p.get("page_end")),
         "map_seq":map.map(|e| e.seq), "map":map.map(|e|research_tools::investigation::expanded_map(events,e)),
         "branches":branch_history(events,running), "corrections":corrections, "activities":activities, "answers":answers})

@@ -42,6 +42,7 @@ pub(crate) fn map_base_instructions(
     text
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn conventions_resume_instructions(
     route: PaperRoute,
     source_id: &str,
@@ -50,6 +51,7 @@ pub(crate) fn conventions_resume_instructions(
     next_batch: u64,
     catalog: &Value,
     prior: &str,
+    expanding: bool,
 ) -> String {
     let pending: Vec<&str> = catalog["pending_items"]
         .as_array()
@@ -64,7 +66,9 @@ pub(crate) fn conventions_resume_instructions(
             pending.join(", ")
         ));
     }
-    let lead = if catalog.is_null() {
+    let lead = if expanding {
+        "Expand the section conventions catalog to cover the whole paper."
+    } else if catalog.is_null() {
         "Review only the paper's conventions."
     } else {
         "Continue only the paper's conventions review."
@@ -115,6 +119,7 @@ mod tests {
             2,
             &json!({"pending_items": ["c1"]}),
             "{}",
+            false,
         );
         for ctx in [&map_ctx, &branch_ctx, &conv_ctx] {
             assert!(!ctx.contains("delegate_read_paper"), "{ctx}");
@@ -175,6 +180,7 @@ mod tests {
             2,
             &catalog,
             "{}",
+            false,
         );
         let first_line = prompt.lines().next().unwrap_or("");
         assert!(first_line.contains("metric-sign"), "{first_line}");

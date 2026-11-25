@@ -127,15 +127,14 @@ fn has_dedicated_reader_model(
 fn is_section_scoped(req: &Value, marker_payload: Option<&Value>) -> bool {
     if req
         .get("_paper_scope")
-        .and_then(|s| s.get("resolved"))
-        .and_then(Value::as_bool)
-        == Some(true)
+        .is_some_and(|s| s["resolved"].as_bool() == Some(true) || s["status"].as_str() == Some("resolved"))
     {
         return true;
     }
     marker_payload.is_some_and(|m| {
         m["conventions_scope"].as_str() == Some("section")
             || m["scope"]["resolved"].as_bool() == Some(true)
+            || m["scope"]["status"].as_str() == Some("resolved")
     })
 }
 
@@ -328,6 +327,7 @@ fn active_marker(events: &[Event]) -> Option<(&Event, &Event)> {
                 "investigation.mapping_requested" | "investigation.mapping_finished"
                     | "investigation.branch_requested" | "investigation.branch_finished"
                     | "investigation.conventions_resumed" | "investigation.conventions_finished"
+                    | "investigation.question_requested" | "investigation.answer"
                     | "investigation.requested" | "investigation.result"
                     | "session.end" | "session.abort"
             )
@@ -397,9 +397,26 @@ pub fn prepare_for_turn(
         .get("_paper_scope")
         .or_else(|| marker.payload.get("scope"))
         .and_then(|s| {
-            let a = s.get("start_line")?.as_u64()? as usize;
-            let b = s.get("end_line")?.as_u64()? as usize;
-            (a >= 1 && b >= a).then_some((a, b))
+            if let (Some(a), Some(b)) = (
+                s.get("start_line").and_then(Value::as_u64),
+                s.get("end_line").and_then(Value::as_u64),
+            ) {
+                let (a, b) = (a as usize, b as usize);
+                return (a >= 1 && b >= a).then_some((a, b));
+            }
+            let ranges = s.get("ranges").and_then(Value::as_array)?;
+            let mut min_s = usize::MAX;
+            let mut max_e = 0usize;
+            for r in ranges {
+                let arr = r.as_array()?;
+                let a = arr.first()?.as_u64()? as usize;
+                let b = arr.get(1)?.as_u64()? as usize;
+                if a >= 1 && b >= a {
+                    min_s = min_s.min(a);
+                    max_e = max_e.max(b);
+                }
+            }
+            (min_s != usize::MAX && max_e >= min_s).then_some((min_s, max_e))
         });
 
     let resolved = env

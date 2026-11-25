@@ -19,8 +19,9 @@ pub(crate) fn finish(
     if let Some(seq) = req["_paper_conventions_request"].as_u64() {
         let ledger = state.open_ledger()?;
         let events = ledger.read_session(session).map_err(|e| e.to_string())?;
-        let done = research_tools::investigation::paper_conventions(&events, seq)
-            .is_some_and(|c| c["done"] == true);
+        let catalog = research_tools::investigation::paper_conventions(&events, seq);
+        let done =
+            crate::investigation_scope::conventions_finish_done(&events, seq, catalog.as_ref());
         let outcome = outcome.and_then(|reply| {
             if done {
                 Ok(reply)

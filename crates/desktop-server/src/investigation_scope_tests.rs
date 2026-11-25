@@ -1,6 +1,6 @@
 use crate::auth::AuthGuard;
 use crate::chatgpt::ChatGptHub;
-use crate::investigation::{finish, prepare, view};
+use crate::investigation::{finish, prepare, view, PaperRoute};
 use crate::sse::SseHub;
 use crate::state::DesktopState;
 use crate::DesktopConfig;
@@ -147,7 +147,7 @@ fn finish_accepts_section_catalog() {
     let src = seed_paper(&state, &env, sid);
 
     let mut req = json!({"investigation_source_id": src.source_id});
-    prepare(&state, sid, &mut req, "Help me understand section II.A.1").unwrap();
+    prepare(&state, sid, &mut req, "Help me understand section II.A.1", PaperRoute::InCore).unwrap();
     let req_seq = req["_paper_map_request"].as_u64().unwrap();
     let ctx = req["_paper_context"].as_str().unwrap();
     assert!(ctx.contains("Paper structure"), "{ctx}");
@@ -224,7 +224,7 @@ fn whole_paper_unchanged() {
     let src = seed_paper(&state, &env, sid);
 
     let mut req = json!({"investigation_source_id": src.source_id});
-    prepare(&state, sid, &mut req, "Identify the paper's main results.").unwrap();
+    prepare(&state, sid, &mut req, "Identify the paper's main results.", PaperRoute::InCore).unwrap();
     let req_seq = req["_paper_map_request"].as_u64().unwrap();
     let ctx = req["_paper_context"].as_str().unwrap();
     assert!(!ctx.contains("Question scope:"));
@@ -277,7 +277,7 @@ fn whole_paper_unchanged() {
 
     // Whole-paper done catalog still refuses conventions resume (409).
     let mut resume_req = json!({"investigation_conventions": {"map_seq": map_seq}});
-    let err = prepare(&state, sid, &mut resume_req, "Continue").unwrap_err();
+    let err = prepare(&state, sid, &mut resume_req, "Continue", PaperRoute::InCore).unwrap_err();
     assert_eq!(err.0, 409);
 }
 
@@ -288,7 +288,7 @@ fn catalog_all_after_section_done_allowed() {
     let src = seed_paper(&state, &env, sid);
 
     let mut req = json!({"investigation_source_id": src.source_id});
-    prepare(&state, sid, &mut req, "Help me understand section II.A.1").unwrap();
+    prepare(&state, sid, &mut req, "Help me understand section II.A.1", PaperRoute::InCore).unwrap();
     let req_seq = req["_paper_map_request"].as_u64().unwrap();
 
     let ledger = state.open_ledger().unwrap();
@@ -330,7 +330,7 @@ fn catalog_all_after_section_done_allowed() {
 
     // Resuming after a section-done catalog is allowed and emits conventions_resumed{scope:"paper"}.
     let mut resume_req = json!({"investigation_conventions": {"map_seq": map_seq}});
-    prepare(&state, sid, &mut resume_req, "Catalog all conventions").unwrap();
+    prepare(&state, sid, &mut resume_req, "Catalog all conventions", PaperRoute::InCore).unwrap();
     assert_eq!(resume_req["_paper_conventions_request"], req_seq);
     assert!(resume_req["_paper_context"]
         .as_str()
@@ -352,7 +352,7 @@ fn catalog_all_after_section_done_allowed() {
 
     // Start again and record batch 2 with done=true under scope="paper".
     let mut resume_req2 = json!({"investigation_conventions": {"map_seq": map_seq}});
-    prepare(&state, sid, &mut resume_req2, "Catalog all conventions").unwrap();
+    prepare(&state, sid, &mut resume_req2, "Catalog all conventions", PaperRoute::InCore).unwrap();
     record_conventions(
         &env,
         &ledger,
@@ -386,5 +386,49 @@ fn catalog_all_after_section_done_allowed() {
 
     // Once upgraded to paper scope and done, another resume is refused (409).
     let mut again = json!({"investigation_conventions": {"map_seq": map_seq}});
-    assert_eq!(prepare(&state, sid, &mut again, "Again").unwrap_err().0, 409);
+    assert_eq!(prepare(&state, sid, &mut again, "Again", PaperRoute::InCore).unwrap_err().0, 409);
+}
+
+#[test]
+fn question_turn_writes_scope_and_injects_outline() {
+    let (_tmp, state, env) = test_state();
+    let sid = "s-question-scope";
+    let src = seed_paper(&state, &env, sid);
+
+    let mut req = json!({
+        "investigation_source_id": src.source_id,
+        "investigation_scope": "question"
+    });
+    prepare(
+        &state,
+        sid,
+        &mut req,
+        "Help me understand section II.A.1",
+        PaperRoute::InCore,
+    )
+    .unwrap();
+    let q_seq = req["_paper_question_request"].as_u64().unwrap();
+    assert!(req.get("_paper_map_request").is_none());
+    let ctx = req["_paper_context"].as_str().unwrap();
+    assert!(ctx.contains("Paper structure"), "{ctx}");
+    assert!(ctx.contains("Question scope: Section II.A.1"), "{ctx}");
+    assert!(!ctx.contains("record conventions for the scope"), "{ctx}");
+    assert!(!ctx.contains("record_paper_map"), "{ctx}");
+
+    let ledger = state.open_ledger().unwrap();
+    let events = ledger.read_session(sid).unwrap();
+    let q_ev = events.iter().find(|e| e.seq == q_seq).unwrap();
+    assert_eq!(q_ev.kind, "investigation.question_requested");
+    assert_eq!(q_ev.payload["scope"]["status"], "resolved");
+    let scope_ev = events
+        .iter()
+        .find(|e| e.kind == "investigation.scope")
+        .expect("investigation.scope recorded on question turn");
+    assert_eq!(scope_ev.payload["request_seq"], q_seq);
+    assert_eq!(scope_ev.payload["status"], "resolved");
+
+    let v = view(&events, true);
+    assert_eq!(v["mapping_requested"], false);
+    assert_eq!(v["scope"]["status"], "resolved");
+    assert_eq!(v["answers"][0]["status"], "running");
 }

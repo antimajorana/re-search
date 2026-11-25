@@ -84,6 +84,7 @@ pub(crate) fn prepare_question(
     page_range: (Option<u64>, Option<u64>),
     req: &mut Value,
     prompt: &str,
+    prepared_scope: Option<&crate::investigation_scope::PreparedScope>,
 ) -> std::result::Result<String, (u16, String)> {
     let storage = |error: ledger::Error| internal(error.to_string());
     if pinned.is_none() {
@@ -102,22 +103,30 @@ pub(crate) fn prepare_question(
             .map_err(storage)?;
     }
     let map_seq = latest(events, "investigation.map").map(|e| e.seq);
+    let mut q_payload = json!({
+        "source_id": source_id,
+        "question": prompt,
+        "page_start": page_range.0,
+        "page_end": page_range.1,
+        "map_seq": map_seq,
+    });
+    if let Some(resolved) =
+        prepared_scope.and_then(crate::investigation_scope::PreparedScope::resolved_json)
+    {
+        q_payload["scope"] = resolved;
+    }
     let seq = ledger
-        .append(
-            session,
-            "investigation.question_requested",
-            1,
-            &json!({
-                "source_id": source_id,
-                "question": prompt,
-                "page_start": page_range.0,
-                "page_end": page_range.1,
-                "map_seq": map_seq,
-            }),
-        )
+        .append(session, "investigation.question_requested", 1, &q_payload)
         .map_err(storage)?;
     req["_paper_question_request"] = json!(seq);
-    Ok(question_context(events, source_id, primary_path, page_range))
+    let mut ctx = question_context(events, source_id, primary_path, page_range);
+    if let Some(scope_info) = prepared_scope {
+        ledger
+            .append(session, "investigation.scope", 1, &scope_info.event_payload(seq))
+            .map_err(storage)?;
+        ctx.push_str(&scope_info.question_instructions_suffix());
+    }
+    Ok(ctx)
 }
 
 pub(crate) fn finish_question(
@@ -180,5 +189,6 @@ pub(crate) fn conventions_resume_prompt(
         next_batch,
         catalog,
         &prior,
+        false,
     )
 }
