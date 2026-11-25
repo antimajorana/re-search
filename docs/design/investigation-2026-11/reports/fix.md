@@ -246,3 +246,45 @@ Measured by running `ToolDef::def_hash()` and serializing `anchor_schema()` on b
 - **New failures:** **None (`0`).**
 - **Pre-existing Linux diagnostics / Windows-only checks:** Unchanged from §5 and §6 (4 pre-existing untouched clippy diagnostics without the 3 allow flags; `cli_research_workspace_read_fork_diff_export_and_verify` passes standalone without `RE_SEARCH_PYTHON`; all `#[cfg(windows)]` code/tests and WebView2 visual parity checks remain Windows-only).
 
+---
+
+## 8. Third pass (`fix-3.md`)
+
+Applied all 12 items from `origin/gemini/runner:docs/design/investigation-2026-11/agents/fix-3.md` on top of Pass 2 (`b38a620`) using 4 strictly disjoint parallel subagents (`invoke_subagent`, `TypeName: "self"`, `Model: "inherit"`). **Zero tool schemas were touched** — every `def_hash` remains byte-for-byte identical to `origin/gemini/work/merged` (`351b128`), pinned by `review_honesty_f12_recorder_def_hashes_match_merged`.
+
+### 8.1 Item-by-item disposition table (Pass 3)
+
+| # | Item | What was done (or why not) | Commit |
+|---|---|---|---|
+| 1 & 2 | **F5 abandon hint & result visibility** (`investigation_conventions.rs`, `research-tools/src/investigation.rs`, `investigation_prompts.rs`) | Stored `pending_items` on the conventions payload when non-empty; exposed `pending_items`, `abandoned_items` (when non-empty), and `pending_hint` in the `record_paper_conventions` tool result (tool results do not feed `def_hash`); added the abandon instruction sentence to `conventions_resume_instructions`. Also allowed abandoning a newly rejected ID in the same `done: true, coverage: "partial"` batch when named in a non-app-note limitation (Optional nit #1). Kept `conventions_def()` schema untouched (`def_hash` unchanged). Test: `review3_conventions_result_returns_pending_abandoned_and_hint`. | `c677fde`, `8af3bfb` |
+| 3 | **P8 multi-range planner cap & gap merging** (`paper_reader.rs`) | Capped `target_max = n_max.clamp(1, agent::paper_read::MAX_PAPER_READER_SLICES)` (`<= 8`) in `plan_slices_for_ranges` and merged adjacent range pairs with the smallest gap while `merged.len() > target_max`. Test: `review3_plan_slices_merges_smallest_gaps_to_n_max`. | `94a98df` |
+| 4 | **P12 answered-only question handoff** (`desktop-server/src/investigation.rs`) | Required `e.payload["status"] == "answered"` on both the explicit `answer_seq` path and the fallback path in `open_research` (removed `.or_else(|| latest(events, "investigation.answer"))`), returning HTTP 400 `"Answer a question first."` otherwise. Test: `review3_open_research_rejects_failed_or_stopped_answer`. | `8af3bfb` |
+| 5 | **TeX multi-row brace depth** (`investigation_outline_tex.rs`) | Tracked `brace_depth` alongside `nested_depth` in `split_multirow_body` (handling `\\` before `\{`/`\}` so `\\{` opens a brace while `\{`/`\}` are skipped), splitting rows only at `nested_depth == 0 && brace_depth == 0`. Test: `review3_outline_tex_substack_inside_align_does_not_split_row` (`\substack`, `\text{a \\ b}`, escaped braces, and `resolve_scope` on `eq. (2)`). | `52ca2de` |
+| 6 & 10 | **CLI early-stop string** (`investigation_question.rs:150`) | Matched both `"stopped by user"` (API route) and `"turn stopped by the user"` (CLI route, `cli_turn.rs:371`) in `finish_question` so early stops on both routes record `status: "stopped"` without inventing `session.abort`. Test: `review3_flow_f9_cli_early_stop_question_is_stopped`. | `1f80695` |
+| 7 | **Honesty M2 no-bytes fallback** (`investigation_cites.rs:97-105`) | In the no-bytes fallback of `push_passage_range`, failed closed on start line whenever `start_byte > 0` (including `a > 1`), and trimmed `!excerpt.ends_with('\n')` when `total_lines.is_some_and(\|t\| b < t)` or `(total_lines.is_none() && excerpt.len() >= 900)` so known-EOF short lines stay credited while mid-file/oversized cut lines fail closed. Test: `review3_honesty_m2_no_bytes_start_byte_fails_closed`. | `1f80695` |
+| 8 | **Consistency M2 test** (`investigation_scope_tests.rs`) | Added `review3_consistency_front_matter_clipped_to_selected_pages`: 3-page PDF selecting pages 2–3 verifies `front_matter == None` and neither `question_instructions_suffix` nor `mapping_instructions_suffix` contains `"front matter lines 1-"`. | `8af3bfb` |
+| 9 | **Late honesty M3 (`reports/split-1.md` drift)** | Left `docs/design/investigation-2026-11/reports/split-1.md` untouched as a historical Wave-1 agent report (matching how `audit-*.md` are preserved unmodified). The 5 drifted values vs code constants are explicitly recorded here: `:34` claims 400 chars (code: `MAX_QUOTE_CHARS = 300`, `MIN_QUOTE_NON_SPACE = 16`, `MIN_WHOLE_LINE_NON_SPACE = 3`), `:32` lists `evidence_hash` (code: `APP_ONLY_FIELDS = ["excerpt_basis", "cited_range", "range_basis", "excerpt_window"]`), `:35` says 2 lines (code: `LABEL_ABOVE_RADIUS = 3`), `:36` says 800/600 (code: `MAX_EXCERPT_BYTES = 3_200`), and `:49` names `dropped_anchors` / `anchor_basis.app` (code: `anchor_report` and `{model, cited_lines, evidence}`). | — (this report) |
+| 11 & 12 | **Flow F3.1 section conventions scope + dead params** (`investigation_scope.rs`, `investigation.rs`, `investigation_prompts.rs`) | Added `section_conventions_scope_suffix(&events, seq)` and wired it into `conventions_resume_instructions` whenever `resume_scope == Some("section")`, appending `"Question scope: <heading>; record conventions for the scope plus global notation."`. Removed dead `include_conventions` from `mapping_instructions_suffix` and unused `_events`/`_request_seq` from `conventions_expanding_to_paper(catalog)`. Test: `review3_section_conventions_resume_includes_scope_and_map_does_not`. | `8af3bfb` |
+| Opt. nit #1 | Newly rejected ID abandon in same batch (`investigation_conventions.rs`) | Addressed together with Items 1 & 2 (`review3_conventions_result_returns_pending_abandoned_and_hint`). | `c677fde` |
+| Opt. nit #6 | Pin F16/F17 positive behavior through `answer_cites_for_session` | Added `review3_honesty_f17_unselected_page_lines_stay_read` and `review3_honesty_f16_no_files_sha256_entry_still_read` in `investigation_cites_tests.rs`. | `1f80695` |
+| Opt. nit #7 | Dead parameters in `investigation_scope.rs` | Addressed together with Items 11 & 12. | `8af3bfb` |
+| Opt. nit #8 | Reason for deleting `checked_cite_exceeding_513_lines_must_either_open_or_not_be_marked_read` (`audit_honesty_cites.rs`) | Recorded: that test asserted either the server `/workspace/file` window endpoint opens lines `1..550` (>513 lines) or the backend marks the cite `read: false`; per `claude-review.md` honesty item 4 the fix is a client clamp in `investigation.js::openCite` (covered by `review_ui_f10_f12_open_cite_clamps_wide_range` and `review_honesty_f10_wide_cite_stays_read_true`), so the deleted test's premise no longer applies. | — (this report) |
+| Opt. nits #2, #3, #4 | `mentions_item_id` strictness, `openCite` clamp banner placement, `subagents.js` checkbox `false`->`null` | Left untouched per `fix-3.md` ("fix each with the smallest change... change nothing else"; all three were explicitly marked optional/acceptable as designed). | — |
+
+### 8.2 Pass 3 final verification commands and exact counts
+
+| Command | Result | Exact counts |
+|---|---|---|
+| `cargo clippy --workspace --all-targets -- -D warnings -A clippy::manual_unwrap_or -A clippy::items_after_test_module -A unused_imports` | **PASS** | **0 warnings, 0 errors** across all 13 crates |
+| `RE_SEARCH_PYTHON="$(command -v python3)" cargo test --workspace --no-fail-fast -- --skip cli_research_workspace_read_fork_diff_export_and_verify` | **PASS** | **94 suites: 607 passed, 0 failed, 0 ignored, 1 skipped** |
+| `env -u RE_SEARCH_PYTHON cargo test -p cli --test desktop_and_ext cli_research_workspace_read_fork_diff_export_and_verify` | **PASS** | **1 passed, 0 failed** (**608/608** total Rust tests pass) |
+| `for f in crates/desktop-server/assets/*.js; do node --check "$f"; done` | **PASS** | **42/42** JS assets syntax-checked, exit 0 |
+| `node --test crates/desktop-server/tests/*.test.mjs` | **PASS** | **148 passed, 0 failed, 0 skipped** |
+| `/opt/pyenv/shims/python3 crates/desktop-server/tests/workbench_browser.py --binary target/debug/re-search` | **PASS** | **8/8 browser suites passed** |
+
+### 8.3 What is left failing (Pass 3)
+
+- **New failures:** **None (`0`).**
+- **Pre-existing Linux diagnostics / Windows-only checks:** Unchanged from §5 and §6 (4 pre-existing untouched clippy diagnostics without the 3 allow flags; `cli_research_workspace_read_fork_diff_export_and_verify` passes standalone without `RE_SEARCH_PYTHON`; all `#[cfg(windows)]` code/tests and WebView2 visual parity checks remain Windows-only).
+
+
