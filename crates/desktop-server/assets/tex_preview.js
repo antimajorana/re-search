@@ -1,7 +1,9 @@
 // Offline LaTeX document preview renderer with preamble macro harvesting.
 import { escapeHtml } from './code_highlight.js';
 import { extractMath, findMatchingEnvEnd, formatMathTokenHtml } from './math_scan.js';
-import { createMathState, renderFormulaHtml } from './math_katex.js';
+import {
+  createMathState, isMacroDefined, katexOptions, renderFormulaHtml, rewriteNewcommands, syncMathMacros,
+} from './math_katex.js';
 import { numberEquations } from './math_equations.js';
 
 const TEX_STRUCT_ENVS = new Set(
@@ -25,10 +27,17 @@ function stripTexComments(src) {
 function readBalancedGroup(src, openIdx, openChar = '{', closeChar = '}') {
   if (src[openIdx] !== openChar) return null;
   let depth = 1;
+  let braceDepth = 0;
   for (let i = openIdx + 1; i < src.length; i++) {
     if (src[i] === '\\') { i += 1; continue; }
-    if (src[i] === openChar) depth += 1;
-    else if (src[i] === closeChar && --depth === 0) return { content: src.slice(openIdx + 1, i), end: i + 1 };
+    if (openChar !== '{') {
+      if (src[i] === '{') { braceDepth += 1; continue; }
+      if (src[i] === '}' && braceDepth > 0) { braceDepth -= 1; continue; }
+    }
+    if (braceDepth === 0) {
+      if (src[i] === openChar) depth += 1;
+      else if (src[i] === closeChar && --depth === 0) return { content: src.slice(openIdx + 1, i), end: i + 1 };
+    }
   }
   return null;
 }
@@ -46,44 +55,119 @@ function skipSpaces(src, pos) {
 }
 
 export function harvestPreambleMacros(preamble) {
-  const macros = {};
+  const decls = [];
   const src = String(preamble ?? '');
   let i = 0;
   while (i < src.length) {
+    if (src[i] === '\\' && src[i + 1] === '\\') { i += 2; continue; }
     const rest = src.slice(i);
-    const nc = /^\\(?:re|provide)?newcommand\*?\s*(?:\{\\([A-Za-z]+)\}|\\([A-Za-z]+))/.exec(rest);
+    const nc = /^\\(renewcommand|newcommand|providecommand)\*?\s*(?:\{\\([A-Za-z]+)\}|\\([A-Za-z]+))/.exec(rest);
     if (nc) {
-      const name = `\\${nc[1] || nc[2]}`;
+      const kind = nc[1];
+      const name = nc[2] || nc[3];
       let pos = skipSpaces(src, i + nc[0].length);
+      let argc = null;
+      let optDefault = null;
       if (src[pos] === '[') {
-        const argc = readBalancedGroup(src, pos, '[', ']');
+        argc = readBalancedGroup(src, pos, '[', ']');
         if (argc) pos = skipSpaces(src, argc.end);
       }
-      if (src[pos] === '[') {
-        const opt = readBalancedGroup(src, pos, '[', ']');
-        if (opt) pos = skipSpaces(src, opt.end);
+      if (argc && src[pos] === '[') {
+        optDefault = readBalancedGroup(src, pos, '[', ']');
+        if (optDefault) pos = skipSpaces(src, optDefault.end);
       }
       const body = src[pos] === '{' ? readBalancedGroup(src, pos) : null;
-      if (body) { macros[name] = body.content; i = body.end; continue; }
+      if (body) {
+        const argcTrim = argc ? argc.content.trim() : '';
+        const argcNum = argc ? (/^[0-9]+$/.test(argcTrim) ? parseInt(argcTrim, 10) : -1) : 0;
+        if (optDefault && argcNum >= 1 && argcNum <= 9) {
+          const helper = `reSearchOpt${name}`;
+          const restParams = Array.from({ length: argcNum - 1 }, (_, k) => `#${k + 2}`).join('');
+          const tex = `\\def\\${name}{\\@ifnextchar[{\\${helper}}{\\${helper}[${optDefault.content}]}}\\def\\${helper}[#1]${restParams}{${body.content}}`;
+          decls.push({ kind, name, hasOpt: true, tex });
+        } else if (argcNum >= 0 && argcNum <= 9) {
+          const argcPart = argc ? `[${argcTrim}]` : '';
+          const cmd = kind === 'providecommand' ? 'providecommand' : 'newcommand';
+          decls.push({
+            kind,
+            name,
+            hasOpt: false,
+            argcPart,
+            body: body.content,
+            tex: `\\${cmd}{\\${name}}${argcPart}{${body.content}}`,
+          });
+        }
+        i = body.end;
+        continue;
+      }
     }
     const dmo = /^\\DeclareMathOperator(\*?)\s*(?:\{\\([A-Za-z]+)\}|\\([A-Za-z]+))/.exec(rest);
     if (dmo) {
       const star = dmo[1];
-      const name = `\\${dmo[2] || dmo[3]}`;
+      const name = dmo[2] || dmo[3];
       const pos = skipSpaces(src, i + dmo[0].length);
       const body = src[pos] === '{' ? readBalancedGroup(src, pos) : null;
-      if (body) { macros[name] = `\\operatorname${star}{${body.content}}`; i = body.end; continue; }
+      if (body) {
+        const opBody = `\\operatorname${star}{${body.content}}`;
+        decls.push({
+          kind: 'newcommand',
+          name,
+          hasOpt: false,
+          argcPart: '',
+          body: opBody,
+          tex: `\\newcommand{\\${name}}{${opBody}}`,
+        });
+        i = body.end;
+        continue;
+      }
     }
     const def = /^\\(?:g|e|x)?def\s*\\([A-Za-z]+)([^{]*)/.exec(rest);
-    if (def) {
-      const name = `\\${def[1]}`;
+    if (def && !/\n\s*\n/.test(def[2])) {
       const pos = i + def[0].length;
       const body = src[pos] === '{' ? readBalancedGroup(src, pos) : null;
-      if (body) { macros[name] = body.content; i = body.end; continue; }
+      if (body) {
+        decls.push({ kind: 'def', name: def[1], hasOpt: false, tex: src.slice(i, body.end) });
+        i = body.end;
+        continue;
+      }
     }
     i += 1;
   }
-  return macros;
+  return decls;
+}
+
+function replayPreambleMacros(decls, katexImpl, docState) {
+  if (!decls.length || !katexImpl || typeof katexImpl.renderToString !== 'function') return;
+  const defined = new Set();
+  const emitted = [];
+  for (const d of decls) {
+    const already = defined.has(d.name) || isMacroDefined(d.name, katexImpl, docState);
+    if (d.kind === 'providecommand') {
+      if (already) continue;
+      emitted.push(d.tex);
+      defined.add(d.name);
+    } else if (d.kind === 'def' || d.hasOpt) {
+      emitted.push(d.tex);
+      defined.add(d.name);
+    } else {
+      emitted.push(`\\${already ? 'renewcommand' : 'newcommand'}{\\${d.name}}${d.argcPart}{${d.body}}`);
+      defined.add(d.name);
+    }
+  }
+  if (!emitted.length) return;
+  const opts = { ...katexOptions(false, docState), throwOnError: true };
+  try {
+    katexImpl.renderToString(emitted.join('\n'), opts);
+  } catch {
+    for (const decl of emitted) {
+      try {
+        katexImpl.renderToString(rewriteNewcommands(decl, katexImpl, docState), opts);
+      } catch {
+        // Ignore unsupported LaTeX-only preamble declarations.
+      }
+    }
+  }
+  syncMathMacros(docState);
 }
 
 function renderTexInline(src, mathTokens, renderCtx) {
@@ -219,8 +303,12 @@ function buildTexDocumentHtml(texSource, renderCtx) {
 
   let effectiveCtx = renderCtx;
   if (renderCtx) {
-    const docMacros = harvestPreambleMacros(preamble);
-    const state = renderCtx.state ?? createMathState(docMacros);
+    const katexImpl = renderCtx.katex ?? globalThis.window?.katex;
+    let state = renderCtx.state;
+    if (!state) {
+      state = createMathState();
+      replayPreambleMacros(harvestPreambleMacros(preamble), katexImpl, state);
+    }
     effectiveCtx = { ...renderCtx, state };
   }
 

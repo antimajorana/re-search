@@ -72,15 +72,15 @@ export function katexOptions(display, state = defaultState) {
   };
 }
 
-function isDefined(name, katexImpl, state) {
+export function isMacroDefined(name, katexImpl, state = defaultState) {
   if (Object.prototype.hasOwnProperty.call(state.macros, `\\${name}`)) return true;
   let hit = builtinDefined.get(name);
   if (hit === undefined && katexImpl && typeof katexImpl.renderToString === 'function') {
     try {
-      katexImpl.renderToString(`\\${name}`, { throwOnError: true, macros: {}, output: 'html', strict: 'ignore' });
-      hit = true;
+      katexImpl.renderToString(`\\newcommand{\\${name}}{}`, { throwOnError: true, strict: 'ignore', macros: {} });
+      hit = false;
     } catch (e) {
-      hit = !String(e?.message ?? e).includes('Undefined control sequence');
+      hit = /attempting to redefine|already defined/i.test(String(e?.message ?? e));
     }
     builtinDefined.set(name, hit);
   }
@@ -90,24 +90,111 @@ function isDefined(name, katexImpl, state) {
 export function rewriteNewcommands(tex, katexImpl, state = defaultState) {
   const seen = new Set();
   return tex.replace(/\\(re)?newcommand\*?\s*\{?\\([A-Za-z]+)\}?/g, (_m, _re, name) => {
-    const exists = seen.has(name) || isDefined(name, katexImpl, state);
+    const exists = seen.has(name) || isMacroDefined(name, katexImpl, state);
     seen.add(name);
     return `\\${exists ? 'renewcommand' : 'newcommand'}{\\${name}}`;
   });
 }
 
+function findClosingBrace(str, openIdx) {
+  if (str[openIdx] !== '{') return -1;
+  let depth = 1;
+  for (let i = openIdx + 1; i < str.length; i += 1) {
+    if (str[i] === '\\') { i += 1; continue; }
+    if (str[i] === '{') depth += 1;
+    else if (str[i] === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+function repairTextBody(body) {
+  let out = '';
+  let nestedMath = null;
+  for (let i = 0; i < body.length; ) {
+    const ch = body[i];
+    if (ch === '\\') {
+      const next = body[i + 1];
+      if (next === undefined) { out += '\\'; i += 1; continue; }
+      if (next === '(' && !nestedMath) { nestedMath = '('; out += '\\('; i += 2; continue; }
+      if (next === ')' && nestedMath === '(') { nestedMath = null; out += '\\)'; i += 2; continue; }
+      if (nestedMath && body.startsWith('\\text', i) && !/[A-Za-z]/.test(body[i + 5] || '')) {
+        let j = i + 5;
+        while (j < body.length && (body[j] === ' ' || body[j] === '\t')) j += 1;
+        const close = body[j] === '{' ? findClosingBrace(body, j) : -1;
+        if (close !== -1) {
+          out += `${body.slice(i, j + 1)}${repairTextBody(body.slice(j + 1, close))}}`;
+          i = close + 1;
+          continue;
+        }
+      }
+      out += ch + next;
+      i += 2;
+      continue;
+    }
+    if (ch === '$') {
+      if (!nestedMath) nestedMath = '$';
+      else if (nestedMath === '$') nestedMath = null;
+      out += '$';
+      i += 1;
+      continue;
+    }
+    if (!nestedMath && ch === '_') { out += '\\_'; i += 1; continue; }
+    if (!nestedMath && ch === '^') { out += '\\^{}'; i += 1; continue; }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
 export function repairTextCmd(tex) {
-  return tex.replace(/\\text\{([^{}]*)\}/g, (_m, body) => {
-    const fixed = body.replace(/(\\*)(_|[\^])/g, (m, bs, c) =>
-      (bs.length % 2 === 1 ? m : `${bs}${c === '_' ? '\\_' : '\\^{}'}`));
-    return `\\text{${fixed}}`;
-  });
+  const s = String(tex ?? '');
+  let out = '';
+  for (let i = 0; i < s.length; ) {
+    if (s[i] === '\\') {
+      if (s.startsWith('\\text', i) && !/[A-Za-z]/.test(s[i + 5] || '')) {
+        let j = i + 5;
+        while (j < s.length && (s[j] === ' ' || s[j] === '\t')) j += 1;
+        const close = s[j] === '{' ? findClosingBrace(s, j) : -1;
+        if (close !== -1) {
+          out += `${s.slice(i, j + 1)}${repairTextBody(s.slice(j + 1, close))}}`;
+          i = close + 1;
+          continue;
+        }
+      }
+      out += s[i] + (s[i + 1] ?? '');
+      i += 2;
+      continue;
+    }
+    out += s[i];
+    i += 1;
+  }
+  return out;
 }
 
 export function stripTagCommands(tex) {
-  return String(tex ?? '')
-    .replace(/\\tag\*?\s*\{[^{}]*\}/g, '')
-    .replace(/\\(?:notag|nonumber)\b/g, '');
+  const s = String(tex ?? '');
+  let out = '';
+  for (let i = 0; i < s.length; ) {
+    if (s[i] === '\\') {
+      if (s.startsWith('\\tag', i) && !/[A-Za-z]/.test(s[i + 4] || '')) {
+        let j = i + 4;
+        if (s[j] === '*') j += 1;
+        while (j < s.length && /\s/.test(s[j])) j += 1;
+        if (s[j] === '{') {
+          const close = findClosingBrace(s, j);
+          if (close !== -1) { i = close + 1; continue; }
+        }
+      }
+      const noTag = /^\\(?:notag|nonumber)(?![A-Za-z])/.exec(s.slice(i));
+      if (noTag) { i += noTag[0].length; continue; }
+      out += s[i] + (s[i + 1] ?? '');
+      i += 2;
+      continue;
+    }
+    out += s[i];
+    i += 1;
+  }
+  return out;
 }
 
 export function prepareInlineTex(rawTex) {
@@ -156,7 +243,8 @@ function cleanupInternalMacros(state) {
   }
 }
 
-function syncMacroFingerprint(state) {
+export function syncMathMacros(state = defaultState) {
+  cleanupInternalMacros(state);
   const changed = [];
   for (const [k, v] of Object.entries(state.macros)) {
     const sig = macroSignature(v);
@@ -219,22 +307,20 @@ export function renderFormulaHtml(tok, ctx = {}) {
 
   const key = `${display ? '1' : '0'}\u0000${prepared}\u0000${state.fp}`;
   let rendered = state.cache.get(key);
-  let threw = false;
 
   if (rendered === undefined) {
     try {
       rendered = katexImpl.renderToString(prepared, katexOptions(display, state));
-      cleanupInternalMacros(state);
-      const changed = syncMacroFingerprint(state);
+      const changed = syncMathMacros(state);
       if (changed.length === 0) {
         setCached(state.cache, key, rendered);
       } else if (!changed.some((k) => usedBeforeDefinition(prepared, k))) {
-        const postKey = `${display ? '1' : '0'}\u0000${prepared}\u0000${state.fp}`;
+        const postPrepared = rewriteNewcommands(prepared, katexImpl, state);
+        const postKey = `${display ? '1' : '0'}\u0000${postPrepared}\u0000${state.fp}`;
         setCached(state.cache, postKey, rendered);
       }
     } catch {
       cleanupInternalMacros(state);
-      threw = true;
       rendered = `<code class="math-error">${escapeHtml(source)}</code>`;
     }
   }
@@ -250,6 +336,5 @@ export function renderFormulaHtml(tok, ctx = {}) {
     return `<${tag} class="${cls}"${eqIdAttr}${extraIds}${texAttr}>${rendered}</${tag}>`;
   }
 
-  if (threw) return glue ? `<span class="math-glue">${rendered}${escapeHtml(glue)}</span>` : rendered;
   return glue ? `<span class="math-glue">${rendered}${escapeHtml(glue)}</span>` : rendered;
 }

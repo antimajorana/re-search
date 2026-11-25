@@ -42,7 +42,12 @@ export function renderMathInContainer(el, opts = {}) {
   const nodes = [];
   for (let cur = walker.nextNode(); cur; cur = walker.nextNode()) {
     const p = cur.parentElement;
-    if (p && !/^(CODE|PRE|SCRIPT|STYLE|TEXTAREA)$/.test(p.tagName) && /(\$\$|\$|\\\(|\\\[|\\begin\{)/.test(cur.nodeValue || '')) {
+    if (
+      p
+      && !/^(CODE|PRE|SCRIPT|STYLE|TEXTAREA)$/.test(p.tagName)
+      && !p.closest?.('.katex, .katex-error, .math-error')
+      && /(\$\$|\$|\\\(|\\\[|\\begin\{)/.test(cur.nodeValue || '')
+    ) {
       nodes.push(cur);
     }
   }
