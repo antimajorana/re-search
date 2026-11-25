@@ -78,7 +78,14 @@ pub(crate) fn spawn_turn_thread(
         }
     };
 
-    if let Err(error) = crate::investigation::prepare(&state, &session_id, &mut req_json, &prompt) {
+    let paper_route = if on_cli_route.is_some() {
+        crate::investigation::PaperRoute::Cli
+    } else {
+        crate::investigation::PaperRoute::InCore
+    };
+    if let Err(error) =
+        crate::investigation::prepare(&state, &session_id, &mut req_json, &prompt, paper_route)
+    {
         if let Ok(mut active) = state.active_turns.lock() { active.remove(&session_id); }
         return Err(error);
     }
@@ -271,8 +278,11 @@ fn run_session_turn(
             .or(ui.pinned_conventions),
         ..GuardrailConfig::default()
     };
+    let paper_reading_turn = req.get("_paper_map_request").is_some()
+        || req.get("_paper_branch_request").is_some()
+        || req.get("_paper_conventions_request").is_some();
     let delegation_cfg = DelegationConfig {
-        compute_worker: compute_built.as_ref().map(|b| {
+        compute_worker: if paper_reading_turn { None } else { compute_built.as_ref().map(|b| {
             make_worker_spec(
                 "compute_worker",
                 "Compute Worker",
@@ -288,7 +298,7 @@ fn run_session_turn(
                 compute_worker_tools(),
                 DEFAULT_WORKER_MAX_TURNS,
             )
-        }),
+        }) },
         literature_worker: lit_built.as_ref().map(|b| {
             make_worker_spec(
                 "literature_worker",
@@ -301,7 +311,7 @@ fn run_session_turn(
                 DEFAULT_WORKER_MAX_TURNS,
             )
         }),
-        lean_worker: lean_built.as_ref().map(|b| {
+        lean_worker: if paper_reading_turn { None } else { lean_built.as_ref().map(|b| {
             make_worker_spec(
                 "lean_worker",
                 "Lean Prover Worker",
@@ -312,9 +322,9 @@ fn run_session_turn(
                 lean_worker_tools(),
                 DEFAULT_WORKER_MAX_TURNS,
             )
-        }),
-        lean_router: lean_router.as_ref(),
-        explorer_worker: explore_built.as_ref().map(|b| {
+        }) },
+        lean_router: if paper_reading_turn { None } else { lean_router.as_ref() },
+        explorer_worker: if paper_reading_turn { None } else { explore_built.as_ref().map(|b| {
             make_worker_spec(
                 "explorer_worker",
                 "Ultramath Explorer",
@@ -323,21 +333,25 @@ fn run_session_turn(
                 explore_worker_tools(),
                 EXPLORE_BRANCH_MAX_TURNS,
             )
-        }),
-        custom_subagents: custom_built
-            .iter()
-            .map(|(sa, b)| CustomSubagentDelegation {
-                id: sa.id.clone(),
-                name: sa.name.clone(),
-                description: sa.description.clone(),
-                tools_profile: sa.tools_profile.clone(),
-                system_prompt: sa.system_prompt.clone(),
-                transport: &*b.transport,
-                model: b.model.clone(),
-                routing_reason: b.routing_reason.clone(),
-                reasoning_effort: sa.reasoning_effort.clone(),
-            })
-            .collect(),
+        }) },
+        custom_subagents: if paper_reading_turn {
+            Vec::new()
+        } else {
+            custom_built
+                .iter()
+                .map(|(sa, b)| CustomSubagentDelegation {
+                    id: sa.id.clone(),
+                    name: sa.name.clone(),
+                    description: sa.description.clone(),
+                    tools_profile: sa.tools_profile.clone(),
+                    system_prompt: sa.system_prompt.clone(),
+                    transport: &*b.transport,
+                    model: b.model.clone(),
+                    routing_reason: b.routing_reason.clone(),
+                    reasoning_effort: sa.reasoning_effort.clone(),
+                })
+                .collect()
+        },
         pinned_conventions: guardrails.pinned_conventions.clone(),
     };
     let interactive_plan_mode = req.get("interactive_plan_mode").and_then(Value::as_bool).unwrap_or(false);
