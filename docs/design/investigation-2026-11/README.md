@@ -67,7 +67,7 @@ ported from Kandinsky** (see below). In short:
 | 2 | `agents/split-1.md` | Split WP1a, WP1b, WP2, WP3, WP4, WP5 | `ux-ui` |
 | 3 | `agents/split-2.md` | Split WP6–WP9 (readers) | `split-3` |
 | 3 | `agents/split-3.md` | Split WP10–WP12 (outline, scope) | `split-2` |
-| 4 | `agents/audit.md` | Read-only bug and consistency audit | several lenses in parallel |
+| 4 | `agents/audit.md` | Bug and consistency audit of `gemini/work/merged` | four lenses in parallel (Carbon) |
 
 **Changed 2026-11-25:** the user chose to run waves 1–3 all at once from the same base and to
 check everything at the end (see `agents/PARALLEL.md`). Each agent's patch is committed under
