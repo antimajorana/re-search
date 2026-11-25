@@ -117,6 +117,7 @@ test('CSS audit: starter-chip scoped to > span and no bare descendant span/div/*
   const katexContainers = [
     '.starter-chip', '.rich-prose', '.msg-bubble-user', '.msg-assistant-body',
     '#latex-preview', '.dag-detail-card', '.paper-card', '.source-card', '#sidetalk-stream', '.sc-latex',
+    '.math-display', '.math-glue', '.table-wrap',
   ];
 
   for (const [name, css] of [['components.css', componentsCss], ['layout.css', layoutCss], ['workbench.css', workbenchCss]]) {

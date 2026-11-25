@@ -3,7 +3,7 @@
 import * as api from '/assets/api.js';
 import { initInvestigation, showInvestigationSession, refreshInvestigation } from '/assets/investigation.js';
 import { fileNewSession, initFolders, openFolderDialog, sessionFolderName, sessionsInFolder } from '/assets/session_folders.js';
-import { renderMathTextInto } from '/assets/math.js';
+import { renderMathTextInto, resetMathMacros } from '/assets/math.js';
 import { attachAnswerTrace } from '/assets/claim_trace.js';
 import {
   appendAssistantMessage, appendUserMessage, appendWarningLine, confirmOptimisticUserMessage,
@@ -539,6 +539,7 @@ async function selectSession(id, { focus = false, adoptDraft = false } = {}) {
   closeProjects();
   setComposerLoading(true);
   if (changed) {
+    resetMathMacros();
     showInvestigationSession(id, null);
     closeSessionPopovers();
     resetLiveTurnState();
