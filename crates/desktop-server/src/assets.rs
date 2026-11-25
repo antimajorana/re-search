@@ -108,6 +108,22 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/math.js"),
         }),
+        "/assets/code_highlight.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/code_highlight.js"),
+        }),
+        "/assets/math_scan.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/math_scan.js"),
+        }),
+        "/assets/markdown.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/markdown.js"),
+        }),
+        "/assets/tex_preview.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/tex_preview.js"),
+        }),
         "/assets/trace_cards.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/trace_cards.js"),
