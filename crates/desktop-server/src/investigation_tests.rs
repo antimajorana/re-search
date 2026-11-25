@@ -169,7 +169,7 @@ fn prepare_question_pins_once_appends_request_and_strips_forged_key() {
         "calculation_mode": true,
         "use_strategist": true
     });
-    prepare(&state, SID, &mut first, "Explain eq (1)").unwrap();
+    prepare(&state, SID, &mut first, "Explain eq (1)", PaperRoute::InCore).unwrap();
     let first_seq = first["_paper_question_request"].as_u64().unwrap();
     assert_ne!(first_seq, 9999);
     assert_eq!(first["verification_mode"], false);
@@ -182,7 +182,7 @@ fn prepare_question_pins_once_appends_request_and_strips_forged_key() {
     assert!(!ctx.contains("final_answer"));
 
     let mut second = json!({"_paper_question_request": 7777});
-    prepare(&state, SID, &mut second, "Follow-up question").unwrap();
+    prepare(&state, SID, &mut second, "Follow-up question", PaperRoute::InCore).unwrap();
     let second_seq = second["_paper_question_request"].as_u64().unwrap();
     assert!(second_seq > first_seq);
 
@@ -266,7 +266,7 @@ fn mapping_request_writes_conventions_requested_false_and_omits_catalog_sentence
         "investigation_source_id": paper.source_id,
         "investigation_scope": "map"
     });
-    prepare(&state, SID, &mut req, "Find main results").unwrap();
+    prepare(&state, SID, &mut req, "Find main results", PaperRoute::InCore).unwrap();
     let map_req_seq = req["_paper_map_request"].as_u64().unwrap();
     let ctx = req["_paper_context"].as_str().unwrap();
     assert!(!ctx.contains("record_paper_conventions"));
@@ -289,7 +289,7 @@ fn finish_maps_without_catalog_returns_ok() {
         "investigation_source_id": paper.source_id,
         "investigation_scope": "map"
     });
-    prepare(&state, SID, &mut req, "Find main results").unwrap();
+    prepare(&state, SID, &mut req, "Find main results", PaperRoute::InCore).unwrap();
     let map_req_seq = req["_paper_map_request"].as_u64().unwrap();
     ledger
         .append(
@@ -305,7 +305,7 @@ fn finish_maps_without_catalog_returns_ok() {
 
     // Without a saved map, the updated failure copy is returned.
     let mut req2 = json!({"investigation_scope": "map"});
-    prepare(&state, SID, &mut req2, "Retry").unwrap();
+    prepare(&state, SID, &mut req2, "Retry", PaperRoute::InCore).unwrap();
     let err = finish(&state, SID, &req2, Ok("No map.".into())).unwrap_err();
     assert_eq!(
         err,
@@ -323,13 +323,13 @@ fn finish_question_answered_failed_stopped_never_changes_outcome() {
         "investigation_source_id": paper.source_id,
         "investigation_scope": "question"
     });
-    prepare(&state, SID, &mut req_ok, "Q1").unwrap();
+    prepare(&state, SID, &mut req_ok, "Q1", PaperRoute::InCore).unwrap();
     let seq1 = req_ok["_paper_question_request"].as_u64().unwrap();
     let long_reply = "a".repeat(25_000);
     assert_eq!(finish(&state, SID, &req_ok, Ok(long_reply.clone())), Ok(long_reply));
 
     let mut req_fail = json!({});
-    prepare(&state, SID, &mut req_fail, "Q2").unwrap();
+    prepare(&state, SID, &mut req_fail, "Q2", PaperRoute::InCore).unwrap();
     let seq2 = req_fail["_paper_question_request"].as_u64().unwrap();
     let long_err = "e".repeat(2_500);
     assert_eq!(
@@ -338,7 +338,7 @@ fn finish_question_answered_failed_stopped_never_changes_outcome() {
     );
 
     let mut req_stop = json!({});
-    prepare(&state, SID, &mut req_stop, "Q3").unwrap();
+    prepare(&state, SID, &mut req_stop, "Q3", PaperRoute::InCore).unwrap();
     let seq3 = req_stop["_paper_question_request"].as_u64().unwrap();
     ledger
         .append(
@@ -385,7 +385,7 @@ fn view_answers_running_vs_interrupted() {
         "investigation_source_id": paper.source_id,
         "investigation_scope": "question"
     });
-    prepare(&state, SID, &mut req, "What is equation 1?").unwrap();
+    prepare(&state, SID, &mut req, "What is equation 1?", PaperRoute::InCore).unwrap();
     let seq = req["_paper_question_request"].as_u64().unwrap();
 
     let events = ledger.read_session(SID).unwrap();
@@ -419,12 +419,12 @@ fn view_mapping_requested_flag() {
         "investigation_source_id": paper.source_id,
         "investigation_scope": "question"
     });
-    prepare(&state, SID, &mut q_req, "Question only").unwrap();
+    prepare(&state, SID, &mut q_req, "Question only", PaperRoute::InCore).unwrap();
     let events_before = ledger.read_session(SID).unwrap();
     assert_eq!(view(&events_before, false)["mapping_requested"], false);
 
     let mut m_req = json!({"investigation_scope": "map"});
-    prepare(&state, SID, &mut m_req, "Map now").unwrap();
+    prepare(&state, SID, &mut m_req, "Map now", PaperRoute::InCore).unwrap();
     let events_after = ledger.read_session(SID).unwrap();
     assert_eq!(view(&events_after, false)["mapping_requested"], true);
 }

@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 #[path = "investigation_prompts.rs"]
-mod prompts;
+pub(crate) mod prompts;
 pub(crate) use prompts::PaperRoute;
 
 type Result<T> = std::result::Result<T, (u16, String)>;

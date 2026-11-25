@@ -84,7 +84,7 @@ pub(crate) fn collect_received_ranges(
             .as_str()
             .and_then(|cid| requests.get(cid).copied());
         if let Some(name) = tool {
-            if !matches!(name, "fs_read" | "search_paper_passages") {
+            if !matches!(name, "fs_read" | "read_paper_lines" | "search_paper_passages") {
                 continue;
             }
         }
@@ -106,6 +106,26 @@ pub(crate) fn collect_received_ranges(
                     }
                 }
             }
+            continue;
+        }
+
+        if tool == Some("read_paper_lines") || (tool.is_none() && val["a_meta"].is_object()) {
+            let meta = &val["a_meta"];
+            if meta["path"].as_str() != Some(primary_path) {
+                continue;
+            }
+            if let Some(total) = meta["total_lines"]
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+            {
+                observed_total_lines =
+                    Some(observed_total_lines.map_or(total, |prev| prev.max(total)));
+            }
+            push_range(
+                &mut ranges,
+                meta["start_line"].as_u64(),
+                meta["end_line"].as_u64(),
+            );
             continue;
         }
 

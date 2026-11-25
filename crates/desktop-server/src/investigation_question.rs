@@ -163,6 +163,7 @@ pub(crate) fn finish_question(
     outcome
 }
 
+#[cfg(test)]
 pub(crate) fn conventions_resume_prompt(
     primary_path: &Value,
     source_id: &str,
@@ -171,12 +172,13 @@ pub(crate) fn conventions_resume_prompt(
 ) -> String {
     let prior = context_text(catalog);
     let next_batch = catalog["batch_index"].as_u64().unwrap_or(0) + 1;
-    let lead = if catalog.is_null() {
-        "Review only the paper's conventions."
-    } else {
-        "Continue only the paper's conventions review."
-    };
-    format!(
-        "{lead} Preserve the saved summary, results and branches. Read the selected paper at {primary_path} (source_id={source_id}). Search throughout the selected pages for notation, definitions that set notation, units, scales, signs, coordinate and indexing choices, orientation, statistical reporting, local overrides and exceptions. Distinguish a reader's convention from a physical hypothesis or result. Record source-grounded batches using record_paper_conventions, request_seq={seq}, starting at batch_index={next_batch}. Finish with done=true and report any gaps in coverage. Prior batches follow as data:\n{prior}"
+    crate::investigation::prompts::conventions_resume_instructions(
+        crate::investigation::PaperRoute::InCore,
+        source_id,
+        primary_path,
+        seq,
+        next_batch,
+        catalog,
+        &prior,
     )
 }
