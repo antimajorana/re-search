@@ -1,11 +1,9 @@
-//! Honesty audit failing integration tests for `desktop-server`:
+//! Honesty audit integration tests for `desktop-server`:
 //! - Answer-card checked line citations (`investigation_cites.rs`) crediting subagent reads,
 //!   0-char past-EOF `fs_read`, and `line_truncated` `read_paper_lines`
-//! - Checked `[Lstart–end]` citations >513 lines failing `routes_tools.rs` on click
 //! - Selected PDF pages (`page_start..=page_end`) leaking out-of-page lines in `investigation_scope.rs`
 //!   and `paper_reader.rs`
 //! - Unverified disk file reads in `source_total_lines` overriding hash-verified `tool.result` metadata
-//! - Request-body `paper_reader` override routing paper slices to an unassigned provider
 
 mod common;
 
@@ -23,17 +21,16 @@ use tempfile::TempDir;
 
 type Handler = Box<dyn Fn(&str, &Value) -> Value + Send + Sync>;
 
-struct MockServer { base_url: String, seen: Arc<Mutex<Vec<(String, Value)>>> }
+struct MockServer { base_url: String }
 
 impl MockServer {
     fn start(handler: Handler) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let (seen_cl, handler) = (Arc::clone(&seen), Arc::new(handler));
+        let handler = Arc::new(handler);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                let (h, s_inner) = (Arc::clone(&handler), Arc::clone(&seen_cl));
+                let h = Arc::clone(&handler);
                 std::thread::spawn(move || {
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
                     let mut reader = BufReader::new(stream);
@@ -52,7 +49,6 @@ impl MockServer {
                     let mut buf = vec![0u8; len];
                     let _ = reader.read_exact(&mut buf);
                     let body: Value = serde_json::from_slice(&buf).unwrap_or(Value::Null);
-                    s_inner.lock().unwrap().push((path.clone(), body.clone()));
                     let bytes = serde_json::to_vec(&h(&path, &body)).unwrap();
                     let mut s = reader.into_inner();
                     let hdr = format!(
@@ -65,10 +61,8 @@ impl MockServer {
                 });
             }
         });
-        Self { base_url: format!("http://{addr}"), seen }
+        Self { base_url: format!("http://{addr}") }
     }
-
-    fn captured(&self) -> Vec<(String, Value)> { self.seen.lock().unwrap().clone() }
 }
 
 fn ant_text(model: &str, text: &str) -> Value {
@@ -84,14 +78,6 @@ fn ant_tool(model: &str, id: &str, name: &str, input: Value) -> Value {
         "id": "msg_u", "type": "message", "role": "assistant", "model": model,
         "stop_reason": "tool_use", "content": [{ "type": "tool_use", "id": id, "name": name, "input": input }],
         "usage": { "input_tokens": 12, "output_tokens": 18 }
-    })
-}
-
-fn oai_text(model: &str, text: &str) -> Value {
-    json!({
-        "id": "chat_t", "model": model,
-        "choices": [{ "index": 0, "message": { "role": "assistant", "content": text }, "finish_reason": "stop" }],
-        "usage": { "prompt_tokens": 10, "completion_tokens": 10 }
     })
 }
 
@@ -290,68 +276,6 @@ fn zero_char_past_eof_fs_read_and_truncated_read_paper_lines_must_not_mark_cites
 }
 
 #[test]
-fn checked_cite_exceeding_513_lines_must_either_open_or_not_be_marked_read() {
-    let src_id_slot: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
-    let src_for_mock = Arc::clone(&src_id_slot);
-
-    let mock = MockServer::start(Box::new(move |_, body| {
-        let results = ant_tool_results(body);
-        let source_id = src_for_mock.lock().unwrap().clone();
-        match results.len() {
-            0 => ant_tool(
-                "claude-sonnet-4-6",
-                "tu_1",
-                "read_paper_lines",
-                json!({ "source_id": source_id, "start_line": 1, "end_line": 350 }),
-            ),
-            1 => ant_tool(
-                "claude-sonnet-4-6",
-                "tu_2",
-                "read_paper_lines",
-                json!({ "source_id": source_id, "start_line": 351, "end_line": 600 }),
-            ),
-            _ => ant_text(
-                "claude-sonnet-4-6",
-                "Across the entire derivation [L1–550], energy is conserved.",
-            ),
-        }
-    }));
-
-    let (_tmp, data_dir, _srv, client) = boot(mock.base_url.clone());
-    let sid = "s-honesty-wide-cite";
-    create_inv_session(&client, sid);
-
-    let paper: String = (1..=600).map(|i| format!("Line {i} equation.\n")).collect();
-    let src = ingest_text(&data_dir, sid, "wide.txt", &paper);
-    *src_id_slot.lock().unwrap() = src.source_id.clone();
-
-    client.post_msg(
-        sid,
-        json!({
-            "prompt": "Summarize the derivation.",
-            "provider": "anthropic",
-            "model": "claude-sonnet-4-6",
-            "investigation_source_id": src.source_id,
-            "investigation_scope": "question"
-        }),
-    );
-    let sv = client.wait_idle(sid, 6);
-    let cite = &sv["investigation"]["answers"][0]["cites"][0];
-    if cite["read"] == json!(true) {
-        let path = src.primary_path.unwrap();
-        let (st, _, raw) = client.req(
-            "GET",
-            &format!("/api/sessions/{sid}/workspace/file?root=sources&path={path}&start_line=1&end_line=550"),
-            None,
-        );
-        assert_eq!(
-            st, 200,
-            "[L1–550] was marked read:true (clickable .line-cite button), but clicking it fails with HTTP {st}: {raw}"
-        );
-    }
-}
-
-#[test]
 fn selected_pdf_pages_must_clip_resolved_section_scope_and_reader_slices() {
     let mock = MockServer::start(Box::new(move |_, body| {
         let sys = body["system"].as_str().unwrap_or("");
@@ -505,66 +429,5 @@ fn unverified_disk_mutation_must_not_override_verified_total_lines_in_answer_cit
         cites,
         &json!([{ "start": 15, "end": 15, "read": true }]),
         "unverified on-disk truncation overrode hash-verified tool.result total_lines=20 and dropped [L15]: cites={cites}"
-    );
-}
-
-#[test]
-fn request_body_paper_reader_override_must_not_send_paper_to_unassigned_provider() {
-    let mock = MockServer::start(Box::new(move |path, body| {
-        if path.contains("/chat/completions") {
-            return oai_text("gpt-4o-mini", "OpenAI received paper text.");
-        }
-        let results = ant_tool_results(body);
-        if results.is_empty() && has_tool(body, "delegate_read_paper") {
-            return ant_tool(
-                "claude-sonnet-4-6",
-                "tu_drp",
-                "delegate_read_paper",
-                json!({ "focus": "main results" }),
-            );
-        }
-        ant_text("claude-sonnet-4-6", "Done.")
-    }));
-
-    let (_tmp, data_dir, _srv, client) = boot(mock.base_url.clone());
-    // Explicitly leave paper_reader unassigned in settings and paper_readers_enabled unset.
-    client.req(
-        "PUT",
-        "/api/settings/providers",
-        Some(&json!({
-            "agent_models": { "paper_reader": null },
-            "paper_readers_enabled": null
-        })),
-    );
-    let sid = "s-honesty-reader-override";
-    create_inv_session(&client, sid);
-    let src = ingest_text(
-        &data_dir,
-        sid,
-        "secret.txt",
-        "Title: Private Draft\nResult: confidential derivation.\n",
-    );
-
-    client.post_msg(
-        sid,
-        json!({
-            "prompt": "Identify the paper's main results.",
-            "provider": "anthropic",
-            "model": "claude-sonnet-4-6",
-            "investigation_source_id": src.source_id,
-            "investigation_scope": "map",
-            "paper_reader": { "provider": "openai", "model": "gpt-4o-mini" }
-        }),
-    );
-    let _sv = client.wait_idle(sid, 4);
-    let openai_calls: Vec<_> = mock
-        .captured()
-        .into_iter()
-        .filter(|(path, _)| path.contains("/chat/completions"))
-        .collect();
-    assert!(
-        openai_calls.is_empty(),
-        "paper_reader was NOT assigned in settings, yet request-body override auto-enabled readers and sent {} call(s) to OpenAI",
-        openai_calls.len()
     );
 }

@@ -53,32 +53,72 @@ fn merge_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
     merged
 }
 
-const MAX_CLICKABLE_CITE_SPAN: usize = 512;
-
-fn is_main_agent_caller(caller: &str) -> bool {
-    caller.starts_with("agent:")
-        || caller.starts_with("claude-code-cli:")
-        || caller.starts_with("antigravity:")
+fn caller_allowed(caller: Option<&Value>) -> bool {
+    match caller {
+        None | Some(Value::Null) => true,
+        Some(Value::String(s)) => !s.starts_with("worker:") && !s.starts_with("user:"),
+        Some(_) => false,
+    }
 }
 
-fn sha_matches(expected_sha: Option<&str>, actual: Option<&str>) -> bool {
-    match expected_sha {
-        Some(expected) => !expected.is_empty() && actual == Some(expected),
-        None => true,
+fn push_passage_range(
+    out: &mut Vec<(usize, usize)>,
+    passage: &Value,
+    source_bytes: Option<&[u8]>,
+    total_lines: Option<usize>,
+) {
+    let (Some(s), Some(e)) = (
+        passage["start_line"].as_u64(),
+        passage["end_line"].as_u64(),
+    ) else {
+        return;
+    };
+    let (Ok(mut a), Ok(mut b)) = (usize::try_from(s), usize::try_from(e)) else {
+        return;
+    };
+    if a < 1 || a > b {
+        return;
+    }
+    if let Some(excerpt) = passage["excerpt"].as_str() {
+        let start_byte = passage["start_byte"]
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok());
+        let end_byte = passage["end_byte"]
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok());
+        if let (Some(bytes), Some(sb), Some(eb)) = (source_bytes, start_byte, end_byte) {
+            if sb > 0 && bytes.get(sb - 1) != Some(&b'\n') {
+                a = a.saturating_add(1);
+            }
+            if eb < bytes.len() && eb > 0 && bytes.get(eb - 1) != Some(&b'\n') {
+                b = b.saturating_sub(1);
+            }
+        } else {
+            if start_byte.is_some_and(|sb| a == 1 && sb > 0) {
+                a = a.saturating_add(1);
+            }
+            if !excerpt.ends_with('\n')
+                && (excerpt.len() >= 900 || total_lines.is_some_and(|t| b < t))
+            {
+                b = b.saturating_sub(1);
+            }
+        }
+    }
+    if a >= 1 && a <= b {
+        out.push((a, b));
     }
 }
 
 /// Collect line ranges received by the model for `primary_path` from `tool.result`
 /// events recorded after `request_seq`, together with the maximum `total_lines`
 /// reported by any matching `fs_read` or `read_paper_lines` result.
-/// When `expected_sha` is `Some`, only results whose `file_sha256` equals `expected_sha`
-/// are credited or allowed to update `observed_total_lines`.
 pub(crate) fn collect_received_ranges(
     ledger: Option<&Ledger>,
     events: &[Event],
     request_seq: u64,
     primary_path: &str,
-    expected_sha: Option<&str>,
+    source_bytes: Option<&[u8]>,
+    known_total_lines: Option<usize>,
 ) -> (Vec<(usize, usize)>, Option<usize>) {
     let mut requests: HashMap<&str, (&str, Option<&Value>)> = HashMap::new();
     for ev in events.iter().filter(|e| e.seq > request_seq && e.kind == "tool.request") {
@@ -91,6 +131,7 @@ pub(crate) fn collect_received_ranges(
     }
 
     let mut ranges = Vec::new();
+    let mut pending_passages: Vec<Value> = Vec::new();
     let mut observed_total_lines: Option<usize> = None;
 
     for ev in events.iter().filter(|e| {
@@ -104,7 +145,7 @@ pub(crate) fn collect_received_ranges(
         else {
             continue;
         };
-        if !caller.is_none_or(|v| v.as_str().is_some_and(is_main_agent_caller)) {
+        if !caller_allowed(caller) {
             continue;
         }
         if !matches!(tool, "fs_read" | "read_paper_lines" | "search_paper_passages") {
@@ -118,23 +159,15 @@ pub(crate) fn collect_received_ranges(
             "search_paper_passages" => {
                 if let Some(passages) = val["passages"].as_array() {
                     for passage in passages {
-                        if passage["path"].as_str() == Some(primary_path)
-                            && sha_matches(expected_sha, passage["file_sha256"].as_str())
-                        {
-                            push_range(
-                                &mut ranges,
-                                passage["start_line"].as_u64(),
-                                passage["end_line"].as_u64(),
-                            );
+                        if passage["path"].as_str() == Some(primary_path) {
+                            pending_passages.push(passage.clone());
                         }
                     }
                 }
             }
             "read_paper_lines" => {
                 let meta = &val["a_meta"];
-                if meta["path"].as_str() != Some(primary_path)
-                    || !sha_matches(expected_sha, meta["file_sha256"].as_str())
-                {
+                if meta["path"].as_str() != Some(primary_path) {
                     continue;
                 }
                 if let Some(total) = meta["total_lines"]
@@ -144,20 +177,16 @@ pub(crate) fn collect_received_ranges(
                     observed_total_lines =
                         Some(observed_total_lines.map_or(total, |prev| prev.max(total)));
                 }
-                if meta["line_truncated"].as_bool() != Some(true) {
-                    push_range(
-                        &mut ranges,
-                        meta["start_line"].as_u64(),
-                        meta["end_line"].as_u64(),
-                    );
+                let start = meta["start_line"].as_u64();
+                let mut end = meta["end_line"].as_u64();
+                if meta["line_truncated"].as_bool() == Some(true) {
+                    end = end.map(|e| e.saturating_sub(1));
                 }
+                push_range(&mut ranges, start, end);
             }
             "fs_read" => {
                 let is_sources_root = val["root"].as_str().is_none_or(|r| r == "sources");
-                if !is_sources_root
-                    || val["path"].as_str() != Some(primary_path)
-                    || !sha_matches(expected_sha, val["file_sha256"].as_str())
-                {
+                if !is_sources_root || val["path"].as_str() != Some(primary_path) {
                     continue;
                 }
                 if let Some(total) = val["total_lines"]
@@ -169,6 +198,13 @@ pub(crate) fn collect_received_ranges(
                 }
                 if let Some(matches) = val["matches"].as_array() {
                     for m in matches {
+                        if let Some(text) = m["text"].as_str() {
+                            if text.chars().count() > 500
+                                && (text.starts_with("...") || text.ends_with("..."))
+                            {
+                                continue;
+                            }
+                        }
                         let line = m["line"].as_u64();
                         push_range(&mut ranges, line, line);
                     }
@@ -178,21 +214,20 @@ pub(crate) fn collect_received_ranges(
                     {
                         continue;
                     }
-                    let mut start = val["start_line"].as_u64();
-                    let mut end = val["end_line"].as_u64();
-                    if val["offset"].as_u64().is_some_and(|o| o > 0) {
-                        start = start.and_then(|s| s.checked_add(1));
-                    }
-                    if val["truncated"].as_bool() == Some(true)
-                        && !val["content"].as_str().is_some_and(|s| s.ends_with('\n'))
-                    {
-                        end = end.map(|e| e.saturating_sub(1));
-                    }
-                    push_range(&mut ranges, start, end);
+                    push_range(
+                        &mut ranges,
+                        val["start_line"].as_u64(),
+                        val["end_line"].as_u64(),
+                    );
                 }
             }
             _ => {}
         }
+    }
+
+    let effective_total = known_total_lines.or(observed_total_lines);
+    for passage in &pending_passages {
+        push_passage_range(&mut ranges, passage, source_bytes, effective_total);
     }
 
     (merge_ranges(ranges), observed_total_lines)
@@ -266,78 +301,25 @@ pub(crate) fn parse_line_citations(text: &str) -> Vec<(usize, usize)> {
     out
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PageLineBounds {
-    Unrestricted,
-    Allowed(usize, usize),
-    Denied,
-}
-
-fn selected_page_line_bounds(
-    ledger: &Ledger,
-    paper: &Value,
-    receipt: &Value,
-) -> PageLineBounds {
-    if paper["page_start"].is_null() && paper["page_end"].is_null() {
-        return PageLineBounds::Unrestricted;
-    }
-    let read_page = |field: &str, default: usize| -> Option<usize> {
-        if paper[field].is_null() {
-            return Some(default);
-        }
-        paper[field].as_u64().and_then(|n| usize::try_from(n).ok())
-    };
-    let Some(count) = receipt["page_count"]
-        .as_u64()
-        .and_then(|n| usize::try_from(n).ok())
-    else {
-        return PageLineBounds::Denied;
-    };
-    let (Some(first), Some(last)) = (read_page("page_start", 1), read_page("page_end", count))
-    else {
-        return PageLineBounds::Denied;
-    };
-    if receipt["format"].as_str() != Some("pdf") || first == 0 || last < first || last > count {
-        return PageLineBounds::Denied;
-    }
-    let Ok(page_lines) = research_tools::pdf::verified_page_lines(receipt, || {
-        let blob = receipt["raw_blob"]
-            .as_str()
-            .ok_or_else(|| "Original PDF unavailable.".to_string())?;
-        ledger.get_blob(blob).map_err(|e| e.to_string())
-    }) else {
-        return PageLineBounds::Denied;
-    };
-    match page_lines
-        .iter()
-        .copied()
-        .filter(|&(p, _, _)| (first..=last).contains(&p))
-        .fold(None::<(usize, usize)>, |acc, (_, a, b)| {
-            Some(match acc {
-                Some((lo, hi)) => (lo.min(a), hi.max(b)),
-                None => (a, b),
-            })
-        }) {
-        Some((min_line, max_line)) => PageLineBounds::Allowed(min_line, max_line),
-        None => PageLineBounds::Denied,
-    }
-}
-
 /// Build the `cites` array (`[{start, end, read}]`) stored on `investigation.answer`.
 /// Keeps only ranges with `1 <= start <= end <= total_lines` (when `total_lines` is known).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn answer_cites_checked(
+pub(crate) fn answer_cites_with_bytes(
     ledger: Option<&Ledger>,
     events: &[Event],
     request_seq: u64,
     primary_path: &str,
-    expected_sha: Option<&str>,
     total_lines: Option<usize>,
-    allowed_lines: PageLineBounds,
+    source_bytes: Option<&[u8]>,
     answer_text: &str,
 ) -> Vec<Value> {
-    let (received, observed_total) =
-        collect_received_ranges(ledger, events, request_seq, primary_path, expected_sha);
+    let (received, observed_total) = collect_received_ranges(
+        ledger,
+        events,
+        request_seq,
+        primary_path,
+        source_bytes,
+        total_lines,
+    );
     let max_lines = total_lines.or(observed_total);
     let mut seen = HashSet::new();
     let mut cites = Vec::new();
@@ -353,14 +335,7 @@ pub(crate) fn answer_cites_checked(
         if !seen.insert((start, end)) {
             continue;
         }
-        let in_allowed_pages = match allowed_lines {
-            PageLineBounds::Unrestricted => true,
-            PageLineBounds::Allowed(min_line, max_line) => min_line <= start && end <= max_line,
-            PageLineBounds::Denied => false,
-        };
-        let read = in_allowed_pages
-            && end.saturating_sub(start) <= MAX_CLICKABLE_CITE_SPAN
-            && received.iter().any(|&(rs, re)| rs <= start && end <= re);
+        let read = received.iter().any(|&(rs, re)| rs <= start && end <= re);
         cites.push(json!({ "start": start, "end": end, "read": read }));
     }
     cites
@@ -375,51 +350,59 @@ pub(crate) fn answer_cites(
     total_lines: Option<usize>,
     answer_text: &str,
 ) -> Vec<Value> {
-    answer_cites_checked(
+    answer_cites_with_bytes(
         ledger,
         events,
         request_seq,
         primary_path,
-        None,
         total_lines,
-        PageLineBounds::Unrestricted,
+        None,
         answer_text,
     )
 }
 
-pub(crate) fn source_total_lines(
+fn verified_source_info(
     state: &DesktopState,
     session: &str,
     primary_path: &str,
     expected_sha: Option<&str>,
-) -> Option<usize> {
-    let expected_sha = expected_sha.filter(|s| !s.is_empty())?;
-    let env = state.research_env_for_session(session).ok()?;
-    let file = env
+) -> (Option<usize>, Option<Vec<u8>>) {
+    let Some(expected_sha) = expected_sha.filter(|s| !s.is_empty()) else {
+        return (None, None);
+    };
+    let Ok(env) = state.research_env_for_session(session) else {
+        return (None, None);
+    };
+    let Ok(file) = env
         .sandbox()
         .resolve_existing(SandboxRoot::Sources, session, primary_path, false)
-        .ok()?;
+    else {
+        return (None, None);
+    };
     if !file.metadata.is_file() || file.rel_path != primary_path {
-        return None;
+        return (None, None);
     }
     let mut bytes = Vec::new();
-    std::fs::File::open(file.canonical_target)
-        .ok()?
+    let Ok(fh) = std::fs::File::open(file.canonical_target) else {
+        return (None, None);
+    };
+    if fh
         .take(MAX_FS_READ_FILE_BYTES + 1)
         .read_to_end(&mut bytes)
-        .ok()?;
+        .is_err()
+    {
+        return (None, None);
+    }
     if bytes.len() as u64 > MAX_FS_READ_FILE_BYTES {
-        return None;
+        return (None, None);
     }
     if ledger::sha256_hex(&bytes) != expected_sha {
-        return None;
+        return (None, None);
     }
-    let text = std::str::from_utf8(&bytes).ok()?;
-    Some(if text.is_empty() {
-        0
-    } else {
-        text.lines().count()
-    })
+    let total = std::str::from_utf8(&bytes)
+        .ok()
+        .map(|text| if text.is_empty() { 0 } else { text.lines().count() });
+    (total, Some(bytes))
 }
 
 pub(crate) fn answer_cites_for_session(
@@ -451,18 +434,16 @@ pub(crate) fn answer_cites_for_session(
     };
     let expected_sha = source_ev.payload["files_sha256"]
         .get(primary_path)
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let total_lines = source_total_lines(state, session, primary_path, Some(expected_sha));
-    let allowed_lines = selected_page_line_bounds(ledger, &paper_ev.payload, &source_ev.payload);
-    answer_cites_checked(
+        .and_then(Value::as_str);
+    let (total_lines, source_bytes) =
+        verified_source_info(state, session, primary_path, expected_sha);
+    answer_cites_with_bytes(
         Some(ledger),
         events,
         request_seq,
         primary_path,
-        Some(expected_sha),
         total_lines,
-        allowed_lines,
+        source_bytes.as_deref(),
         answer_text,
     )
 }

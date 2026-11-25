@@ -137,26 +137,20 @@ pub(crate) fn finish_question(
     seq: u64,
     outcome: std::result::Result<String, String>,
 ) -> std::result::Result<String, String> {
-    let verified = ledger.read_verified_session(session).ok().map(|(_, evs)| evs);
+    let events = ledger.read_session(session).unwrap_or_default();
     let (status, text, error, cites) = match &outcome {
         Ok(reply) => {
             let clipped = reply.chars().take(24_000).collect::<String>();
-            let cites = verified
-                .as_deref()
-                .map(|events| {
-                    crate::investigation_cites::answer_cites_for_session(
-                        state, ledger, session, events, seq, &clipped,
-                    )
-                })
-                .unwrap_or_default();
+            let cites = crate::investigation_cites::answer_cites_for_session(
+                state, ledger, session, &events, seq, &clipped,
+            );
             ("answered", json!(clipped), Value::Null, cites)
         }
         Err(err) => {
-            let events =
-                verified.unwrap_or_else(|| ledger.read_session(session).unwrap_or_default());
-            let stopped = events.iter().any(|e| {
-                e.seq > seq && e.kind == "session.abort" && e.payload["stopped"] == true
-            });
+            let stopped = err == "stopped by user"
+                || events.iter().any(|e| {
+                    e.seq > seq && e.kind == "session.abort" && e.payload["stopped"] == true
+                });
             (
                 if stopped { "stopped" } else { "failed" },
                 Value::Null,
@@ -165,7 +159,7 @@ pub(crate) fn finish_question(
             )
         }
     };
-    let _ = ledger.append(
+    if let Err(e) = ledger.append(
         session,
         "investigation.answer",
         1,
@@ -176,7 +170,12 @@ pub(crate) fn finish_question(
             "error": error,
             "cites": cites,
         }),
-    );
+    ) {
+        eprintln!("failed to save investigation.answer for session {session} seq {seq}: {e}");
+        if outcome.is_ok() {
+            return Err(format!("Could not save investigation answer: {e}"));
+        }
+    }
     outcome
 }
 

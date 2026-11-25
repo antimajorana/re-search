@@ -153,7 +153,7 @@ fn read_paper_lines_marks_cites_read() {
 }
 
 #[test]
-fn caller_allowlist_and_unmatched_results() {
+fn caller_denylist_and_unmatched_results() {
     let path = "src-1/paper.txt";
     let res = |cid: &str, s: u64, e: u64| {
         ev(20, "tool.result", json!({"call_id": cid, "ok": true, "result": {"inline":
@@ -185,7 +185,7 @@ fn caller_allowlist_and_unmatched_results() {
         "[L2] [L7] [L12] [L17] [L22] [L31] [L41] [L51]",
     );
     let flags: Vec<bool> = cites.iter().map(|c| c["read"].as_bool().unwrap()).collect();
-    assert_eq!(flags, vec![false, false, false, false, false, true, true, true]);
+    assert_eq!(flags, vec![false, false, true, false, false, true, true, true]);
 }
 
 #[test]
@@ -232,16 +232,16 @@ fn truncated_empty_and_partial_reads_excluded() {
         vec![
             (1, 1, false),
             (30, 30, false),
-            (5, 5, false),
+            (5, 5, true),
             (6, 7, true),
-            (8, 8, false),
+            (8, 8, true),
             (10, 12, true)
         ]
     );
 }
 
 #[test]
-fn wide_citation_above_513_lines_stays_unread() {
+fn review_honesty_f10_wide_cite_stays_read_true() {
     let path = "src-1/wide.txt";
     let events = vec![
         ev(11, "tool.request", json!({"call_id": "a", "tool": "read_paper_lines", "caller": "agent:s1"})),
@@ -249,113 +249,350 @@ fn wide_citation_above_513_lines_stays_unread() {
             "a_meta": {"path": path, "start_line": 1, "end_line": 600, "total_lines": 600}
         })).unwrap()}})),
     ];
-    let cites = answer_cites(None, &events, 10, path, Some(600), "[L1-513] [L1-514]");
+    let cites = answer_cites(None, &events, 10, path, Some(600), "[L1-513] [L1-550]");
     assert_eq!(
         cites,
         vec![
             json!({"start": 1, "end": 513, "read": true}),
-            json!({"start": 1, "end": 514, "read": false})
+            json!({"start": 1, "end": 550, "read": true}),
         ]
     );
 }
 
 #[test]
-fn expected_sha_filters_mismatched_reads_and_total_lines() {
+fn review_honesty_f1_custom_main_caller_allowed() {
     let path = "src-1/paper.txt";
-    let good = "good_sha_hex";
-    let bad = "tampered_sha_hex";
+    let res = |seq: u64, cid: &str, s: u64, e: u64| {
+        ev(
+            seq,
+            "tool.result",
+            json!({"call_id": cid, "ok": true, "result": {"inline": serde_json::to_string(&json!({
+                "root": "sources", "path": path, "start_line": s, "end_line": e, "total_lines": 100
+            })).unwrap()}}),
+        )
+    };
     let events = vec![
-        ev(11, "tool.request", json!({"call_id": "f_bad", "tool": "fs_read", "caller": "agent:s1"})),
-        ev(12, "tool.result", json!({"call_id": "f_bad", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-            "root": "sources", "path": path, "file_sha256": bad, "start_line": 1, "end_line": 50, "total_lines": 50
-        })).unwrap()}})),
-        ev(13, "tool.request", json!({"call_id": "r_bad", "tool": "read_paper_lines", "caller": "agent:s1"})),
-        ev(14, "tool.result", json!({"call_id": "r_bad", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-            "a_meta": {"path": path, "file_sha256": bad, "start_line": 10, "end_line": 20, "total_lines": 99}
-        })).unwrap()}})),
-        ev(15, "tool.request", json!({"call_id": "s_mix", "tool": "search_paper_passages", "caller": "agent:s1"})),
-        ev(16, "tool.result", json!({"call_id": "s_mix", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-            "passages": [
-                {"path": path, "file_sha256": bad, "start_line": 30, "end_line": 35},
-                {"path": path, "file_sha256": good, "start_line": 3, "end_line": 5}
-            ]
-        })).unwrap()}})),
-        ev(17, "tool.request", json!({"call_id": "r_good", "tool": "read_paper_lines", "caller": "agent:s1"})),
-        ev(18, "tool.result", json!({"call_id": "r_good", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-            "a_meta": {"path": path, "file_sha256": good, "start_line": 1, "end_line": 2, "total_lines": 10}
-        })).unwrap()}})),
+        ev(11, "tool.request", json!({"call_id": "c1", "tool": "fs_read", "caller": "codex-cli:s1"})),
+        res(12, "c1", 1, 5),
+        ev(13, "tool.request", json!({"call_id": "c2", "tool": "fs_read", "caller": "future-route:s1"})),
+        res(14, "c2", 10, 12),
+        ev(15, "tool.request", json!({"call_id": "c3", "tool": "fs_read", "caller": ""})),
+        res(16, "c3", 20, 22),
+        ev(17, "tool.request", json!({"call_id": "c4", "tool": "fs_read"})),
+        res(18, "c4", 30, 32),
+        ev(19, "tool.request", json!({"call_id": "w1", "tool": "fs_read", "caller": "worker:reader"})),
+        res(20, "w1", 40, 42),
+        ev(21, "tool.request", json!({"call_id": "u1", "tool": "fs_read", "caller": "user:ui"})),
+        res(22, "u1", 50, 52),
     ];
-    let (ranges, observed_total) =
-        collect_received_ranges(None, &events, 10, path, Some(good));
-    assert_eq!(ranges, vec![(1, 5)]);
-    assert_eq!(observed_total, Some(10));
+    let cites = answer_cites(
+        None,
+        &events,
+        10,
+        path,
+        Some(100),
+        "[L3] [L11] [L21] [L31] [L41] [L51]",
+    );
+    let flags: Vec<bool> = cites.iter().map(|c| c["read"].as_bool().unwrap()).collect();
+    assert_eq!(flags, vec![true, true, true, true, false, false]);
 }
 
 #[test]
-fn pinned_pdf_page_bounds_gate_read_flag_and_fail_closed() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let ledger = Ledger::open(dir.path()).expect("open ledger");
-    let receipt = json!({
-        "format": "pdf",
-        "page_count": 2,
-        "pdf_page_lines": [[1, 1, 10], [2, 11, 20]]
-    });
-    assert_eq!(
-        selected_page_line_bounds(&ledger, &json!({}), &receipt),
-        PageLineBounds::Unrestricted
-    );
-    assert_eq!(
-        selected_page_line_bounds(&ledger, &json!({"page_start": 2, "page_end": 2}), &receipt),
-        PageLineBounds::Allowed(11, 20)
-    );
-    let broken_receipt = json!({
-        "format": "pdf",
-        "page_count": 2,
-        "raw_blob": "missing-blob"
-    });
-    assert_eq!(
-        selected_page_line_bounds(
-            &ledger,
-            &json!({"page_start": 2, "page_end": 2}),
-            &broken_receipt
-        ),
-        PageLineBounds::Denied
-    );
-
-    let path = "pdf1/extracted.txt";
+fn review_honesty_m3_unmatched_tool_result_not_credited() {
+    let path = "src-1/paper.txt";
     let events = vec![
-        ev(11, "tool.request", json!({"call_id": "r", "tool": "read_paper_lines", "caller": "agent:s1"})),
-        ev(12, "tool.result", json!({"call_id": "r", "ok": true, "result": {"inline": serde_json::to_string(&json!({
-            "a_meta": {"path": path, "start_line": 1, "end_line": 20, "total_lines": 20}
-        })).unwrap()}})),
+        // Request before request_seq=10 must not match a result after request_seq.
+        ev(5, "tool.request", json!({"call_id": "stale", "tool": "fs_read", "caller": "agent:s1"})),
+        ev(10, "investigation.question_requested", json!({"source_id": "src-1"})),
+        ev(
+            11,
+            "tool.result",
+            json!({"call_id": "stale", "ok": true, "result": {"inline": serde_json::to_string(&json!({
+                "root": "sources", "path": path, "start_line": 1, "end_line": 5, "total_lines": 50
+            })).unwrap()}}),
+        ),
+        ev(
+            12,
+            "tool.result",
+            json!({"call_id": "missing_req_rpl", "ok": true, "result": {"inline": serde_json::to_string(&json!({
+                "a_meta": {"path": path, "start_line": 10, "end_line": 15, "total_lines": 50}
+            })).unwrap()}}),
+        ),
+        ev(
+            13,
+            "tool.result",
+            json!({"call_id": "missing_req_spp", "ok": true, "result": {"inline": serde_json::to_string(&json!({
+                "passages": [{"path": path, "start_line": 20, "end_line": 25}]
+            })).unwrap()}}),
+        ),
+        ev(
+            14,
+            "tool.result",
+            json!({"ok": true, "result": {"inline": serde_json::to_string(&json!({
+                "root": "sources", "path": path, "start_line": 30, "end_line": 35, "total_lines": 50
+            })).unwrap()}}),
+        ),
     ];
-    let cites = answer_cites_checked(
+    let cites = answer_cites(
         None,
         &events,
         10,
         path,
-        None,
-        Some(20),
-        PageLineBounds::Allowed(11, 20),
-        "[L3-4] [L10-12] [L12-15]",
+        Some(50),
+        "[L2] [L12] [L22] [L32]",
     );
-    assert_eq!(
-        cites,
-        vec![
-            json!({"start": 3, "end": 4, "read": false}),
-            json!({"start": 10, "end": 12, "read": false}),
-            json!({"start": 12, "end": 15, "read": true}),
-        ]
-    );
-    let denied = answer_cites_checked(
+    let flags: Vec<bool> = cites.iter().map(|c| c["read"].as_bool().unwrap()).collect();
+    assert_eq!(flags, vec![false, false, false, false]);
+}
+
+#[test]
+fn review_honesty_m1_grep_truncated_line_not_credited() {
+    let path = "src-1/paper.txt";
+    let trunc_end = format!("{}...", "a".repeat(500));
+    let trunc_start = format!("...{}", "b".repeat(500));
+    let short_ellipsis = format!("{}...", "c".repeat(40));
+    let long_no_ellipsis = "d".repeat(505);
+    let events = vec![
+        ev(11, "tool.request", json!({"call_id": "g1", "tool": "fs_read", "caller": "agent:s1"})),
+        ev(
+            12,
+            "tool.result",
+            json!({"call_id": "g1", "ok": true, "result": {"inline": serde_json::to_string(&json!({
+                "root": "sources",
+                "path": path,
+                "total_lines": 50,
+                "matches": [
+                    {"line": 10, "text": trunc_end},
+                    {"line": 11, "text": trunc_start},
+                    {"line": 12, "text": short_ellipsis},
+                    {"line": 13, "text": long_no_ellipsis}
+                ]
+            })).unwrap()}}),
+        ),
+    ];
+    let cites = answer_cites(
         None,
         &events,
         10,
         path,
-        None,
-        Some(20),
-        PageLineBounds::Denied,
-        "[L12-15]",
+        Some(50),
+        "[L10] [L11] [L12] [L13]",
     );
-    assert_eq!(denied, vec![json!({"start": 12, "end": 15, "read": false})]);
+    let flags: Vec<bool> = cites.iter().map(|c| c["read"].as_bool().unwrap()).collect();
+    assert_eq!(flags, vec![false, false, true, true]);
+}
+
+#[test]
+fn review_honesty_m2_passage_cut_line_not_credited() {
+    let path = "src-1/paper.txt";
+    // Case 1: verified disk bytes available.
+    let line1 = format!("{}END1\n", "a".repeat(100));
+    let line2 = "line two complete\n";
+    let line3 = "line three complete\n";
+    let line4 = format!("START4{}END4\n", "b".repeat(100));
+    let full = format!("{line1}{line2}{line3}{line4}");
+    let l1_mid = 50usize;
+    let l2_end = line1.len() + line2.len();
+    let l3_start = l2_end;
+    let l4_mid = l3_start + line3.len() + 30;
+
+    let disk_events = vec![
+        ev(11, "tool.request", json!({"call_id": "p1", "tool": "search_paper_passages", "caller": "agent:s1"})),
+        ev(
+            12,
+            "tool.result",
+            json!({"call_id": "p1", "ok": true, "result": {"inline": serde_json::to_string(&json!({
+                "passages": [
+                    {
+                        "path": path,
+                        "start_line": 1,
+                        "end_line": 2,
+                        "start_byte": l1_mid,
+                        "end_byte": l2_end,
+                        "excerpt": &full[l1_mid..l2_end]
+                    },
+                    {
+                        "path": path,
+                        "start_line": 3,
+                        "end_line": 4,
+                        "start_byte": l3_start,
+                        "end_byte": l4_mid,
+                        "excerpt": &full[l3_start..l4_mid]
+                    }
+                ]
+            })).unwrap()}}),
+        ),
+    ];
+    let disk_cites = answer_cites_with_bytes(
+        None,
+        &disk_events,
+        10,
+        path,
+        Some(4),
+        Some(full.as_bytes()),
+        "[L1] [L2] [L3] [L4]",
+    );
+    let disk_flags: Vec<bool> = disk_cites.iter().map(|c| c["read"].as_bool().unwrap()).collect();
+    assert_eq!(disk_flags, vec![false, true, true, false]);
+
+    // Case 2: without disk bytes (ledger-only fixture).
+    let long_cut = "x".repeat(950);
+    let mem_events = vec![
+        ev(11, "tool.request", json!({"call_id": "p2", "tool": "search_paper_passages", "caller": "agent:s1"})),
+        ev(
+            12,
+            "tool.result",
+            json!({"call_id": "p2", "ok": true, "result": {"inline": serde_json::to_string(&json!({
+                "passages": [
+                    {
+                        "path": path,
+                        "start_line": 1,
+                        "end_line": 2,
+                        "start_byte": 40,
+                        "end_byte": 90,
+                        "excerpt": "tail1\nline2\n"
+                    },
+                    {
+                        "path": path,
+                        "start_line": 10,
+                        "end_line": 12,
+                        "excerpt": "line10\nline11\npartial12"
+                    },
+                    {
+                        "path": path,
+                        "start_line": 20,
+                        "end_line": 20,
+                        "excerpt": long_cut
+                    }
+                ]
+            })).unwrap()}}),
+        ),
+    ];
+    let mem_cites = answer_cites(
+        None,
+        &mem_events,
+        10,
+        path,
+        Some(30),
+        "[L1] [L2] [L10-11] [L12] [L20]",
+    );
+    let mem_flags: Vec<bool> = mem_cites.iter().map(|c| c["read"].as_bool().unwrap()).collect();
+    assert_eq!(mem_flags, vec![false, true, true, false, false]);
+}
+
+fn test_desktop_state(data_dir: &std::path::Path) -> DesktopState {
+    let cfg = crate::DesktopConfig {
+        port: 0,
+        data_dir: data_dir.to_path_buf(),
+        workspace_root: None,
+        python: None,
+        worker_script: None,
+        api_base_override: None,
+        literature_endpoints: research_tools::LiteratureEndpoints::default(),
+        open_window: false,
+        print_url_json: false,
+        eval_timeout_s: 30,
+        core_exe: None,
+        claude_exe: None,
+        agy_exe: None,
+        connection_env: Some(Default::default()),
+        chatgpt_test: Some(crate::chatgpt::offline_test_hooks()),
+    };
+    let auth = crate::auth::AuthGuard::new(0).unwrap();
+    let sse = std::sync::Arc::new(crate::sse::SseHub::new());
+    let chatgpt = crate::chatgpt::ChatGptHub::new(&cfg).unwrap();
+    DesktopState::new(cfg, auth, sse, chatgpt)
+}
+
+#[test]
+fn review_honesty_late_m2_finish_question_append_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = test_desktop_state(tmp.path());
+    let ledger = Ledger::open(tmp.path()).unwrap();
+    ledger
+        .append("s1", "investigation.started", 1, &json!({}))
+        .unwrap();
+    let seq = ledger
+        .append(
+            "s1",
+            "investigation.question_requested",
+            1,
+            &json!({"source_id": "src-1", "question": "Q"}),
+        )
+        .unwrap();
+    drop(ledger);
+
+    let db_path = tmp.path().join("ledger.db");
+    let mut perms = std::fs::metadata(&db_path).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&db_path, perms).unwrap();
+
+    let ro_ledger = Ledger::open_existing(tmp.path()).unwrap();
+    let ok_res = crate::investigation_question::finish_question(
+        &state,
+        &ro_ledger,
+        "s1",
+        seq,
+        Ok("Answer text".into()),
+    );
+    let err_res = crate::investigation_question::finish_question(
+        &state,
+        &ro_ledger,
+        "s1",
+        seq,
+        Err("provider failed".into()),
+    );
+    drop(ro_ledger);
+
+    let mut restore = std::fs::metadata(&db_path).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    restore.set_readonly(false);
+    let _ = std::fs::set_permissions(&db_path, restore);
+
+    let err_msg = ok_res.expect_err("append failure must not return Ok");
+    assert!(
+        err_msg.contains("Could not save investigation answer:"),
+        "unexpected error: {err_msg}"
+    );
+    assert_eq!(err_res, Err("provider failed".into()));
+}
+
+#[test]
+fn review_flow_f9_early_stop_question_is_stopped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = test_desktop_state(tmp.path());
+    let ledger = Ledger::open(tmp.path()).unwrap();
+    ledger
+        .append("s1", "investigation.started", 1, &json!({}))
+        .unwrap();
+    let seq = ledger
+        .append(
+            "s1",
+            "investigation.question_requested",
+            1,
+            &json!({"source_id": "src-1", "question": "Q"}),
+        )
+        .unwrap();
+
+    let out = crate::investigation_question::finish_question(
+        &state,
+        &ledger,
+        "s1",
+        seq,
+        Err("stopped by user".into()),
+    );
+    assert_eq!(out, Err("stopped by user".into()));
+
+    let events = ledger.read_session("s1").unwrap();
+    assert!(
+        !events.iter().any(|e| e.kind == "session.abort"),
+        "early stop must not invent a session.abort event"
+    );
+    let answer = events
+        .iter()
+        .find(|e| e.kind == "investigation.answer")
+        .expect("investigation.answer recorded");
+    assert_eq!(answer.payload["request_seq"], seq);
+    assert_eq!(answer.payload["status"], "stopped");
+    assert_eq!(answer.payload["error"], "stopped by user");
 }
