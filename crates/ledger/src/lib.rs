@@ -14,8 +14,12 @@
 //! `read_session` / `sessions` and fail closed with
 //! `Error::LegacyUnchainedSchema` on `append*` / `verify*`.
 
+pub mod fulltext_cache;
 pub mod verify;
 
+pub use fulltext_cache::{
+    FulltextCache, FulltextEntry, FULLTEXT_TABLE, LIBRARY_DB_NAME, LIBRARY_DIR_NAME,
+};
 pub use verify::{SessionVerifyReport, VerifyAllReport};
 
 use rusqlite::{

@@ -1,7 +1,8 @@
 //! arXiv Atom 1.0 search and `.tar.gz` / `.gz` e-print LaTeX source ingestion.
 
-use crate::http_client::{fetch_bytes_allowlisted, MAX_EPRINT_BYTES, MAX_METADATA_BYTES};
+use crate::http_client::{fetch_bytes_with_gate, MAX_EPRINT_BYTES, MAX_METADATA_BYTES};
 use crate::ingest::{ingest_bytes, IngestRequest};
+use crate::net_rate::{global_gate, NetRateGate, Service};
 use crate::tex_scan::base_arxiv_id;
 use crate::ResearchEnv;
 use ledger::Ledger;
@@ -74,7 +75,7 @@ pub fn register(registry: &mut Registry, env: Arc<ResearchEnv>) {
         Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
             let req: ArxivSearchRequest =
                 serde_json::from_value(args.clone()).map_err(|e| format!("invalid arxiv_search args: {e}"))?;
-            let papers = run_arxiv_search_locked(&env, ctx.ledger, ctx.session, &req)?;
+            let papers = run_arxiv_search_locked(&env, ctx.ledger, ctx.session, &req, global_gate())?;
             Ok(json!({ "count": papers.len(), "papers": papers }))
         }),
     );
@@ -86,7 +87,18 @@ pub fn run_arxiv_search(
     session: &str,
     req: &ArxivSearchRequest,
 ) -> Result<Vec<ArxivPaper>, String> {
-    let raw_bytes = fetch_atom_feed(env, req)?;
+    run_arxiv_search_with_gate(env, ledger, session, req, global_gate())
+}
+
+/// Same as [`run_arxiv_search`] using an explicit [`NetRateGate`] (for fake-clock tests).
+pub fn run_arxiv_search_with_gate(
+    env: &ResearchEnv,
+    ledger: &Ledger,
+    session: &str,
+    req: &ArxivSearchRequest,
+    gate: &NetRateGate,
+) -> Result<Vec<ArxivPaper>, String> {
+    let raw_bytes = fetch_atom_feed(env, req, gate)?;
     let mut papers = parse_atom_feed(&raw_bytes)?;
 
     let blob_hash = ledger
@@ -119,7 +131,7 @@ pub fn run_arxiv_search(
         let _ = m;
         // Reuse shared ingestion path via a temporary handleless flow? We already own `&Ledger`,
         // so ingest using a helper that writes directly under `ledger`.
-        ingest_eprints_direct(env, ledger, session, &mut papers, req.section_filter.as_deref())?;
+        ingest_eprints_direct(env, ledger, session, &mut papers, req.section_filter.as_deref(), gate)?;
     }
     Ok(papers)
 }
@@ -129,8 +141,9 @@ fn run_arxiv_search_locked(
     ledger: &Mutex<Ledger>,
     session: &str,
     req: &ArxivSearchRequest,
+    gate: &NetRateGate,
 ) -> Result<Vec<ArxivPaper>, String> {
-    let raw_bytes = fetch_atom_feed(env, req)?;
+    let raw_bytes = fetch_atom_feed(env, req, gate)?;
     let mut papers = parse_atom_feed(&raw_bytes)?;
 
     {
@@ -162,12 +175,16 @@ fn run_arxiv_search_locked(
     }
 
     if req.include_source == Some(true) {
-        ingest_eprints_locked(env, ledger, session, &mut papers, req.section_filter.as_deref())?;
+        ingest_eprints_locked(env, ledger, session, &mut papers, req.section_filter.as_deref(), gate)?;
     }
     Ok(papers)
 }
 
-fn fetch_atom_feed(env: &ResearchEnv, req: &ArxivSearchRequest) -> Result<Vec<u8>, String> {
+fn fetch_atom_feed(
+    env: &ResearchEnv,
+    req: &ArxivSearchRequest,
+    gate: &NetRateGate,
+) -> Result<Vec<u8>, String> {
     let q = req.query.trim();
     if q.is_empty() {
         return Err("`query` must not be empty".into());
@@ -185,7 +202,7 @@ fn fetch_atom_feed(env: &ResearchEnv, req: &ArxivSearchRequest) -> Result<Vec<u8
         format!("{base}/api/query?search_query={enc}&max_results={max_results}")
     };
 
-    fetch_bytes_allowlisted(&url, &env.network_endpoints, MAX_METADATA_BYTES)
+    fetch_bytes_with_gate(&url, &env.network_endpoints, MAX_METADATA_BYTES, Some(Service::Arxiv), gate)
 }
 
 const ARXIV_FIELD_PREFIXES: &[&str] = &[
@@ -295,7 +312,7 @@ fn sanitize_arxiv_query(raw: &str) -> String {
         .join(" ")
 }
 
-fn parse_atom_feed(bytes: &[u8]) -> Result<Vec<ArxivPaper>, String> {
+pub(crate) fn parse_atom_feed(bytes: &[u8]) -> Result<Vec<ArxivPaper>, String> {
     let xml = std::str::from_utf8(bytes).map_err(|_| "arXiv Atom feed is not valid UTF-8".to_string())?;
     let head_upper = xml.chars().take(4096).collect::<String>().to_ascii_uppercase();
     if head_upper.contains("<!DOCTYPE") || head_upper.contains("<!ENTITY") {
@@ -420,6 +437,7 @@ fn ingest_eprints_direct(
     session: &str,
     papers: &mut [ArxivPaper],
     section_filter: Option<&str>,
+    gate: &NetRateGate,
 ) -> Result<(), String> {
     let sandbox = env.sandbox();
     let eprint_base = env.network_endpoints.arxiv_eprint_base.trim_end_matches('/');
@@ -430,7 +448,13 @@ fn ingest_eprints_direct(
         }
         fetched += 1;
         let url = format!("{eprint_base}/e-print/{}", paper.id);
-        let bytes = match fetch_bytes_allowlisted(&url, &env.network_endpoints, MAX_EPRINT_BYTES) {
+        let bytes = match fetch_bytes_with_gate(
+            &url,
+            &env.network_endpoints,
+            MAX_EPRINT_BYTES,
+            Some(Service::Arxiv),
+            gate,
+        ) {
             Ok(b) => b,
             Err(e) => {
                 paper.source = Some(json!({ "source_available": false, "reason": e }));
@@ -456,6 +480,7 @@ fn ingest_eprints_locked(
     session: &str,
     papers: &mut [ArxivPaper],
     section_filter: Option<&str>,
+    gate: &NetRateGate,
 ) -> Result<(), String> {
     let sandbox = env.sandbox();
     let eprint_base = env.network_endpoints.arxiv_eprint_base.trim_end_matches('/');
@@ -466,7 +491,13 @@ fn ingest_eprints_locked(
         }
         fetched += 1;
         let url = format!("{eprint_base}/e-print/{}", paper.id);
-        let bytes = match fetch_bytes_allowlisted(&url, &env.network_endpoints, MAX_EPRINT_BYTES) {
+        let bytes = match fetch_bytes_with_gate(
+            &url,
+            &env.network_endpoints,
+            MAX_EPRINT_BYTES,
+            Some(Service::Arxiv),
+            gate,
+        ) {
             Ok(b) => b,
             Err(e) => {
                 paper.source = Some(json!({ "source_available": false, "reason": e }));

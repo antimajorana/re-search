@@ -1,6 +1,7 @@
 //! Literature search across INSPIRE-HEP, Crossref, and Semantic Scholar.
 
-use crate::http_client::{fetch_bytes_allowlisted, MAX_METADATA_BYTES};
+use crate::http_client::{fetch_bytes_with_gate, MAX_METADATA_BYTES};
+use crate::net_rate::{global_gate, NetRateGate, Service};
 use crate::tex_scan::normalize_doi;
 use crate::ResearchEnv;
 use ledger::Ledger;
@@ -60,7 +61,7 @@ pub fn register(registry: &mut Registry, env: Arc<ResearchEnv>) {
         Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
             let req: LiteratureRequest = serde_json::from_value(args.clone())
                 .map_err(|e| format!("invalid literature_search args: {e}"))?;
-            let hits = run_literature_search_locked(&env, ctx.ledger, ctx.session, &req)?;
+            let hits = run_literature_search_locked(&env, ctx.ledger, ctx.session, &req, global_gate())?;
             Ok(json!({ "count": hits.len(), "hits": hits }))
         }),
     );
@@ -72,7 +73,18 @@ pub fn run_literature_search(
     session: &str,
     req: &LiteratureRequest,
 ) -> Result<Vec<LiteratureHit>, String> {
-    let (source, url, raw_bytes) = fetch_source(env, req)?;
+    run_literature_search_with_gate(env, ledger, session, req, global_gate())
+}
+
+/// Same as [`run_literature_search`] using an explicit [`NetRateGate`] (for fake-clock tests).
+pub fn run_literature_search_with_gate(
+    env: &ResearchEnv,
+    ledger: &Ledger,
+    session: &str,
+    req: &LiteratureRequest,
+    gate: &NetRateGate,
+) -> Result<Vec<LiteratureHit>, String> {
+    let (source, url, raw_bytes) = fetch_source(env, req, gate)?;
     let hits = parse_hits(&source, &raw_bytes)?;
     record_fetch(ledger, session, &source, &url, &req.query, &raw_bytes, &hits)?;
     Ok(hits)
@@ -83,15 +95,20 @@ fn run_literature_search_locked(
     ledger: &Mutex<Ledger>,
     session: &str,
     req: &LiteratureRequest,
+    gate: &NetRateGate,
 ) -> Result<Vec<LiteratureHit>, String> {
-    let (source, url, raw_bytes) = fetch_source(env, req)?;
+    let (source, url, raw_bytes) = fetch_source(env, req, gate)?;
     let hits = parse_hits(&source, &raw_bytes)?;
     let guard = ledger.lock().map_err(|_| "ledger lock poisoned".to_string())?;
     record_fetch(&guard, session, &source, &url, &req.query, &raw_bytes, &hits)?;
     Ok(hits)
 }
 
-fn fetch_source(env: &ResearchEnv, req: &LiteratureRequest) -> Result<(String, String, Vec<u8>), String> {
+fn fetch_source(
+    env: &ResearchEnv,
+    req: &LiteratureRequest,
+    gate: &NetRateGate,
+) -> Result<(String, String, Vec<u8>), String> {
     let q = req.query.trim();
     if q.is_empty() {
         return Err("`query` must not be empty".into());
@@ -100,24 +117,27 @@ fn fetch_source(env: &ResearchEnv, req: &LiteratureRequest) -> Result<(String, S
     let max_results = req.max_results.unwrap_or(5).clamp(1, 20);
     let enc_q = utf8_percent_encode(q, NON_ALPHANUMERIC).to_string();
 
-    let url = match source.as_str() {
+    let (svc, url) = match source.as_str() {
         "inspire" => {
             let base = env.network_endpoints.inspire_api_base.trim_end_matches('/');
-            format!("{base}/api/literature?q={enc_q}&size={max_results}")
+            (Service::Inspire, format!("{base}/api/literature?q={enc_q}&size={max_results}"))
         }
         "crossref" => {
             let base = env.network_endpoints.crossref_api_base.trim_end_matches('/');
-            format!("{base}/works?query={enc_q}&rows={max_results}")
+            (Service::Crossref, format!("{base}/works?query={enc_q}&rows={max_results}"))
         }
         "semantic_scholar" => {
             let base = env.network_endpoints.semantic_scholar_api_base.trim_end_matches('/');
-            format!(
-                "{base}/graph/v1/paper/search?query={enc_q}&limit={max_results}&fields=title,authors,year,citationCount,externalIds,url"
+            (
+                Service::SemanticScholar,
+                format!(
+                    "{base}/graph/v1/paper/search?query={enc_q}&limit={max_results}&fields=title,authors,year,citationCount,externalIds,url"
+                ),
             )
         }
         other => return Err(format!("unsupported literature source `{other}`")),
     };
-    let raw_bytes = fetch_bytes_allowlisted(&url, &env.network_endpoints, MAX_METADATA_BYTES)?;
+    let raw_bytes = fetch_bytes_with_gate(&url, &env.network_endpoints, MAX_METADATA_BYTES, Some(svc), gate)?;
     Ok((source, url, raw_bytes))
 }
 
@@ -157,7 +177,7 @@ fn record_fetch(
     Ok(())
 }
 
-fn parse_hits(source: &str, raw_bytes: &[u8]) -> Result<Vec<LiteratureHit>, String> {
+pub(crate) fn parse_hits(source: &str, raw_bytes: &[u8]) -> Result<Vec<LiteratureHit>, String> {
     let root: Value = serde_json::from_slice(raw_bytes)
         .map_err(|e| format!("invalid JSON from `{source}`: {e}"))?;
     match source {
