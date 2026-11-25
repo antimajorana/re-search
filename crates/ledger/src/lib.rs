@@ -15,10 +15,19 @@
 //! `Error::LegacyUnchainedSchema` on `append*` / `verify*`.
 
 pub mod fulltext_cache;
+pub mod library_db;
+mod library_db_ext;
+mod library_db_query;
+mod library_rows;
+pub mod library_schema;
 pub mod verify;
 
 pub use fulltext_cache::{
     FulltextCache, FulltextEntry, FULLTEXT_TABLE, LIBRARY_DB_NAME, LIBRARY_DIR_NAME,
+};
+pub use library_db::LibraryDb;
+pub use library_schema::{
+    LIBRARY_SCHEMA_VERSION, ORIGIN_USER_LIBRARY, USER_MARKS_BACKUP_NAME, USER_MARKS_FILE_NAME,
 };
 pub use verify::{SessionVerifyReport, VerifyAllReport};
 
