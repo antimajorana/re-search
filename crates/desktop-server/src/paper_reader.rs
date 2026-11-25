@@ -188,7 +188,7 @@ pub fn plan_slices_for_ranges(
 ) -> Vec<PaperReaderSlice> {
     let lines: Vec<&str> = text.split('\n').collect();
     let total_lines = if text.ends_with('\n') { lines.len().saturating_sub(1).max(1) } else { lines.len().max(1) };
-    let n_max = n_max.clamp(MIN_MAX_PARALLEL, MAX_MAX_PARALLEL);
+    let target_max = n_max.clamp(1, agent::paper_read::MAX_PAPER_READER_SLICES);
 
     let selected_bounds = match selected_pages {
         Some((p_lo, p_hi)) if !page_lines.is_empty() => {
@@ -217,7 +217,7 @@ pub fn plan_slices_for_ranges(
             .collect();
         if !active_pages.is_empty() {
             let (rs, re) = (active_pages.first().unwrap().1, active_pages.last().unwrap().2.min(total_lines));
-            let n = range_char_count(&lines, rs, re).div_ceil(CHARS_PER_SLICE).clamp(1, n_max);
+            let n = range_char_count(&lines, rs, re).div_ceil(CHARS_PER_SLICE).clamp(1, target_max);
             let chunks = n.min(active_pages.len());
             return (0..chunks)
                 .map(|i| {
@@ -234,7 +234,7 @@ pub fn plan_slices_for_ranges(
         }
     }
 
-    let merged: Vec<(usize, usize)> = if scope_ranges.is_empty() {
+    let mut merged: Vec<(usize, usize)> = if scope_ranges.is_empty() {
         vec![(1, total_lines)]
     } else {
         let mut clipped: Vec<(usize, usize)> = scope_ranges
@@ -261,6 +261,13 @@ pub fn plan_slices_for_ranges(
         }
         out
     };
+    while merged.len() > target_max {
+        let idx = (0..merged.len() - 1)
+            .min_by_key(|&i| merged[i + 1].0.saturating_sub(merged[i].1))
+            .unwrap_or(0);
+        merged[idx].1 = merged[idx + 1].1;
+        merged.remove(idx + 1);
+    }
 
     let stats: Vec<(usize, usize)> = merged
         .iter()
@@ -271,7 +278,7 @@ pub fn plan_slices_for_ranges(
         .collect();
     let mut alloc = vec![1usize; merged.len()];
     let mut total_chunks = alloc.len();
-    while total_chunks < n_max {
+    while total_chunks < target_max {
         let Some(idx) = (0..merged.len())
             .filter(|&i| alloc[i] < stats[i].1)
             .max_by_key(|&i| stats[i].0 / alloc[i])

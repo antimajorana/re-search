@@ -5,7 +5,7 @@
 mod common;
 
 use common::{raw_http, test_cfg};
-use desktop_server::paper_reader::{default_max_parallel, plan_slices};
+use desktop_server::paper_reader::{default_max_parallel, plan_slices, plan_slices_for_ranges};
 use desktop_server::{start_desktop_server, RunningDesktopServer};
 use ledger::Ledger;
 use research_tools::{ingest_bytes, IngestRequest, ResearchEnv, EVIDENCE_EVENT};
@@ -504,4 +504,25 @@ fn poll_view_omits_evidence_excerpt() {
     assert!(ev["payload"].get("quote").is_none(), "quote must be stripped: {ev}");
     assert_eq!(ev["payload"]["excerpt_chars"].as_u64(), Some(sample_excerpt.chars().count() as u64));
     assert_eq!(ev["payload"]["gist"], "Theorem 1 statement");
+}
+
+#[test]
+fn review3_plan_slices_merges_smallest_gaps_to_n_max() {
+    let text: String = (1..=300).map(|i| format!("Line {i}: sample paper text.\n")).collect();
+
+    // 3 disjoint ranges with n_max = 2: gaps are (15-10=5) vs (100-20=80) -> merges first two.
+    let slices = plan_slices_for_ranges(&text, &[], None, &[(1, 10), (15, 20), (100, 110)], 2);
+    assert!(slices.len() <= 2, "expected <= 2 slices, got {slices:?}");
+    assert_eq!(slices.len(), 2);
+    assert_eq!((slices[0].start_line, slices[0].end_line), (1, 20));
+    assert_eq!((slices[1].start_line, slices[1].end_line), (100, 110));
+
+    // 10 disjoint ranges with n_max = 12: capped at MAX_PAPER_READER_SLICES (8).
+    let ten_ranges: Vec<(usize, usize)> = (0..10).map(|i| (i * 25 + 1, i * 25 + 5)).collect();
+    let capped = plan_slices_for_ranges(&text, &[], None, &ten_ranges, 12);
+    assert!(
+        capped.len() <= 8,
+        "expected <= 8 slices (MAX_PAPER_READER_SLICES), got {}",
+        capped.len()
+    );
 }
