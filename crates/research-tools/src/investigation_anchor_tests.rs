@@ -14,8 +14,10 @@ struct Fixture {
     events: Vec<Event>,
 }
 
+type PdfSelection = (usize, usize, Vec<(usize, usize, usize)>);
+
 impl Fixture {
-    fn new(primary_text: &str, ref_text: Option<&str>, pdf_pages: Option<(usize, usize, Vec<(usize, usize, usize)>)>) -> Self {
+    fn new(primary_text: &str, ref_text: Option<&str>, pdf_pages: Option<PdfSelection>) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let env = ResearchEnv::new(tmp.path());
         let db = Mutex::new(Ledger::open(tmp.path()).unwrap());
@@ -180,7 +182,7 @@ fn sixteen_char_quote_never_grounds_64_lines() {
     let mut idx = fx.index();
     let mut a = fx.pointer(1, 64, "UniqueMarkerAlpha"); // 17 non-space chars
     idx.verify_any("nodes[n1].anchors[0]", &mut a).unwrap();
-    assert!(a.end_line - a.start_line + 1 <= 5);
+    assert!(a.end_line - a.start_line < 5);
     assert_eq!((a.start_line, a.end_line), (29, 33));
     assert_eq!(a.cited_range, Some([1, 64]));
     assert_eq!(a.range_basis, vec!["narrowed"]);

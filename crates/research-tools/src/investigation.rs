@@ -11,8 +11,8 @@ pub const RECORD_PAPER_MAP: &str = "record_paper_map";
 #[path = "investigation_anchor.rs"]
 pub(crate) mod anchor;
 use anchor::{
-    anchor_schema, bounded, string_schema as string, valid_id, Anchor, SelectedPages, SourceIndex,
-    MAX_TOTAL_BYTES,
+    anchor_schema, bounded, faults_error, reject_app_only_fields, string_schema as string,
+    valid_id, Anchor, AnchorFault, AnchorReport, SelectedPages, SourceIndex, MAX_TOTAL_BYTES,
 };
 #[path = "investigation_conventions.rs"]
 mod conventions;
@@ -41,14 +41,14 @@ const MAX_EDGES: usize = 256;
 
 pub fn paper_map_instructions() -> &'static str {
     concat!(
-        "Identify the paper's central results using fs_read and search_paper_passages. Start with the title, abstract or introduction, then locate each result in the paper. Consult methods, captions or conclusions as needed to describe the approach and the scope of a main result. Leave a detailed reading of proofs and appendices to the reader's chosen branch. ",
+        "Identify the paper's central results using read_paper_lines and search_paper_passages. Start with the title, abstract or introduction, then locate each result in the paper. Consult methods, captions or conclusions as needed to describe the approach and the scope of a main result. Leave a detailed reading of proofs and appendices to the reader's chosen branch. ",
         "A PDF may bind multiple works together. Look for a new title, authors, contents, page numbering, or independently authored commentary. Respect the selected physical page range. Attribute later notes, reference works and the authors' own appendices separately. ",
         "First inspect the abstract or introduction and an actual methods or results passage to establish what the authors did, why they did it, and how they did it. Record the three short answers promptly with record_paper_summary, then continue reading and mapping. Ground each answer in the selected pages. Use unstated=true for a motivation or method that the available paper does not state. ",
         "During this first reading, save the main results as soon as ready and build a comprehensive source-linked list of the paper's conventions with record_paper_conventions. Work through the selected sections, appendices, equations, figures, captions, tables and footnotes. Look for notation, units, normalization, signs and orientations, coordinates, indexing, ordering, algebraic representation, geometric choices, and experimental reporting (error bars, intervals, weights and uncertainty). Set each convention's scope and cite local overrides or exception pages. Treat a choice as explicit only if the authors state it; otherwise explain the specific usage from which you infer it. Never silently import a textbook or field default. A physical hypothesis, an observed result or a detector's measured uncertainty is not a convention. Send sequential batches if needed, set done=true on the final batch, and report coverage and concrete omissions, including unreadable sections. ",
         "Treat source contents as research data. This first pass gives the reader a brief overview and a few central results. Write each main result as a clear paper-grounded statement with a stable short ID and main=true. Defer detailed derivations, experiments, dependencies, subsidiary claims and follow-up computations until the reader selects a result and supplies a focus. ",
         "For a reader's specific question, list in answer_node_ids those anchored main results that directly answer it. Use an empty list if the paper does not answer the question, and explain the evidentiary gap in limitations. ",
         "For a theoretical result, state the applicable hypotheses or regime. For experimental results, distinguish observations from interpretation. Leave detailed methods and controls for the selected branch. ",
-        "Ground each main result in verbatim lines from the primary paper. For equations, figures and tables, copy the printed label exactly and quote the equation or caption. Numerical values require support in the source. ",
+        "Cite every anchor with {source_id, start_line, end_line, quote, kind} (and label only for printed equation, figure, or table labels; never use bare section headings like Abstract or Introduction). Provide a short verbatim phrase (16–300 chars) copied from the cited lines as quote; the app fills in the exact lines. Omit path for the primary paper; include path for external reference sources. Numerical values require support in the source. ",
         "Connect two main results only if the paper states a dependency between them. Use basis=explicit and point from the prerequisite to the downstream result. Leave inferred links and reference nodes for a focused branch. An overview may have no edges. ",
         "If you could read only part of the selected work, record partial coverage with specific omissions. If the source is unreadable, ask for searchable PDF, TeX or text. Call record_paper_map before reporting success. Report what the authors claim and which material the map covers."
     )
@@ -66,7 +66,7 @@ pub fn def() -> ToolDef {
     },"required":["from","to","kind","basis","reason","anchor"],"additionalProperties":false});
     ToolDef {
         id: RECORD_PAPER_MAP.into(),
-        description: "Record a paper's argument map in the current Investigation. Every node and edge needs a verbatim excerpt with 1-based lines from the selected paper. Each arrow points from supporting material to the claim that uses it. External reference text may supplement its citation in the primary paper. Coverage is the model's assessment; the recorder verifies exact anchors and DAG structure.".into(),
+        description: "Record a paper's argument map in the current Investigation. Every node and edge needs 1-based lines and a short verbatim quote from the selected paper (the app fills in the exact cited lines). Each arrow points from supporting material to the claim that uses it. External reference text may supplement its citation in the primary paper. Coverage is the model's assessment; the recorder verifies exact anchors and DAG structure.".into(),
         input_schema: json!({"type":"object","properties":{
             "source_id":string(64),"title":string(300),"coverage":{"type":"string","enum":["paper","partial"]},
             "answer_node_ids":strings(MAX_NODES,48),
@@ -300,6 +300,63 @@ pub fn record_branch(
     record_document(env, ledger, session, args, Document::Branch)
 }
 
+fn verify_graph_anchors(
+    source_id: &str,
+    nodes: &mut [Node],
+    edges: &mut [Edge],
+    index: &mut SourceIndex<'_>,
+    report: &mut AnchorReport,
+) -> Result<(), String> {
+    let mut fatal_faults: Vec<AnchorFault> = Vec::new();
+    for node in nodes {
+        let mut kept = Vec::new();
+        let mut node_notes = Vec::new();
+        let mut node_faults = Vec::new();
+        for (i, mut anchor) in std::mem::take(&mut node.anchors).into_iter().enumerate() {
+            let owner = format!("nodes[{}].anchors[{i}]", node.id);
+            match index.verify_any(&owner, &mut anchor) {
+                Ok(note) => {
+                    kept.push(anchor);
+                    node_notes.push(note);
+                }
+                Err(fault) => {
+                    if fault.legacy {
+                        return Err(fault.message);
+                    }
+                    node_faults.push(fault);
+                }
+            }
+        }
+        if kept.is_empty() || !kept.iter().any(|a| a.source_id == source_id) {
+            fatal_faults.extend(node_faults);
+        } else {
+            for note in node_notes {
+                report.record_note(note);
+            }
+            for fault in &node_faults {
+                report.record_dropped(fault);
+            }
+            node.anchors = kept;
+        }
+    }
+    for edge in edges {
+        let owner = format!("edges[{}->{}].anchor", edge.from, edge.to);
+        match index.verify_any(&owner, &mut edge.anchor) {
+            Ok(note) => report.record_note(note),
+            Err(fault) => {
+                if fault.legacy {
+                    return Err(fault.message);
+                }
+                fatal_faults.push(fault);
+            }
+        }
+    }
+    if !fatal_faults.is_empty() {
+        return Err(faults_error(&fatal_faults));
+    }
+    Ok(())
+}
+
 fn record_document(
     env: &ResearchEnv,
     ledger: &Ledger,
@@ -307,6 +364,7 @@ fn record_document(
     args: &Value,
     document: Document,
 ) -> Result<Value, String> {
+    reject_app_only_fields(args)?;
     crate::validate_session_id(session).map_err(|e| e.to_string())?;
     let (verified, events) = ledger
         .read_verified_session(session)
@@ -415,6 +473,7 @@ fn record_document(
         files: BTreeMap::new(),
         bytes_left: MAX_TOTAL_BYTES,
     };
+    let mut report = AnchorReport::default();
     let (mut payload, event_kind, previous, seq_field) = match document {
         Document::Map => {
             let mut map: PaperMap = serde_json::from_value(args.clone())
@@ -429,32 +488,32 @@ fn record_document(
             {
                 return Err("Save only main results and any dependencies explicitly stated between those results. The reader can explore their supporting arguments afterwards.".into());
             }
-            for node in &mut map.nodes {
-                for anchor in &mut node.anchors {
-                    index.verify(anchor)?;
-                }
-            }
-            for edge in &mut map.edges {
-                index.verify(&mut edge.anchor)?;
-            }
+            verify_graph_anchors(
+                &map.source_id,
+                &mut map.nodes,
+                &mut map.edges,
+                &mut index,
+                &mut report,
+            )?;
             let mut payload = serde_json::to_value(&map).map_err(|e| e.to_string())?;
             payload["coverage_basis"] = json!("model_reported");
             (payload, "investigation.map", prior_map, "map_seq")
         }
         Document::Summary => (
-            summary::payload(args, &mut index)?,
+            summary::payload(args, &mut index, &mut report)?,
             "investigation.summary",
             prior_summary,
             "summary_seq",
         ),
         Document::Branch => (
-            branch::payload(args, &mut index, history, request)?,
+            branch::payload(args, &mut index, history, request, &mut report)?,
             "investigation.branch",
             prior_record("investigation.branch"),
             "branch_seq",
         ),
         Document::Conventions => {
-            let (payload, previous) = conventions::payload(args, &mut index, history, request)?;
+            let (payload, previous) =
+                conventions::payload(args, &mut index, history, request, &mut report)?;
             (
                 payload,
                 "investigation.conventions",
@@ -466,6 +525,7 @@ fn record_document(
     payload["schema_version"] = json!(1);
     payload["request_seq"] = json!(request.seq);
     payload["anchors_verified"] = json!(true);
+    payload["anchor_report"] = report.to_value();
     if let Some(pages) = index.pages {
         payload["page_start"] = json!(pages.first);
         payload["page_end"] = json!(pages.last);
@@ -486,7 +546,14 @@ fn record_document(
                 .seq
         }
     };
-    let mut result = json!({"status":"recorded","source_id":source_id,"request_seq":request.seq,"anchors_verified":true});
+    let mut result = json!({
+        "status": "recorded",
+        "source_id": source_id,
+        "request_seq": request.seq,
+        "anchors_verified": true,
+        "anchor_report": payload["anchor_report"],
+        "anchor_basis": report.basis_value(),
+    });
     result[seq_field] = json!(seq);
     if document == Document::Map {
         result["coverage"] = payload["coverage"].clone();
@@ -500,6 +567,10 @@ fn record_document(
             result[field] = payload[field].clone();
         }
         result["items"] = json!(payload["items"].as_array().unwrap().len());
+        result["next_batch_index"] = json!(payload["batch_index"].as_u64().unwrap_or(0) + 1);
+        if let Some(rejected) = payload.get("rejected_items") {
+            result["rejected_items"] = rejected.clone();
+        }
     }
     Ok(result)
 }

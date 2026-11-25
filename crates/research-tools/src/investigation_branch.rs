@@ -1,4 +1,5 @@
-use super::{bounded, validate_map, Edge, Node, PaperMap, SourceIndex};
+use super::anchor::AnchorReport;
+use super::{bounded, validate_map, verify_graph_anchors, Edge, Node, PaperMap, SourceIndex};
 use ledger::Event;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -14,7 +15,8 @@ const MAX_TOTAL_EDGES: usize = 4096;
 pub fn paper_branch_instructions() -> &'static str {
     concat!(
         "Explore the selected statement in the saved paper map. Read the requested focus and existing graph first. Trace its complete supporting argument within that focus back to the paper's assumptions, evidence and methods. ",
-        "Use fs_read and search_paper_passages to quote the actual definitions, derivations, equations, figures, tables, or experimental controls and uncertainties on which this result depends. Respect the selected physical pages, and distinguish the authors' results from later commentary. ",
+        "Use read_paper_lines and search_paper_passages to inspect the actual definitions, derivations, equations, figures, tables, or experimental controls and uncertainties on which this result depends. Respect the selected physical pages, and distinguish the authors' results from later commentary. ",
+        "Cite every anchor with {source_id, start_line, end_line, quote, kind} (plus label for printed equation, figure, or table labels only; never use bare section headings like Abstract or Introduction). Give a short verbatim phrase (16–300 chars) copied from the cited lines as quote; the app fills in the exact lines. Omit path for the primary paper; include path for external reference sources. ",
         "An arrow points from a contribution to the downstream claim that uses it. Give a source-anchored reason for each arrow; label author-stated links explicit and your interpretation inferred. Abstract theory and empirical observations need different supporting details. ",
         "Reuse the IDs of existing statements where they already express a prerequisite. Supply only NEW nodes with main=false, and NEW edges along paths leading to the selected statement. Preserve previously recorded statements, edges and corrections. Where the argument relies on an external theorem or result, identify it and cite the passage in the primary paper. Let the reader choose which external work to open or investigate. ",
         "Use record_paper_branch once you have traced the relevant chain. State any specific gaps, unreadable equations, unproved assumptions, or remaining dependencies in limitations. Return empty nodes and edges with a concrete limitation when the paper provides no further support. Do not start independent computations or add unrelated paper branches."
@@ -30,7 +32,7 @@ pub fn branch_def() -> ToolDef {
     let mut edges = base["edges"].clone();
     edges["maxItems"] = json!(MAX_NEW_EDGES);
     def.id = RECORD_PAPER_BRANCH.into();
-    def.description = "Save the source-grounded dependencies for the currently selected paper result and reading question. Supply new nodes and new edges pointing from evidence or assumptions towards that result. Use limitations for unsupported parts of the argument.".into();
+    def.description = "Save the source-grounded dependencies for the currently selected paper result and reading question. Supply new nodes and new edges pointing from evidence or assumptions towards that result, citing each anchor with start_line, end_line, and a short verbatim quote. Use limitations for unsupported parts of the argument.".into();
     def.input_schema = json!({"type":"object","properties":{
         "request_seq":{"type":"integer","minimum":1,"description":"The request number in the current branch instructions."},
         "source_id":base["source_id"],"nodes":nodes,"edges":edges,"limitations":base["limitations"]
@@ -112,6 +114,7 @@ pub(super) fn payload(
     index: &mut SourceIndex<'_>,
     history: &[Event],
     request: &Event,
+    report: &mut AnchorReport,
 ) -> Result<Value, String> {
     let mut branch: Branch =
         serde_json::from_value(args.clone()).map_err(|e| format!("Invalid paper branch: {e}"))?;
@@ -180,14 +183,13 @@ pub(super) fn payload(
     union.nodes.append(&mut branch.nodes);
     union.edges.append(&mut branch.edges);
     validate_map(&union, MAX_TOTAL_NODES, MAX_TOTAL_EDGES)?;
-    for node in &mut union.nodes[start_node..] {
-        for anchor in &mut node.anchors {
-            index.verify(anchor)?;
-        }
-    }
-    for edge in &mut union.edges[start_edge..] {
-        index.verify(&mut edge.anchor)?;
-    }
+    verify_graph_anchors(
+        &union.source_id,
+        &mut union.nodes[start_node..],
+        &mut union.edges[start_edge..],
+        index,
+        report,
+    )?;
     Ok(
         json!({"source_id":union.source_id,"map_seq":base.seq,"node_id":target,"question":question,"nodes":&union.nodes[start_node..],"edges":&union.edges[start_edge..],"limitations":branch.limitations}),
     )
