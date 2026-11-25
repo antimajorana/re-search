@@ -31,6 +31,7 @@ pub mod tex_audit;
 mod tex_audit_sources;
 pub mod tex_bundle;
 pub mod tex_scan;
+pub mod tool_profile;
 pub mod write_tools;
 
 pub use investigation_evidence::{
