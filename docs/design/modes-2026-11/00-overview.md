@@ -46,7 +46,7 @@ three hand-off formats.
 
 1. Solve freezes today's tool list ("fails on any edit"); Investigate adds 4 tools to that same list. Fix: profiles (F1).
 2. "Leg" means one model exchange in Explore and a 48-turn stretch in Solve and in today's code. Fix: Explore says "exchange".
-3. Solve reserves the word "verified" for Lean; the other two show "verified quote" everywhere. Fix: quotes are "matched". (Lean is now cut. The word stays reserved and is shown nowhere: section 0.1.)
+3. Solve reserves the word "verified" for Lean; the other two show "verified quote" everywhere. Fix: quotes are "matched". (Lean is now cut, and the owner decided that an exact symbolic check by code is what "verified" means: section 0.1.)
 4. A dashed line means "used in the proof" in Investigate and "not checked" in Explore. Fix: dashed always means "not checked by code".
 5. Mode is detected three different ways. Fix: the latest host-written mode marker wins.
 6. Task kind is `check` in Explore's hand-off and `check_derivation` in Solve. Fix: Solve's names.
@@ -57,7 +57,7 @@ three hand-off formats.
 |---|---|
 | 2 | Profiles, paper key, quote core, graph component and evaluation harness exist. Skeleton scanner passes its fixtures. Solve badge function passes its property tests. |
 | 4 | **Investigate: skeleton of an ingested TeX paper on screen with zero model calls.** Solve setup card. PDF text core measured on the PDF fixtures. |
-| 6 | **Investigate: paste an arXiv id, structure in under 10 s, skip plan, symbols.** **Open a paper from your own library folder (a Kandinsky vault or a plain folder), TeX or PDF, with no network.** Solve: a recorded step with a claim gets "Computed" from the check process in tests. |
+| 6 | **Investigate: paste an arXiv id, structure in under 10 s, skip plan, symbols.** **Open a paper from your own library folder (a Kandinsky vault or a plain folder), TeX or PDF, with no network.** Solve: a recorded step with a claim gets "Verified" from the check process in tests. |
 | 8 | **Investigate: Orient (main results, authors' new / restated labels). A PDF-only paper gets a skeleton and page-linked quotes.** Solve: checks, gates and finish pass the evaluation set headless. One hand-off packet. |
 
 Honest limits: a Solve run a user can watch (S12, S13) and "open any node" in Investigate (V8) land in
@@ -80,8 +80,8 @@ research" goes, and the new questions that the added packages raise (8.3).
 | **Add: a write-up output** | New package F15. A cited summary from Explore, a clean TeX derivation from Solve, reading notes from Investigate. Assembled by code from the records; how each statement was checked always travels with it | 2.13 |
 | **Add: learning from user corrections** | New package F16. Corrections the user makes are kept across sessions and used again: by code where a rule exists, and as short notes shown to the model where it does not. They never change a badge, a tier or a verdict | 2.14 |
 | **Skip: numerics in Solve ahead of Lean** | Nothing added. The numeric checks already in the plan (`identity_numeric`, S18 SciPy) stay as they were | - |
-| **Cut: Lean and physlib** | No Lean tier, no `formal_check`, no engine download, no formal-library search in any new mode. Packages S16 cut; S22 loses its Lean part. The top tier in Solve is Computed. Existing Lean and physlib code stays untouched for earlier Research sessions (their tool list is frozen as `research/1`); removing that code is a separate decision (8.3) | solve.md; 2.2; 2.10 |
-| **The word "verified"** | Stays reserved for a machine-checked formal proof. Because no such checker ships, **the word is shown on no screen, in no export and in no write-up of the three modes.** Quotes are "matched", computed steps are "Computed". Internal names may keep "verify". Earlier Research sessions keep showing what they recorded | 3.2 row 20; 7.3; 8.1 |
+| **Cut: Lean and physlib** | No Lean tier, no `formal_check`, no engine download, no formal-library search in any new mode. Packages S16 cut; S22 loses its Lean part. The top tier in Solve is Verified, an exact symbolic check by code (next row). Existing Lean and physlib code stays untouched for earlier Research sessions (their tool list is frozen as `research/1`); removing that code is a separate decision (8.3) | solve.md; 2.2; 2.10 |
+| **The word "verified"** | Owner, 2026-11-25: "things can still be verified through SymPy, SciPy and other Python computations". This overrules the editor's first reading (the word shown nowhere). **"Verified"** is the badge of a Solve step whose every claim passed an exact symbolic check by code; **"Checked numerically"** is the badge when the agreement is numeric (sampled points, quadrature, any SciPy result): evidence, not proof. A step is never shown above the weakest step it rests on. Quotes stay "matched"; a model review stays "Model agreed"; Investigate and Explore do not use the word. The split into two words is the editor's; it was accepted with question 11 of 8.3 | solve.md 4.3, 4.4; 2.10; 3.2 row 20; 7.3; 8.1 |
 | **Defer: Cadabra2 and FORM** | Package S22 (engine manager, `engine_run`, profile `solve/2`) is deferred as a whole. No tool is reserved for them in `solve/1` | solve.md |
 | **Defer: V14, Investigate's own prior-work check** | Investigate does not compare a result with earlier literature itself. The right half-badge is a button, "Search wider in Explore", which hands the result to Explore (F7) and later shows Explore's answer by reading the child session. The tool `record_prior_work_check` leaves the profile `investigation/2` (three new tools, not four) and is listed under `may_gain`. Evaluation set P4 is deferred; two of its cases become P-to-I chains in set C | investigate.md; 2.2; 2.9; 4.2 |
 | **Defer: version tracking (evaluation set P2)** | A session stays on the arXiv version it opened. No "new version" banner, no carrying of notes and labels to another version, no builder upgrade inside an existing session. Tags stay permanent and content-based, and the version is still recorded, so this can be added later without changing stored data. Package V10 keeps only notes | investigate.md |
@@ -285,7 +285,7 @@ Not a shared storage field; a shared mapping so the same look means the same thi
 
 | Grade | Investigate | Explore | Solve | Look |
 |---|---|---|---|---|
-| By code | Skeleton node or edge | Coverage, verdict text | Computed | Solid, plain |
+| By code | Skeleton node or edge | Coverage, verdict text | Verified (exact symbolic check), Checked numerically (numeric agreement) | Solid, plain; the badge text tells the two apart |
 | Matched quote, full text | From this paper / Outside this paper | `xe` evidence | Cited | Solid, quote chip; for a PDF the chip names the page |
 | Matched quote, scanned page (OCR text) | Same, from a scan | `xe` evidence from a scan | Cited, flag "OCR source" | Solid, quote chip tagged "OCR", which opens the page image (2.12) |
 | Matched quote, abstract | - | `xa` evidence | - | Dashed, "abstract only" |
@@ -481,7 +481,7 @@ Block   = Prose { text, basis: "app" | "user" | "model" }
 1. **How it was checked always travels.** Every write-up ends with a table "How each statement was checked" (step or claim, badge, what it rests on) and starts with a status line ("Done with open items: 2 steps unchecked"). Inline badge marks can be turned off; the table and the status line cannot. Explore's coverage paragraph cannot be removed either.
 2. A Solve write-up is refused while the closure of the final answer has a Failed or Stale step (the rule of gate G7).
 3. Citations are `PaperRef`s. The key is the user's own citation key when the paper is in one of their libraries (2.11), else one made by the app; the `.bib` file comes from the library.
-4. The words "verified", "proved", "new" and "novel" follow the same rule as on screen; the property test of 7.3 covers the writers.
+4. The words "verified", "proved", "new" and "novel" follow the same rule as on screen; the property test of 7.3 covers the writers. In a Solve write-up "verified" appears only in the check table, on rows whose own tier is Verified, each with its assumptions; the text never calls the result as a whole verified unless the final step's effective tier is Verified.
 5. **Optional "Polish the prose (model)"**: one exchange that may only rewrite prose blocks. Formulas, quotes, citations, status sentences and the check table are locked placeholders; the result is refused if one is missing or altered, and is checked by the existing honesty lint and Explore's phrase rule (V8). The output says "prose edited by a model".
 6. A quote from a scan is marked "(OCR)".
 
@@ -559,7 +559,7 @@ records corrections on screen (Solve's "Correct this step" in S13).
 | 17 | Leg | Explore: one model call plus up to 2 repairs. Solve and today's code (`run_turn_leg`): a stretch of up to 48 turns. | "Leg" keeps the code's meaning. Explore's unit is an **exchange**: `agent/src/exchange.rs`, event `idea.exchange`. |
 | 18 | Brief | Explore: the sharpened idea (`idea.brief`). Solve: the deterministic text a resumed leg starts from. | Explore's data name stays; its screen says "Sharpened idea". Solve's is the **resume brief** (`resume_brief.rs`). |
 | 19 | Check | Investigate: the prior-work comparison (`investigation.check`, "Check: not run"). Solve: a computed test (`solve.check`). | "Check" belongs to Solve. Investigate: event `investigation.prior_work`, badge "Prior work: not run". The tool id `record_prior_work_check` may stay. |
-| 20 | Verified | Solve: only with Lean. Investigate and Explore: "verified quote", "quotes not verified on this machine". | The word is reserved for a machine-checked formal proof. Lean was cut (section 0.1), so on screen, in exports and in write-ups of the three modes the word is used nowhere. Quotes are "matched" ("quote matched at lines 212-219", "4 quotes could not be matched"). Internal names may keep "verify". |
+| 20 | Verified | Solve: only with Lean. Investigate and Explore: "verified quote", "quotes not verified on this machine". | The word belongs to Solve: a step whose every claim passed an exact symbolic check by code is "Verified"; numeric agreement is "Checked numerically" (section 0.1, solve.md 4.4). It is used for nothing else: not for a quote, a model review, a paper or a run. Quotes are "matched" ("quote matched at lines 212-219", "4 quotes could not be matched"). Internal names may keep "verify". |
 | 21 | Recorder | Investigate: a registry tool. Explore: an app function with no tool definition. | One definition: a recorder is the validator that writes the ledger. It may be offered as a registry tool or as the single output of an exchange. |
 | 22 | Model call, request, turn | Caps are in "requests" (Investigate), "model calls" (Explore), "model calls" and "turns" (Solve) | "Model call" = one request to the provider, in every cap and on every screen. "Turn" is internal. |
 | 23 | Run states | Investigate: done, partial, failed, stopped. Explore: requested, finished, failed, stopped_at_cap, cancelled, interrupted. Solve: paused (9 reasons), finished, finished_open_items. | 3.3. |
@@ -700,10 +700,10 @@ Items inside one numbered step can run in parallel. A step starts when the liste
    **Milestone M1: skeleton of an ingested TeX paper on screen, zero model calls; build time measured on the fixtures. The two PDF extractors measured on the PDF fixtures and one chosen.**
 5. **Week 5.** `V4` (A, needs V3, F3) | `S8` (B, needs S7, F4) | `F10` library (C, needs F2) | `V5` (D with A for the Rust half, needs V2, V3).
 6. **Week 6.** `V6` starts (A, needs V3, F1, F4, F9) | `S9` starts (B, needs S3, S8) | `F13a` sources and sync, Kandinsky-vault and folder adapters (C, needs F10, F14a) | library list and sources panel, the UI half of F13a (D).
-   **Milestone M2: paste an arXiv id, structure in under 10 s on the evaluation papers; skip plan and symbols; a Solve step with a claim reaches Computed in tests; a paper from the user's own library folder opens with no network, and a second sync changes nothing.**
+   **Milestone M2: paste an arXiv id, structure in under 10 s on the evaluation papers; skip plan and symbols; a Solve step with a claim reaches Verified in tests; a paper from the user's own library folder opens with no network, and a second sync changes nothing.**
 7. **Week 7.** `V6` finishes (A) | `S9` finishes (B) | `V17` PDF skeleton (C, in Investigate's skeleton module, needs V2, F14a) | `V13` whole map without novelty toggles (D, needs V5, F6).
 8. **Week 8.** `V7` Orient (A, needs V6) | `S11` gates and finish (B, needs S3, S9, F9) | `F7` hand-off packet (C, needs F4, F5, S4) | `V7` badges UI and the page link on the quote chip (D).
-   **Milestone M3: Orient shows main results and the authors' labels with quotes on the evaluation papers; a PDF-only paper of set P6 gets a skeleton with its quality line, and quotes from it match and open the right page; the Solve evaluation set passes headless (planted errors end Failed, never Computed); one hand-off packet opens a Solve setup card from an Investigate node.**
+   **Milestone M3: Orient shows main results and the authors' labels with quotes on the evaluation papers; a PDF-only paper of set P6 gets a skeleton with its quality line, and quotes from it match and open the right page; the Solve evaluation set passes headless (planted errors end Failed, never Verified or Checked numerically); one hand-off packet opens a Solve setup card from an Investigate node.**
 
 Next, in order, after week 8: `S12` and `S13` (a Solve run on screen), `V8` (open any node), `F11`
 (literature services), `F15` core with the Solve adapter (a derivation as TeX), `F14b` (own OCR),
@@ -792,8 +792,8 @@ Set I is frozen as recorded responses so "open as far as known" cannot change un
 | A scanned page reported as a plain text layer | P6 and the PDF fixtures | Must be 0 |
 | Character errors per 100 characters on the sampled lines of scans; lines in the wrong reading order on two-column pages | P6 | Recorded |
 | Sync: a second sync changes nothing; every planted case ends in its expected state; the source folder is byte-identical afterwards; no quote check breaks when a source is removed | B | Must pass; in CI |
-| Planted error ends Failed | Q | Must be 100 percent; ending Computed is a release blocker |
-| Share of steps Computed, Model agreed, Unchecked | Q | Recorded; decides whether SymPy's reach is enough. With Lean cut, a prose proof cannot rise above Model agreed; the two proofs of Q show how much that costs |
+| Planted error ends Failed | Q | Must be 100 percent; ending Verified or Checked numerically is a release blocker |
+| Share of steps Verified, Checked numerically, Model agreed, Unchecked | Q | Recorded; decides whether SymPy's reach is enough. With Lean cut, a prose proof cannot rise above Model agreed; the two proofs of Q show how much that costs |
 | Final answer equals the key | Q | Recorded |
 | Write-up: the TeX compiles; every formula equals the check process's rendering of its handle; every citation resolves to a bibliography entry; the check table lists every step the answer rests on with its badge; the status line equals the run's status | W | Must pass |
 | With and without lessons, every tier, verdict and gate result is identical for the same events | K | Must pass; in CI |
@@ -802,7 +802,8 @@ Set I is frozen as recorded responses so "open as far as known" cannot change un
 | Target case solved correctly when started from a hand-over | C | Recorded |
 | Old ledgers resume; views equal before and after | R | Must pass; in CI |
 | Peak memory and build time on the reference laptop | All | Recorded at each milestone |
-| A view, an export or a write-up of the three modes never shows "verified", and never "new", "novel" or "proved" outside the allowed places | All | Property tests in CI |
+| "Verified" appears only tied to a Solve step whose own tier is Verified, and as a step badge only when the effective tier is Verified; no Investigate or Explore view, export or write-up shows the word; "new", "novel" and "proved" stay inside their allowed places | All | Property tests in CI |
+| A step whose only passing identity check is numeric is never shown as Verified; a Verified equation that disagrees at the numeric guard points ends Failed | Q | Must be 100 percent; property test on generated ledgers plus two planted cases in set Q (one identity true only on a sampled domain, one wrong simplification across a branch cut) |
 
 ---
 
@@ -818,13 +819,17 @@ Set I is frozen as recorded responses so "open as far as known" cannot change un
 | Learning from corrections | Add | 0.1, 2.14 (F16) |
 | Numerics in Solve ahead of Lean | Skip | 0.1 |
 | Lean and physlib | Cut | 0.1; solve.md |
-| The word "verified" (was question 3) | Stays reserved for a machine-checked formal proof. With Lean cut it is shown nowhere in the three modes; quotes are "matched". This reading of "cut Lean" was written by the plan's editor, not said by the owner in so many words: object if it is wrong | 0.1, 3.2 row 20, 7.3 |
+| The word "verified" (was question 3) | Decided by the owner: computations in Python can verify. "Verified" is a Solve step with an exact symbolic check; "Checked numerically" is numeric agreement; quotes are "matched". (The editor's first reading, "shown nowhere", was overruled.) | 0.1, 3.2 row 20, 7.3, solve.md 4.4 |
 | Cadabra2 and FORM | Defer | 0.1; solve.md S22 |
 | V14, Investigate's own prior-work check | Defer; "Search wider in Explore" is the path | 0.1, 4.2; investigate.md |
 | Version tracking (set P2) | Defer | 0.1; investigate.md V10 |
 | Licence | re:Search is AGPL-3.0. Already on `main` (PR 5). Kandinsky's code may be ported directly where useful | 2.11 "Porting" |
 
-### 8.2 Still open, from the first version
+### 8.2 From the first version: recommended answers accepted
+
+**Accepted on 2026-11-25.** The owner approved the open items in one message ("Do everything all at
+once, I give my approval"). Every answer in the "Recommended" column below is therefore the decision,
+and the documents may be built on it. Any single row can still be reversed by the owner.
 
 | # | Question | Recommended |
 |---|---|---|
@@ -841,7 +846,11 @@ Set I is frozen as recorded responses so "open as far as known" cannot change un
 | 11 | Rename Explore's "leg" to "exchange" and Investigate's "check" to "prior work"? | Yes, now, while it costs nothing. |
 | 12 | Who makes the answer keys of the evaluation set, and which real papers and ideas go in? | The owner picks, now including the eight PDF-only and old papers of set P6; someone other than the builder writes the keys before M1. |
 
-### 8.3 New questions raised by the revision
+### 8.3 Raised by the revision: recommended answers accepted
+
+**Accepted on 2026-11-25.** The owner approved the open items in one message ("Do everything all at
+once, I give my approval"). Every answer in the "Recommended" column below is therefore the decision,
+and the documents may be built on it. Two rows still need something from the owner that an approval cannot supply: the papers and ideas of the evaluation set (8.2, question 12) and the measurement that question 4 waits for. Any single row can still be reversed by the owner.
 
 | # | Question | Recommended |
 |---|---|---|
@@ -855,6 +864,7 @@ Set I is frozen as recorded responses so "open as far as known" cannot change un
 | 8 | Remove the existing Lean and physlib code (the `lean_check` and `search_formal_library` tools, the Lean worker, the formal-library panel)? Earlier Research sessions resume with a frozen tool list that names them. | Not now. No new mode offers them, and their screen entry points are hidden for new sessions when F5 is built. Removal waits until earlier Research sessions are retired. Also: leave them out of `investigation/2` if the tool list check in F1 confirms they are in the research list. |
 | 9 | With Lean cut, a proof in prose can reach at most "Model agreed" or "Checked by you". Keep "prove" as a Solve task kind? | Keep it, and say so on the setup card: "a proof in prose is reviewed by a model; only calculations are computed". Its default done checklist asks for a review by a different model. |
 | 10 | May a write-up be produced without the table "How each statement was checked"? | No. Inline marks can be turned off; the table and the status line stay. |
+| 11 | The owner said computations in SymPy, SciPy and other Python code can verify. SciPy is numeric. Is a numeric agreement "Verified", or a weaker word? | A weaker word: "Checked numerically", one tier below "Verified" (exact symbolic check). Agreement at 12 points does not exclude a difference elsewhere, and one word for both would hide which steps are exact. The alternative, if the owner prefers the word everywhere, is "Verified numerically" with the same tier order; it changes two strings and no logic. |
 
 ---
 
@@ -886,6 +896,7 @@ documents were edited again; each carries a "Scope revision" line under its titl
 - Settled by the revision: the `independence` function is built with S14, its only user for now.
 - Licence: the passages that said "GPL-3.0 only, AGPL assumed" were replaced after the owner's
   decision; `main` was merged into this branch so that `Cargo.toml` and `LICENSE` here say AGPL-3.0.
-- For the briefs already in work: the S2 brief was changed (no Lean-checked tier; the word
-  "verified" in no table of on-screen words). The F3 brief needs no change (2.4). The V1 brief still
+- For the briefs already in work: the S2 brief was changed twice (no Lean-checked tier; then the
+  two computed tiers, Checked numerically and Verified, with the rule for where "verified" may
+  appear). The F3 brief needs no change (2.4). The V1 brief still
   lists a two-version fixture; it is harmless and unused until version tracking returns.

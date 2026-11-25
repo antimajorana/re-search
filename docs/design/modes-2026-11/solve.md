@@ -9,7 +9,8 @@ cut** (no Lean-checked tier, no `formal_check`, no formal-library search; packag
 **Cadabra2 and FORM are deferred** (package S22 deferred as a whole); a **write-up** of the
 derivation in TeX is added (F15); **corrections** made by the user are reused (F16); papers cited
 in a step may come from the user's own library (F13) and from PDF-only papers (F14). The top tier
-is Computed. The word "verified" is shown nowhere. Section 0 below is the record of the earlier
+is **Verified**: an exact symbolic check by code (SymPy) passed. A numeric check gives **Checked
+numerically**, one tier lower (owner decision of 2026-11-25, section 4.4). Section 0 below is the record of the earlier
 review and still mentions Lean, Cadabra2 and FORM; it was not rewritten.
 
 Written 2026-11-25. Built on `reSearch-modes-gaps-and-prior-art-2026-11-25.md` (section 4) and on two
@@ -99,7 +100,7 @@ Terms used throughout:
 - **Model call**: one request to the model provider. Every cap and every screen counts model calls. A **turn** is the internal unit of the loop (one model call plus the tool calls it asks for); the word is used only for internals.
 - **Leg**: one uninterrupted stretch of model turns (up to 48 model calls). **Resume brief**: the deterministic text the next leg starts from (previously called "brief"; in Explore, "brief" means the sharpened idea).
 - **Tool profile**: a frozen, named list of tool definitions that a session records and resumes with. The mechanism is the shared package F1; Solve's profile is `solve/1`.
-- **Matched quote**: a quote that the shared quote core (F4) found word for word at the stated lines of an ingested source. The word "verified" is reserved for a machine-checked formal proof; since Lean was cut it is shown nowhere, and quotes are "matched". A quote found in the text of a scanned page is "matched in OCR text" (overview 2.12).
+- **Matched quote**: a quote that the shared quote core (F4) found word for word at the stated lines of an ingested source. The word "verified" belongs to a Solve step whose claims passed an exact symbolic check (4.4); a quote is never "verified", it is "matched". A quote found in the text of a scanned page is "matched in OCR text" (overview 2.12).
 - **QuoteRef**, **PaperRef**, **NodeRef**: the shared records that point at a quote, a paper and a node of any session (overview 2.3 and 2.5; fields in 4.1 below).
 - **Hand-off packet**: the one shared event (`handoff.packet`, F7) with which one mode opens a session in another.
 
@@ -119,7 +120,7 @@ Expected: V_1 = m^4/(64 pi^2) (ln(m^2/mu^2) - 3/2) with m^2 = lambda phi^2/2.
 - Symbols found in the statement: lambda, phi, mu, eps, d, m. Each has an assumption menu (default "real, positive" for lambda, mu, m).
 - Conventions: copied from the pinned conventions (Euclidean signature, hbar = c = 1). The user adds "MS-bar".
 - Dimensions table (optional): phi, m, mu: mass^1; lambda: mass^0.
-- Done checklist, prefilled: "final result is Computed"; "everything it rests on is at least Model agreed"; "dimensions check passes on the final result"; and from the word "show": "named check `vanishes_to_order` passes (mu dV/dmu, order lambda^2)".
+- Done checklist, prefilled: "final result is Verified" (the user may lower this to "Verified or Checked numerically"); "everything it rests on is at least Model agreed"; "dimensions check passes on the final result"; and from the word "show": "named check `vanishes_to_order` passes (mu dV/dmu, order lambda^2)".
 - Models: solver, verifier. If they are the same: "Same model: reviews will be labelled as weaker".
 - Approvals needed for this run, one line each (see D5).
 
@@ -132,22 +133,23 @@ The user presses Run. The host writes `solve.setup`, one `assumption` step per c
 | e-1, e-2 | nothing | written from the setup | Given |
 | e-3 | records "V_1 = (1/2) Int d^dk/(2 pi)^d ln(k^2 + m^2)" as an assumption (no source attached) | nothing | Assumed by model (needs your OK) |
 | e-4 | `sympy_eval`: does the d-dimensional integral, `save_expr("I_d", ...)`. Then `step_record` with claim `V1_d = I_d` | harvests handle `I_d@1`; renders its LaTeX in the check process | Unchecked (this is the definition of `V1_d`; nothing to compare it with) |
-| e-5 | `sympy_eval`: numeric quadrature of the second m^2-derivative at d = 3, m = 1.3, saved as `num_d3`; a second run evaluates the closed form there, saved as `cf_d3`. `step_record` with value claim `num_d3 ~ cf_d3` | auto-check `identity_numeric`: the two numbers came from two different runs and agree to 12 digits | Computed (two runs agree, same solver) |
-| e-6 | `sympy_eval`: expands in eps, `save_expr("V1_series", ...)`; `step_record` with claim `I_d(d = 4 - 2 eps) = V1_series` to order eps^0 | auto-check `series_match` passes | Computed (series to O(eps^0)) |
-| e-7 | removes the pole and the MS-bar constants, `save_expr("V1_msbar", ...)`; claim `V1_series - pole_terms = V1_msbar + O(eps)` | auto-checks `series_match`, `dimensions` (mass^4) | Computed (series, dimensions) |
+| e-5 | `sympy_eval`: numeric quadrature of the second m^2-derivative at d = 3, m = 1.3, saved as `num_d3`; a second run evaluates the closed form there, saved as `cf_d3`. `step_record` with value claim `num_d3 ~ cf_d3` | auto-check `identity_numeric`: the two numbers came from two different runs and agree to 12 digits | Checked numerically (two runs agree, same solver) |
+| e-6 | `sympy_eval`: expands in eps, `save_expr("V1_series", ...)`; `step_record` with claim `I_d(d = 4 - 2 eps) = V1_series` to order eps^0 | auto-check `series_match` passes | own check: Verified (series to O(eps^0)); shown as Unchecked, because it rests on e-4 |
+| e-7 | removes the pole and the MS-bar constants, `save_expr("V1_msbar", ...)`; claim `V1_series - pole_terms = V1_msbar + O(eps)` | auto-checks `series_match`, `dimensions` (mass^4) | own check: Verified (series, dimensions); shown as Unchecked (rests on e-4) |
 | e-8 | calls `check_run` on e-7 with `symmetry` {phi -> -phi} | runs it | e-7 gains sublabel "symmetry" |
-| e-9 | `step_record`, type result: `mu d/dmu (V_tree + V1_msbar) + beta dV_tree/dlambda = 0` to order lambda^2, with beta = 3 lambda^2/(16 pi^2) recorded as its own assumption e-8b | auto-check `vanishes_to_order` passes | Computed |
+| e-9 | `step_record`, type result: `mu d/dmu (V_tree + V1_msbar) + beta dV_tree/dlambda = 0` to order lambda^2, with beta = 3 lambda^2/(16 pi^2) recorded as its own assumption e-8b | auto-check `vanishes_to_order` passes | own check: Verified (to order lambda^2); shown as Unchecked (rests on e-4, e-8b) |
 | e-10 | `step_record`, type final_answer, depends on e-7 and e-9; then `solve_finish` | evaluates the done checklist | see below |
 
-**The honest ending.** e-7 is Computed, but its closure contains e-3 (Assumed by model) and e-4 (Unchecked).
-So the effective badge of the final answer is:
+**The honest ending.** The own check of e-7 is Verified, but its closure contains e-3 (Assumed by model) and e-4 (Unchecked).
+A step is never shown above the weakest thing it rests on (4.4), so the badge of the final answer is:
 
-> Computed. Rests on: e-3 "one-loop formula" (assumed by the model, not acknowledged), e-4 (unchecked), e-8b "beta function" (assumed by the model).
+> Unchecked. Own check: verified (series). Rests on: e-3 "one-loop formula" (assumed by the model, not acknowledged), e-4 (unchecked), e-8b "beta function" (assumed by the model).
 
 The run ends as **Done with open items**. The result sheet offers three ways forward, each one click:
 "Acknowledge e-3" (you know the formula), "Attach a source for e-3" (it becomes Cited with a matched quote),
 "Review e-4 with the verifier" (it becomes Model agreed). With e-3 and e-8b acknowledged and e-4 reviewed by a
-different model, the sheet reads "Done: 4 computed, 1 model agreed, 3 given by you."
+different model, the sheet reads "Done. Final answer: Model agreed (rests on e-4). Own checks: 3 verified, 1 checked numerically, 1 model agreed, 3 given by you."
+The final answer becomes Verified only if e-4 itself gets an exact check, for example a claim that relates `I_d` to an independently obtained form.
 
 **If a check fails.** Suppose the solver drops a factor 1/2 in e-6. `series_match` returns fail with
 "lhs - rhs = 0.0312 at m = 1.7, mu = 0.9, order eps^0". The card turns red with that line. The solver sees the
@@ -188,12 +190,21 @@ Views (plain-JS modules, see 7.3):
 - **Badge**: always text plus an icon, never colour alone (drawn with the shared `ui_badge.js` of F6). A second line appears when the effective tier is lower than the step's own: "rests on e-4 (unchecked)".
 - **Why popover** (click a badge): each check with outcome, numbers (residual, points, digits), who asked for it, versions, "show code"; the ancestors that lower the tier; actions: Re-run checks, Add check, Review with another model, Correct this step, Acknowledge assumption, Attach a source (5.1), Fork from here.
 - **Canvas tabs**: Graph (the shared graph view of F6, filter "closure of the final answer"), Expressions (handle table), Sources, Log (today's conversation stream and tool trace). Artifacts arrives with package S18.
-- **Graph rules** (shared, overview 2.6): `solve_view` returns the shared `GraphView` shape. An edge runs from the step relied on (`src`) to the step that relies on it (`dst`), drawn top to bottom; this is `depends_on` and `derived_depends_on` read directly. A solid border means checked by code or backed by a matched quote (Computed, Cited); a dashed border means not checked by code (Model agreed, Assumed by model, Unchecked). Given and Checked by you are drawn plain with the tag "you" (overview 2.10). Failed and Stale have no border style of their own; their text badges say it. Each node carries its effective tier as a badge (text plus icon).
-- **Display grade** (shared, overview 2.10), so the same look means the same thing in every mode: Computed is "By code"; Cited is "Matched quote, full text" (or "Matched quote, scanned page" with the tag "OCR" when the source is a scan); Model agreed and Assumed by model are "Model statement"; Given and Checked by you are "User statement".
+- **Graph rules** (shared, overview 2.6): `solve_view` returns the shared `GraphView` shape. An edge runs from the step relied on (`src`) to the step that relies on it (`dst`), drawn top to bottom; this is `depends_on` and `derived_depends_on` read directly. A solid border means checked by code or backed by a matched quote (Verified, Checked numerically, Cited); a dashed border means not checked by code (Model agreed, Assumed by model, Unchecked). Given and Checked by you are drawn plain with the tag "you" (overview 2.10). Failed and Stale have no border style of their own; their text badges say it. Each node carries its effective tier as a badge (text plus icon).
+- **Display grade** (shared, overview 2.10), so the same look means the same thing in every mode: Verified and Checked numerically are "By code" (two badges, one grade); Cited is "Matched quote, full text" (or "Matched quote, scanned page" with the tag "OCR" when the source is a scan); Model agreed and Assumed by model are "Model statement"; Given and Checked by you are "User statement".
 
-Badge texts: Computed; Model agreed; Model agreed (same model); Checked by you; Unchecked;
-Failed; Given; Cited; Assumed by model; Stale. The word "verified" appears nowhere (a quote is
-"matched"). The word "proved" never appears on a computed step. Model text follows the two shared patterns:
+Badge texts: Verified; Checked numerically; Model agreed; Model agreed (same model); Checked by you;
+Unchecked; Failed; Given; Cited; Assumed by model; Stale. "Computed" is not a badge; in this document
+it means "Verified or Checked numerically".
+
+Where the word "verified" may appear: as the badge of a step whose **effective** tier is Verified; as
+"own check: verified" in the why popover and the check table of a write-up, for a step whose own tier
+is Verified but which rests on something weaker; in counts on the result sheet. Nowhere else: a quote
+is "matched", a model review is "Model agreed", a numeric check is "Checked numerically", and no
+answer, run or paper as a whole is called verified unless the final step's effective tier is
+Verified. The legend says what the word means: "the two sides are equal as exact expressions under
+the stated assumptions, as decided by SymPy; this does not show that the expression means what the
+text says". The word "proved" never appears on a computed step. Model text follows the two shared patterns:
 a verdict starts "Model agreed"; any other model text carries the suffix "(model)".
 
 ---
@@ -269,10 +280,15 @@ Reference machine: at most three Python processes at a time. A job memory cap is
 
 Tier order, low to high:
 
-`Unchecked (0) < Model agreed, same model (1) < Model agreed (2) = Checked by you (2) < Computed (3)`
+`Unchecked (0) < Model agreed, same model (1) < Model agreed (2) = Checked by you (2) < Checked numerically (3) < Verified (4)`
 
-Computed is the top tier. The Lean-checked tier (4) was cut on 2026-11-25. A proof in prose can
-therefore reach at most Model agreed or Checked by you; only claims between handles are computed.
+Verified is the top tier and means an exact symbolic check by code passed (owner decision of
+2026-11-25: "things can still be verified through SymPy, SciPy and other Python computations").
+Checked numerically means agreement at sampled points or between numeric runs: evidence, not proof.
+The split between the two words was written by the plan's editor; the owner's sentence also names
+SciPy, which is numeric, so "Verified numerically" was the other possible wording; the owner accepted the recommended
+answers in bulk, so "Checked numerically" stands (overview 8.3, question 11). The Lean-checked tier was cut. A proof in prose can reach at most Model agreed or
+Checked by you; only claims between handles are computed.
 
 Outside the order: **Failed** (overrides everything), **Given** (setup assumption or acknowledged model
 assumption), **Cited** (`reference_lookup` whose `source_ref` is a matched quote: accepted by `verify_quote` of the shared quote core, F4),
@@ -283,18 +299,21 @@ equal to the current ones; reviews and acknowledgements with `entry_sha256` equa
 
 1. **Failed** if any matching check has outcome fail, or the latest matching review is rejected. A fail is never cleared; the step must be superseded.
 2. (Removed with the Lean-checked tier. The number is kept so that "rule 3" below keeps its name.)
-3. **Computed** if the step has claims and every claim has a passing identity-class check:
+3. **Verified** or **Checked numerically** ("computed") if the step has claims and every claim has a passing identity-class check. Each claim gets the tier of its best passing check; the step gets the lowest tier among its claims:
 
-   | Claim form | Checks that count | Sublabel |
-   |---|---|---|
-   | equation | `identity_symbolic` | "symbolic" |
-   | equation | `identity_numeric` (at least 12 points, 50 digits, points drawn from the declared assumptions and domain) | "numeric only" |
-   | series | `series_match` to the order stated in the claim; `vanishes_to_order` | "series to O(x^n)" |
-   | value | `identity_numeric` where lhs and rhs were produced by two receipts with different `code_sha256` | "two runs agree, same solver" |
-   | value, equation | `independent_recompute` (blind task, package S20) | "independent recompute" |
-   | inequality | none. `counterexample_search` passing gives the sublabel "sampled, no counterexample" and the tier stays Unchecked | |
+   | Claim form | Checks that count | Tier | Sublabel |
+   |---|---|---|---|
+   | equation | `identity_symbolic`: the difference reduces to exactly 0 under the declared assumptions | Verified | "symbolic" |
+   | equation | `identity_numeric` (at least 12 points, 50 digits, points drawn from the declared assumptions and domain) | Checked numerically | "12 points, 50 digits" |
+   | series | `series_match` to the order stated in the claim, or `vanishes_to_order`, with every coefficient compared exactly | Verified | "to O(x^n)", always shown: the claim is the truncated one |
+   | series | the same checks with coefficients compared numerically | Checked numerically | "to O(x^n), numeric coefficients" |
+   | value | `identity_numeric` where lhs and rhs were produced by two receipts with different `code_sha256` (this includes every SciPy result: quadrature, root finding, ODE solutions, linear algebra in floating point) | Checked numerically | "two runs agree, same solver" |
+   | value, equation | `independent_recompute` (blind task, package S20) | Verified if the two results are compared exactly, otherwise Checked numerically | "independent recompute" |
+   | inequality | none. `counterexample_search` passing gives the sublabel "sampled, no counterexample" and the tier stays Unchecked | | |
 
-   Other named checks (`dimensions`, `limit_case`, `symmetry`, `conservation`, `convergence`, `matrix_property`) never give Computed. Passing adds a sublabel. Failing gives Failed.
+   Three guards on Verified. (a) The exact check runs in the check process on the handles, never on text the model wrote, and a `True` returned by solver code is not a check. (b) Every Verified equation is also evaluated at the numeric points of `identity_numeric` for zero model calls; a disagreement gives Failed and is recorded as a suspected simplification error, because a computer algebra system can simplify wrongly across branch cuts. (c) The assumptions used by the simplification (signs, reality, integer-ness) are stored in the check record and shown in the why popover: Verified always means "under these assumptions".
+
+   Other named checks (`dimensions`, `limit_case`, `symmetry`, `conservation`, `convergence`, `matrix_property`) never give Verified or Checked numerically. Passing adds a sublabel. Failing gives Failed.
 4. **Model agreed** or **Model agreed (same model)** if the latest matching review is accepted, by its `independence`. **Checked by you** if a matching `hand_checked` acknowledgement exists.
 5. **Given**, **Cited**, **Assumed by model** by the rules above.
 6. Otherwise **Unchecked**. A computation step with a successful receipt and no claim is Unchecked with sublabel "ran".
@@ -311,7 +330,7 @@ step through rule 3, like anyone else's.
 - If any dependency is superseded: the step is **Stale** (effective Unchecked) until re-recorded. Re-recording the same claim is one tool call and keeps its checks.
 - `lowered_by` lists the dependencies that attain the minimum; the UI shows them as "rests on".
 
-**Flags**, shown on the badge and never hidden: "transcription unconfirmed", "same model", "numeric only",
+**Flags**, shown on the badge and never hidden: "transcription unconfirmed", "same model", "to O(x^n)" on a truncated series,
 "rests on N assumptions made by the model", "OCR source" (a Cited step whose quote was matched in the text
 of a scanned page).
 
@@ -412,7 +431,7 @@ never turn a policy deny or an unanswered approval into an allow. A refusal is r
 | G4 budget | When `max_model_calls`, `max_wall_minutes` or `max_model_calls_per_leg` is reached, the next model call is not sent; `solve.paused`. Model calls are counted from ledger events by the one shared function of F9 (`run_budget.rs`), not by Solve code. |
 | G5 bounce | `max_gate_bounces` refusals in a row: `solve.paused {gate_bounces}`. Stops a confused model from spending calls on the same refused action. |
 | G6 stuck | Two rejected reviews on the same step lineage: `solve.paused {verification_stuck}` with the reviewer's issues shown. |
-| G7 finish | `solve_finish` is refused if the closure of the final step has a Failed or Stale step. Otherwise it writes `solve.done`. The existing `lint_honesty_with_ledger` runs on `summary_markdown`: "verified" is refused in a Solve summary, and "proved" must match the tiers. |
+| G7 finish | `solve_finish` is refused if the closure of the final step has a Failed or Stale step. Otherwise it writes `solve.done`. The existing `lint_honesty_with_ledger` runs on `summary_markdown`: "verified" and "proved" must match the tiers: "verified" is accepted only next to a step whose effective tier is Verified, and is refused for the answer as a whole unless the final step's effective tier is Verified. |
 
 On CLI routes the host cannot stop the CLI from printing a final text. The result sheet is built from the
 ledger, so it reads "Not done: 3 steps unchecked" whatever the text says.
@@ -459,7 +478,7 @@ ledger, so it reads "Not done: 3 steps unchecked" whatever the text says.
 | R5 | Shown formula equals checked formula | `step_record` has no `latex` field; LaTeX comes from the check process | LaTeX on the card equals the check process's rendering of the stored `srepr`; a solver worker with a patched `latex` printer does not change it |
 | R6 | Model code cannot alter a check | check process runs only `python/checks/`; `srepr_safe.py` | Hostile `srepr` strings (attribute access, `__import__`, unknown names, lambda) are rejected and marked non-portable; a solver worker that patches `sympy.simplify` does not change any check outcome |
 | R7 | Tiers are monotone | `solve_status.rs` | Property tests on random graphs: effective <= own and <= every dependency; adding a fail or an edge never raises any tier |
-| R8 | One weak check never gives Computed | rule 3 of 4.4 | A step with only `dimensions` and `symmetry` passing is Unchecked; an inequality with only `counterexample_search` is Unchecked |
+| R8 | One weak check never gives a computed tier, and a numeric check never gives Verified | rule 3 of 4.4 | A step with only `dimensions` and `symmetry` passing is Unchecked; an inequality with only `counterexample_search` is Unchecked; a step whose only passing identity check is `identity_numeric` is Checked numerically for every generated input; a step with one symbolic and one numeric claim is Checked numerically; a Verified equation that fails the numeric guard is Failed |
 | R9 | Dependencies cannot be dodged or manufactured | `derived_depends_on`; no "depends on everything" fallback in Solve | Using handle h owned by e-3 without declaring it still inherits e-3's tier; `final_answer` with empty `depends_on` is refused |
 | R10 | No computation step without a real successful run in this session | `step_record` (reuses `tool_reference_matches`) | Fabricated reference, failed run, other session: refused |
 | R11 | Gates bind every route and never widen permissions | `tools::Gate` in `Router::try_call` | Scripted in-core transport, MCP server call and delegated worker call each hit G1; a gate returning allow on a policy-denied call still ends denied |
@@ -473,13 +492,13 @@ ledger, so it reads "Not done: 3 steps unchecked" whatever the text says.
 | R19 | Re-run reproduces | `POST solve/recheck` | Same stored request gives the same `evidence_sha256`; a difference is surfaced as "result changed on re-run" |
 | R20 | Files stay at or under 600 lines | Shared: the CI check of package F0, for all modes | fails on any new or touched file over the limit |
 | R21 | Nothing arrives as checked through a hand-off | Shared: the receiving route of F7 | In F7: every `QuoteRef` of a packet is re-run through `verify_quote` in the new session; a step made from a packet is Given or Cited, never a higher tier; no badge or tier is read from a packet |
-| R22 | Screen words stay inside their allowed places | view models, exports, write-up | Property test (shared, evaluation set 7.3): no Solve view, export or write-up shows "verified" at all, or "proved", "new" or "novel" outside the allowed places |
+| R22 | Screen words stay inside their allowed places | view models, exports, write-up | Property test (shared, evaluation set 7.3): for generated ledgers, every occurrence of "verified" in a Solve view, export or write-up is tied to a step id whose own tier is Verified, the step badge reads "Verified" only when the effective tier is Verified, and no string calls a quote, a model review or a numeric check verified; "proved", "new" and "novel" stay inside their allowed places |
 | R23 | A write-up says how each statement was checked | Shared: F15 (`writeup.rs`), Solve adapter | Evaluation set W: every formula equals the check process's rendering of its handle; the check table lists every step of the closure with its badge; the status line equals `solve.done.status`; a write-up is refused while the closure has a Failed or Stale step |
 | R24 | A lesson never decides anything | Shared: F16; `solve_status.rs` reads no lesson | Evaluation set K: with and without lessons the same events give the same tiers; the resume brief built twice from the same events is byte-identical whatever the live lesson store holds |
 
 What code cannot close, stated plainly: a handle can be checked correctly and still not mean what the prose
 says, and a model can pick a weak check. The countermeasures are the formula rendered from the handle, rule
-R8, a verifier on another model, and the user's eye. The UI must never say more than "Computed" for such a step.
+R8, a verifier on another model, and the user's eye. The UI must never say more than "Verified" for such a step, and the legend states the limit in those words (4.3).
 
 ---
 
@@ -587,7 +606,7 @@ change between legs without breaking anything. This rule is Solve-only for now (
 ### 8.4 Today's Research sessions
 
 - Not converted. They stay readable, exportable, forkable and resumable under `research/1` with their recorded system prompt. The rail tags them "Research (earlier)".
-- **Open in Solve**: `export::fork_session` into a new session, then host-written `solve.started` and a `solve.setup` prefilled from the first prompt, the pinned conventions, existing `assumption` entries and ingested sources; `solve.setup.origin` is a `NodeRef` to the Research session. Old steps keep their ids and get tiers from the same function: an accepted old review counts as Model agreed (same model, unless the old event recorded a different verifier model); old SymPy validations are shown as receipts and do not give Computed, because they are not bound to a claim. The old ledger is untouched.
+- **Open in Solve**: `export::fork_session` into a new session, then host-written `solve.started` and a `solve.setup` prefilled from the first prompt, the pinned conventions, existing `assumption` entries and ingested sources; `solve.setup.origin` is a `NodeRef` to the Research session. Old steps keep their ids and get tiers from the same function: an accepted old review counts as Model agreed (same model, unless the old event recorded a different verifier model); old SymPy validations are shown as receipts and give neither computed tier, because they are not bound to a claim. The old ledger is untouched.
 - Investigation hand-offs created before this change (`investigation.handoff`) stay readable and stay Research.
 - **New hand-overs into Solve use the one shared packet (F7, overview section 4).** The new session's first events are, in order: copies of the needed `source.ingested` events, one `handoff.packet`, then `solve.started`. The setup prefill reads the packet; nothing Solve-specific is written by the sending mode:
   - `statement.text` fills the statement; `conventions` fills the conventions; `ask.kind` is the task kind (`calculate`, `prove`, `check_derivation`); `ask.fields` fill `target` and suggested done criteria (from Explore: `check.reproduces` becomes a suggested criterion and "Check first" is shown above the done checklist; `risks` and `stop_if` become notes the user sees); symbols fill the symbols table; `from` becomes `solve.setup.origin` and an origin chip back to the node.
@@ -615,7 +634,7 @@ S11. Then S12 and S13, S10, S14, S15, and the rest.
 
 | Id | Title | What | Files | Size | Depends on |
 |---|---|---|---|---|---|
-| S0 | Evaluation set: moved to F8 | The harness, the manifest and sheet formats and the old-session ledgers are F8. Solve remainder, written by the Solve lane inside F8 in week 1: set Q of overview 7.2 (10 calculations with known closed forms including the example above, 3 derivations with one planted error each, 2 prose-heavy proofs), each with final answer, expected tier per step and the planted step; scripted-transport fixtures for later packages. A planted error must end Failed, never Computed. Solve also supplies the target cases of the hand-over chains (set C) | `crates/agent/tests/eval_support/`, `tests/fixtures/eval/`, sheets in `docs/design/eval-2026-11/` (all F8) | in F8 | none |
+| S0 | Evaluation set: moved to F8 | The harness, the manifest and sheet formats and the old-session ledgers are F8. Solve remainder, written by the Solve lane inside F8 in week 1: set Q of overview 7.2 (10 calculations with known closed forms including the example above, 3 derivations with one planted error each, 2 prose-heavy proofs), each with final answer, expected tier per step and the planted step; scripted-transport fixtures for later packages. A planted error must end Failed, never Verified or Checked numerically. Solve also supplies the target cases of the hand-over chains (set C) | `crates/agent/tests/eval_support/`, `tests/fixtures/eval/`, sheets in `docs/design/eval-2026-11/` (all F8) | in F8 | none |
 | S1 | Tool profiles: replaced by F1 | No Solve package. F1 builds the profile mechanism, the frozen `research/1` and the golden files. What stays in Solve: the tool list of `solve/1` (5.1, added to the profile data by S7 to S9, S11 and S16 as each tool lands) and the resume-brief part of rule R2 (S12) | none here | - | - |
 | **S2** | **Solve model, state fold, badge function** | Types, incremental fold, own and effective tier, stale and fail rules, closure over declared plus derived edges; property tests R4, R7, R8. Pure code, no I/O | `crates/research-tools/src/solve_model.rs`, `solve_state.rs`, `solve_status.rs`, `proof_closure.rs`, `proof_dag.rs` | M | none |
 | **S3** | **Router gate and post-call hook** | `tools::Gate`; refusal becomes a tool error plus `guardrail.blocked`; tests R11 (cannot widen) | `crates/tools/src/gate.rs`, `router.rs`, `router/tests.rs` | S | none |
@@ -691,8 +710,8 @@ Nothing in the free column calls a paid service. The number of model calls is sh
 ## 12. Risks
 
 1. **A checked handle that does not mean what the prose says.** Cannot be closed in code. See the end of section 6.
-2. **SymPy's reach.** Tensor algebra, non-commutative operators at scale and most loop integrals are out of reach. Many steps will end as Model agreed. With Lean cut there is no tier above Computed, so every step that is not a relation between handles (a prose argument, an existence claim, most of a "prove" task) stays at Model agreed or Checked by you at best. If most of a run is amber the mode is worth less. Set Q of the evaluation set (F8) measures the share of steps Computed, Model agreed and Unchecked before any UI polish.
-3. **Numeric identity checks.** Random points can miss a difference on a branch cut or outside the sampled domain, and can fail falsely across a cut. Receipts show domain, points and digits; "numeric only" is a visible sublabel; "Computed" is evidence, not proof, and the legend says so.
+2. **SymPy's reach.** Tensor algebra, non-commutative operators at scale and most loop integrals are out of reach. Many steps will end as Model agreed. With Lean cut, the top tier (Verified) is reachable only by a relation between handles, so every step that is not a relation between handles (a prose argument, an existence claim, most of a "prove" task) stays at Model agreed or Checked by you at best. If most of a run is amber the mode is worth less. Set Q of the evaluation set (F8) measures the share of steps Verified, Checked numerically, Model agreed and Unchecked before any UI polish.
+3. **Numeric identity checks.** Random points can miss a difference on a branch cut or outside the sampled domain, and can fail falsely across a cut. Receipts show domain, points and digits; such a step is "Checked numerically", never "Verified", and the legend says it is evidence, not proof. The opposite error also exists: an exact simplification can be wrong (branch cuts, assumptions applied too freely, a bug in the computer algebra system), so "Verified" means "SymPy reduced the difference to zero", which is weaker than a formal proof; guard (b) of 4.4 catches part of this.
 4. **Symbol assumptions.** In SymPy a symbol with different assumptions is a different object. A handle saved with a positive `a` and a claim built with a plain `a` gives a false mismatch. Setup assumptions must be applied wherever a symbol is created (`assumed_symbol`), and a mismatch must be reported as "inconclusive: symbol assumptions differ", not as a fail.
 5. **The restricted parser's allowlist.** Too narrow and useful expressions become non-portable (no badge possible); too wide and it is a hole. Start narrow, log every rejection by constructor name, widen from data.
 6. **Resume.** F1 touches the most fragile path, and all three modes now depend on it. The golden test for `research/1` (F0) lands before anything else. A session started after F1 records a profile and will not resume in an older build. Legs started from a resume brief lose provider-side state (thinking blocks, prompt cache): one cache miss per checkpoint.
@@ -712,10 +731,10 @@ Nothing in the free column calls a paid service. The number of model calls is sh
 
 | # | Question | Recommended default |
 |---|---|---|
-| D1 | Top badge wording on a normal run | "Computed"; it is also the top tier now. "Proved" never on a computed step. "Verified" is shown nowhere (decided, overview 8.1). |
+| D1 | Top badge wording on a normal run | "Verified" for an exact symbolic check, "Checked numerically" for a numeric one (decided, overview 8.1; numeric wording accepted with overview 8.3 question 11). "Proved" never on a computed step. |
 | D2 | Verifier is the same model as the solver | Run and label "Model agreed (same model)". It does not satisfy the default done checklist unless "accept same-model review" is ticked at setup. Suggest a second model once. |
 | D3 | Which steps the verifier reviews by default | Steps with no computed claim, batched 5 per loop, plus whatever the done checklist still requires at finish. |
-| D4 | Default done checklist for a calculation | Final result Computed, dimensions check passed, everything it rests on at least Model agreed, no unacknowledged model assumptions. "Every step Computed" is one tick. |
+| D4 | Default done checklist for a calculation | Final result Verified (the user may accept Checked numerically), dimensions check passed, everything it rests on at least Model agreed, no unacknowledged model assumptions. "Every step Verified" is one tick. |
 | D5 | Approvals at setup | The setup card lists every grant the run needs (solver runs code; host runs checks; verifier runs code and checks), one line each. One "Allow listed" click records each grant separately through the existing approver. No new approval scope; a worker restart still asks again. The card is the one approval card component all modes use (overview 3.1, row 13); whether the approver can prompt outside a running model turn is settled in F5. |
 | D6 | Unmet criteria at the end | One automatic repair round inside the remaining budget, then stop as "Done with open items". No silent extra spending. |
 | D7 | SciPy and matplotlib | In the installer, so the free core works offline. |
@@ -724,13 +743,13 @@ Nothing in the free column calls a paid service. The number of model calls is sh
 | D10 | Assumptions the model adds mid-run | Continue, mark "Assumed by model", count as Unchecked for everything resting on it, list at the top of the result sheet for one-click acknowledgement. |
 | D11 | A step you checked by hand | Allow "Checked by you", ranked with Model agreed, recorded with your acknowledgement and the step's hash. |
 | D12 | A formula stated without a source | Allowed only as an assumption (Assumed by model), never as Cited. |
-| D13 | Check-a-derivation: confirm transcriptions | Not required per step. Show "Computed (transcription unconfirmed)"; the done checklist stays open until "Confirm all" after a side-by-side look. |
+| D13 | Check-a-derivation: confirm transcriptions | Not required per step. Show "Verified (transcription unconfirmed)" or "Checked numerically (transcription unconfirmed)"; the done checklist stays open until "Confirm all" after a side-by-side look. |
 | D14 | (No longer asked: Lean is cut.) | - |
 | D15 | Changing the setup after the run starts | Allowed as a new revision. Checks that depended on changed assumptions or conventions become Stale; "Re-run all checks" is free. |
 | D16 | Solve for subscription-CLI users | Package S15, right after the core loop. Do not hold the first release for it, but do not ship a release that hides Solve from them without saying why on the setup card. |
 | D17 | First optional engine | Decided: none for now. Lean is cut; Cadabra2 and FORM are deferred with S22. |
 | D18 | Notebook export default | Only what the final answer rests on; "include all runs" as an option. |
-| D19 | Old Research sessions opened in Solve | Earlier reviews count as Model agreed (same model unless a different one was recorded). Earlier SymPy validations are shown as receipts and do not give Computed until re-recorded with handles. An earlier `lean_check` result is shown as a receipt ("Lean check recorded in the earlier session") and gives no tier, since Solve has no Lean tier. |
+| D19 | Old Research sessions opened in Solve | Earlier reviews count as Model agreed (same model unless a different one was recorded). Earlier SymPy validations are shown as receipts and give neither computed tier until re-recorded with handles. An earlier `lean_check` result is shown as a receipt ("Lean check recorded in the earlier session") and gives no tier, since Solve has no Lean tier. |
 | D21 | A "prove" task without Lean | Keep the task kind; the setup card says "a proof in prose is reviewed by a model; only calculations are computed"; the default done checklist asks for a review by a different model (overview 8.3, question 9). |
 | D22 | The write-up without its check table | Not offered (overview 8.3, question 10). |
 | D20 | Start at once or wait for plan approval | Start at once. "Ask before running" is an opt-in switch. |

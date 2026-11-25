@@ -15,7 +15,7 @@ Scope revision of 2026-11-25 (owner decisions, `00-overview.md` section 0.1), ap
 - **Version tracking is deferred** (the version half of V10, stage M, evaluation set P2). A session
   stays on the version it opened.
 - **Added:** reading notes as a write-up (F15); corrections the reader makes are reused (F16).
-- **Lean is cut.** The word "verified" is shown nowhere; quotes are "matched".
+- **Lean is cut.** The word "verified" belongs to Solve steps with an exact symbolic check (overview 0.1); Investigate never shows it, and quotes are "matched".
 
 Written 2026-11-25. Builds on `reSearch-modes-gaps-and-prior-art-2026-11-25.md` (the agreed gap analysis)
 and on two independent proposals (researcher-first and architecture-first). Code facts were checked
@@ -33,8 +33,8 @@ Terms used throughout:
   the hash-pinned source file (existing mechanism in `investigation_anchor.rs`, reached through
   `verify_quote` of shared package F4).
 - **Matched**: a quote or anchor that passed that verification. On screen and in this document a
-  quote is "matched", never "verified"; the word "verified" is reserved for a machine-checked formal
-  proof and, since Lean was cut, is shown nowhere. Internal names such as `verify_quote` keep the
+  quote is "matched", never "verified"; the word "verified" is reserved for a Solve step whose claims
+  passed an exact symbolic check (overview 3.2 row 20) and is not shown in Investigate. Internal names such as `verify_quote` keep the
   old verb. A quote found in the text of a scanned page is "matched in OCR text" and its chip opens
   the page image (F14).
 - **Task**: one scoped model run started by the reader (orient, open a node, context; prior work is deferred).
@@ -655,7 +655,7 @@ text; runs in CI) and a live tier outside the repository (a manifest of arXiv id
 answer keys; papers are fetched, never stored in the repository; run by hand before each milestone,
 one sheet per run in `docs/design/eval-2026-11/`). The owner chooses the papers; someone who is not
 the builder writes the answer keys. Model calls and tokens per task are recorded against the caps
-of 5.3, and a property test checks that no view, export or write-up shows "verified" at all, or
+of 5.3, and a property test checks that no Investigate view, export or write-up shows "verified" at all, or
 "new", "novel" or "proved" outside the allowed places. The 8 self-written fixtures of V1 stay with V1 as unit tests.
 
 ## 10. Free core versus optional add-ons
@@ -722,8 +722,8 @@ GROBID (add-ons); TheoremSearch (no licence or terms). Nothing here depends on t
 
 Decisions that concern all three modes are no longer asked here; they are in `00-overview.md`
 section 8. Decided on 2026-11-25 (overview 8.1): PDF-only and old papers are essential; bring your
-own papers; write-up; corrections; V14 and version tracking deferred; Lean cut, "verified" shown
-nowhere, quotes are "matched". Still open and shaping this mode (overview 8.2): 1 (tool profiles),
+own papers; write-up; corrections; V14 and version tracking deferred; Lean cut, "verified" used
+only for Solve steps with an exact symbolic check, quotes are "matched". Accepted as recommended on 2026-11-25 and shaping this mode (overview 8.2): 1 (tool profiles),
 4 (dashed means not checked by code), 5 (one library), 6 (entry screen), 8 (hand-overs re-match
 every quote), 10 (shared event kinds), 11 ("check" renamed to "prior work"), 12 (who writes the
 evaluation answer keys); and from overview 8.3: 3 (quotes from OCR text), 4 (own OCR).

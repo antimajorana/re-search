@@ -14,7 +14,7 @@ Scope revision of 2026-11-25 (owner decisions, overview section 0.1), applied be
 - **Explore is now Investigate's only path to earlier literature**, through "Search wider in
   Explore" (Investigate's own prior-work check, V14, is deferred).
 - **Lean is cut**: `lean` is no longer a method of a first calculation, and the word "verified" is
-  shown nowhere.
+  not shown in Explore (it belongs to Solve steps with an exact symbolic check, overview 0.1).
 - In the revised build order the shared literature services (F11) and coverage (F12) come in
   weeks 9 to 11, so Explore's first screen moves to about week 11 (overview section 6).
 
@@ -44,7 +44,7 @@ Terms used throughout:
   by a search service).
 - **Matched**: the word shown on screen when the app found a quote at the cited place ("quote
   matched at lines 212-219", "4 quotes could not be matched"). The word "verified" is reserved for
-  a machine-checked formal proof and, since Lean was cut, is shown nowhere. Internal names
+  a Solve step whose claims passed an exact symbolic check and is not shown in Explore. Internal names
   (functions, tests) may keep "verify". A quote from a PDF names its page; a quote found in the
   text of a scanned page is "matched in OCR text" and its chip opens the page image (F14).
 - **Coverage**: the app-computed record of where the search looked, what failed and what was read
@@ -892,9 +892,9 @@ Other shared decisions that bind this document and are not repeated here: overvi
 decision 1 (tool profiles; Explore is `explore/1`), 4 (dashed always means "not checked by code"),
 6 (home screen with three cards), 7 ("New research" stays under "More" until X13 and S13 work), 8
 (hand-overs re-match every quote and carry no badge) and 12 (who writes the answer keys of the
-evaluation set). Decided on 2026-11-25 (overview 8.1): "verified" is shown nowhere and quotes are
-"matched"; bring your own papers; PDF-only and old papers essential; write-up; corrections. New
-questions that touch Explore (overview 8.3): 1 (the revised order), 3 (a `judged` status on OCR
+evaluation set). Decided on 2026-11-25 (overview 8.1): "verified" is not shown in Explore and quotes are
+"matched"; bring your own papers; PDF-only and old papers essential; write-up; corrections. Questions
+of overview 8.3 that touch Explore, accepted as recommended on 2026-11-25: 1 (the revised order), 3 (a `judged` status on OCR
 text), 5 and 6 (sync direction and first sources), 7 (lessons).
 
 ---

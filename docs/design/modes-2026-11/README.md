@@ -44,5 +44,8 @@ code may be ported directly; the rules and the list of files are in overview 2.1
 ## Owner decisions
 
 The scope decisions are recorded in section 8.1 of the overview. Sections 8.2 (the first questions)
-and 8.3 (new questions raised by the revision) are not answered yet. The recommended options are provisional. No agent
-implements F1 (tool profiles), adds a tool to any registry, or changes a tool definition.
+and 8.3 (questions raised by the revision) were accepted in bulk by the owner on 2026-11-25: every
+recommended answer there is the decision. This lifts the earlier hold on F1 (tool profiles), which
+is now approved as the single way a session's tools are fixed; tools are still added only through
+a profile. In Solve, "Verified" means an exact symbolic check by code and "Checked numerically"
+means numeric agreement (overview 0.1, `solve.md` 4.4).
