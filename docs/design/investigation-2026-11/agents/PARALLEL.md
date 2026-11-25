@@ -34,5 +34,6 @@ Who owns what, when two briefs touch the same file:
 - Long reviews and audits: **Gemini 4 Carbon**, `--model gemini-4-carbon-high`.
 
 The coordinator sets the model when it launches the agent; an agent does not switch model itself.
-- Fix rounds (user's choice, 2026-11-25): one **Orchestrator (Carbon)**, `--model gemini-pro-orchestrator`,
+- Fix rounds (user's choice, 2026-11-25): one orchestrating agent (`gemini-pro-orchestrator` is refused for
+  remote agents, "not available for remote agents"; the CLI falls back to Neon High),
   which hands each fix to Neon (High) subagents; the coordinator verifies its output at the end.
