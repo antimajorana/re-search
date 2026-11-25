@@ -163,3 +163,28 @@ fn concurrent_callers_sharing_one_arxiv_gate_get_strictly_spaced_grants() {
         );
     }
 }
+
+#[test]
+fn process_wide_gate_counts_but_does_not_wait_for_a_loopback_mock() {
+    let endpoints = LiteratureEndpoints::loopback_mock("http://127.0.0.1:9").unwrap();
+    let gate = NetRateGate::process_wide();
+    let uri: ureq::http::Uri = "http://127.0.0.1:9/api/query?id_list=1".parse().unwrap();
+    let started = std::time::Instant::now();
+    for _ in 0..3 {
+        let grant = gate.acquire_for_url(&uri, &endpoints, Some(Service::Arxiv));
+        assert_eq!(grant.waited, Duration::ZERO);
+    }
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(gate.acquired_count(&RateBucket::Service(Service::Arxiv)), 3);
+}
+
+#[test]
+fn process_wide_gate_still_spaces_a_real_host() {
+    // Reserve two arXiv slots back to back without sleeping: the second must be owed 3 s.
+    let clock = Arc::new(FakeRateClock::new());
+    let gate = NetRateGate { wait_on_loopback: false, ..NetRateGate::new(clock.clone()) };
+    let endpoints = LiteratureEndpoints::default();
+    let uri: ureq::http::Uri = "https://export.arxiv.org/api/query?id_list=1".parse().unwrap();
+    assert_eq!(gate.acquire_for_url(&uri, &endpoints, None).waited, Duration::ZERO);
+    assert_eq!(gate.acquire_for_url(&uri, &endpoints, None).waited, Duration::from_secs(3));
+}
