@@ -54,6 +54,7 @@ pub struct Router {
     approver: Arc<dyn Approver>,
     store: ApprovalStore,
     worker_instance: String,
+    tool_profile: Option<String>,
 }
 
 impl Router {
@@ -66,7 +67,19 @@ impl Router {
             approver,
             store: ApprovalStore::new(),
             worker_instance: random_hex(16),
+            tool_profile: None,
         }
+    }
+
+    /// Record which tool profile (overview 2.2, F1) built this router.
+    pub fn with_tool_profile(mut self, profile: impl Into<String>) -> Self {
+        self.tool_profile = Some(profile.into());
+        self
+    }
+
+    /// Tool profile id that built this router, if any.
+    pub fn tool_profile(&self) -> Option<&str> {
+        self.tool_profile.as_deref()
     }
 
     pub fn registry(&self) -> &Registry {
