@@ -2,7 +2,7 @@
 import { escapeHtml } from './code_highlight.js';
 import { extractMath, findMatchingEnvEnd, formatMathTokenHtml } from './math_scan.js';
 import {
-  createMathState, isMacroDefined, katexOptions, renderFormulaHtml, rewriteNewcommands, syncMathMacros,
+  createMathState, isMacroDefined, katexOptions, renderFormulaHtml, syncMathMacros,
 } from './math_katex.js';
 import { numberEquations } from './math_equations.js';
 
@@ -121,8 +121,8 @@ export function harvestPreambleMacros(preamble) {
         continue;
       }
     }
-    const def = /^\\(?:g|e|x)?def\s*\\([A-Za-z]+)([^{]*)/.exec(rest);
-    if (def && !/\n\s*\n/.test(def[2])) {
+    const def = /^\\(?:g|e|x)?def\s*\\([A-Za-z]+)([^{\r\n]*)/.exec(rest);
+    if (def) {
       const pos = i + def[0].length;
       const body = src[pos] === '{' ? readBalancedGroup(src, pos) : null;
       if (body) {
@@ -139,32 +139,20 @@ export function harvestPreambleMacros(preamble) {
 function replayPreambleMacros(decls, katexImpl, docState) {
   if (!decls.length || !katexImpl || typeof katexImpl.renderToString !== 'function') return;
   const defined = new Set();
-  const emitted = [];
+  const opts = { ...katexOptions(false, docState), throwOnError: true };
   for (const d of decls) {
     const already = defined.has(d.name) || isMacroDefined(d.name, katexImpl, docState);
-    if (d.kind === 'providecommand') {
-      if (already) continue;
-      emitted.push(d.tex);
+    if (d.kind === 'providecommand' && already) continue;
+    const tex = (d.kind === 'providecommand' || d.kind === 'def' || d.hasOpt)
+      ? d.tex
+      : `\\${already ? 'renewcommand' : 'newcommand'}{\\${d.name}}${d.argcPart}{${d.body}}`;
+    const snapshot = { ...docState.macros };
+    try {
+      katexImpl.renderToString(tex, opts);
       defined.add(d.name);
-    } else if (d.kind === 'def' || d.hasOpt) {
-      emitted.push(d.tex);
-      defined.add(d.name);
-    } else {
-      emitted.push(`\\${already ? 'renewcommand' : 'newcommand'}{\\${d.name}}${d.argcPart}{${d.body}}`);
-      defined.add(d.name);
-    }
-  }
-  if (!emitted.length) return;
-  const opts = { ...katexOptions(false, docState), throwOnError: true };
-  try {
-    katexImpl.renderToString(emitted.join('\n'), opts);
-  } catch {
-    for (const decl of emitted) {
-      try {
-        katexImpl.renderToString(rewriteNewcommands(decl, katexImpl, docState), opts);
-      } catch {
-        // Ignore unsupported LaTeX-only preamble declarations.
-      }
+    } catch {
+      for (const k of Object.keys(docState.macros)) delete docState.macros[k];
+      Object.assign(docState.macros, snapshot);
     }
   }
   syncMathMacros(docState);

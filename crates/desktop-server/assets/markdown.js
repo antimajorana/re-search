@@ -2,8 +2,8 @@
 // Offline Markdown parser and HTML renderer with container-aware block display math, lists, tables, and headings.
 import { escapeHtml } from './code_highlight.js';
 import {
-  HEADING_LINE_RE, MATH_ENVS, extractMath, findClosingDelim, findDisplayClose,
-  findEnvBlockClose, formatMathTokenHtml, isEscapedAt, normalizeMathTex,
+  HEADING_LINE_RE, MATH_ENVS, extractMath, findClosingDelim, findClosingInlineDollar,
+  findDisplayClose, findEnvBlockClose, formatMathTokenHtml, isEscapedAt, normalizeMathTex,
 } from './math_scan.js';
 import { renderFormulaHtml } from './math_katex.js';
 import { numberEquations } from './math_equations.js';
@@ -243,6 +243,12 @@ function findUnclosedParaDisplay(paraLines) {
       i += 2;
       continue;
     }
+    if (ch === '$' && text[i + 1] !== '$') {
+      const end = findClosingInlineDollar(text, i + 1, true);
+      if (end !== -1) { i = end + 1; continue; }
+      i += 1;
+      continue;
+    }
     i += 1;
   }
   return null;
@@ -427,29 +433,31 @@ function renderMarkdownBlocks(inputLines, mathTokens, parseOpts) {
     }
 
     // Block display math ($$, \[, \begin{env})
-    const disp = matchBlockDisplay(lines, i);
+    let disp = matchBlockDisplay(lines, i);
     if (disp) {
-      flushAll();
-      const raw = disp.body.trim();
-      const tex = parseOpts.rendered ? raw : normalizeMathTex(raw, true);
-      if (tex) {
-        const id = mathTokens.length;
-        mathTokens.push({ raw, tex, display: true, inlineDisplay: false, glue: '' });
-        out.push(`\u0000D${id}\u0000`);
-      }
-      if (disp.rest && disp.rest.trim()) {
-        const tail = disp.rest.trimStart();
-        const prevLine = lines[disp.closeLine];
-        lines[disp.closeLine] = tail;
-        if (matchBlockDisplay(lines, disp.closeLine)) {
-          i = disp.closeLine - 1;
-        } else {
+      while (disp) {
+        flushAll();
+        const raw = disp.body.trim();
+        const tex = parseOpts.rendered ? raw : normalizeMathTex(raw, true);
+        if (tex) {
+          const id = mathTokens.length;
+          mathTokens.push({ raw, tex, display: true, inlineDisplay: false, glue: '' });
+          out.push(`\u0000D${id}\u0000`);
+        }
+        i = disp.closeLine;
+        if (disp.rest && disp.rest.trim()) {
+          const tail = disp.rest.trimStart();
+          const prevLine = lines[disp.closeLine];
+          lines[disp.closeLine] = tail;
+          const nextDisp = matchBlockDisplay(lines, disp.closeLine);
+          if (nextDisp) {
+            disp = nextDisp;
+            continue;
+          }
           lines[disp.closeLine] = prevLine;
           para.push(tail);
-          i = disp.closeLine;
         }
-      } else {
-        i = disp.closeLine;
+        disp = null;
       }
       continue;
     }
