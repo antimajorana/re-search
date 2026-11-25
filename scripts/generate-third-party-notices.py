@@ -175,11 +175,12 @@ def main():
     inventory = [
         "reSearch Windows installer source and third-party notices",
         "",
-        "reSearch: GNU General Public License, version 3 only (see ../LICENSE).",
+        "reSearch: GNU Affero General Public License, version 3 only (see ../LICENSE).",
         f"Project source archive: {source_url}",
         "Build and installation scripts are in the archive. Run cargo fetch --locked",
         "in the source tree to retrieve the dependency versions and checksums pinned in Cargo.lock.",
         "Earlier MIT and Apache-2.0 grants are recorded in legacy/LICENSE-MIT and legacy/LICENSE-APACHE.",
+        "Versions published under GPL-3.0-only before 2026-11-25 remain available under that license.",
         "",
         f"Target: {args.target}",
         f"Cargo.lock SHA-256: {digest(ROOT / 'Cargo.lock')}",
