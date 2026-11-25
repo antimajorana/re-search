@@ -543,4 +543,46 @@ fn external_client_cannot_inject_internal_paper_scope_and_question_only_can_open
         (false, 201),
         "Spoofed `_paper_scope` enabled readers ({turn1_has_readers}) AND question-only Research handoff failed ({handoff_st}: {handoff_body})"
     );
+    let child_id = handoff_body["session_id"].as_str().unwrap();
+    let (_, child_sv) = req(&boot.srv, "GET", &format!("/api/sessions/{child_id}"), None);
+    let origin = &child_sv["investigation"]["origin"];
+    assert!(origin["answer_seq"].is_u64() && origin["answer_hash"].is_string());
+    assert!(origin["claim"].is_null(), "unverified model prose leaked into handoff: {origin}");
+    assert_eq!(origin["sources"], json!([]), "unread [L1] cite leaked into handoff: {origin}");
+}
+
+#[test]
+fn review_consistency_turn_req_cannot_override_paper_readers_enabled() {
+    let mock = LoopbackApi::start(Box::new(|_, _| ant_text("Mapped.")));
+    let boot = InvBoot::start(&mock.base_url);
+    for (idx, (sid, saved, req_val, expect_tool)) in [
+        ("s-req-override-off", false, true, false),
+        ("s-req-override-on", true, false, true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        req(&boot.srv, "PUT", "/api/settings/providers", Some(&json!({ "paper_readers_enabled": saved })));
+        let src = boot.new_session(sid, "paper.txt", b"Line 1: Main result.\nLine 2: Proof.\n");
+        let (st, _) = req(
+            &boot.srv,
+            "POST",
+            &format!("/api/sessions/{sid}/messages"),
+            Some(&json!({
+                "prompt": "Map the whole paper",
+                "investigation_source_id": src.source_id,
+                "investigation_scope": "map",
+                "paper_readers_enabled": req_val,
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-6"
+            })),
+        );
+        assert_eq!(st, 202);
+        wait_idle(&boot.srv, sid, 1);
+        assert_eq!(
+            has_tool(&mock.captured()[idx].1, "delegate_read_paper"),
+            expect_tool,
+            "turn req paper_readers_enabled={req_val} overrode saved ui.paper_readers_enabled={saved}"
+        );
+    }
 }

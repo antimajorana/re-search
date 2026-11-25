@@ -103,9 +103,18 @@ pub fn is_paper_recording_turn(req: &Value) -> bool {
 
 fn has_dedicated_reader_model(
     ui: &UiSettings,
+    req: &Value,
     primary_provider: ProviderKind,
     primary_model: &str,
 ) -> bool {
+    let parse_spec = |v: &Value| -> Option<(ProviderKind, String)> {
+        let p = ProviderKind::parse(v.get("provider")?.as_str()?).ok()?;
+        let raw_m = v.get("model").and_then(Value::as_str).unwrap_or("");
+        Some((p, p.resolve_model(raw_m)))
+    };
+    if let Some((p, m)) = req.get("paper_reader").and_then(parse_spec) {
+        return p != primary_provider || m != primary_model;
+    }
     if let Some(spec) = ui.agent_models.get("paper_reader") {
         if let Ok(p) = ProviderKind::parse(&spec.provider) {
             let m = p.resolve_model(&spec.model);
@@ -140,13 +149,10 @@ pub fn should_enable_readers(
     if !is_paper_recording_turn(req) {
         return false;
     }
-    if let Some(explicit) = req.get("paper_readers_enabled").and_then(Value::as_bool) {
-        return explicit;
-    }
     if let Some(opt_in) = ui.paper_readers_enabled {
         return opt_in;
     }
-    has_dedicated_reader_model(ui, primary_provider, primary_model)
+    has_dedicated_reader_model(ui, req, primary_provider, primary_model)
         || is_section_scoped(req, marker_payload)
 }
 
@@ -438,11 +444,7 @@ pub fn prepare_for_turn(
         return Ok(None);
     };
     let reader_provider = ProviderKind::parse(&built.provider).unwrap_or(primary_provider);
-    let explicit_enabled = req
-        .get("paper_readers_enabled")
-        .and_then(Value::as_bool)
-        .or(ui.paper_readers_enabled);
-    if explicit_enabled.is_none()
+    if ui.paper_readers_enabled.is_none()
         && !is_section_scoped(req, Some(&marker.payload))
         && (built.routing_reason == "isolated_primary_model"
             || !reader_provider_configured(state, reader_provider))

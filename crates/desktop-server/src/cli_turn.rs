@@ -396,28 +396,26 @@ pub(crate) fn run_cli_turn(
         Some(sa) => crate::subagents::apply_subagent_to_turn_prompt(sa, message),
         None => message.to_string(),
     };
-    let is_inv = crate::investigation::is_investigation(&existing);
-    let needs_title = allow_model_title && crate::routes_session::model_session_title(&existing).is_none() && !is_inv;
+    let needs_title = allow_model_title && crate::routes_session::model_session_title(&existing).is_none()
+        && !crate::investigation::is_investigation(&existing);
     if needs_title {
         eff_msg = format!("Once you can state the main research question, use set_session_title once with a concise title in the user's language.\n\n{eff_msg}");
     }
     if let Some(text) = conventions.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
         eff_msg = format!("Pinned research conventions\n{text}\n\n{eff_msg}");
     }
-    if !(is_inv && req.get("_paper_context").is_some() && req.get("_paper_request").is_none()) {
+    eff_msg = format!(
+        "Use `search_paper_passages` to locate exact passages in ingested papers and \
+         `search_formal_library` to discover Lean declarations in the attached workspace. \
+         Cite recorded source locations, and type-check any intended formal application.\n\n{eff_msg}"
+    );
+    if state.cfg.python.is_some() {
         eff_msg = format!(
-            "Use `search_paper_passages` and `read_paper_lines` to locate and read exact numbered passages in ingested papers, and \
-             `search_formal_library` to discover Lean declarations in the attached workspace. \
-             Cite recorded source locations, and type-check any intended formal application.\n\n{eff_msg}"
+            "The re:Search compute worker exposes `check_symbolic_identity(lhs, rhs, variable=x, domain=...)` \
+             and `check_convergence(run, levels, axis=..., atol=..., rtol=..., reference=...)` in `sympy_eval`. \
+             Return the report as the final Python expression and record its `tool_call_ref` with the proof entry. \
+             Report excluded points, counterexamples, and the scope of numerical evidence. \n\n{eff_msg}"
         );
-        if state.cfg.python.is_some() {
-            eff_msg = format!(
-                "The re:Search compute worker exposes `check_symbolic_identity(lhs, rhs, variable=x, domain=...)` \
-                 and `check_convergence(run, levels, axis=..., atol=..., rtol=..., reference=...)` in `sympy_eval`. \
-                 Return the report as the final Python expression and record its `tool_call_ref` with the proof entry. \
-                 Report excluded points, counterexamples, and the scope of numerical evidence. \n\n{eff_msg}"
-            );
-        }
     }
     if let Some(context) = &project_context {
         eff_msg = format!("{context}\n\nCurrent user request\n{eff_msg}");

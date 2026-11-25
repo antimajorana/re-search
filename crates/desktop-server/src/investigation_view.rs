@@ -118,14 +118,36 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
             running,
         )
     });
+    let latest_resumed = mapping.and_then(|request| {
+        events.iter().rev().find(|e| {
+            e.kind == "investigation.conventions_resumed"
+                && e.payload["for_request_seq"].as_u64() == Some(request.seq)
+        })
+    });
+    let conventions_is_current =
+        catalog_request.is_some() && catalog_request == mapping.map(|m| m.seq);
+    let current_catalog_done =
+        conventions_is_current && conventions.as_ref().is_some_and(|c| c["done"] == true);
+    let conventions_error = if let Some(res) = latest_resumed {
+        catalog_finish
+            .filter(|e| e.seq > res.seq)
+            .and_then(|e| e.payload.get("error"))
+            .filter(|v| !v.is_null())
+    } else if current_catalog_done {
+        None
+    } else {
+        finished
+            .and_then(|e| e.payload.get("conventions_error"))
+            .filter(|v| !v.is_null())
+    };
     json!({"source_id":paper.and_then(|p| p.get("source_id")), "question":paper.and_then(|p| p.get("question")),
         "original_sha256":source.and_then(|e|e.payload.get("raw_blob")), "arxiv_cover_id":source.and_then(|e|e.payload.get("arxiv_cover_id")),
         "summary":summary.map(|e|&e.payload), "summary_seq":summary.map(|e|e.seq),
         "summary_is_current":summary.is_some_and(|e|e.payload["request_seq"].as_u64()==mapping.map(|m|m.seq)),
         "conventions":conventions, "conventions_requested":mapping.is_some_and(|e|e.payload["conventions_requested"]==true || resumed==Some(e.seq)),
-        "conventions_is_current":catalog_request.is_some() && catalog_request==mapping.map(|e|e.seq),
+        "conventions_is_current":conventions_is_current,
         "conventions_expanding":conventions_expanding,
-        "conventions_error":catalog_finish.map(|e|&e.payload["error"]).or_else(||finished.and_then(|e|e.payload.get("conventions_error"))),
+        "conventions_error":conventions_error,
         "mapping_requested":mapping.is_some(),
         "mapping_status":finished.map(|e|&e.payload["status"]), "mapping_error":finished.and_then(|e|e.payload.get("error")),
         "scope":scope,
@@ -214,4 +236,150 @@ pub(crate) fn branch_history(events: &[Event], running: bool) -> Vec<Value> {
         }
     }
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::view;
+    use ledger::Ledger;
+    use serde_json::json;
+
+    #[test]
+    fn review_ui_stale_mapping_conventions_error_not_leaked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(tmp.path()).unwrap();
+        let sid = "s-view-conv-err";
+        ledger.append(sid, "investigation.started", 1, &json!({})).unwrap();
+        ledger.append(sid, "investigation.paper", 1, &json!({"source_id": "src-1"})).unwrap();
+        let map_req = ledger
+            .append(
+                sid,
+                "investigation.mapping_requested",
+                1,
+                &json!({"source_id": "src-1", "conventions_requested": true}),
+            )
+            .unwrap();
+        ledger
+            .append(
+                sid,
+                "investigation.mapping_finished",
+                1,
+                &json!({
+                    "request_seq": map_req,
+                    "status": "mapped",
+                    "conventions_error": "Stale mapping-era conventions error"
+                }),
+            )
+            .unwrap();
+
+        // 1. Before any resume or done catalog, mapping-era conventions_error IS shown.
+        let v1 = view(&ledger.read_session(sid).unwrap(), false);
+        assert_eq!(v1["conventions_error"], "Stale mapping-era conventions error");
+
+        // 2. Once a done=true section catalog exists for the current mapping, stale mapping error clears.
+        ledger
+            .append(
+                sid,
+                "investigation.conventions",
+                1,
+                &json!({
+                    "request_seq": map_req,
+                    "source_id": "src-1",
+                    "batch_index": 1,
+                    "done": true,
+                    "coverage": "partial",
+                    "coverage_scope": "section",
+                    "limitations": [],
+                    "items": []
+                }),
+            )
+            .unwrap();
+        let v2 = view(&ledger.read_session(sid).unwrap(), false);
+        assert!(v2["conventions_error"].is_null(), "done catalog leaked stale error: {v2}");
+
+        // 3. After a new conventions_resumed (while running or stopped without its own finish),
+        // stale mapping-era conventions_error must NOT leak back.
+        ledger
+            .append(
+                sid,
+                "investigation.conventions_resumed",
+                1,
+                &json!({"for_request_seq": map_req, "source_id": "src-1", "scope": "paper"}),
+            )
+            .unwrap();
+        let v3 = view(&ledger.read_session(sid).unwrap(), true);
+        assert!(v3["conventions_error"].is_null(), "running resume leaked stale error: {v3}");
+
+        // 4. A real conventions_finished error AFTER latest conventions_resumed IS returned.
+        ledger
+            .append(
+                sid,
+                "investigation.conventions_finished",
+                1,
+                &json!({
+                    "for_request_seq": map_req,
+                    "status": "incomplete",
+                    "error": "Paper expansion failed."
+                }),
+            )
+            .unwrap();
+        let v4 = view(&ledger.read_session(sid).unwrap(), false);
+        assert_eq!(v4["conventions_error"], "Paper expansion failed.");
+
+        // 5. Starting a fresh conventions_resumed clears the previous conventions_finished error,
+        // and a succeeding conventions_finished (error: null) never falls back to mapping-era error.
+        ledger
+            .append(
+                sid,
+                "investigation.conventions_resumed",
+                1,
+                &json!({"for_request_seq": map_req, "source_id": "src-1", "scope": "paper"}),
+            )
+            .unwrap();
+        let v5 = view(&ledger.read_session(sid).unwrap(), true);
+        assert!(v5["conventions_error"].is_null(), "retry resume leaked prior error: {v5}");
+        ledger
+            .append(
+                sid,
+                "investigation.conventions_finished",
+                1,
+                &json!({"for_request_seq": map_req, "status": "complete", "error": null}),
+            )
+            .unwrap();
+        let v6 = view(&ledger.read_session(sid).unwrap(), false);
+        assert!(v6["conventions_error"].is_null(), "completed resume fell back to stale error: {v6}");
+    }
+
+    #[test]
+    fn review_flow_question_turn_does_not_resurrect_interrupted_activity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(tmp.path()).unwrap();
+        let sid = "s-view-act-q";
+        ledger.append(sid, "investigation.started", 1, &json!({})).unwrap();
+        ledger.append(sid, "investigation.paper", 1, &json!({"source_id": "src-1"})).unwrap();
+        // Earlier claim-check activity that crashed without emitting investigation.result or session.end.
+        ledger
+            .append(
+                sid,
+                "investigation.requested",
+                1,
+                &json!({"map_seq": 2, "node_id": "r1", "action": "check", "question": "Check claim"}),
+            )
+            .unwrap();
+        // Later question turn is now in flight.
+        ledger
+            .append(
+                sid,
+                "investigation.question_requested",
+                1,
+                &json!({"source_id": "src-1", "question": "What is Eq. 1?"}),
+            )
+            .unwrap();
+        let v = view(&ledger.read_session(sid).unwrap(), true);
+        assert_eq!(
+            v["activities"][0]["status"], "interrupted",
+            "interrupted activity resurrected as running during question turn: {v}"
+        );
+        assert_eq!(v["answers"][0]["status"], "running");
+    }
 }

@@ -258,7 +258,7 @@ fn literature_worker_and_read_only_subagent_expose_read_paper_lines() {
 }
 
 #[test]
-fn investigation_session_start_system_prompt_does_not_contradict_itself_or_math_renderer() {
+fn investigation_session_start_system_prompt_does_not_contradict_itself() {
     let mock = LoopbackApi::start(Box::new(|_, _| {
         json!({
             "id": "msg_q1",
@@ -330,9 +330,8 @@ fn investigation_session_start_system_prompt_does_not_contradict_itself_or_math_
     assert!(sys.contains("Do not build a Proof DAG"));
     assert!(
         !sys.contains("synthesize the `final_answer`")
-            && !sys.contains("`ledger_append` with `entry_type")
-            && !sys.contains("single dollar delimiters do not render in the Paper view"),
-        "Investigation session.start freezes Research Proof-DAG/final_answer delegation prompt AND stale single-dollar claim:\n{sys}"
+            && !sys.contains("`ledger_append` with `entry_type"),
+        "Investigation session.start freezes Research Proof-DAG/final_answer delegation prompt:\n{sys}"
     );
 }
 

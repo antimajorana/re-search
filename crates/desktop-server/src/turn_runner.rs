@@ -296,8 +296,7 @@ fn run_session_turn(
     let is_investigation = crate::investigation::is_investigation(&existing);
     let paper_reading_turn = req.get("_paper_map_request").is_some()
         || req.get("_paper_branch_request").is_some()
-        || req.get("_paper_conventions_request").is_some()
-        || req.get("_paper_question_request").is_some();
+        || req.get("_paper_conventions_request").is_some();
     let delegation_cfg = DelegationConfig {
         compute_worker: if paper_reading_turn { None } else { compute_built.as_ref().map(|b| {
             make_worker_spec(

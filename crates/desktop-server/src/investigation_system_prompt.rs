@@ -18,8 +18,8 @@ ledger-backed verification (a succeeding `sympy_eval`, a `lean_check` with statu
 or an accepted full Verifier review).\n\
 4. Ledger Use: Use `ledger_append` only when a claim-check turn runs an explicit calculation. \
 Do not build a Proof DAG or use proof-step citation tags on reading turns.\n\
-5. Math Formatting: Write inline math with `$...$` or `\\(...\\)` and display math with `$$...$$` \
-or `\\[...\\]`; all four delimiter forms render in the Paper view.\n\
+5. Math Formatting: Write inline math with `\\(...\\)` and display math with `$$...$$`, because \
+single dollar delimiters do not render in the Paper view.\n\
 6. Delegation: If worker delegation is available, use workers only to locate candidate passages, \
 then read the cited lines yourself before quoting or explaining them.";
 

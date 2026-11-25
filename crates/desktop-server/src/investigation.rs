@@ -253,6 +253,7 @@ pub(crate) fn prepare(
     for field in [
         "_paper_context", "_paper_request", "_paper_map_request", "_paper_branch_request",
         "_paper_conventions_request", "_paper_question_request", "_paper_scope",
+        "paper_readers_enabled",
     ] {
         object.remove(field);
     }
@@ -539,13 +540,23 @@ fn open_research(
             .or_else(|| q_req.and_then(|e| e.payload["source_id"].as_str()))
             .or_else(|| latest(events, "source.ingested").and_then(|e| e.payload["source_id"].as_str()))
             .ok_or_else(|| bad("Add a paper to this Investigation first."))?;
-        let claim: String = answer.payload["text"].as_str().unwrap_or_default().chars().take(1400).collect();
+        let primary_path = events
+            .iter()
+            .rev()
+            .find(|e| e.kind == "source.ingested" && e.payload["source_id"].as_str() == Some(source_id))
+            .and_then(|e| e.payload["primary_path"].as_str());
         let sources: Vec<Value> = list(&answer.payload["cites"]).iter()
-            .filter(|c| c["read"] == true && c["source_id"].as_str().is_some())
-            .map(|c| json!({"source_id":c["source_id"],"path":c["path"],"start_line":c["start"],"end_line":c["end"],"kind":"passage"}))
+            .filter(|c| c["read"] == true)
+            .filter_map(|c| {
+                let (s, e) = (c["start"].as_u64()?, c["end"].as_u64()?);
+                (s >= 1 && s <= e).then(|| json!({
+                    "source_id": source_id, "path": primary_path,
+                    "start_line": s, "end_line": e, "kind": "passage"
+                }))
+            })
             .collect();
         let ctx = json!({"source_id":source_id,"answer_seq":answer.seq,"answer_hash":answer.event_hash,
-            "question":q,"claim":claim,"sources":sources,"assumptions":[],"dependencies":[],
+            "question":q,"sources":sources,"assumptions":[],"dependencies":[],
             "edges":[],"corrections":[],"paper_conventions":[]});
         (ctx, q, answer.seq, json!({"answer_seq": answer.seq}))
     };
