@@ -46,7 +46,26 @@ parts, F10 library, F14a PDF text core. (Pull requests 7 to 14.)
 | `lib-f13a-f16a-f15` | F13a sources and sync, F16a corrections by code, F15 write-up core | `gemini/modes/lib-f13a-f16a-f15` |
 | `q-f11-x1-s3-s6` | F11 literature services, X1, S3, S6 (launched earlier, about 2026-11-25 23:00 UTC) | `gemini/modes/q-f11-x1-s3-s6` |
 
-Leave these running. Known risk: `f5-f7-mode-shell` was launched while `RULES.md` still forbade
+Leave these running; Yo wants them kept. How to check on each and pick it up:
+
+- **Where they are.** Each has a terminal tab on Yo's computer (named c10 for
+  `q-f11-x1-s3-s6`, c11 for `inv-a-v2-v5`, c12 for `f5-f7-mode-shell`, c13 for
+  `lib-f13a-f16a-f15` in the previous coordinator's terminal) and a folder `modes-<brief>` in
+  the directory given in section 4. The work itself runs in Google's cloud.
+- **Progress without touching them.** `git ls-remote origin 'gemini/modes/*'`: a branch appears
+  when the agent pushes. `inv-a-v2-v5` and `lib-f13a-f16a-f15` push after each package, so their
+  branches grow; verify and merge each package as it arrives (section 5) and do not wait for the
+  last one. The tab shows what the agent is doing; the final message is a `PUSHED` or
+  `PUSH-FAILED` block.
+- **If a tab shows a question, an error or a quota message**, the agent is stopped: resume it
+  as in section 4, step 5, with the answer as the prompt.
+- **Do not exit a tab that is still working.** Whether the cloud agent keeps running after its
+  TUI is closed was not tested; only finished agents were closed so far. The resume ids of these
+  four are not known yet, because an id is printed only on exit.
+- **Time.** Earlier agents took between about 40 minutes and 2 hours per brief (observed, eight
+  briefs). If a branch has not moved for much longer than that, look at the tab.
+
+Known risk: `f5-f7-mode-shell` was launched while `RULES.md` still forbade
 editing `routes_session.rs`, `turn_runner.rs` and `http_srv.rs`, which that brief owns. RULES.md
 is corrected now, but that agent may have read the old text. If its report says it did not edit
 those files, resume it (section 4, follow-ups) with one line telling it the brief wins.
