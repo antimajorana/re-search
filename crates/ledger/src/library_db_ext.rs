@@ -131,6 +131,30 @@ impl LibraryDb {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    pub fn list_all_source_items(&self) -> Result<Vec<LibrarySourceItemRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_id, external_id, paper_key, citekey, ids_json, version,
+                    title, authors_json, year, item_kind, collections_json, tags_json,
+                    files_json, state, updated_ms
+             FROM source_item
+             ORDER BY source_id ASC, external_id ASC",
+        )?;
+        let rows = stmt.query_map([], row_to_source_item)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn delete_source_item(&self, source_id: &str, external_id: &str) -> Result<bool> {
+        let n = self.conn.execute(
+            "DELETE FROM source_item WHERE source_id = ?1 AND external_id = ?2",
+            params![source_id, external_id],
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn delete_user_library_fulltext_for_paths(&self, paths: &[String]) -> Result<usize> {
+        self.prune_unreferenced_user_fulltext_atomic(paths)
+    }
+
     pub fn upsert_paper_text(&self, row: &LibraryPaperTextRow) -> Result<()> {
         validate_non_empty("paper_key", &row.paper_key)?;
         validate_non_empty("extractor", &row.extractor)?;

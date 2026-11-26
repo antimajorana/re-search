@@ -168,6 +168,74 @@ pub struct RebuildBatch {
     pub paper_text: Vec<LibraryPaperTextRow>,
 }
 
+/// Pre-scan snapshot of a `source` row used for optimistic concurrency (CAS) on sync commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceSyncSnapshot {
+    pub id: String,
+    pub kind: String,
+    pub root: String,
+    pub settings_json: String,
+    pub added_ms: i64,
+    pub last_sync_ms: Option<i64>,
+    pub state: String,
+}
+
+impl SourceSyncSnapshot {
+    pub fn from_source_row(row: &LibrarySourceRow) -> Self {
+        Self {
+            id: row.id.clone(),
+            kind: row.kind.clone(),
+            root: row.root.clone(),
+            settings_json: row.settings_json.clone(),
+            added_ms: row.added_ms,
+            last_sync_ms: row.last_sync_ms,
+            state: row.state.clone(),
+        }
+    }
+}
+
+/// Merge strategy for one paper row inside [`SourceSyncBatch`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaperUpdateMode {
+    /// Insert if absent, otherwise merge incoming fields/IDs/owned flag into the live row.
+    UpsertMerge,
+    /// Insert only if the paper row does not currently exist in `paper`.
+    InsertIfMissing,
+    /// Only update `ids_json` and `flags.owned = true` if the paper row already exists.
+    MergeIdsIfExists,
+}
+
+/// One paper update applied atomically inside [`crate::library_db::LibraryDb::apply_source_sync_batch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceSyncPaperUpdate {
+    pub paper_key: String,
+    pub ids_json: String,
+    pub title: String,
+    pub authors_json: String,
+    pub year: Option<i32>,
+    pub abstract_text: String,
+    pub venue: Option<String>,
+    pub seen_ms: i64,
+    pub mode: PaperUpdateMode,
+}
+
+/// Complete atomic write batch for one F13a source sync commit.
+#[derive(Debug, Clone)]
+pub struct SourceSyncBatch {
+    pub expected_source: SourceSyncSnapshot,
+    pub upsert_source_items: Vec<LibrarySourceItemRow>,
+    pub paper_updates: Vec<SourceSyncPaperUpdate>,
+    pub aliases: Vec<(String, String)>,
+    pub upsert_user_fulltext: Vec<LibraryFulltextRow>,
+    pub stale_user_paths: Vec<String>,
+    /// `(paper_key, version, file_path)` tuples whose key/version changed while the path may
+    /// still be active under a different key; pruned only when no active source item matches.
+    pub stale_user_fulltext_keys: Vec<(String, String, String)>,
+    pub affected_fulltext_keys: Vec<(String, String)>,
+    pub sync_ts_ms: i64,
+    pub next_state: String,
+}
+
 pub(crate) fn row_to_paper(r: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryPaperRow> {
     Ok(LibraryPaperRow {
         paper_key: r.get(0)?,

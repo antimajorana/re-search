@@ -7,10 +7,11 @@ use crate::solve_badge::{
 };
 use crate::solve_model::{
     compute_claim_sha256, AckKind, CheckOutcome, Claim, ClaimForm, EvidenceQuoteRecord,
-    ReviewIndependence, ReviewVerdict, SolveCheck, SolveEntry, SolveReview, StepEntryType,
-    StepOrigin,
+    ReceiptProcess, ReviewIndependence, ReviewVerdict, SolveCheck, SolveEntry, SolveReview,
+    StepEntryType, StepOrigin,
 };
 use crate::solve_state::SolveState;
+use serde::Deserialize;
 use serde_json::Value;
 
 const NON_IDENTITY_CHECKS: &[&str] = &[
@@ -109,42 +110,127 @@ fn handles_status(state: &SolveState, entry: &SolveEntry) -> (bool, bool) {
     (true, false)
 }
 
+fn point_matches(val: Option<&Value>, expected: &str) -> bool {
+    match val {
+        Some(Value::String(s)) => s == expected,
+        Some(Value::Number(n)) => n.to_string() == expected,
+        _ => false,
+    }
+}
+
 fn series_order_satisfied(claim: &Claim, check: &SolveCheck) -> bool {
     let Some(ref req) = claim.order else {
-        return true;
+        return false;
     };
     let Some(ev_order) = check.evidence.get("order") else {
         return false;
     };
     if let Some(obj) = ev_order.as_object() {
         let var_ok = obj.get("variable").and_then(Value::as_str) == Some(req.variable.as_str());
-        let pt_ok = match obj.get("point") {
-            Some(Value::String(s)) => s == &req.point,
-            Some(Value::Number(n)) => n.to_string() == req.point,
-            _ => false,
-        };
+        let pt_ok = point_matches(obj.get("point"), &req.point);
         let n_ok = obj.get("n").and_then(Value::as_i64).is_some_and(|n| n >= i64::from(req.n));
         return var_ok && pt_ok && n_ok;
     }
     if let Some(n) = ev_order.as_i64() {
-        let var_ok = check
-            .params
-            .get("variable")
-            .and_then(Value::as_str)
-            .is_none_or(|v| v == req.variable);
-        return var_ok && n >= i64::from(req.n);
+        let var_ok =
+            check.params.get("variable").and_then(Value::as_str) == Some(req.variable.as_str());
+        let pt_ok = point_matches(check.params.get("point"), &req.point);
+        return var_ok && pt_ok && n >= i64::from(req.n);
     }
     false
 }
 
-/// Fail-closed check for whether a series or `independent_recompute` check compared
-/// coefficients/results symbolically (exact) rather than numerically (`solve.md` 4.4).
-fn is_exact_comparison(check: &SolveCheck) -> bool {
-    if check.evidence.get("numeric_coefficients").and_then(Value::as_bool) == Some(true) {
+/// Positive comparison kind recorded in `solve.check.evidence` (`solve.md` 4.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ComparisonKind {
+    Exact,
+    Numeric,
+}
+
+/// Parse an optional boolean field from a JSON object, treating absent or `null` as `Ok(None)`
+/// and any non-boolean value as `Err(())` so malformed evidence fails closed.
+fn parse_optional_bool(obj: &serde_json::Map<String, Value>, key: &str) -> Result<Option<bool>, ()> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(()),
+    }
+}
+
+/// Fail-closed parser for the explicit comparison kind on `independent_recompute` (S20)
+/// and series checks (`series_match`, `vanishes_to_order`, S9) (`solve.md` 4.4).
+///
+/// Requires positive evidence for either `Exact` or `Numeric`:
+/// - `"comparison": "exact" | "numeric"` (canonical typed indicator for S9 and S20)
+/// - `"exact": true` (positive `Exact`; `"exact": false` is negative-only and never grants `Numeric`)
+/// - `"numeric_coefficients": true` (positive `Numeric` for series checks only; `false` is negative-only;
+///   rejected on `independent_recompute`)
+///
+/// Missing, unrecognized, malformed, or contradictory combinations return `None` (stays `Unchecked`).
+fn parse_comparison_kind(
+    check: &SolveCheck,
+    allow_numeric_coefficients: bool,
+) -> Option<ComparisonKind> {
+    let obj = check.evidence.as_object()?;
+
+    let comparison_field = match obj.get("comparison") {
+        None | Some(Value::Null) => None,
+        Some(val) => Some(serde_json::from_value::<ComparisonKind>(val.clone()).ok()?),
+    };
+    let exact_flag = parse_optional_bool(obj, "exact").ok()?;
+    let numeric_coeff_flag = parse_optional_bool(obj, "numeric_coefficients").ok()?;
+
+    if !allow_numeric_coefficients && numeric_coeff_flag.is_some() {
+        return None;
+    }
+
+    let mut positive = comparison_field;
+    if exact_flag == Some(true) {
+        match positive {
+            None | Some(ComparisonKind::Exact) => positive = Some(ComparisonKind::Exact),
+            Some(ComparisonKind::Numeric) => return None,
+        }
+    }
+    if allow_numeric_coefficients && numeric_coeff_flag == Some(true) {
+        match positive {
+            None | Some(ComparisonKind::Numeric) => positive = Some(ComparisonKind::Numeric),
+            Some(ComparisonKind::Exact) => return None,
+        }
+    }
+
+    let kind = positive?;
+    if kind == ComparisonKind::Exact && exact_flag == Some(false) {
+        return None;
+    }
+    if allow_numeric_coefficients
+        && kind == ComparisonKind::Numeric
+        && numeric_coeff_flag == Some(false)
+    {
+        return None;
+    }
+    Some(kind)
+}
+
+/// Verify that a passing `solve.check` carries a non-empty check receipt reference, is not
+/// pointing at an in-flight tool call, and when that receipt is present in `state.receipts`,
+/// confirm it succeeded inside the dedicated check process (`ReceiptProcess::Check`, not
+/// `sympy_eval` / solver / verifier) (`solve.md` 4.4 guard (a) and "Inspecting a check").
+fn has_check_receipt(state: &SolveState, check: &SolveCheck) -> bool {
+    let cid = check.receipt.call_id.as_str();
+    if cid.is_empty() || cid.trim() != cid || check.receipt.result_seq == 0 {
         return false;
     }
-    check.evidence.get("exact").and_then(Value::as_bool) == Some(true)
-        || check.evidence.get("comparison").and_then(Value::as_str) == Some("exact")
+    if state.in_flight_tools.contains_key(&check.receipt.call_id) {
+        return false;
+    }
+    if let Some(receipt) = state.receipts.get(&check.receipt.call_id) {
+        return receipt.ok
+            && receipt.result_seq == check.receipt.result_seq
+            && receipt.process == Some(ReceiptProcess::Check)
+            && receipt.tool != "sympy_eval";
+    }
+    true
 }
 
 fn value_two_runs_differ(state: &SolveState, claim: &Claim, check: &SolveCheck) -> bool {
@@ -212,6 +298,7 @@ pub(crate) fn evaluate_own(state: &SolveState, entry: &SolveEntry) -> OwnEval {
         if check.outcome == CheckOutcome::Fail {
             any_claim_check_failed = true;
         } else if check.outcome == CheckOutcome::Pass
+            && has_check_receipt(state, check)
             && NON_IDENTITY_CHECKS.contains(&check.name.as_str())
         {
             push_unique(&mut sublabels, check.name.clone());
@@ -303,10 +390,9 @@ fn evaluate_claims_computed_tier(
     for (idx, claim) in entry.claims.iter().enumerate() {
         let mut best_claim_tier: Option<Tier> = None;
 
-        for check in matching_checks
-            .iter()
-            .filter(|c| c.claim_index == idx && c.outcome == CheckOutcome::Pass)
-        {
+        for check in matching_checks.iter().filter(|c| {
+            c.claim_index == idx && c.outcome == CheckOutcome::Pass && has_check_receipt(state, c)
+        }) {
             match (claim.form, check.name.as_str()) {
                 (ClaimForm::Equation, "identity_symbolic") => {
                     best_claim_tier = best_of(best_claim_tier, Tier::Verified);
@@ -322,36 +408,39 @@ fn evaluate_claims_computed_tier(
                     }
                 }
                 (ClaimForm::Equation | ClaimForm::Value, "independent_recompute") => {
-                    let t = if is_exact_comparison(check) {
-                        Tier::Verified
-                    } else {
-                        Tier::CheckedNumerically
-                    };
-                    best_claim_tier = best_of(best_claim_tier, t);
-                    push_unique(sublabels, wording::SUBLABEL_INDEPENDENT_RECOMPUTE.to_string());
+                    if let Some(kind) = parse_comparison_kind(check, false) {
+                        let t = match kind {
+                            ComparisonKind::Exact => Tier::Verified,
+                            ComparisonKind::Numeric => Tier::CheckedNumerically,
+                        };
+                        best_claim_tier = best_of(best_claim_tier, t);
+                        push_unique(sublabels, wording::SUBLABEL_INDEPENDENT_RECOMPUTE.to_string());
+                    }
                 }
                 (ClaimForm::Series, "series_match" | "vanishes_to_order")
                     if series_order_satisfied(claim, check) =>
                 {
-                    let exact = is_exact_comparison(check);
-                    let t = if exact { Tier::Verified } else { Tier::CheckedNumerically };
-                    best_claim_tier = best_of(best_claim_tier, t);
-                    if let Some(ref o) = claim.order {
-                        let order_text = wording::format_series_order(&o.variable, o.n);
-                        push_unique(series_flags, order_text.clone());
-                        let sub = if exact {
-                            order_text
+                    if let Some(kind) = parse_comparison_kind(check, true) {
+                        let exact = kind == ComparisonKind::Exact;
+                        let t = if exact { Tier::Verified } else { Tier::CheckedNumerically };
+                        best_claim_tier = best_of(best_claim_tier, t);
+                        if let Some(ref o) = claim.order {
+                            let order_text = wording::format_series_order(&o.variable, o.n);
+                            push_unique(series_flags, order_text.clone());
+                            let sub = if exact {
+                                order_text
+                            } else {
+                                wording::format_series_numeric_sublabel(&o.variable, o.n)
+                            };
+                            push_unique(sublabels, sub);
                         } else {
-                            wording::format_series_numeric_sublabel(&o.variable, o.n)
-                        };
-                        push_unique(sublabels, sub);
-                    } else {
-                        let sub = if exact {
-                            wording::SUBLABEL_SERIES_FALLBACK
-                        } else {
-                            wording::SUBLABEL_SERIES_NUMERIC_FALLBACK
-                        };
-                        push_unique(sublabels, sub.to_string());
+                            let sub = if exact {
+                                wording::SUBLABEL_SERIES_FALLBACK
+                            } else {
+                                wording::SUBLABEL_SERIES_NUMERIC_FALLBACK
+                            };
+                            push_unique(sublabels, sub.to_string());
+                        }
                     }
                 }
                 (ClaimForm::Value, "identity_numeric")
@@ -413,3 +502,7 @@ fn review_accepted_tier(state: &SolveState, review: &SolveReview) -> Tier {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "solve_own_tier_tests.rs"]
+mod tests;
