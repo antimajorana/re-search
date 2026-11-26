@@ -195,6 +195,20 @@ export function openInvestigationResearch(id, request) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/research`, request);
 }
 
+export function pinInvestigationSkeleton(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/skeleton`, payload);
+}
+
+export function getInvestigationMapview(id) {
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/investigation/mapview`);
+}
+
+export function getInvestigationNodeText(id, tag, seq) {
+  const qs = new URLSearchParams({ tag: String(tag) });
+  if (seq != null) qs.set('seq', String(seq));
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/investigation/node-text?${qs}`);
+}
+
 export function getSession(id) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}`);
 }

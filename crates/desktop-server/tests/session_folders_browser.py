@@ -58,6 +58,7 @@ def check_session_folders(browser, binary):
             page.get_by_label("Destination folder").select_option(label="Unfiled")
             page.get_by_role("button", name="Move session", exact=True).click()
             expect(page.locator(".session-row")).to_have_count(0)
+            page.locator("#rail-more-menu > summary").click()
             page.get_by_role("button", name="New research", exact=True).click()
             expect(page.locator(".session-row")).to_have_count(1)
             page.get_by_role("button", name="Folders…").click()

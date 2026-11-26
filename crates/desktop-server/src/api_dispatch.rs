@@ -250,6 +250,38 @@ pub(crate) fn dispatch_api(
         ("POST", ["api", "sessions", id, "claim-review"]) => {
             write_api_res(&mut stream, crate::claim_review::handle_review(state, id, &req.body));
         }
+        (
+            method,
+            [
+                "api",
+                "sessions",
+                id,
+                "investigation",
+                op @ ("skeleton" | "mapview" | "node-text"),
+            ],
+        ) => {
+            let inm = req.header("if-none-match");
+            match crate::investigation_skeleton::handle_with_etag(
+                state, method, id, op, &req.query, &req.body, inm,
+            ) {
+                Ok((304, Some(etag), _)) => {
+                    let quoted = format!("\"{etag}\"");
+                    write_bytes(
+                        &mut stream,
+                        304,
+                        "application/json; charset=utf-8",
+                        b"",
+                        &[("ETag", quoted.as_str())],
+                    );
+                }
+                Ok((st, Some(etag), val)) => {
+                    let quoted = format!("\"{etag}\"");
+                    write_json(&mut stream, st, val, &[("ETag", quoted.as_str())]);
+                }
+                Ok((st, None, val)) => write_json(&mut stream, st, val, &[]),
+                Err((st, msg)) => write_json(&mut stream, st, json!({ "error": msg }), &[]),
+            }
+        }
         ("POST", ["api", "sessions", id, "investigation", operation]) => {
             write_api_res(&mut stream, crate::investigation::handle(state, id, operation, &req.body));
         }
