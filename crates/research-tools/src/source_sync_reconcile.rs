@@ -23,6 +23,7 @@ pub(crate) struct ReconciledEntry {
     pub(crate) abstract_text: String,
     pub(crate) venue: Option<String>,
     pub(crate) dirty: bool,
+    pub(crate) pass1_updated: bool,
 }
 
 pub(crate) struct ReconcileOutcome {
@@ -71,12 +72,16 @@ pub(crate) fn reconcile_items(
                 .files
                 .iter()
                 .filter(|f| f.role != FILE_ROLE_NOTE)
-                .find_map(|f| prev_id_by_path.get(&f.path).cloned())
+                .find_map(|f| {
+                    prev_id_by_path
+                        .get(&f.path)
+                        .filter(|pid| prev_by_id.contains_key(*pid))
+                        .cloned()
+                })
         };
 
-        if let Some(pid) = matched_id {
+        if let Some((pid, prev)) = matched_id.and_then(|pid| prev_by_id.remove(&pid).map(|p| (pid, p))) {
             matched_prev_ids.insert(pid.clone());
-            let prev = prev_by_id.remove(&pid).unwrap();
             // Keep stable external_id for items matched by current path after an earlier move.
             sc.item.external_id = pid;
             if sc.reused_unchanged && prev.state != SourceItemState::Missing {
@@ -86,8 +91,9 @@ pub(crate) fn reconcile_items(
                     abstract_text: String::new(),
                     venue: None,
                     dirty: false,
+                    pass1_updated: false,
                 });
-            } else if same_item_content(&prev, &sc.item) && prev.state != SourceItemState::Missing {
+            } else if same_item_content(&prev, &sc.item) && prev.state == sc.item.state {
                 unchanged += 1;
                 let mut kept = sc.item;
                 kept.updated_ms = prev.updated_ms;
@@ -96,14 +102,26 @@ pub(crate) fn reconcile_items(
                     abstract_text: sc.abstract_text,
                     venue: sc.venue,
                     dirty: false,
+                    pass1_updated: false,
                 });
             } else {
-                updated += 1;
+                let mut pass1_updated = false;
+                if sc.item.state == SourceItemState::Missing
+                    && prev.state != SourceItemState::Missing
+                {
+                    missing += 1;
+                } else if detect_same_id_moved_file(&prev, &mut sc.item, roots_checked) {
+                    moved += 1;
+                } else {
+                    updated += 1;
+                    pass1_updated = true;
+                }
                 out_entries.push(ReconciledEntry {
                     item: sc.item,
                     abstract_text: sc.abstract_text,
                     venue: sc.venue,
                     dirty: true,
+                    pass1_updated,
                 });
             }
         } else {
@@ -172,6 +190,7 @@ pub(crate) fn reconcile_items(
                 abstract_text: cand.abstract_text,
                 venue: cand.venue,
                 dirty: true,
+                pass1_updated: false,
             });
         } else {
             added += 1;
@@ -180,6 +199,7 @@ pub(crate) fn reconcile_items(
                 abstract_text: cand.abstract_text,
                 venue: cand.venue,
                 dirty: true,
+                pass1_updated: false,
             });
         }
     }
@@ -197,6 +217,7 @@ pub(crate) fn reconcile_items(
                 abstract_text: String::new(),
                 venue: None,
                 dirty: false,
+                pass1_updated: false,
             });
         } else {
             abs_item.state = SourceItemState::Missing;
@@ -207,6 +228,7 @@ pub(crate) fn reconcile_items(
                 abstract_text: String::new(),
                 venue: None,
                 dirty: true,
+                pass1_updated: false,
             });
         }
     }
@@ -219,6 +241,42 @@ pub(crate) fn reconcile_items(
         moved,
         missing,
         unchanged,
+    }
+}
+
+fn detect_same_id_moved_file(
+    prev: &SourceItemRecord,
+    next: &mut SourceItemRecord,
+    roots_checked: &[PathBuf],
+) -> bool {
+    let Some((prev_sha, prev_size)) = primary_file_sha_and_size(prev) else {
+        return false;
+    };
+    let Some(prev_path) = prev
+        .files
+        .iter()
+        .find(|f| f.role != FILE_ROLE_NOTE && f.sha256.as_deref() == Some(prev_sha))
+        .map(|f| f.path.as_str())
+    else {
+        return false;
+    };
+    let Some(cand) = next
+        .files
+        .iter_mut()
+        .find(|f| f.role != FILE_ROLE_NOTE && f.path != prev_path && f.size == prev_size)
+    else {
+        return false;
+    };
+    if cand.sha256.is_none() {
+        cand.sha256 = hash_in_any_root(roots_checked, Path::new(&cand.path));
+    }
+    if cand.sha256.as_deref() == Some(prev_sha) {
+        if next.key.is_none() {
+            next.key = prev.key.clone();
+        }
+        true
+    } else {
+        false
     }
 }
 
@@ -240,7 +298,7 @@ fn hash_in_any_root(roots: &[PathBuf], path: &Path) -> Option<String> {
     None
 }
 
-fn same_item_content(a: &SourceItemRecord, b: &SourceItemRecord) -> bool {
+pub(crate) fn same_item_content(a: &SourceItemRecord, b: &SourceItemRecord) -> bool {
     a.key == b.key
         && a.citekey == b.citekey
         && a.ids == b.ids
