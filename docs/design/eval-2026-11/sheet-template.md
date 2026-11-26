@@ -53,10 +53,10 @@ PASS needs every measure that has a pass rule to be measured and to pass. A meas
 | Quotes accepted per model call | `quotes_accepted_per_model_call` | Investigate tasks, Explore readers | recorded | not measured | not measured |  |  |
 | Quotes rejected (reasons in the note) | `quotes_rejected` | Investigate tasks, Explore readers | recorded | not measured | not measured |  |  |
 | Planted error ends Failed | `planted_error_ends_failed_pct` | Q | must equal 100 | not measured | not measured | Must be 100 percent |  |
-| Planted error ends Verified | `planted_error_ends_verified` | Q | must be 0 | not measured | not measured | ending Verified or Checked numerically is a release blocker |  |
-| Planted error ends Checked numerically | `planted_error_ends_checked_numerically` | Q | must be 0 | not measured | not measured | ending Verified or Checked numerically is a release blocker |  |
+| Planted error ends Verified | `planted_error_ends_verified` | Q | must be 0 | not measured | not measured | ending Verified or Numerically checked is a release blocker |  |
+| Planted error ends Numerically checked | `planted_error_ends_checked_numerically` | Q | must be 0 | not measured | not measured | ending Verified or Numerically checked is a release blocker |  |
 | Share of steps Verified | `steps_verified_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
-| Share of steps Checked numerically | `steps_checked_numerically_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
+| Share of steps Numerically checked | `steps_checked_numerically_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
 | Share of steps Model agreed | `steps_model_agreed_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
 | Share of steps Unchecked | `steps_unchecked_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
 | Final answer equals the key | `final_answer_equals_key` | Q | recorded | not measured | not measured |  |  |
