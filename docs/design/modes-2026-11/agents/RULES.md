@@ -33,10 +33,12 @@ Never print, copy or store a credential. Your result goes back by pushing your b
 - **The owner accepted every recommended answer in section 8 of the overview on 2026-11-25.** Build
   on them. Still put every name that depends on one (an event kind, a word shown on screen) in
   one named constant with a comment naming the decision, so that it can change in one place. F1
-  (tool profiles) is approved; implement it only in the brief that owns it. Do not edit `crates/agent/src/resume.rs`,
-  `crates/desktop-server/src/routes_session.rs`, `turn_runner.rs` or `http_srv.rs`.
-- **Base.** Briefs launched from 2026-11-26 on start from `gemini/work/fixed`, which holds F0, F2,
-  F3 and F8. (The first four briefs, f3-net-gate, f4-f9-quote-budget, v1-skeleton and
+  (tool profiles) is approved and merged. Do not edit `crates/agent/src/resume.rs`,
+  `crates/desktop-server/src/routes_session.rs`, `turn_runner.rs` or `http_srv.rs`, **unless your
+  brief names that file as yours** (the brief `f5-f7-mode-shell` owns the three desktop-server
+  files; on this point the brief wins over these rules).
+- **Base.** Briefs launched from 2026-11-26 on start from `gemini/work/fixed`, which holds every
+  package the README status table marks as merged. (The first four briefs, f3-net-gate, f4-f9-quote-budget, v1-skeleton and
   s2-solve-model, started from `claude/project-thread-caszr2`.) Shared package F3 is in your
   checkout: `net_rate.rs` (every request to a literature host goes through
   `http_client::fetch_bytes_for_service` or `fetch_response_with_gate`), `paper_fetch.rs`, and
