@@ -20,7 +20,9 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | F0 guard rails | done | work branch |
 | F2 paper key | done | work branch, `crates/research-tools/src/paper_key.rs` |
 | F8 evaluation harness skeleton | done | work branch, `crates/agent/tests/eval_support/`, `tests/fixtures/eval/`, `docs/design/eval-2026-11/` |
-| F8 Solve fixed case set Q | brief ready | `agents/eval-q-cases.md` |
+| F8 Solve fixed case set Q | Neon launched | `gemini/modes/eval-q-cases` |
+| F8 Investigate fixed case set P | brief ready | `agents/eval-p-cases.md` |
+| F1/F4/F14a integration review | Carbon brief ready | `agents/audit-mode-foundations.md` |
 | F3 network gate and paper fetch | done, reviewed and merged | `net_rate.rs`, `paper_fetch*.rs`, `ledger/src/fulltext_cache.rs`; report `reports/f3-net-gate.md` |
 | F4 quote core, F9 run budget | done, reviewed and merged | `quote_core.rs`, `lines_sent.rs`, `run_budget.rs`; report `reports/f4-f9-quote-budget.md` |
 | V1 skeleton core for TeX | done, reviewed and merged | `crates/research-tools/src/skeleton/`; report `reports/v1-skeleton.md` |
