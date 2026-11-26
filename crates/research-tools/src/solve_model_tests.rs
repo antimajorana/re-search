@@ -240,3 +240,62 @@ fn pause_reasons_and_done_statuses_roundtrip() {
         "finished_open_items"
     );
 }
+
+#[test]
+fn quote_ref_is_reexported_from_quote_core() {
+    let f4_ref = crate::quote_core::QuoteRef {
+        source_id: "src-f4".into(),
+        path: "paper.tex".into(),
+        start_line: 10,
+        end_line: 14,
+        file_sha256: "c".repeat(64),
+        quote_sha256: "d".repeat(64),
+        evidence_seq: Some(5),
+    };
+    let solve_ref: QuoteRef = f4_ref.clone();
+    assert_eq!(solve_ref, f4_ref);
+}
+
+#[test]
+fn solve_run_status_maps_onto_f9_solve_run_state_and_run_state() {
+    use crate::run_budget::{RunState, SolvePauseReason, SolveRunState};
+
+    assert_eq!(SolveRunStatus::Idle.to_solve_run_state(), None);
+    assert_eq!(SolveRunStatus::Idle.to_run_state(), None);
+    assert_eq!(
+        SolveRunStatus::Running.to_solve_run_state(),
+        Some(SolveRunState::LegRunning)
+    );
+    assert_eq!(SolveRunStatus::Running.to_run_state(), Some(RunState::Running));
+    assert_eq!(
+        SolveRunStatus::Done(SolveDoneStatus::Finished).to_run_state(),
+        Some(RunState::Done)
+    );
+    assert_eq!(
+        SolveRunStatus::Done(SolveDoneStatus::FinishedOpenItems).to_run_state(),
+        Some(RunState::DoneWithOpenItems)
+    );
+
+    let pause_cases = [
+        (PauseReason::LegCap, SolvePauseReason::LegCap, RunState::Paused),
+        (PauseReason::Budget, SolvePauseReason::Budget, RunState::Paused),
+        (PauseReason::GateBounces, SolvePauseReason::GateBounces, RunState::Paused),
+        (PauseReason::VerificationStuck, SolvePauseReason::VerificationStuck, RunState::Paused),
+        (PauseReason::ApprovalNeeded, SolvePauseReason::ApprovalNeeded, RunState::WaitingForYou),
+        (PauseReason::WorkerRestarted, SolvePauseReason::WorkerRestarted, RunState::Paused),
+        (PauseReason::User, SolvePauseReason::User, RunState::Paused),
+        (PauseReason::Interrupted, SolvePauseReason::Interrupted, RunState::Interrupted),
+        (PauseReason::TransportError, SolvePauseReason::TransportError, RunState::Interrupted),
+    ];
+    for (reason, expected_f9, expected_screen) in pause_cases {
+        let converted: SolvePauseReason = reason.into();
+        assert_eq!(converted, expected_f9);
+        assert_eq!(PauseReason::from(converted), reason);
+        assert_eq!(reason.as_str(), expected_f9.as_str());
+        let status = SolveRunStatus::Paused(reason);
+        assert_eq!(status.to_solve_run_state(), Some(SolveRunState::Paused(expected_f9)));
+        assert_eq!(status.to_run_state(), Some(expected_screen));
+        assert_ne!(status.to_run_state(), Some(RunState::Failed));
+    }
+}
+
