@@ -10,7 +10,8 @@ use crate::guardrails::{
     GuardrailConfig,
 };
 use crate::honesty::{infer_campaign_phase, lint_honesty_with_ledger, CampaignPhase};
-use crate::resume::{fork_assumption, format_fork_assumption, rehydrate_history, verify_and_read, ResumeConfig};
+use crate::resume::{fork_assumption, format_fork_assumption, rehydrate_history, ResumeConfig};
+use crate::resume_profile::{insert_tool_profile, verify_router_for_resume};
 use crate::runner::{
     run_turn_leg, tool_defs_json, AgentConfig, Audit, EventSink, LegResult, LoopParams, SessionOutcome,
 };
@@ -21,7 +22,7 @@ use research_tools::{read_proof_dag, ProofStatus, ResearchEnv};
 use serde_json::json;
 use std::borrow::Cow;
 use std::time::Instant;
-use tools::{Router, ToolDef};
+use tools::Router;
 
 pub const DEFAULT_MAX_VERIFICATION_ROUNDS: u32 = 3;
 const REVISION_TURN_RESERVE: u32 = 8;
@@ -108,34 +109,33 @@ pub fn run_autonomous_research_loop(
     let events = ledger.read_session(session).map_err(|e| e.to_string())?;
     let last_seq = events.last().map_or(0, |e| e.seq);
     let mut audit = Audit { ledger, session, sink, last_seq };
-    audit.emit(
-        "session.start",
-        json!({
-            "route": "api",
-            "provenance": "in-core loop, full provenance",
-            "provider": info.provider,
-            "endpoint": info.endpoint,
-            "api_key_env": info.api_key_env,
-            "model_requested": cfg.model_requested,
-            "model": cfg.model,
-            "prompt": cfg.prompt,
-            "project_context": auto_cfg.project_context,
-            "workspace_revision": env.workspace_root.as_deref().and_then(crate::workspace_revision),
-            "system_prompt": system_prompt,
-            "max_turns": cfg.max_turns,
-            "max_tokens": cfg.max_tokens,
-            "policy_version": router.policy().version.as_str(),
-            "containment": cfg.containment,
-            "contained": cfg.contained,
-            "verification_mode": auto_cfg.guardrails.verification_mode,
-            "calculation_mode": auto_cfg.guardrails.calculation_mode,
-            "use_strategist": auto_cfg.use_strategist,
-            "interactive_plan_mode": auto_cfg.interactive_plan_mode,
-            "pause_after_explore": auto_cfg.pause_after_explore,
-            "pinned_conventions": auto_cfg.guardrails.pinned_conventions,
-            "tool_defs": tool_defs_json(&defs),
-        }),
-    )?;
+    let mut start_payload = json!({
+        "route": "api",
+        "provenance": "in-core loop, full provenance",
+        "provider": info.provider,
+        "endpoint": info.endpoint,
+        "api_key_env": info.api_key_env,
+        "model_requested": cfg.model_requested,
+        "model": cfg.model,
+        "prompt": cfg.prompt,
+        "project_context": auto_cfg.project_context,
+        "workspace_revision": env.workspace_root.as_deref().and_then(crate::workspace_revision),
+        "system_prompt": system_prompt,
+        "max_turns": cfg.max_turns,
+        "max_tokens": cfg.max_tokens,
+        "policy_version": router.policy().version.as_str(),
+        "containment": cfg.containment,
+        "contained": cfg.contained,
+        "verification_mode": auto_cfg.guardrails.verification_mode,
+        "calculation_mode": auto_cfg.guardrails.calculation_mode,
+        "use_strategist": auto_cfg.use_strategist,
+        "interactive_plan_mode": auto_cfg.interactive_plan_mode,
+        "pause_after_explore": auto_cfg.pause_after_explore,
+        "pinned_conventions": auto_cfg.guardrails.pinned_conventions,
+        "tool_defs": tool_defs_json(&defs),
+    });
+    insert_tool_profile(&mut start_payload, router, &events);
+    audit.emit("session.start", start_payload)?;
 
     let mut initial_content: Vec<_> = events.iter().filter_map(fork_assumption)
         .map(|assumption| ContentBlock::Text { text: format_fork_assumption(assumption) })
@@ -190,10 +190,9 @@ pub fn resume_autonomous_research_loop(
 
     let session = router.session();
     let defs = router.registry().defs();
-    let expected_defs: Vec<ToolDef> = defs.iter().map(|d| (*d).clone()).collect();
     let policy_version = router.policy().version.as_str();
     let (inspection, events) =
-        verify_and_read(ledger, session, policy_version, &expected_defs).map_err(|e| e.to_string())?;
+        verify_router_for_resume(ledger, router).map_err(|e| e.to_string())?;
 
     let info = solver_transport.info();
     let target_provider = ProviderKind::parse(info.provider)?;
@@ -234,39 +233,38 @@ pub fn resume_autonomous_research_loop(
     }
 
     let mut audit = Audit { ledger, session, sink, last_seq: inspection.resumed_from_seq };
-    audit.emit(
-        "session.resume",
-        json!({
-            "route": "api",
-            "provenance": "in-core loop, full provenance",
-            "leg": inspection.leg,
-            "resumed_from_seq": inspection.resumed_from_seq,
-            "prior_outcome": inspection.prior_outcome,
-            "start_turn": inspection.start_turn,
-            "provider": info.provider,
-            "endpoint": info.endpoint,
-            "api_key_env": info.api_key_env,
-            "model_requested": cfg.model_requested,
-            "model": cfg.model,
-            "prompt": cfg.prompt,
-            "project_context": auto_cfg.project_context,
-            "workspace_revision": env.workspace_root.as_deref().and_then(crate::workspace_revision),
-            "system_prompt": system_prompt,
-            "max_turns": cfg.max_turns,
-            "max_tokens": cfg.max_tokens,
-            "policy_version": policy_version,
-            "containment": cfg.containment,
-            "contained": cfg.contained,
-            "verification_mode": auto_cfg.guardrails.verification_mode,
-            "calculation_mode": auto_cfg.guardrails.calculation_mode,
-            "use_strategist": auto_cfg.use_strategist,
-            "interactive_plan_mode": auto_cfg.interactive_plan_mode,
-            "pause_after_explore": auto_cfg.pause_after_explore,
-            "pinned_conventions": auto_cfg.guardrails.pinned_conventions,
-            "history_messages": messages.len(),
-            "tool_defs": tool_defs_json(&defs),
-        }),
-    )?;
+    let mut resume_payload = json!({
+        "route": "api",
+        "provenance": "in-core loop, full provenance",
+        "leg": inspection.leg,
+        "resumed_from_seq": inspection.resumed_from_seq,
+        "prior_outcome": inspection.prior_outcome,
+        "start_turn": inspection.start_turn,
+        "provider": info.provider,
+        "endpoint": info.endpoint,
+        "api_key_env": info.api_key_env,
+        "model_requested": cfg.model_requested,
+        "model": cfg.model,
+        "prompt": cfg.prompt,
+        "project_context": auto_cfg.project_context,
+        "workspace_revision": env.workspace_root.as_deref().and_then(crate::workspace_revision),
+        "system_prompt": system_prompt,
+        "max_turns": cfg.max_turns,
+        "max_tokens": cfg.max_tokens,
+        "policy_version": policy_version,
+        "containment": cfg.containment,
+        "contained": cfg.contained,
+        "verification_mode": auto_cfg.guardrails.verification_mode,
+        "calculation_mode": auto_cfg.guardrails.calculation_mode,
+        "use_strategist": auto_cfg.use_strategist,
+        "interactive_plan_mode": auto_cfg.interactive_plan_mode,
+        "pause_after_explore": auto_cfg.pause_after_explore,
+        "pinned_conventions": auto_cfg.guardrails.pinned_conventions,
+        "history_messages": messages.len(),
+        "tool_defs": tool_defs_json(&defs),
+    });
+    insert_tool_profile(&mut resume_payload, router, &events);
+    audit.emit("session.resume", resume_payload)?;
 
     drive_autonomous_rounds(
         solver_transport,
