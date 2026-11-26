@@ -297,6 +297,12 @@ pub(crate) fn dispatch_api(
         ("POST", ["api", "sessions", id, "investigation", "cited"]) => {
             write_api_res(&mut stream, crate::investigation_cited::handle(state, id, &req.body));
         }
+        ("POST", ["api", "sessions", id, "investigation", "handoff-packet"]) => {
+            write_api_res(
+                &mut stream,
+                crate::investigation_handoff::handle_build_handoff_packet(state, id, &req.body),
+            );
+        }
         ("POST", ["api", "sessions", id, "investigation", operation]) => {
             write_api_res(&mut stream, crate::investigation::handle(state, id, operation, &req.body));
         }

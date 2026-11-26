@@ -246,6 +246,7 @@ pub fn handle_with_etag(
                         }
                     }
                 }
+                crate::investigation_handoff::attach_child_statuses_to_mapview(&ledger, &events, &mut mv);
                 return Ok((200, Some(head), mv));
             }
             Ok((200, Some(head.clone()), json!({
