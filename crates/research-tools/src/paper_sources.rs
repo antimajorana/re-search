@@ -419,7 +419,7 @@ pub fn attach_source_paper_to_session(
         .to_string();
     let format = format_from_path_and_role(&chosen.path, &chosen.role);
 
-    let _ = lib.upsert_fulltext(&FulltextRecord {
+    let _ = lib.upsert_user_library_fulltext(&FulltextRecord {
         key: canonical.clone(),
         version: version.map(str::to_string),
         raw_blob: None,

@@ -19,7 +19,7 @@ use crate::state::DesktopState;
 use research_tools::library::{Library, SourceKind};
 use research_tools::source_dedupe::find_duplicates;
 use research_tools::source_sync::{
-    register_source, remove_source, sync_all_sources, sync_source, SyncOptions,
+    preview_source, register_source, remove_source, sync_all_sources, sync_source, SyncOptions,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -108,20 +108,28 @@ pub fn handle_add_source(state: &DesktopState, body: &[u8]) -> ApiResult {
 
     let lib = Library::open(&state.cfg.data_dir).map_err(internal)?;
     let root_path = PathBuf::from(root_raw);
-    let source = register_source(&lib, kind, &root_path, settings, custom_id).map_err(bad)?;
-    let report = sync_source(
-        &lib,
-        &source.id,
-        &SyncOptions {
-            dry_run: !accept,
-            hash_files,
-        },
-    )
-    .map_err(bad)?;
-    if !accept {
-        // First-sync preview: remove the uncommitted pending source record until user accepts.
-        let _ = remove_source(&lib, &source.id);
-    }
+    let (source, report) = if !accept {
+        // First-sync preview: pure read-only scan with zero writes to library.db.
+        preview_source(&lib, kind, &root_path, settings, custom_id, hash_files).map_err(bad)?
+    } else {
+        let source = register_source(&lib, kind, &root_path, settings, custom_id).map_err(bad)?;
+        let report = sync_source(
+            &lib,
+            &source.id,
+            &SyncOptions {
+                dry_run: false,
+                hash_files,
+            },
+        )
+        .map_err(map_sync_err)?;
+        let refreshed = lib
+            .list_sources()
+            .map_err(internal)?
+            .into_iter()
+            .find(|s| s.id == source.id)
+            .unwrap_or(source);
+        (refreshed, report)
+    };
     Ok((
         if accept { 201 } else { 200 },
         json!({
@@ -197,13 +205,7 @@ pub fn handle_delete_source(state: &DesktopState, source_id: &str) -> ApiResult 
 pub fn handle_sync_one(state: &DesktopState, source_id: &str, body: &[u8]) -> ApiResult {
     let opts = parse_sync_opts(body)?;
     let lib = Library::open(&state.cfg.data_dir).map_err(internal)?;
-    let report = sync_source(&lib, source_id, &opts).map_err(|e| {
-        if e.contains("not found") {
-            not_found(e)
-        } else {
-            bad(e)
-        }
-    })?;
+    let report = sync_source(&lib, source_id, &opts).map_err(map_sync_err)?;
     Ok((200, json!({ "ok": true, "report": report })))
 }
 
@@ -211,7 +213,7 @@ pub fn handle_sync_one(state: &DesktopState, source_id: &str, body: &[u8]) -> Ap
 pub fn handle_sync_all(state: &DesktopState, body: &[u8]) -> ApiResult {
     let opts = parse_sync_opts(body)?;
     let lib = Library::open(&state.cfg.data_dir).map_err(internal)?;
-    let reports = sync_all_sources(&lib, &opts).map_err(bad)?;
+    let reports = sync_all_sources(&lib, &opts).map_err(map_sync_err)?;
     Ok((
         200,
         json!({
@@ -228,6 +230,16 @@ pub fn handle_list_duplicates(state: &DesktopState) -> ApiResult {
     let items = lib.list_all_source_items().map_err(internal)?;
     let analysis = find_duplicates(&items);
     Ok((200, json!({ "duplicates": analysis })))
+}
+
+fn map_sync_err(err: String) -> (u16, String) {
+    if err.contains("not found") || err.contains("was removed") {
+        not_found(err)
+    } else if err.contains("concurrent sync conflict") {
+        (409, err)
+    } else {
+        bad(err)
+    }
 }
 
 fn parse_sync_opts(body: &[u8]) -> Result<SyncOptions, (u16, String)> {

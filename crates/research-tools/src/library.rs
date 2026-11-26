@@ -18,7 +18,7 @@ use crate::library_rebuild::rebuild_from_ledger;
 pub use crate::library_schema::*;
 use crate::paper_key::PaperKey;
 use crate::sandbox::WorkspaceSandbox;
-use ledger::library_db::{LibraryDb, LibrarySearchParams};
+use ledger::library_db::{LibraryDb, LibrarySearchParams, SourceSyncBatch};
 use ledger::Ledger;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -376,6 +376,24 @@ impl Library {
     pub fn delete_user_library_fulltext_for_paths(&self, paths: &[String]) -> Result<usize, String> {
         self.db
             .delete_user_library_fulltext_for_paths(paths)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn apply_source_sync_batch(&self, batch: &SourceSyncBatch) -> Result<i64, String> {
+        self.db
+            .apply_source_sync_batch(batch)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn unregister_source(&self, source_id: &str) -> Result<bool, String> {
+        self.db
+            .unregister_source_atomic(source_id)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn upsert_user_library_fulltext(&self, record: &FulltextRecord) -> Result<(), String> {
+        self.db
+            .upsert_user_library_fulltext_preserve_other_origins(&record.to_row())
             .map_err(|e| e.to_string())
     }
 

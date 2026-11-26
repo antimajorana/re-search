@@ -2,11 +2,19 @@
 //! Pure reconciliation, moved-file detection by SHA-256, and source-id helpers for
 //! [`crate::source_sync`] (package F13a, `00-overview.md` 2.11).
 
-use crate::library::{SourceItemRecord, SourceItemState, SourceKind};
+use crate::library::{
+    FulltextRecord, LibraryIds, SourceItemRecord, SourceItemState, SourceKind, SourceRecord,
+    ORIGIN_USER_LIBRARY,
+};
+use crate::paper_key::PaperKey;
 use crate::paper_sources::{
-    hash_contained_file, resolve_contained_abs, ScannedItem, FILE_ROLE_NOTE,
+    format_from_path_and_role, hash_contained_file, resolve_contained_abs, ScannedItem,
+    FILE_ROLE_NOTE, FILE_ROLE_PDF, FILE_ROLE_TEX, SOURCE_STATE_SYNCED,
 };
 use crate::pdf_pages::MAX_USER_PDF_BYTES;
+use ledger::library_db::{
+    PaperUpdateMode, SourceSyncBatch, SourceSyncPaperUpdate, SourceSyncSnapshot,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -268,4 +276,153 @@ pub(crate) fn derive_source_id(kind: SourceKind, root_str: &str) -> String {
     };
     let digest = crate::paper_sources::sha256_hex(format!("{prefix}:{root_str}").as_bytes());
     format!("{prefix}-{}", &digest[..12])
+}
+
+pub(crate) type ExactMergeSpec = (PaperKey, Vec<PaperKey>, LibraryIds);
+
+pub(crate) fn build_source_sync_batch(
+    source: &SourceRecord,
+    previous: &[SourceItemRecord],
+    entries: &[ReconciledEntry],
+    exact_merges: &[ExactMergeSpec],
+    ts: i64,
+) -> Result<SourceSyncBatch, String> {
+    let expected_source = SourceSyncSnapshot::from_source_row(&source.to_row()?);
+
+    let mut upsert_source_items = Vec::new();
+    let mut paper_updates = Vec::new();
+    let mut alias_map: BTreeMap<String, String> = BTreeMap::new();
+    let mut upsert_user_fulltext = Vec::new();
+    let mut new_active_paths: BTreeSet<String> = BTreeSet::new();
+
+    for entry in entries {
+        if entry.dirty {
+            upsert_source_items.push(entry.item.to_row()?);
+        }
+        if entry.item.state == SourceItemState::Missing {
+            continue;
+        }
+        for f in &entry.item.files {
+            if f.role != FILE_ROLE_NOTE && !f.path.is_empty() {
+                new_active_paths.insert(f.path.clone());
+            }
+        }
+        let Some(key) = &entry.item.key else {
+            continue;
+        };
+        let ids_json = serde_json::to_string(&entry.item.ids).map_err(|e| e.to_string())?;
+        let authors_json =
+            serde_json::to_string(&entry.item.authors).map_err(|e| e.to_string())?;
+        let mode = if entry.dirty {
+            PaperUpdateMode::UpsertMerge
+        } else {
+            PaperUpdateMode::InsertIfMissing
+        };
+        paper_updates.push(SourceSyncPaperUpdate {
+            paper_key: key.to_string(),
+            ids_json,
+            title: entry.item.title.clone(),
+            authors_json,
+            year: entry.item.year,
+            abstract_text: entry.abstract_text.clone(),
+            venue: entry.venue.clone(),
+            seen_ms: ts,
+            mode,
+        });
+        for alias in entry.item.ids.canonical_aliases() {
+            if alias != key.as_str() {
+                alias_map.insert(alias, key.to_string());
+            }
+        }
+
+        if entry.dirty {
+            if let Some(ft_row) = build_user_fulltext_row(key, &entry.item, ts) {
+                upsert_user_fulltext.push(ft_row);
+            }
+        }
+    }
+
+    for (canon, aliases, merged_ids) in exact_merges {
+        let ids_json = serde_json::to_string(merged_ids).map_err(|e| e.to_string())?;
+        paper_updates.push(SourceSyncPaperUpdate {
+            paper_key: canon.to_string(),
+            ids_json,
+            title: String::new(),
+            authors_json: "[]".to_string(),
+            year: None,
+            abstract_text: String::new(),
+            venue: None,
+            seen_ms: ts,
+            mode: PaperUpdateMode::MergeIdsIfExists,
+        });
+        for alias in aliases {
+            if alias != canon {
+                alias_map.insert(alias.to_string(), canon.to_string());
+            }
+        }
+        for alias in merged_ids.canonical_aliases() {
+            if alias != canon.as_str() {
+                alias_map.insert(alias, canon.to_string());
+            }
+        }
+    }
+
+    let mut stale_paths_set: BTreeSet<String> = BTreeSet::new();
+    let mut affected_keys_set: BTreeSet<(String, String)> = BTreeSet::new();
+    for prev in previous {
+        let mut had_stale = false;
+        for f in &prev.files {
+            if f.role != FILE_ROLE_NOTE && !f.path.is_empty() && !new_active_paths.contains(&f.path)
+            {
+                stale_paths_set.insert(f.path.clone());
+                had_stale = true;
+            }
+        }
+        if had_stale {
+            if let Some(pk) = &prev.key {
+                let ver = prev.version.as_deref().map(str::trim).unwrap_or("").to_string();
+                affected_keys_set.insert((pk.to_string(), ver));
+            }
+        }
+    }
+
+    Ok(SourceSyncBatch {
+        expected_source,
+        upsert_source_items,
+        paper_updates,
+        aliases: alias_map.into_iter().collect(),
+        upsert_user_fulltext,
+        stale_user_paths: stale_paths_set.into_iter().collect(),
+        affected_fulltext_keys: affected_keys_set.into_iter().collect(),
+        sync_ts_ms: ts,
+        next_state: SOURCE_STATE_SYNCED.to_string(),
+    })
+}
+
+fn build_user_fulltext_row(
+    key: &PaperKey,
+    item: &SourceItemRecord,
+    ts: i64,
+) -> Option<ledger::library_db::LibraryFulltextRow> {
+    // Prefer TeX over PDF when both exist (`00-overview.md` 2.11).
+    let file = item
+        .files
+        .iter()
+        .find(|f| f.role == FILE_ROLE_TEX)
+        .or_else(|| item.files.iter().find(|f| f.role == FILE_ROLE_PDF))?;
+    let format = format_from_path_and_role(&file.path, &file.role);
+    let rec = FulltextRecord {
+        key: key.clone(),
+        version: item.version.clone(),
+        raw_blob: None,
+        format,
+        bytes: file.size,
+        origin: ORIGIN_USER_LIBRARY.to_string(),
+        fetched_ms: ts,
+        file_path: Some(file.path.clone()),
+        file_size: Some(file.size),
+        file_mtime_ms: Some(file.mtime_ms),
+        file_sha256: file.sha256.clone(),
+    };
+    Some(rec.to_row())
 }
