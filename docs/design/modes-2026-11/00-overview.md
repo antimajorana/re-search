@@ -229,6 +229,7 @@ GraphView {
 ```
 
 - **Edge direction is fixed:** `src` is the prerequisite, `dst` the dependent, drawn top to bottom. Investigate already stores edges this way. Solve's `depends_on` maps directly. Explore must state the direction per edge kind (for `uses`, `special_case_of`, `generalises`, `answers`) in its recorder schema; today it does not.
+- **Investigate argument tracing:** V3 provides source-backed results and immediate neighbours, V7 identifies main results, V8 expands only the selected argument, V11 follows a cited statement into its own paper, and V13 presents these paths in the focused and whole-paper graphs. The acceptance walkthrough is in `investigate.md` section 3, under "Follow the argument".
 - **Line and border style is fixed:** solid = found by code or backed by a matched full-text quote; dashed = model-inferred, abstract-only or unchecked. Investigate's "statement uses" versus "proof uses" is shown by line weight and a toggle, not by dashes.
 - **Badges** are always text plus icon, never colour alone (Solve's rule, applied to all).
 - `graph_layout.js` (pure: layering, lanes, folding above 150 nodes) is extracted from `investigation_graph.js` and `canvas_dag.js`; `graph_view.js` draws, pans, selects, filters. `canvas_dag.js` drops under 600 lines as a result.

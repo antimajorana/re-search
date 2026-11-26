@@ -199,6 +199,39 @@ arXiv.
 Layout: left outline tree (always visible); centre is the results list, one node card, or the whole
 map; right context drawer; bottom composer scoped to the selected node. Single column under 900 px.
 
+### Follow the argument
+
+The results graph opens at paper scale. Show the main results and their direct relationships once
+Orient has identified them or the reader has pinned them. Until then, show the source-built outline
+and result candidates. A reader can choose any result to focus the graph on it and its immediate
+neighbours. Keep the full map available from that view.
+
+On selection, show the exact statement and its source at once, with three distinct paths through
+the graph: **Statement uses**, **Proof uses**, and **Used by**. The last path follows outgoing
+arrows to downstream results. The first two follow incoming arrows to prerequisites. A reader
+can follow either direction one node at a time and return along the breadcrumb.
+
+Expand only the selected argument. Show source-built children immediately. With model expansion
+enabled, clicking an unexpanded node can start the bounded Open task, and its saved explanation
+and proof steps appear in that branch as they arrive. A reader can also start this explicitly.
+Reuse accepted steps when revisiting a node. Keep model inference distinguishable from source
+cross-references and matched quotes, and leave the source and previous steps visible on pause.
+
+A named citation opens a cited-result card. Use the local library first and the shared fetcher for
+the named source when needed. Show the exact cited statement and locator when supported. From the
+card, open a focused Investigate view of that paper at the cited result, with a link back to the
+original claim. Reuse the pinned source and skeleton. For PDF-only or ambiguous locators, show
+the candidate pages for the reader to choose. When the source cannot be obtained, show the
+bibliographic reference and the option to supply the file.
+
+Acceptance uses two self-authored papers. A main result must expose one prerequisite in its
+statement, another in its proof, and a downstream result under **Used by**. Open the proof,
+expand one child without expanding its siblings, and follow a citation into the second paper.
+The cited text and page or line must match that paper. Returning must restore the original
+selection. Include an ambiguous locator case that stays a candidate until the reader selects it.
+
+### Reading stages
+
 | Stage | Trigger | Wait (target) | Model | On screen | If it fails |
 |---|---|---|---|---|---|
 | A. Entry | Paste id / DOI / link, drop a file, or pick from the library | 0 | no | The Investigate card of the home screen (F5): one input; recent papers from the shared library (F10) and the papers of the user's own sources (F13). An arXiv id, DOI or arXiv link pasted into any card's box focuses this card | "This DOI has no arXiv version and is not in your library; drop the PDF or TeX" |
@@ -620,12 +653,12 @@ below that needs a route registered hands that one edit to that lane.
 | V5 | Skip plan, symbols | `skip_plan` with basis; symbol definitions and nearest-definition lookup; reading-plan strip; symbol popovers | `skeleton/{skip, symbols}.rs`, `investigation_skip.js` | M | V2, V3 |
 | V6 | Task markers, `read_map_node`, `record_map_reading` | Shared marker constant; task requested / finished; context injection logged as `context.supplied` (F4); the two tools, listed in the profile `investigation/2` (F1); rules 6.3-6.5, 6.10, 6.12, 6.15 (the finish hook and the caps; the counting is F9); fold. No longer in this package: the `resume.rs` edit (F1), rule 6.17 (F4), rule 6.18 (F0 and F1), model-call counting (F9) | `investigation_markers.rs`, `map_node_read.rs`, `map_reading.rs`, `map_defs.rs`, `map_fold.rs`, `investigation_tasks.rs`, `investigation_task_context.rs` | L | V3, F1, F4, F9 |
 | V7 | Orient | Deterministic cues; orient prompt; main-result markers, gists, authors' half-badge with quote; reader pins; auto-start setting | `investigation_task_prompts.rs`, `status_badge.rs` (authors' side), `investigation_badges.js`, `investigation_notes.rs` | M | V6 |
-| V8 | Open any node, any depth | Open prompt; model nodes with content-based tags; block B with streaming and the shared run bar (Stop, Paused, Continue); breadcrumb | `map_reading.rs`, `investigation_node_model.js` | M | V7 |
+| V8 | Open any node, any depth | Open prompt; expand only the selected branch; model nodes with content-based tags; block B with streaming and the shared run bar (Stop, Paused, Continue); breadcrumb and saved steps on revisit | `map_reading.rs`, `investigation_node_model.js` | M | V7 |
 | V9 | Old sessions | Legacy adapter, "Earlier map", relabelled button, fixture ledgers | `investigation_legacy_view.rs`, tests | M | V6 |
 | V10 | Notes now; stable tags across versions **deferred** | Now: notes on a node (text, shown on the card and in the reading notes). Deferred with version tracking: carry matching, version route (versions fetched through F3), change summary, stale banners and diff | `investigation_notes.rs`, UI; later `skeleton/tags.rs`, `investigation_open.rs` | S now; M later | V7 |
-| V11 | Cited result without a model | (A cited paper found in the user's library is used from there, with no fetch; one that exists only as PDF is located on its PDF skeleton and shown as candidates with the page, rule 6.9.) Resolve the bib entry to a `PaperRef`, fetch TeX through F3, build that skeleton once and keep it in the library's `skeleton` table (F10) so it is not rebuilt per session, locate with rule 6.9, all statuses, picker, fetch budget | `investigation_cited.rs`, `skeleton/locate.rs`, `investigation_context.js` | M | V4, F10 |
+| V11 | Cited result without a model | Resolve the bib entry to a `PaperRef`, use the library first or fetch TeX through F3, and use the shared skeleton cache (F10). Locate with rule 6.9, all statuses, picker and fetch budget. Open the cited node in that paper's Investigate view with a link back to the original claim. PDF-only sources use the V17 skeleton and show page-linked candidates. | `investigation_cited.rs`, `skeleton/locate.rs`, `investigation_context.js` | M | V4, F10; V17 for the PDF path |
 | V12 | Context cards | `record_context_cards` with rule 6.8; "Prerequisites" and "Compare hypotheses" tasks; drawer; hide-unchecked toggle | `map_context.rs`, UI | M | V8, V11 |
-| V13 | Whole map | Adapter from the mapview to the shared graph view; layering, lanes, folding above 150 nodes and drawing are F6 and are not built here. Mode-specific: line weight and a toggle for statement uses and proof uses, novelty toggles (these wait for V7), dimming, section collapse | `investigation_wholemap.js` | M | V5, F6 |
+| V13 | Focused and whole-paper graph views | Adapter from the mapview to the shared graph view, with a paper-scale main-results view after V7 and a focused view of direct prerequisites and dependents. Reuse F6 layering, lanes, drawing and folding above 150 nodes. Add statement/proof filters, evidence styling, novelty toggles after V7, dimming and section collapse. | `investigation_wholemap.js` | M | V5, F6; V7 for main-result and novelty filters |
 | V14 | Prior work: **deferred** (owner decision of 2026-11-25; the "Search wider in Explore" button moved to V16) | Not in the build order. When it returns: `record_prior_work_check` with rule 6.7; two depths; search and fetch caps; one-click confirmation; right half-badge and side-by-side view; "Search wider in Explore" button on a result (a packet of F7 that carries the coverage and the earlier candidates); batch with a cost note. Coverage record and gate, status values and wording are F12 and are not built here | `map_prior_work.rs`, `investigation_badges.js` | L | V7, V11, F12; F7 for the Explore button |
 | V15 | Export and import | `.rsmap`, standalone HTML; import with rule 6.11. The readable Markdown or TeX output is the reading-notes write-up of F15 (`writeup_paper.rs`), not this package | `export/src/paper_map*.rs`, `investigation_share.rs` | M | V8 |
 | V16 | Hand-off to Explore and Solve | Three buttons on top of the shared hand-off packet (F7): "Derive in Solve", "Has this been extended?" and, on the right half-badge of a result, "Search wider in Explore" (moved here from V14; it is this mode's only path to earlier literature for now, and the half-badge afterwards shows Explore's status sentence by reading the child's `idea.verdict`). This package only fills the packet from a node: the statement with its quotes; the statement closure (definitions, assumptions, equations it uses) as context; symbols; the paper's conventions; the reader's notes; gists only as model text; for Explore the paper as origin and its resolved bibliography as seeds. The task kind sent to Solve uses Solve's names: `prove` for a theorem-like node, `calculate` for an equation, `check_derivation` for a proof node. Receiving side: a packet whose target is Investigate opens the paper, and each earlier quote that matches again appears as a note on the innermost node whose span contains it. Nothing is written back: the node shows a chip such as "Opened in Solve: Done with open items" by reading the child session. Order note: the overview's week-8 milestone (one packet opens a Solve setup card from an Investigate node) comes before V8, so the smallest filler for "Derive in Solve" (statement, statement closure, symbols and conventions of a skeleton node; no notes, no model text) is written with F7 in week 8, in `investigation_handoff.rs`; this package adds the rest | `investigation_handoff.rs`, `investigation_node.js` | S | V8, F7 |
