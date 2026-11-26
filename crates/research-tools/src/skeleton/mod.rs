@@ -1,17 +1,25 @@
-//! Deterministic TeX skeleton core (Investigate package V1).
+//! Deterministic TeX skeleton core (Investigate packages V1 and V2).
 //!
-//! Builds a [`PaperSkeleton`] from already ingested TeX files (or an in-memory map) with
-//! zero model calls and zero file access outside the ingested source. Tags (`SkNode::tag`),
-//! edges, computed counters, reading stats, and bibliography resolution belong to V2.
+//! Builds a complete [`PaperSkeleton`] (nodes, permanent tags, simulated counters,
+//! positional dependency edges, reading stats, and bibliography entries) from already
+//! ingested TeX files (or an in-memory map) with zero model calls and zero file access
+//! outside the ingested source.
 
+pub mod bib;
+pub mod edges;
 pub mod flatten;
 pub mod model;
+pub mod number;
+pub mod stats;
+pub mod tags;
 pub mod tex_env;
 mod tex_env_cmds;
 mod tex_lex;
 mod tex_math;
 pub mod tex_theorems;
 
+pub use bib::{extract_bibliography, CiteOccurrence};
+pub use edges::build_edges;
 pub use flatten::{
     flatten_tex_files, load_ingested_tex_source, select_primary_tex, FlattenedLine, FlattenedTex,
     IngestedTexSource, OriginEntry, MAX_FLATTENED_BYTES, MAX_FLATTENED_LINES, MAX_INCLUDE_DEPTH,
@@ -23,6 +31,9 @@ pub use model::{
     SymbolDef, SymbolDefHow, MAX_SKELETON_EDGES, MAX_SKELETON_JSON_BYTES, MAX_SKELETON_NODES,
     NODE_FP_HEX_CHARS, SKELETON_SCHEMA_VERSION,
 };
+pub use number::assign_numbers;
+pub use stats::{compute_stats, count_tex_words, estimate_read_minutes, EQ_READ_MINUTES, MATH_READ_WORDS_PER_MIN};
+pub use tags::{assign_tags, kind_class, KIND_CLASS_TABLE};
 pub use tex_env::{scan_tex_stream, ProofHint, TexScanOutput};
 pub use tex_theorems::{map_theorem_kind, TheoremDef, TheoremLookup, TheoremTable};
 
@@ -30,7 +41,7 @@ use crate::paper_key::PaperKey;
 use crate::sandbox::WorkspaceSandbox;
 use ledger::Event;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 /// Input to the pure in-memory TeX skeleton builder.
@@ -47,8 +58,8 @@ pub struct TexSkeletonInput {
     pub files_sha256: Option<BTreeMap<String, String>>,
 }
 
-/// Complete V1 build output: the section 4.1 [`PaperSkeleton`] plus structural metadata
-/// consumed by V2 (`edges`, `number`, `tags`, `stats`) and tests.
+/// Complete build output: the section 4.1 [`PaperSkeleton`] plus structural metadata
+/// consumed by downstream passes and tests.
 #[derive(Debug, Clone)]
 pub struct TexSkeletonOutput {
     pub skeleton: PaperSkeleton,
@@ -120,6 +131,22 @@ pub fn build_tex_skeleton_timed(input: &TexSkeletonInput) -> (TexSkeletonOutput,
     let mut nodes = scan.nodes;
     let mut parent_orders = scan.parent_orders;
     let mut proof_hints = scan.proof_hints;
+    let theorem_table = scan.theorem_table;
+
+    // V2 passes: permanent tags, simulated counters, bibliography, edges, and reading stats.
+    assign_tags(&input.paper_key, &mut nodes, &parent_orders);
+    assign_numbers(&mut nodes, &parent_orders, &theorem_table, &flattened);
+    let (bib, citations) = extract_bibliography(&flattened, &input.files);
+    let edges = build_edges(
+        &mut nodes,
+        &parent_orders,
+        &proof_hints,
+        &flattened,
+        &citations,
+        &mut quality,
+        &mut quality_notes,
+    );
+    let stats = compute_stats(&mut nodes, &parent_orders, &flattened);
 
     let mut skeleton = PaperSkeleton {
         schema: SKELETON_SCHEMA_VERSION,
@@ -131,12 +158,12 @@ pub fn build_tex_skeleton_timed(input: &TexSkeletonInput) -> (TexSkeletonOutput,
         version: input.version.clone(),
         quality,
         quality_reason: join_quality_notes(&quality_notes),
-        nodes: std::mem::take(&mut nodes),
-        edges: Vec::new(),
-        bib: Vec::new(),
+        nodes,
+        edges,
+        bib,
         symbols: Vec::new(),
         macros: scan.macros,
-        stats: Vec::new(),
+        stats,
         carry: None,
     };
 
@@ -152,6 +179,21 @@ pub fn build_tex_skeleton_timed(input: &TexSkeletonInput) -> (TexSkeletonOutput,
             skeleton.nodes.truncate(cut);
             parent_orders.truncate(cut);
             proof_hints.retain(|&ord, _| ord < cut);
+            let live_tags: BTreeSet<String> = skeleton
+                .nodes
+                .iter()
+                .filter_map(|n| n.tag.clone())
+                .collect();
+            for node in &mut skeleton.nodes {
+                if node.proof_of.as_ref().is_some_and(|t| !live_tags.contains(t)) {
+                    node.proof_of = None;
+                }
+            }
+            skeleton.edges.retain(|e| {
+                live_tags.contains(&e.to)
+                    && (e.kind == SkEdgeKind::Cites || live_tags.contains(&e.from))
+            });
+            skeleton.stats = compute_stats(&mut skeleton.nodes, &parent_orders, &flattened);
             skeleton.quality = quality;
             skeleton.quality_reason = join_quality_notes(&quality_notes);
             json_bytes = serde_json::to_vec(&skeleton).map(|v| v.len()).unwrap_or(0);
@@ -172,7 +214,7 @@ pub fn build_tex_skeleton_timed(input: &TexSkeletonInput) -> (TexSkeletonOutput,
         skeleton,
         parent_orders,
         proof_hints,
-        theorem_table: scan.theorem_table,
+        theorem_table,
         flattened,
         quality_notes,
     };
