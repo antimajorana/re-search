@@ -27,6 +27,7 @@ mod library_rebuild;
 mod library_rebuild_lit;
 pub mod library_schema;
 pub mod lit_abstracts;
+pub mod lit_openalex;
 pub mod lit_providers;
 pub mod literature;
 pub mod map_defs;
