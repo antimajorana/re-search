@@ -13,6 +13,9 @@ use crate::map_defs::{
     record_map_reading_def, IndexedFault, MapReadingEventPayload, ReadingRejected,
     MAX_READING_EDGES, MAX_READING_ITEMS, MAX_READING_LIMITATIONS,
 };
+use crate::map_model_nodes::{
+    ancestor_chain, collect_existing_model_nodes, is_model_descendant_of_any, ModelNodeRef,
+};
 use crate::skeleton::{PaperSkeleton, SkEdgeKind, SkNode, SkNodeKind};
 use crate::{resolve_sources_session_id, ResearchEnv};
 use ledger::{Event, Ledger};
@@ -104,16 +107,24 @@ fn load_pinned_skeleton(
     Ok((skeleton_seq, skeleton))
 }
 
-fn compute_open_scopes<'a>(
+fn compute_open_scopes(
     marker: &Event,
-    skeleton: &'a PaperSkeleton,
-    nodes_by_tag: &BTreeMap<&'a str, &'a SkNode>,
-) -> (BTreeSet<&'a str>, BTreeSet<&'a str>) {
-    let mut item_scope: BTreeSet<&'a str> = BTreeSet::new();
+    skeleton: &PaperSkeleton,
+    nodes_by_tag: &BTreeMap<&str, &SkNode>,
+    model_nodes: &BTreeMap<String, ModelNodeRef>,
+) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut item_scope: BTreeSet<String> = BTreeSet::new();
+    let mut owning_roots: BTreeSet<String> = BTreeSet::new();
+    let sk_tags: BTreeSet<&str> = nodes_by_tag.keys().copied().collect();
+
     if let Some(tags) = marker.payload.get("tags").and_then(Value::as_array) {
         for raw in tags.iter().filter_map(Value::as_str) {
-            if let Some((&tag, _)) = nodes_by_tag.get_key_value(raw) {
-                item_scope.insert(tag);
+            if nodes_by_tag.contains_key(raw) {
+                item_scope.insert(raw.to_string());
+                owning_roots.insert(raw.to_string());
+            } else if let Some(m) = model_nodes.get(raw) {
+                item_scope.insert(raw.to_string());
+                owning_roots.insert(m.root_skeleton_tag.clone());
             }
         }
     }
@@ -127,7 +138,7 @@ fn compute_open_scopes<'a>(
             let via_proof = node.kind == SkNodeKind::Proof
                 && node.proof_of.as_deref().is_some_and(|t| item_scope.contains(t));
             if via_parent || via_proof {
-                item_scope.insert(tag);
+                item_scope.insert(tag.to_string());
                 added = true;
             }
         }
@@ -135,12 +146,28 @@ fn compute_open_scopes<'a>(
             break;
         }
     }
+    let base_roots = item_scope.clone();
+    for mtag in model_nodes.keys() {
+        if is_model_descendant_of_any(mtag, &base_roots, model_nodes) {
+            item_scope.insert(mtag.clone());
+        }
+    }
+
     let mut edge_scope = item_scope.clone();
-    for edge in &skeleton.edges {
-        if edge.kind == SkEdgeKind::Uses && item_scope.contains(edge.to.as_str()) {
-            if let Some((&from_tag, _)) = nodes_by_tag.get_key_value(edge.from.as_str()) {
-                edge_scope.insert(from_tag);
+    // Allow edges whose `from` is an ancestor along the parent chain of a requested `m-` node.
+    for tag in &item_scope {
+        if let Some(chain) = ancestor_chain(tag, &sk_tags, model_nodes) {
+            for anc in chain {
+                edge_scope.insert(anc);
             }
+        }
+    }
+    for edge in &skeleton.edges {
+        if edge.kind == SkEdgeKind::Uses
+            && (item_scope.contains(edge.to.as_str()) || owning_roots.contains(edge.to.as_str()))
+            && nodes_by_tag.contains_key(edge.from.as_str())
+        {
+            edge_scope.insert(edge.from.clone());
         }
     }
     (item_scope, edge_scope)
@@ -234,8 +261,9 @@ pub fn record_map_reading(
         }
     }
     let bib_keys: BTreeSet<&str> = skeleton.bib.iter().map(|b| b.key.as_str()).collect();
+    let model_nodes = collect_existing_model_nodes(&skeleton, &events);
     let (open_item_scope, open_edge_scope) = if task_kind == InvestigationTaskKind::Open {
-        let (is, es) = compute_open_scopes(marker, &skeleton, &nodes_by_tag);
+        let (is, es) = compute_open_scopes(marker, &skeleton, &nodes_by_tag, &model_nodes);
         (Some(is), Some(es))
     } else {
         (None, None)
@@ -249,7 +277,7 @@ pub fn record_map_reading(
     let req_seq_str = parsed.request_seq.to_string();
     let sent = lines_sent_with_ledger(task_events, Some(ledger), Some(&req_seq_str));
 
-    let ctx = ValidationCtx {
+    let mut ctx = ValidationCtx {
         sandbox: env.sandbox(),
         session,
         caller,
@@ -261,6 +289,8 @@ pub fn record_map_reading(
         nodes_by_tag,
         proofs_for_target,
         bib_keys,
+        model_nodes,
+        temp_id_map: BTreeMap::new(),
         open_item_scope,
         open_edge_scope,
     };
@@ -269,13 +299,26 @@ pub fn record_map_reading(
     let mut accepted_edges = Vec::new();
     let mut item_outcomes = Vec::with_capacity(parsed.items.len());
     let mut edge_outcomes = Vec::with_capacity(parsed.edges.len());
+    let mut assigned_tags: BTreeMap<String, String> = BTreeMap::new();
     let mut rejected = ReadingRejected::default();
     let mut report = ReadingAnchorReport::default();
 
     for (idx, raw_item) in parsed.items.into_iter().enumerate() {
-        match validate_item(&ctx, idx, raw_item, &mut report) {
-            Ok(rec) => {
-                item_outcomes.push(json!({ "index": idx, "status": "accepted", "tag": rec.tag }));
+        match validate_item(&mut ctx, idx, raw_item, &mut report) {
+            Ok(validated) => {
+                let rec = validated.record;
+                let mut outcome = json!({ "index": idx, "status": "accepted", "tag": rec.tag });
+                if let Some(tid) = validated.temp_id {
+                    assigned_tags.insert(tid.clone(), rec.tag.clone());
+                    outcome["temp_id"] = json!(tid);
+                }
+                if let Some(ref parent) = rec.attach_to {
+                    outcome["attach_to"] = json!(parent);
+                }
+                if let Some(ref mk) = rec.model_kind {
+                    outcome["kind"] = json!(mk);
+                }
+                item_outcomes.push(outcome);
                 accepted_items.push(rec);
             }
             Err(fault) => {
@@ -350,6 +393,7 @@ pub fn record_map_reading(
         "done": parsed.done,
         "accepted_items": accepted_items_len,
         "accepted_edges": accepted_edges_len,
+        "assigned_tags": assigned_tags,
         "items": item_outcomes,
         "edges": edge_outcomes,
         "rejected_items": rejected.items,

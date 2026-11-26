@@ -97,6 +97,8 @@ fn orient_run_twice_keeps_history_notes_pins_and_untouched_fields() {
         items: vec![ReadingItemRecord {
             tag: thm_tag.clone(),
             node_fp: thm_fp.clone(),
+            attach_to: None,
+            model_kind: None,
             role: Some(ReadingRole::Supporting),
             gist: Some("First orient gist.".into()),
             purpose: Some("Original purpose stays across re-runs.".into()),
@@ -140,6 +142,8 @@ fn orient_run_twice_keeps_history_notes_pins_and_untouched_fields() {
         items: vec![ReadingItemRecord {
             tag: thm_tag.clone(),
             node_fp: thm_fp.clone(),
+            attach_to: None,
+            model_kind: None,
             role: Some(ReadingRole::MainResult),
             gist: Some("Second orient gist.".into()),
             purpose: None,
@@ -224,6 +228,8 @@ fn reader_pin_overrides_role_and_stale_node_fp_flagged() {
             ReadingItemRecord {
                 tag: lem_tag.clone(),
                 node_fp: lem_fp.clone(),
+                attach_to: None,
+                model_kind: None,
                 role: Some(ReadingRole::Supporting),
                 gist: Some("Lemma gist.".into()),
                 purpose: None,
@@ -234,6 +240,8 @@ fn reader_pin_overrides_role_and_stale_node_fp_flagged() {
             ReadingItemRecord {
                 tag: thm_tag.clone(),
                 node_fp: "deadbeef0000".into(), // stale fingerprint!
+                attach_to: None,
+                model_kind: None,
                 role: Some(ReadingRole::MainResult),
                 gist: Some("Stale theorem gist.".into()),
                 purpose: None,
@@ -279,6 +287,8 @@ fn reader_pin_overrides_role_and_stale_node_fp_flagged() {
         items: vec![ReadingItemRecord {
             tag: thm_tag.clone(),
             node_fp: thm_fp.clone(),
+            attach_to: None,
+            model_kind: None,
             role: Some(ReadingRole::MainResult),
             gist: None,
             purpose: None,
