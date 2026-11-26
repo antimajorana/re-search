@@ -263,11 +263,18 @@ result.
   person types into the desktop UI's literature drawer
   (`POST /api/sessions/{id}/literature`, token-protected) are human-authored and
   run without a second prompt.
-- **Allowlisted literature egress & deterministic `tex_audit`.** `arxiv_search`
-  and `literature_search` restrict remote hosts to allowlisted HTTPS science
-  endpoints (`arxiv.org`, `export.arxiv.org`, `inspirehep.net`,
-  `api.crossref.org`, `api.semanticscholar.org`, plus loopback mock overrides in
-  tests), reject XXE/DTD feeds, and record `"literature.fetched"` `"raw_blob"`s.
+- **Allowlisted literature egress & deterministic `tex_audit`.** `arxiv_search`,
+  `literature_search`, and the unified F11/X19 literature runner restrict remote
+  hosts to allowlisted HTTPS science endpoints (`arxiv.org`, `export.arxiv.org`,
+  `inspirehep.net`, `api.crossref.org`, `api.semanticscholar.org`, and
+  `api.openalex.org` [Owner Decision 2026-11-26, X19 Part 1], plus loopback mock
+  overrides in tests), pace every request through the process-wide F3 rate gate,
+  send optional per-user API keys strictly via request headers (`x-api-key` for
+  Semantic Scholar, `Authorization: Bearer <key>` for OpenAlex — never in URLs
+  or ledger payloads, and stripped on cross-origin redirects), reject XXE/DTD
+  feeds, mark OpenAlex inverted-index abstracts non-verbatim (`verbatim: false`
+  so they never count as `evidence.abstract`), and record `"literature.fetched"`
+  `"raw_blob"`s. TheoremSearch remains excluded/disabled (not allowlisted).
   `tex_audit` deterministically checks `\label`/`\ref`/`\cite`, verbatim TeX
   quotes, and blocks reliance on withdrawn arXiv papers or retracted DOIs.
 - **Stateless verifiers, isolated Explain & verified fork/export

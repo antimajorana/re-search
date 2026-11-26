@@ -149,6 +149,11 @@ use tools::{Registry, ToolDef};
 
 pub const DEFAULT_LATEX_COMPILE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Default production base URL for OpenAlex (`api.openalex.org`, X19 Part 1).
+pub fn default_openalex_api_base() -> String {
+    "https://api.openalex.org".to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LiteratureEndpoints {
     pub arxiv_api_base: String,
@@ -156,6 +161,8 @@ pub struct LiteratureEndpoints {
     pub inspire_api_base: String,
     pub crossref_api_base: String,
     pub semantic_scholar_api_base: String,
+    #[serde(default = "default_openalex_api_base")]
+    pub openalex_api_base: String,
 }
 
 impl Default for LiteratureEndpoints {
@@ -166,6 +173,7 @@ impl Default for LiteratureEndpoints {
             inspire_api_base: "https://inspirehep.net".to_string(),
             crossref_api_base: "https://api.crossref.org".to_string(),
             semantic_scholar_api_base: "https://api.semanticscholar.org".to_string(),
+            openalex_api_base: default_openalex_api_base(),
         }
     }
 }
@@ -183,7 +191,8 @@ impl LiteratureEndpoints {
             arxiv_eprint_base: trimmed.clone(),
             inspire_api_base: trimmed.clone(),
             crossref_api_base: trimmed.clone(),
-            semantic_scholar_api_base: trimmed,
+            semantic_scholar_api_base: trimmed.clone(),
+            openalex_api_base: format!("{trimmed}/openalex"),
         })
     }
 }

@@ -5,6 +5,7 @@
 //! - INSPIRE-HEP (`inspirehep.net`): 15 requests per 5 s
 //! - Semantic Scholar (`api.semanticscholar.org`): 1 request per 1 s
 //! - Crossref (`api.crossref.org`): 1 request per 1 s
+//! - OpenAlex (`api.openalex.org`): 10 requests per 1 s (ASSUMPTION, X19 Part 1)
 //!
 //! Every outgoing literature HTTP request in `research-tools` passes through
 //! [`global_gate`] (or an injected [`NetRateGate`] in tests). For loopback mocks
@@ -38,14 +39,16 @@ pub enum Service {
     Inspire,
     SemanticScholar,
     Crossref,
+    OpenAlex,
 }
 
 impl Service {
-    pub const ALL: [Service; 4] = [
+    pub const ALL: [Service; 5] = [
         Self::Arxiv,
         Self::Inspire,
         Self::SemanticScholar,
         Self::Crossref,
+        Self::OpenAlex,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -54,10 +57,11 @@ impl Service {
             Self::Inspire => "inspire",
             Self::SemanticScholar => "semantic_scholar",
             Self::Crossref => "crossref",
+            Self::OpenAlex => "openalex",
         }
     }
 
-    /// Configured rate limit from `00-overview.md` section 2.4.
+    /// Configured rate limit from `00-overview.md` section 2.4 (plus X19 Part 1 OpenAlex).
     pub const fn rate_limit(self) -> RateLimit {
         match self {
             Self::Arxiv => RateLimit {
@@ -76,6 +80,12 @@ impl Service {
                 max_requests: 1,
                 window: Duration::from_secs(1),
             },
+            // ASSUMPTION (X19 Part 1): OpenAlex polite/free-key pool ceiling is 10 req/s;
+            // not pinned numerically in `00-overview.md` 2.4.
+            Self::OpenAlex => RateLimit {
+                max_requests: 10,
+                window: Duration::from_secs(1),
+            },
         }
     }
 
@@ -89,6 +99,7 @@ impl Service {
             "inspirehep.net" => Some(Self::Inspire),
             "api.semanticscholar.org" => Some(Self::SemanticScholar),
             "api.crossref.org" => Some(Self::Crossref),
+            "api.openalex.org" => Some(Self::OpenAlex),
             _ => None,
         }
     }
@@ -110,6 +121,11 @@ impl Service {
             || path.starts_with("/api/doi/")
         {
             return Some(Self::Inspire);
+        }
+        // Match `/openalex` before Crossref's `/works` because OpenAlex loopback paths are
+        // `/openalex/works...`.
+        if path == "/openalex" || path.starts_with("/openalex/") {
+            return Some(Self::OpenAlex);
         }
         if path == "/works" || path.starts_with("/works/") {
             return Some(Self::Crossref);
@@ -201,6 +217,7 @@ pub fn resolve_bucket(
             (endpoints.inspire_api_base.as_str(), Service::Inspire),
             (endpoints.crossref_api_base.as_str(), Service::Crossref),
             (endpoints.semantic_scholar_api_base.as_str(), Service::SemanticScholar),
+            (endpoints.openalex_api_base.as_str(), Service::OpenAlex),
         ];
         for (base, svc) in candidates {
             if parse_loopback_port(base) == Some(port) && !matched.contains(&svc) {
