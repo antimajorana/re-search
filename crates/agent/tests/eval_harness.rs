@@ -32,12 +32,23 @@ use support::{default_cfg, make_router, MockApprover, MockEpoch, RecordingSink, 
 fn fixed_tier_manifests_load_and_validate() {
     let set = load_manifests(&fixtures_dir(), Tier::Fixed).unwrap_or_else(|e| panic!("fixed tier is invalid:\n{}", e.join("\n")));
     let sets: Vec<Set> = set.manifests.iter().map(|m| m.set).collect();
-    assert_eq!(sets, [Set::P, Set::Q], "the skeleton ships self-test cases for P and Q only");
-    assert_eq!(set.cases_of(Set::P).len(), 2);
+    assert_eq!(sets, [Set::P, Set::Q], "fixed tier ships manifests for P and Q");
+    let p_cases = set.cases_of(Set::P);
+    let p_selftests = p_cases.iter().filter(|c| c.id.starts_with("P-selftest-")).count();
+    let p_evals = p_cases.iter().filter(|c| c.id.starts_with("P-eval-")).count();
+    assert_eq!(p_selftests, 2);
+    assert_eq!(p_evals, 10);
+    assert_eq!(p_cases.len(), p_selftests + p_evals);
     assert_eq!(set.cases_of(Set::Q).len(), 2);
     for (s, case) in set.cases() {
         assert_eq!(case.mode, s.mode());
-        assert!(case.notes.contains("Harness self-test case, not part of the evaluation set"), "{}", case.id);
+        if case.id.contains("-selftest-") {
+            assert!(case.notes.contains("Harness self-test case, not part of the evaluation set"), "{}", case.id);
+        } else if s == Set::P {
+            assert!(case.notes.contains("Fixed-tier Set P evaluation case"), "{}", case.id);
+        } else {
+            assert!(!case.notes.trim().is_empty(), "{}", case.id);
+        }
     }
 
     // The fixture a P case names is self-written TeX that is really there.
