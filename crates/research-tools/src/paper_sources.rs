@@ -492,6 +492,14 @@ fn collect_allowed_roots_for_sources(sources: &[SourceRecord]) -> Vec<PathBuf> {
             }
             continue;
         }
+        if src.kind == SourceKind::Zotero {
+            for extra in crate::source_zotero::allowed_roots_for_zotero(Path::new(&src.root), &src.settings) {
+                if !roots.contains(&extra) {
+                    roots.push(extra);
+                }
+            }
+            continue;
+        }
         if let Ok(canon) = canonicalize_source_root(Path::new(&src.root)) {
             if !roots.contains(&canon) {
                 roots.push(canon.clone());

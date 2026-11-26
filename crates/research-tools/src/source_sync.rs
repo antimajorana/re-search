@@ -15,6 +15,7 @@ use crate::source_kandinsky::KandinskyVaultAdapter;
 use crate::source_sync_reconcile::{
     build_source_sync_batch, derive_source_id, reconcile_items, validate_source_id, ExactMergeSpec,
 };
+use crate::source_zotero::{canonicalize_zotero_source_root, ZoteroAdapter};
 use ledger::library_db::SourceSyncBatch;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -73,12 +74,7 @@ fn build_candidate_source(
     let canon_root = match kind {
         SourceKind::KandinskyVault | SourceKind::Folder => canonicalize_source_root(root)?,
         SourceKind::Bibtex => canonicalize_bibtex_source_root(root)?,
-        other => {
-            return Err(format!(
-                "source kind `{}` is not supported yet",
-                other.as_str()
-            ));
-        }
+        SourceKind::Zotero => canonicalize_zotero_source_root(root)?,
     };
     let root_str = portable_path_string(&canon_root);
     let id = match custom_id.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
@@ -216,12 +212,7 @@ pub fn commit_source_sync(
 pub fn sync_all_sources(lib: &Library, opts: &SyncOptions) -> Result<Vec<SyncReport>, String> {
     let mut reports = Vec::new();
     for src in lib.list_sources()? {
-        if matches!(
-            src.kind,
-            SourceKind::KandinskyVault | SourceKind::Folder | SourceKind::Bibtex
-        ) {
-            reports.push(sync_source(lib, &src.id, opts)?);
-        }
+        reports.push(sync_source(lib, &src.id, opts)?);
     }
     Ok(reports)
 }
@@ -240,12 +231,7 @@ fn scan_and_prepare(
         SourceKind::KandinskyVault => KandinskyVaultAdapter.scan(source, &ctx)?,
         SourceKind::Folder => FolderAdapter.scan(source, &ctx)?,
         SourceKind::Bibtex => BibtexAdapter.scan(source, &ctx)?,
-        other => {
-            return Err(format!(
-                "source kind `{}` is not supported yet",
-                other.as_str()
-            ));
-        }
+        SourceKind::Zotero => ZoteroAdapter.scan(source, &ctx)?,
     };
 
     let reconciled = reconcile_items(previous, scan.items, &scan.roots_checked, ts);
@@ -332,6 +318,25 @@ fn scan_and_prepare(
         }
     }
 
+    // If exact/possible dedupe restored an item to exact equality with `previous`, treat it as
+    // unchanged (zero index writes on an idempotent second sync).
+    let mut updated_count = reconciled.updated;
+    let mut unchanged_count = reconciled.unchanged;
+    for entry in &mut final_entries {
+        if entry.pass1_updated {
+            if let Some(prev) = previous.iter().find(|p| p.external_id == entry.item.external_id) {
+                if crate::source_sync_reconcile::same_item_content(prev, &entry.item)
+                    && prev.state == entry.item.state
+                {
+                    entry.item.updated_ms = prev.updated_ms;
+                    entry.dirty = false;
+                    updated_count = updated_count.saturating_sub(1);
+                    unchanged_count += 1;
+                }
+            }
+        }
+    }
+
     let batch = build_source_sync_batch(source, previous, &final_entries, &exact_merges, ts)?;
 
     let items_out: Vec<SourceItemRecord> = final_entries.into_iter().map(|e| e.item).collect();
@@ -359,10 +364,10 @@ fn scan_and_prepare(
         with_pdf,
         with_tex,
         added: reconciled.added,
-        updated: reconciled.updated,
+        updated: updated_count,
         moved: reconciled.moved,
         missing: reconciled.missing,
-        unchanged: reconciled.unchanged,
+        unchanged: unchanged_count,
         exact_duplicates: dedupe.exact_groups.len(),
         possible_duplicates: dedupe.possible_groups.len(),
         unreadable,

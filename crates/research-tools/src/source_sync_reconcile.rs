@@ -23,6 +23,7 @@ pub(crate) struct ReconciledEntry {
     pub(crate) abstract_text: String,
     pub(crate) venue: Option<String>,
     pub(crate) dirty: bool,
+    pub(crate) pass1_updated: bool,
 }
 
 pub(crate) struct ReconcileOutcome {
@@ -86,6 +87,7 @@ pub(crate) fn reconcile_items(
                     abstract_text: String::new(),
                     venue: None,
                     dirty: false,
+                    pass1_updated: false,
                 });
             } else if same_item_content(&prev, &sc.item) && prev.state == sc.item.state {
                 unchanged += 1;
@@ -96,8 +98,10 @@ pub(crate) fn reconcile_items(
                     abstract_text: sc.abstract_text,
                     venue: sc.venue,
                     dirty: false,
+                    pass1_updated: false,
                 });
             } else {
+                let mut pass1_updated = false;
                 if sc.item.state == SourceItemState::Missing
                     && prev.state != SourceItemState::Missing
                 {
@@ -106,12 +110,14 @@ pub(crate) fn reconcile_items(
                     moved += 1;
                 } else {
                     updated += 1;
+                    pass1_updated = true;
                 }
                 out_entries.push(ReconciledEntry {
                     item: sc.item,
                     abstract_text: sc.abstract_text,
                     venue: sc.venue,
                     dirty: true,
+                    pass1_updated,
                 });
             }
         } else {
@@ -180,6 +186,7 @@ pub(crate) fn reconcile_items(
                 abstract_text: cand.abstract_text,
                 venue: cand.venue,
                 dirty: true,
+                pass1_updated: false,
             });
         } else {
             added += 1;
@@ -188,6 +195,7 @@ pub(crate) fn reconcile_items(
                 abstract_text: cand.abstract_text,
                 venue: cand.venue,
                 dirty: true,
+                pass1_updated: false,
             });
         }
     }
@@ -205,6 +213,7 @@ pub(crate) fn reconcile_items(
                 abstract_text: String::new(),
                 venue: None,
                 dirty: false,
+                pass1_updated: false,
             });
         } else {
             abs_item.state = SourceItemState::Missing;
@@ -215,6 +224,7 @@ pub(crate) fn reconcile_items(
                 abstract_text: String::new(),
                 venue: None,
                 dirty: true,
+                pass1_updated: false,
             });
         }
     }
@@ -256,7 +266,14 @@ fn detect_same_id_moved_file(
     if cand.sha256.is_none() {
         cand.sha256 = hash_in_any_root(roots_checked, Path::new(&cand.path));
     }
-    cand.sha256.as_deref() == Some(prev_sha)
+    if cand.sha256.as_deref() == Some(prev_sha) {
+        if next.key.is_none() {
+            next.key = prev.key.clone();
+        }
+        true
+    } else {
+        false
+    }
 }
 
 fn primary_file_sha_and_size(item: &SourceItemRecord) -> Option<(&str, u64)> {
@@ -277,7 +294,7 @@ fn hash_in_any_root(roots: &[PathBuf], path: &Path) -> Option<String> {
     None
 }
 
-fn same_item_content(a: &SourceItemRecord, b: &SourceItemRecord) -> bool {
+pub(crate) fn same_item_content(a: &SourceItemRecord, b: &SourceItemRecord) -> bool {
     a.key == b.key
         && a.citekey == b.citekey
         && a.ids == b.ids
