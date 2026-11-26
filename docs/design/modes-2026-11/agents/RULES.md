@@ -54,11 +54,12 @@ Never print, copy or store a credential. Your result goes back by pushing your b
   description, schema, effect class or approval scope of an existing tool.
   `cargo test -p research-tools --test tool_def_golden` must pass with
   `crates/research-tools/tests/golden/tool_defs.txt` unchanged. Never regenerate that file.
-  For `inv-v6-tasks` (two new V6 definitions in `investigation/2`) and `solve-s7-exprs` (four new
+  For `inv-v6-tasks` (two new V6 definitions in `investigation/2`), `solve-s7-exprs` (four new
   Solve definitions `expr_show`, `step_record`, `check_run`, `solve_finish` and `solve_policy()` in
-  `solve/1`) only, those scoped profile definitions and `[profile ...]` registrations in
+  `solve/1`), and `exp-x6-x7-x8` (two new Explore definitions `idea_search`, `idea_fetch_papers` in
+  `explore/1`) only, those scoped profile definitions and `[profile ...]` registrations in
   `tool_profiles.txt` are authorized. Keep the research registry, `research/1`, `investigation/1`,
-  `tool_defs.txt`, and every existing definition unchanged.
+  `investigation/2`, `solve/1`, `tool_defs.txt`, and every existing definition unchanged.
 - Do not weaken the sandbox, the approval flow, the policy engine (deny > ask > allow), the ledger's
   fail-closed behaviour or its hash chain. No auto-approve path of any kind.
 - Never weaken, delete, skip (`#[ignore]`) or loosen an existing test or assertion. If a test is truly
