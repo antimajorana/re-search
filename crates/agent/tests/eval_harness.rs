@@ -8,12 +8,17 @@
 
 #[allow(dead_code)]
 mod eval_support;
+#[path = "eval_support/solve_q_tests.rs"]
+mod solve_q_tests;
 #[allow(dead_code)]
 mod support;
 
 use agent::{run_agent_loop, SessionOutcome};
 use eval_support::manifest::{parse_manifest, validate_manifest, validate_manifests, Input, Mode, Set, SolveTask, Tier};
-use eval_support::measures::{evaluate, judge, measure, percent, share, GateVerdict, Outcome, Rule, MEASURES};
+use eval_support::measures::{
+    count_in, evaluate, judge, measure, percent, share, solve_wording, GateVerdict, Outcome, Rule,
+    SolveQCounts, MEASURES,
+};
 use eval_support::routed_mock::{RoutedMock, Routes};
 use eval_support::scripted::{load_script, ScriptStep, ScriptedModel};
 use eval_support::sheet::{current_build, parse_sheet, render_markdown, today_utc, validate_sheet, write_sheet, Build, Sheet};
@@ -190,8 +195,9 @@ fn measure_table_is_the_table_of_section_7_3() {
         ("wrong_carry_overs", Rule::MustBeZero),
         ("judged_same_key_different_unreviewed", Rule::MustBeZero),
         ("wrong_statement_located", Rule::MustBeZero),
-        ("planted_error_ends_failed_pct", Rule::MustEqual(100.0)),
-        ("planted_error_ends_computed", Rule::MustBeZero),
+        (solve_wording::ID_PLANTED_ERROR_ENDS_FAILED_PCT, Rule::MustEqual(100.0)),
+        (solve_wording::ID_PLANTED_ERROR_ENDS_VERIFIED, Rule::MustBeZero),
+        (solve_wording::ID_PLANTED_ERROR_ENDS_CHECKED_NUMERICALLY, Rule::MustBeZero),
         ("quotes_surviving_handover_pct", Rule::MustEqual(100.0)),
         ("old_ledgers_not_resuming", Rule::MustBeZero),
         ("old_ledgers_view_differs", Rule::MustBeZero),
@@ -227,11 +233,13 @@ fn gate_never_passes_what_was_not_measured() {
     assert_eq!(judge(&rule("statement_recall"), Some(0.1)), Outcome::RecordedOnly);
     assert_eq!(judge(&rule("statement_recall"), None), Outcome::NotMeasured);
 
-    // Zero of zero is not 100 percent.
+    // Zero of zero is never 100 percent, a share, or a passing zero count.
     assert_eq!(percent(0, 0), None);
     assert_eq!(percent(3, 3), Some(100.0));
     assert_eq!(percent(2, 3).map(|p| p < 100.0), Some(true));
+    assert_eq!(share(0, 0), None);
     assert_eq!(share(1, 2), Some(0.5));
+    assert_eq!(count_in(0, 0), None);
 
     // All pass rules satisfied: PASS, even with recorded-only measures missing.
     let mut all: BTreeMap<String, f64> = BTreeMap::new();
@@ -357,8 +365,8 @@ fn scripted_case_runs_end_to_end_and_fills_a_sheet() {
     sheet.cases_run = vec![case.id.clone()];
     sheet.set_value_opt("final_answer_equals_key", share(u64::from(equals_key), 1));
     sheet.set_value("model_calls_typical", model_calls as f64);
-    // No planted-error case was run, so 0 of 0: the measure stays unmeasured.
-    sheet.set_value_opt("planted_error_ends_failed_pct", percent(0, 0));
+    // No planted-error case or tiered step was run, so 0 of 0: Q measures stay unmeasured.
+    SolveQCounts::default().record_into(&mut sheet.values).unwrap();
     sheet.measure_notes.insert("final_answer_equals_key".into(), "self-test | scripted model".into());
     sheet.remarks = "Harness self-test. Not an evaluation run.".into();
     assert_eq!(validate_sheet(&sheet), Vec::<String>::new());
@@ -367,7 +375,9 @@ fn scripted_case_runs_end_to_end_and_fills_a_sheet() {
     assert_eq!(report.verdict, GateVerdict::Incomplete, "one self-test case decides no gate");
     assert_eq!(report.outcome_of("final_answer_equals_key"), Some(Outcome::RecordedOnly));
     assert_eq!(report.outcome_of("model_calls_typical"), Some(Outcome::RecordedOnly));
-    assert_eq!(report.outcome_of("planted_error_ends_failed_pct"), Some(Outcome::NotMeasured));
+    assert_eq!(report.outcome_of(solve_wording::ID_PLANTED_ERROR_ENDS_FAILED_PCT), Some(Outcome::NotMeasured));
+    assert_eq!(report.outcome_of(solve_wording::ID_PLANTED_ERROR_ENDS_VERIFIED), Some(Outcome::NotMeasured));
+    assert_eq!(report.outcome_of(solve_wording::ID_PLANTED_ERROR_ENDS_CHECKED_NUMERICALLY), Some(Outcome::NotMeasured));
     assert_eq!(report.ids_with(Outcome::Pass), Vec::<&str>::new());
 
     let out = tempfile::tempdir().unwrap();
@@ -380,6 +390,8 @@ fn scripted_case_runs_end_to_end_and_fills_a_sheet() {
     assert!(md.contains("| Models | claude-haiku-4-5 |"));
     assert!(md.contains("| `final_answer_equals_key` | Q | recorded | 1 share | recorded |"));
     assert!(md.contains("| `planted_error_ends_failed_pct` | Q | must equal 100 | not measured | not measured |"));
+    assert!(md.contains("| `planted_error_ends_verified` | Q | must be 0 | not measured | not measured |"));
+    assert!(md.contains("| `planted_error_ends_checked_numerically` | Q | must be 0 | not measured | not measured |"));
     assert!(md.contains("self-test \\| scripted model"), "a `|` in a note must not break the table");
     assert_eq!(md.lines().filter(|l| l.contains("| not measured | not measured |")).count(), MEASURES.len() - 2);
     // A second run of the same day and build is a second sheet, not an overwrite.
@@ -404,6 +416,7 @@ fn sheet_template_is_the_rendering_of_a_blank_sheet() {
     let rendered = render_markdown(&Sheet::blank(Tier::Live)).unwrap();
     assert!(rendered.contains("## Gate: INCOMPLETE"));
     assert!(!rendered.contains("| pass |"));
+    assert!(!rendered.to_ascii_lowercase().contains("computed"));
     let path = sheets_dir().join("sheet-template.md");
     if std::env::var_os("EVAL_BLESS").is_some() {
         std::fs::write(&path, &rendered).unwrap();
