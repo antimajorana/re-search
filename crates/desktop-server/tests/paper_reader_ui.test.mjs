@@ -112,8 +112,7 @@ test('reader_card_escapes_gist_label_focus', async () => {
 });
 
 test('located_by_reader_label', async () => {
-  const graphSource = fs.readFileSync(path.join(assetsDir, 'investigation_graph.js'), 'utf8');
-  const graphUrl = `data:text/javascript;base64,${Buffer.from(graphSource, 'utf8').toString('base64')}`;
+  const graphUrl = pathToFileURL(path.join(assetsDir, 'investigation_graph.js')).href;
   const mapSource = fs.readFileSync(path.join(assetsDir, 'investigation_map.js'), 'utf8')
     .replace("import { renderMathTextInto } from '/assets/math.js';", 'const renderMathTextInto = (el, t) => { el.textContent = String(t); };')
     .replace('/assets/investigation_graph.js', graphUrl);
