@@ -130,7 +130,14 @@ export function createInvestigationV3Controller(deps = {}) {
     const mapBtn = el('button', 'inv-node-action-btn', 'Whole paper graph');
     mapBtn.type = 'button';
     mapBtn.setAttribute('aria-pressed', st.wholeMap ? 'true' : 'false');
-    toolbar.append(focusBtn, mapBtn);
+    const orientBtn = el('button', 'inv-node-action-btn', 'Orient paper');
+    orientBtn.type = 'button';
+    orientBtn.setAttribute('data-action', 'orient');
+    orientBtn.disabled = !hooks?.isModelConnected?.();
+    orientBtn.addEventListener('click', () => {
+      void apiMod.startInvestigationTask?.(sessionId, { task: 'orient' })?.then(() => hooks?.refresh?.(sessionId)).catch((err) => hooks?.showStatus?.(err?.message || 'Could not start Orient.'));
+    });
+    toolbar.append(focusBtn, mapBtn, orientBtn);
 
     if (st.trail.length > 1) {
       const backBtn = el('button', 'inv-node-action-btn', '← Previous statement');
@@ -328,6 +335,9 @@ export function createInvestigationV3Controller(deps = {}) {
     const contextDrawer = st.contextDrawer;
     contextHost.replaceChildren(contextDrawer.element);
 
+    const refreshMv = () => { st.etag = ''; activeKey = ''; return hooks?.refresh?.(sessionId); };
+    const startOpenTag = (tag) => apiMod.startInvestigationTask?.(sessionId, { task: 'open', tags: [tag] })?.then(refreshMv).catch((err) => hooks?.showStatus?.(err?.message || 'Could not open node.'));
+
     const mountNodeCard = (entry) => {
       renderInvestigationNodeCard(nodeCardHost, mv, st.selectedTag, {
         nodeText: entry ? entry.text : (st.selectedTag ? null : ''),
@@ -335,6 +345,13 @@ export function createInvestigationV3Controller(deps = {}) {
         hasPdf,
         modelConnected,
         onSelectNode: (id) => selectNode(id, true),
+        onTogglePin: (node, pin) => { void apiMod.saveInvestigationNote?.(sessionId, { tag: node.id, node_fp: node.fp, pin })?.then(refreshMv); },
+        onSaveNote: async (payload) => { const res = await apiMod.saveInvestigationNote?.(sessionId, payload); void refreshMv(); return res; },
+        onOpenNode: (id) => { void startOpenTag(id); },
+        onContinueTask: (_t, node) => { if (node?.id) void startOpenTag(node.id); },
+        onRetryTask: (_t, node) => { if (node?.id) void startOpenTag(node.id); },
+        onStopTask: () => { void apiMod.stopTurn?.(sessionId)?.then(refreshMv); },
+        onOpenQuote: (t) => { if (t?.source_id && t?.path) hooks?.openSource?.(sessionId, t); },
         onSelectCitation: (cite) => {
           const locator = Array.isArray(cite.locators) && cite.locators.length
             ? cite.locators[0]
@@ -361,7 +378,7 @@ export function createInvestigationV3Controller(deps = {}) {
               start_line: span.start_line,
               label: node.label,
             });
-          } else if (actionId === 'ask' || actionId === 'note') {
+          } else if (actionId === 'ask') {
             const input = typeof document !== 'undefined' ? document.getElementById('composer-input') : null;
             if (input) {
               if (!input.value) input.value = `Regarding ${node.label} (${node.id}): `;
@@ -374,6 +391,11 @@ export function createInvestigationV3Controller(deps = {}) {
       });
     };
     mountNodeCard(currentEntry);
+
+    if (mv.orient_auto_start && modelConnected && !st.orientAutoStarted && !(mv.tasks || []).some((t) => t.task === 'orient')) {
+      st.orientAutoStarted = true;
+      void apiMod.startInvestigationTask?.(sessionId, { task: 'orient' })?.then(refreshMv).catch(() => {});
+    }
 
     focusBtn.addEventListener('click', () => {
       if (!st.wholeMap && st.graphMode === VIEW_MODES.FOCUSED) return;
