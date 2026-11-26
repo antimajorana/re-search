@@ -255,13 +255,13 @@ pub fn attach_pdf_page_metadata(mv: &mut Value, skeleton: &PaperSkeleton, pdf: &
                 let basis = node_page_basis(&pdf.page_map, node);
                 item["page_range"] = json!(page_range);
                 item["page_basis"] = json!(basis);
-                item["render_math"] = json!(render_formulas_as_math(basis));
+                item["render_math"] = json!(basis.is_some_and(render_formulas_as_math));
             }
         }
     }
     let image_only: Vec<usize> = pdf
         .page_map
-        .pages()
+        .pages
         .iter()
         .filter(|p| p.basis == research_tools::pdf_pages::PageBasis::None)
         .map(|p| p.page)
@@ -296,7 +296,7 @@ pub fn read_verified_node_text(
             "spans": node.spans, "text": text,
             "page_range": page_range_for_node(&pdf.page_map, node),
             "page_basis": basis,
-            "render_math": render_formulas_as_math(basis),
+            "render_math": basis.is_some_and(render_formulas_as_math),
             "proof_tag": proof_tag, "proof_spans": proof_spans, "proof_text": proof_text,
         }));
     }
