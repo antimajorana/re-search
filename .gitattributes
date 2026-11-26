@@ -1,0 +1,5 @@
+crates/export/tests/golden/** text eol=lf
+crates/research-tools/tests/golden/** text eol=lf
+crates/research-tools/tests/fixtures/** text eol=lf
+tests/fixtures/** text eol=lf
+docs/design/eval-2026-11/sheet-template.md text eol=lf
