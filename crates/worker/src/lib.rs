@@ -11,14 +11,21 @@
 
 #[cfg(windows)]
 pub mod appcontainer;
+pub mod protocol;
 pub mod sandbox;
 #[cfg(windows)]
 pub mod stage;
 #[cfg(windows)]
 pub mod win;
 
+pub use protocol::{
+    CanonicalExpr, FreeSymbol, WorkerHello, WorkerRole, MIN_SUPPORTED_PROTOCOL_VERSION,
+    PROTOCOL_VERSION,
+};
+
 use sandbox::{Contained, Containment, Sandbox};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;
 use std::io::Write;
@@ -27,8 +34,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::Duration;
-
-pub const PROTOCOL_VERSION: u64 = 1;
 
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
@@ -94,6 +99,7 @@ struct Running {
 pub struct Worker {
     #[cfg_attr(not(windows), allow(dead_code))]
     config: WorkerConfig,
+    role: WorkerRole,
     sandbox: Box<dyn Sandbox>,
     running: Option<Running>,
     next_id: u64,
@@ -102,16 +108,35 @@ pub struct Worker {
 }
 
 impl Worker {
-    /// Nothing is started until the first call.
+    /// Nothing is started until the first call. Defaults to [`WorkerRole::Solver`].
     pub fn new(config: WorkerConfig, sandbox: Box<dyn Sandbox>) -> Worker {
+        Self::new_with_role(config, sandbox, WorkerRole::Solver)
+    }
+
+    /// Create a lazy worker handle for an explicit process role (`Solver` or `Check`).
+    pub fn new_with_role(
+        config: WorkerConfig,
+        sandbox: Box<dyn Sandbox>,
+        role: WorkerRole,
+    ) -> Worker {
         Worker {
             config,
+            role,
             sandbox,
             running: None,
             next_id: 1,
             spawn_count: 0,
             epoch: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    pub fn role(&self) -> WorkerRole {
+        self.role
+    }
+
+    /// Negotiated protocol version reported by the currently running worker hello, if any.
+    pub fn negotiated_protocol(&self) -> Option<u64> {
+        self.hello().and_then(|h| h["protocol"].as_u64())
     }
 
     pub fn containment(&self) -> Containment {
@@ -185,14 +210,16 @@ impl Worker {
         env.insert("PYTHONNOUSERSITE".into(), "1".into());
         env.insert("PYTHONIOENCODING".into(), "utf-8".into());
 
+        let mut args = vec![
+            "-u".to_string(),
+            strip_verbatim(&self.config.script).to_string_lossy().into_owned(),
+            to_child.their_handle_value().to_string(),
+            from_child.their_handle_value().to_string(),
+        ];
+        args.extend(self.role.cli_args().iter().map(|arg| arg.to_string()));
         let launch = WorkerLaunch {
             exe: self.config.python.clone(),
-            args: vec![
-                "-u".to_string(),
-                strip_verbatim(&self.config.script).to_string_lossy().into_owned(),
-                to_child.their_handle_value().to_string(),
-                from_child.their_handle_value().to_string(),
-            ],
+            args,
             cwd: scratch,
             env,
             inherit_handles: vec![to_child.their_handle_value(), from_child.their_handle_value()],
@@ -223,7 +250,7 @@ impl Worker {
         let mut running = Running { proc, requests, responses: rx, hello: Value::Null };
         match running.responses.recv_timeout(self.config.startup_timeout) {
             Ok(line) => match serde_json::from_str::<Value>(&line) {
-                Ok(v) if v["ready"] == json!(true) && v["protocol"] == json!(PROTOCOL_VERSION) => {
+                Ok(v) if protocol::validate_hello(&v, self.role).is_ok() => {
                     running.hello = v;
                     self.running = Some(running);
                     Ok(())
@@ -286,15 +313,7 @@ impl Worker {
         }
     }
 
-    /// Run `code` in the worker, optionally enforcing under `&mut self` that
-    /// the call runs inside `required_epoch` without respawning a dead worker.
-    /// Returns `(result, ran_epoch)`.
-    pub fn evaluate_in_epoch(
-        &mut self,
-        code: &str,
-        timeout: Duration,
-        required_epoch: Option<u64>,
-    ) -> Result<(Value, u64), WorkerError> {
+    fn check_epoch(&mut self, required_epoch: Option<u64>) -> Result<(), WorkerError> {
         if self.running.is_some() && self.epoch.load(Ordering::Acquire) == 0 {
             self.kill();
         }
@@ -304,7 +323,32 @@ impl Worker {
                 return Err(WorkerError::EpochMismatch { expected: req, actual: current });
             }
         }
-        let answer = self.request("evaluate", json!({ "code": code }), timeout)?;
+        Ok(())
+    }
+
+    /// Run `code` in a solver worker with optional protocol 2 staged `exprs_in`,
+    /// optionally enforcing `required_epoch`. Refuses immediately on [`WorkerRole::Check`].
+    pub fn evaluate_with_exprs(
+        &mut self,
+        code: &str,
+        exprs_in: Option<&BTreeMap<String, String>>,
+        timeout: Duration,
+        required_epoch: Option<u64>,
+    ) -> Result<(Value, u64), WorkerError> {
+        if self.role != WorkerRole::Solver {
+            return Err(WorkerError::Protocol("evaluate is forbidden on a check-role worker".into()));
+        }
+        self.check_epoch(required_epoch)?;
+        if exprs_in.is_some() && self.running.is_none() {
+            self.spawn()?;
+        }
+        if exprs_in.is_some() && self.negotiated_protocol() == Some(1) {
+            return Err(WorkerError::Protocol(
+                "exprs_in requires worker protocol >= 2 (connected worker speaks protocol 1)".into(),
+            ));
+        }
+        let params = protocol::build_evaluate_params(code, exprs_in);
+        let answer = self.request("evaluate", params, timeout)?;
         let ran_epoch = self.spawn_count;
         if answer["ok"] == json!(true) {
             Ok((answer["result"].clone(), ran_epoch))
@@ -313,11 +357,71 @@ impl Worker {
         }
     }
 
+    /// Run `code` in the worker, optionally enforcing under `&mut self` that
+    /// the call runs inside `required_epoch` without respawning a dead worker.
+    /// Returns `(result, ran_epoch)`.
+    pub fn evaluate_in_epoch(
+        &mut self,
+        code: &str,
+        timeout: Duration,
+        required_epoch: Option<u64>,
+    ) -> Result<(Value, u64), WorkerError> {
+        self.evaluate_with_exprs(code, None, timeout, required_epoch)
+    }
+
     /// Run `code` in the worker. Returns the worker's result object:
     /// `value` (repr of the last expression, or null), `stdout`, `stderr`,
     /// `truncated`, optionally `latex`, and `error` if the code raised.
     pub fn evaluate(&mut self, code: &str, timeout: Duration) -> Result<Value, WorkerError> {
         self.evaluate_in_epoch(code, timeout, None).map(|(v, _)| v)
+    }
+
+    /// Parse, canonicalize, hash, and render LaTeX for a stored `srepr` string inside
+    /// a [`WorkerRole::Check`] process (`solve.md` 4.3, rules R5 & R6).
+    pub fn canonicalize_expr(
+        &mut self,
+        srepr: &str,
+        timeout: Duration,
+        required_epoch: Option<u64>,
+    ) -> Result<(CanonicalExpr, u64), WorkerError> {
+        if self.role != WorkerRole::Check {
+            return Err(WorkerError::Protocol(
+                "canonicalize_expr requires a check-role worker".into(),
+            ));
+        }
+        self.check_epoch(required_epoch)?;
+        let answer = self.request("canonicalize", protocol::build_canonicalize_params(srepr), timeout)?;
+        let ran_epoch = self.spawn_count;
+        if answer["ok"] == json!(true) {
+            let parsed = protocol::parse_canonical_expr(&answer["result"])
+                .map_err(WorkerError::Protocol)?;
+            Ok((parsed, ran_epoch))
+        } else {
+            Err(WorkerError::Protocol(answer["error"].to_string()))
+        }
+    }
+
+    /// Invoke a host-registered check in `python/checks/` inside a [`WorkerRole::Check`] process.
+    pub fn run_check(
+        &mut self,
+        name: &str,
+        handles: &BTreeMap<String, String>,
+        params: Value,
+        timeout: Duration,
+        required_epoch: Option<u64>,
+    ) -> Result<(Value, u64), WorkerError> {
+        if self.role != WorkerRole::Check {
+            return Err(WorkerError::Protocol("run_check requires a check-role worker".into()));
+        }
+        self.check_epoch(required_epoch)?;
+        let req = protocol::build_check_params(name, handles, params);
+        let answer = self.request("check", req, timeout)?;
+        let ran_epoch = self.spawn_count;
+        if answer["ok"] == json!(true) {
+            Ok((answer["result"].clone(), ran_epoch))
+        } else {
+            Err(WorkerError::Protocol(answer["error"].to_string()))
+        }
     }
 
     /// Ask the worker to exit; kill it if it does not.
@@ -332,5 +436,51 @@ impl Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         self.kill();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sandbox::JobObjectSandbox;
+
+    fn dummy_config() -> WorkerConfig {
+        WorkerConfig {
+            python: PathBuf::from("python"),
+            script: PathBuf::from("python/worker.py"),
+            scratch: PathBuf::from("scratch"),
+            pycache: PathBuf::from("pycache"),
+            startup_timeout: Duration::from_secs(5),
+        }
+    }
+
+    #[test]
+    fn worker_role_guards_refuse_mismatched_methods_before_spawn() {
+        let mut solver = Worker::new(dummy_config(), Box::new(JobObjectSandbox));
+        assert_eq!(solver.role(), WorkerRole::Solver);
+        assert_eq!(solver.negotiated_protocol(), None);
+
+        let err = solver.canonicalize_expr("Integer(1)", Duration::from_secs(1), None).unwrap_err();
+        assert!(matches!(err, WorkerError::Protocol(_)), "{err}");
+        let err = solver
+            .run_check("symbolic_zero_smoke", &BTreeMap::new(), json!({}), Duration::from_secs(1), None)
+            .unwrap_err();
+        assert!(matches!(err, WorkerError::Protocol(_)), "{err}");
+        assert_eq!(solver.spawn_count(), 0);
+
+        let mut checker = Worker::new_with_role(dummy_config(), Box::new(JobObjectSandbox), WorkerRole::Check);
+        assert_eq!(checker.role(), WorkerRole::Check);
+
+        let err = checker.evaluate("1 + 1", Duration::from_secs(1)).unwrap_err();
+        assert!(matches!(err, WorkerError::Protocol(_)), "{err}");
+        let err = checker.evaluate_with_exprs("1 + 1", None, Duration::from_secs(1), None).unwrap_err();
+        assert!(matches!(err, WorkerError::Protocol(_)), "{err}");
+        assert_eq!(checker.spawn_count(), 0);
+    }
+
+    #[test]
+    fn protocol_constants_support_v1_and_v2() {
+        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, 1);
+        assert_eq!(PROTOCOL_VERSION, 2);
     }
 }
