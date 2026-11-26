@@ -340,7 +340,6 @@ export function createInvestigationV3Controller(deps = {}) {
     const contextDrawer = st.contextDrawer;
     contextHost.replaceChildren(contextDrawer.element);
 
-    const refreshMv = () => { st.etag = ''; activeKey = ''; return hooks?.refresh?.(sessionId); };
     const startOpenTag = (tag) => apiMod.startInvestigationTask?.(sessionId, { task: 'open', tags: [tag] })?.then(refreshMv).catch((err) => hooks?.showStatus?.(err?.message || 'Could not open node.'));
 
     const mountNodeCard = (entry) => {

@@ -532,17 +532,25 @@ fn v7_orient_rerun_preserves_pins_notes_and_honors_rule_612_615_and_assets() {
     assert_ne!(task2["run_state_label"], json!("Partial"));
     assert!(!raw2.to_ascii_lowercase().contains("verified"));
 
-    // 4. Static V7 assets served cleanly without V8/V10 imports.
+    // 4. Static V7/V8/V10 assets served cleanly once V8+V10 are merged.
     let (st_b, _, raw_b) = raw_http(s.srv.addr.port(), "GET", "/assets/investigation_badges.js", &[], b"");
     assert_eq!(st_b, 200);
     assert!(String::from_utf8_lossy(&raw_b).contains("renderInvestigationBadges"));
+
+    let (st_nm, _, raw_nm) = raw_http(s.srv.addr.port(), "GET", "/assets/investigation_node_model.js", &[], b"");
+    assert_eq!(st_nm, 200);
+    assert!(String::from_utf8_lossy(&raw_nm).contains("renderInvestigationNodeModel"));
+
+    let (st_nu, _, raw_nu) = raw_http(s.srv.addr.port(), "GET", "/assets/investigation_notes_ui.js", &[], b"");
+    assert_eq!(st_nu, 200);
+    assert!(String::from_utf8_lossy(&raw_nu).contains("renderInvestigationNotes"));
 
     let (st_n, _, raw_n) = raw_http(s.srv.addr.port(), "GET", "/assets/investigation_node.js", &[], b"");
     assert_eq!(st_n, 200);
     let node_js = String::from_utf8_lossy(&raw_n);
     assert!(node_js.contains("investigation_badges.js"));
-    assert!(!node_js.contains("investigation_node_model.js"));
-    assert!(!node_js.contains("investigation_notes_ui.js"));
+    assert!(node_js.contains("investigation_node_model.js"));
+    assert!(node_js.contains("investigation_notes_ui.js"));
 
     s.srv.shutdown();
 }
