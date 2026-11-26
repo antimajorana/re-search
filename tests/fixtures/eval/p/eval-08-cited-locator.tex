@@ -1,0 +1,99 @@
+% Original fixed-tier evaluation fixture for Set P (not a real paper).
+% Tests citation locators and external theorem lookup via input.locator.
+\documentclass{article}
+\usepackage{amsmath,amssymb,amsthm}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+
+\begin{document}
+
+\section{Reversible chains and Dirichlet forms}
+\label{sec:markov-intro}
+
+\begin{definition}
+\label{def:dirichlet}
+Let $P$ be an irreducible transition matrix on a finite state space $\Omega$
+that is reversible with respect to its stationary distribution $\pi$. For any
+function $f : \Omega \to \mathbb{R}$, the \emph{Dirichlet form} is
+\[
+\mathcal{E}_P(f,f) = \frac{1}{2} \sum_{x,y \in \Omega} \pi(x) P(x,y) \bigl(f(x) - f(y)\bigr)^2,
+\]
+and the \emph{spectral gap} is
+$\gamma(P) = \inf \{ \mathcal{E}_P(f,f) / \operatorname{Var}_\pi(f) : \operatorname{Var}_\pi(f) > 0 \}$.
+\end{definition}
+
+\section{Spectral gap comparison}
+\label{sec:gap-results}
+
+\begin{theorem}
+\label{thm:spectral-gap}
+Let $P$ and $\widetilde{P}$ be irreducible reversible Markov chains on
+$\Omega$ with stationary distributions $\pi$ and $\widetilde{\pi}$, and let
+$\mathcal{E}_P, \mathcal{E}_{\widetilde{P}}, \gamma(P), \gamma(\widetilde{P})$
+be given by Definition~\ref{def:dirichlet}. Suppose there exist constants
+$c_1, c_2 > 0$ such that $\mathcal{E}_{\widetilde{P}}(f,f) \le c_1 \mathcal{E}_P(f,f)$
+for all $f : \Omega \to \mathbb{R}$ and $\widetilde{\pi}(x) \ge c_2 \pi(x)$
+for all $x \in \Omega$. Then
+\[
+\gamma(\widetilde{P}) \le \frac{c_1}{c_2} \gamma(P).
+\]
+\end{theorem}
+\begin{proof}
+For any nonconstant $f : \Omega \to \mathbb{R}$, the variational formula for
+variance gives
+\[
+\operatorname{Var}_{\widetilde{\pi}}(f)
+= \min_{a \in \mathbb{R}} \sum_{x \in \Omega} \widetilde{\pi}(x)(f(x) - a)^2
+\ge c_2 \min_{a \in \mathbb{R}} \sum_{x \in \Omega} \pi(x)(f(x) - a)^2
+= c_2 \operatorname{Var}_\pi(f).
+\]
+Dividing $\mathcal{E}_{\widetilde{P}}(f,f) \le c_1 \mathcal{E}_P(f,f)$ by
+$\operatorname{Var}_{\widetilde{\pi}}(f) \ge c_2 \operatorname{Var}_\pi(f)$ and
+taking the infimum over nonconstant $f$ gives $\gamma(\widetilde{P}) \le (c_1/c_2)\gamma(P)$.
+\end{proof}
+
+\begin{proposition}[{\cite[Theorem~2.1]{nord2024operator}}]
+\label{prop:comparison}
+Let $P$ and $\widetilde{P}$ share the stationary distribution $\pi$. If each
+transition of $\widetilde{P}$ is routed along a canonical path of transitions
+of $P$ with congestion constant $A > 0$, then
+$\mathcal{E}_{\widetilde{P}}(f,f) \le A \mathcal{E}_P(f,f)$ for all
+$f : \Omega \to \mathbb{R}$ and $\gamma(\widetilde{P}) \le A \gamma(P)$.
+\end{proposition}
+\begin{proof}
+Expanding $f(x) - f(y)$ telescopically along each canonical path and applying
+the Cauchy--Schwarz inequality yields
+$\mathcal{E}_{\widetilde{P}}(f,f) \le A \mathcal{E}_P(f,f)$. Since
+$\widetilde{\pi} = \pi$, applying Theorem~\ref{thm:spectral-gap} with
+$c_1 = A$ and $c_2 = 1$ gives $\gamma(\widetilde{P}) \le A \gamma(P)$.
+\end{proof}
+
+\begin{corollary}
+\label{cor:mixing}
+Under the path-congestion hypotheses of Proposition~\ref{prop:comparison}, if
+$\gamma(\widetilde{P}) > 0$ then the relaxation time of $P$ satisfies
+$\gamma(P)^{-1} \le A \gamma(\widetilde{P})^{-1}$, and its $L^2$-mixing time
+at threshold $\varepsilon \in (0,1)$ obeys
+\[
+t_{\mathrm{mix}}^{(2)}(P, \varepsilon)
+\le \frac{A}{\gamma(\widetilde{P})} \log\left(\frac{1}{\varepsilon \pi_{\min}}\right),
+\]
+where $\pi_{\min} = \min_{x \in \Omega} \pi(x)$.
+\end{corollary}
+\begin{proof}
+Rearranging $\gamma(\widetilde{P}) \le A \gamma(P)$ yields
+$\gamma(P)^{-1} \le A \gamma(\widetilde{P})^{-1}$. Combining this bound with
+the standard spectral-gap $L^2$-mixing estimate in
+\cite[Proposition~4.3]{hale2023bounds} gives the stated inequality.
+\end{proof}
+
+\begin{thebibliography}{9}
+\bibitem{nord2024operator} E. Nord, \emph{Dirichlet Forms on Finite Graphs}, Synthetic Monograph Series (2024), arXiv:0000.00001.
+\bibitem{hale2023bounds} R. Hale, \emph{Mixing Times via Comparison}, Synthetic Lecture Notes (2023), doi:10.0000/eval.markov.2023.
+\end{thebibliography}
+
+\end{document}

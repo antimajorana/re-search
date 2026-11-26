@@ -1,0 +1,123 @@
+% Original fixed-tier evaluation fixture for Set P (not a real paper).
+% Tests ambiguous printed counters, unlabelled claim*, and heuristic mentions.
+\documentclass{article}
+\usepackage{amsmath,amssymb,amsthm}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}[section]
+\newtheorem*{claim*}{Claim}
+
+\begin{document}
+
+\section{Weighted Laplacian and Rayleigh quotient}
+\label{sec:laplacian}
+Let $G = (V, E)$ be a finite connected graph with symmetric positive edge
+weights $w_{xy} = w_{yx} > 0$ for $\{x,y\} \in E$. For each vertex $x \in V$,
+let $d_x = \sum_{y \sim x} w_{xy}$ be its weighted degree, and for any subset
+$S \subseteq V$ define its volume $\operatorname{vol}(S) = \sum_{x \in S} d_x$
+and boundary weight $w(\partial S) = \sum_{x \in S,\, y \notin S} w_{xy}$.
+The normalized Rayleigh quotient of a nonzero function $f : V \to \mathbb{R}$
+is given by
+\begin{equation}
+\label{eq:rayleigh-quot}
+\mathcal{R}(f) = \frac{\sum_{\{x,y\} \in E} w_{xy} (f(x) - f(y))^2}{\sum_{x \in V} d_x f(x)^2}.
+\end{equation}
+Let $0 = \lambda_1 < \lambda_2 \le \dots \le \lambda_{|V|}$ denote the
+eigenvalues of the normalized weighted Laplacian on $G$, and let
+$h(G) = \min_{0 < \operatorname{vol}(S) \le \operatorname{vol}(V)/2}
+\frac{w(\partial S)}{\operatorname{vol}(S)}$ be the weighted Cheeger constant.
+
+\begin{lemma}
+\label{lem:rayleigh}
+The first nontrivial eigenvalue $\lambda_2$ admits the variational
+characterization
+\[
+\lambda_2 = \min \left\{ \mathcal{R}(f) : f \not\equiv 0,\ \sum_{x \in V} d_x f(x) = 0 \right\},
+\]
+where $\mathcal{R}(f)$ is defined in \eqref{eq:rayleigh-quot}.
+\end{lemma}
+\begin{proof}
+Since the constant functions span the kernel of the normalized weighted
+Laplacian and are orthogonal to the subspace $\{f : \sum_{x \in V} d_x f(x) = 0\}$
+in the degree-weighted inner product, the Courant--Fischer min-max principle
+gives the stated formula.
+\end{proof}
+
+\begin{theorem}
+\label{thm:spectral-lower}
+For every finite connected weighted graph $G$, the spectral gap satisfies
+$\lambda_2 \ge \frac{1}{2} h(G)^2$.
+\end{theorem}
+\begin{proof}
+Let $f$ be a minimizer realizing $\lambda_2$ in Lemma~\ref{lem:rayleigh},
+shifted by a median so that its positive part $g = f_+$ is supported on a set
+of volume at most $\operatorname{vol}(V)/2$ and satisfies $\mathcal{R}(g) \le \lambda_2$.
+Applying the co-area formula to the level sets of $g^2$ and bounding the edge
+variation by Cauchy--Schwarz produces $h(G) \le \sqrt{2 \mathcal{R}(g)} \le \sqrt{2\lambda_2}$,
+and squaring gives $\lambda_2 \ge \frac{1}{2} h(G)^2$.
+\end{proof}
+
+\section{Cut bounds and counter collisions}
+\label{sec:cuts}
+
+\begin{proposition}
+\label{prop:cut-upper}
+For every nonempty proper subset $S \subset V$,
+\[
+\lambda_2 \le \frac{w(\partial S)}{\operatorname{vol}(S)} + \frac{w(\partial S)}{\operatorname{vol}(V \setminus S)}.
+\]
+\end{proposition}
+
+% Intentionally decrement counter to simulate a duplicate printed number anomaly.
+\addtocounter{proposition}{-1}
+
+\begin{proposition}
+\label{prop:cut-refined}
+For every subset $S \subset V$ with $0 < \operatorname{vol}(S) \le \operatorname{vol}(V)/2$,
+\[
+\lambda_2 \le 2 \frac{w(\partial S)}{\operatorname{vol}(S)}.
+\]
+\end{proposition}
+
+\begin{theorem}
+\label{thm:cheeger}
+For every finite connected weighted graph $G$,
+\[
+\frac{1}{2} h(G)^2 \le \lambda_2 \le 2 h(G).
+\]
+\end{theorem}
+\begin{proof}
+Choose $S \subset V$ achieving $h(G)$ with $0 < \operatorname{vol}(S) \le \operatorname{vol}(V)/2$,
+and set $f(x) = \operatorname{vol}(V \setminus S)$ for $x \in S$ and
+$f(x) = -\operatorname{vol}(S)$ for $x \notin S$.
+Applying Lemma 1 to the indicator test vector $f$ gives
+$\lambda_2 \le \mathcal{R}(f) = w(\partial S)\bigl(\operatorname{vol}(S)^{-1} + \operatorname{vol}(V \setminus S)^{-1}\bigr) \le 2 h(G)$.
+Combining this with Theorem 1 yields $\frac{1}{2} h(G)^2 \le \lambda_2 \le 2 h(G)$.
+\end{proof}
+
+The constant in Proposition 2.1 can be sharpened for regular graphs.
+
+\begin{claim*}
+If $G$ is connected with $h(G) > 0$, then by Theorem~\ref{thm:spectral-lower}
+the spectral gap $\lambda_2$ is strictly positive.
+\end{claim*}
+
+\appendix
+
+\section{Auxiliary discrete bound}
+\label{sec:app-bound}
+\setcounter{lemma}{0}
+\renewcommand{\thelemma}{A.\arabic{lemma}}
+
+\begin{lemma}
+\label{lem:app-sum}
+For every function $g : V \to \mathbb{R}$,
+\[
+\sum_{\{x,y\} \in E} w_{xy} |g(x)^2 - g(y)^2|
+\le \sqrt{2 \sum_{\{x,y\} \in E} w_{xy} (g(x) - g(y))^2}
+    \sqrt{\sum_{x \in V} d_x g(x)^2}.
+\]
+\end{lemma}
+
+\end{document}
