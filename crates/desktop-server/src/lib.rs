@@ -27,6 +27,7 @@ mod explain_export;
 mod evidence;
 mod experiments;
 mod project_context;
+pub mod handoff;
 pub mod hitl;
 pub mod http_srv;
 pub mod launcher;

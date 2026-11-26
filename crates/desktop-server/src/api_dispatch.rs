@@ -288,6 +288,12 @@ pub(crate) fn dispatch_api(
         ("POST", ["api", "sessions", id, "fork"]) => {
             write_api_res(&mut stream, handle_fork(state, id, &req.body));
         }
+        ("POST", ["api", "sessions", id, "handoff"]) => {
+            write_api_res(&mut stream, crate::handoff::handle_create_handoff(state, id, &req.body));
+        }
+        ("GET", ["api", "sessions", id, "handoffs"]) => {
+            write_api_res(&mut stream, crate::handoff::handle_get_handoffs(state, id));
+        }
         ("GET", ["api", "sessions", id, "diff", other_id]) => {
             write_api_res(&mut stream, handle_diff(state, id, other_id));
         }

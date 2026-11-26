@@ -3,6 +3,9 @@
 
 pub mod diff;
 pub mod fork;
+pub mod handoff;
+mod handoff_types;
+mod handoff_view;
 pub mod html;
 pub mod latex;
 pub mod zip;
