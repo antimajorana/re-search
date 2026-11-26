@@ -37,7 +37,7 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | F14a PDF text core | done, reviewed and merged; local page-link probe passed on seven user-selected PDFs | `pdf_pages*.rs`, `pdf_firstpage*.rs`, `pdf_match.rs`; report `reports/f14a-pdf-core.md`. Full P6 evaluation pending |
 | F10 library | done, reviewed and merged; `/api/library` registered by F5 | `library*.rs`, `ledger/src/library_*.rs`, `routes_library.rs`; report `reports/f10-library.md` |
 | F11 literature services, X1 terms and ranking, S3 router gate | reviewed and merged | `lit_providers.rs`, `lit_abstracts.rs`, `idea_{terms,queries,rank}.rs`, `tools/src/gate.rs` |
-| S6 check worker protocol | cloud checkpoint received; Windows verification pending | `gemini/modes/q-f11-x1-s3-s6` |
+| S6 check worker protocol | protocol and contained check role verified on Windows and Linux; installer verification pending | `codex/modes-worker-windows` |
 | F12 coverage gate and prior-work wording | brief ready | `agents/f12-coverage.md` |
 | V2 Investigate dependencies, tags, numbering and bibliography | reviewed and merged | `crates/research-tools/src/skeleton/`; checkpoint `afea25b` |
 | Investigate lane A: V3, V4, V5 in order | in progress | `gemini/modes/inv-a-v2-v5` |
