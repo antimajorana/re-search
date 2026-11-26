@@ -4,6 +4,9 @@
 //! resume, the desktop router, the CLI research router, `cli-route`, and the MCP server (`core`).
 //! Adding a new mode adds a profile here without mutating `research/1` or `investigation/1`.
 
+use crate::map_defs::{
+    read_map_node_def, record_map_reading_def, register_map_tools, INVESTIGATION_V2_MAY_GAIN,
+};
 use crate::paper_key::Mode;
 use crate::{all_research_tool_defs, investigation, register_research_tools, research_policy, ResearchEnv};
 use ledger::Event;
@@ -21,7 +24,7 @@ pub const TOOL_PROFILE_FIELD: &str = "tool_profile";
 pub const PROFILE_RESEARCH_V1: &str = "research/1";
 /// Frozen profile for pre-F1 and current Investigation sessions (`00-overview.md` 2.2, 8.2 decision 1).
 pub const PROFILE_INVESTIGATION_V1: &str = "investigation/1";
-/// Reserved profile for Investigate v2 (package V6; `00-overview.md` 2.2, 8.2 decision 1).
+/// Built profile for Investigate v2 (package V6; `00-overview.md` 2.2, 8.2 decision 1).
 pub const PROFILE_INVESTIGATION_V2: &str = "investigation/2";
 /// Reserved profile for Explore conversation turns (`00-overview.md` 2.2, 8.2 decision 1).
 pub const PROFILE_EXPLORE_V1: &str = "explore/1";
@@ -29,10 +32,13 @@ pub const PROFILE_EXPLORE_V1: &str = "explore/1";
 pub const PROFILE_SOLVE_V1: &str = "solve/1";
 
 /// Built profiles available in this build, in canonical order.
-pub const BUILT_PROFILE_NAMES: &[&str] = &[PROFILE_RESEARCH_V1, PROFILE_INVESTIGATION_V1];
+pub const BUILT_PROFILE_NAMES: &[&str] = &[
+    PROFILE_RESEARCH_V1,
+    PROFILE_INVESTIGATION_V1,
+    PROFILE_INVESTIGATION_V2,
+];
 /// Known future profiles whose tools are not implemented yet.
 pub const RESERVED_PROFILE_NAMES: &[&str] = &[
-    PROFILE_INVESTIGATION_V2,
     PROFILE_EXPLORE_V1,
     PROFILE_SOLVE_V1,
 ];
@@ -184,28 +190,53 @@ pub fn research_v1() -> ToolProfile {
     }
 }
 
-/// Profile `investigation/1`: same frozen tool list as `research/1`, carrying the 7 historical
-/// `may_gain` ids and 2 historical `earlier_defs` special cases as data.
-///
-/// When package V6 adds `investigation/2`, only `investigation/1` (never `research/1`) will gain
-/// the new Investigate tool ids under `may_gain`.
+/// `may_gain` ids for `investigation/1` and `investigation/2`: the 7 historical `ReadWorkspace`
+/// additions plus the Investigate v2 `ReadWorkspace` tools (never added to `research/1`).
+fn investigation_may_gain() -> Vec<&'static str> {
+    let mut ids = LEGACY_MAY_GAIN.to_vec();
+    ids.extend_from_slice(INVESTIGATION_V2_MAY_GAIN);
+    ids
+}
+
+/// Profile `investigation/1`: same frozen 22-tool list as `research/1`, carrying the 7 historical
+/// `may_gain` ids, the Investigate v2 `ReadWorkspace` compatibility `may_gain` ids, and the 2
+/// historical `earlier_defs` special cases as data (`00-overview.md` 2.2, `investigate.md` §8.2).
 pub fn investigation_v1() -> ToolProfile {
     ToolProfile {
         name: PROFILE_INVESTIGATION_V1,
         defs: research_v1_defs(),
-        may_gain: LEGACY_MAY_GAIN.to_vec(),
+        may_gain: investigation_may_gain(),
         earlier_defs: legacy_recorder_earlier_defs(),
         policy: research_policy(),
     }
 }
 
-/// Look up a profile by name. Reserved future profiles (`investigation/2`, `explore/1`, `solve/1`)
+/// Profile `investigation/2`: `research/1` plus V6's `read_map_node` and `record_map_reading`
+/// (`ReadWorkspace`), sorted by id (`investigate.md` §5.1, `00-overview.md` 2.2).
+/// `record_context_cards` (V12) and `record_prior_work_check` (deferred V14) remain under
+/// `may_gain` so they can join later without breaking `investigation/2` resume.
+pub fn investigation_v2() -> ToolProfile {
+    let mut defs = research_v1_defs();
+    defs.push(read_map_node_def());
+    defs.push(record_map_reading_def());
+    defs.sort_by(|a, b| a.id.cmp(&b.id));
+    ToolProfile {
+        name: PROFILE_INVESTIGATION_V2,
+        defs,
+        may_gain: investigation_may_gain(),
+        earlier_defs: legacy_recorder_earlier_defs(),
+        policy: research_policy(),
+    }
+}
+
+/// Look up a profile by name. Reserved future profiles (`explore/1`, `solve/1`)
 /// return `Err(ProfileError::NotBuiltYet)` with a clear error message, never panicking.
 pub fn lookup(name: &str) -> Result<ToolProfile, ProfileError> {
     match name {
         PROFILE_RESEARCH_V1 => Ok(research_v1()),
         PROFILE_INVESTIGATION_V1 => Ok(investigation_v1()),
-        PROFILE_INVESTIGATION_V2 | PROFILE_EXPLORE_V1 | PROFILE_SOLVE_V1 => {
+        PROFILE_INVESTIGATION_V2 => Ok(investigation_v2()),
+        PROFILE_EXPLORE_V1 | PROFILE_SOLVE_V1 => {
             Err(ProfileError::NotBuiltYet { name: name.to_string() })
         }
         _ => Err(ProfileError::Unknown { name: name.to_string() }),
@@ -214,7 +245,7 @@ pub fn lookup(name: &str) -> Result<ToolProfile, ProfileError> {
 
 /// All profiles built in this binary, in canonical order.
 pub fn built_profiles() -> Vec<ToolProfile> {
-    vec![research_v1(), investigation_v1()]
+    vec![research_v1(), investigation_v1(), investigation_v2()]
 }
 
 /// Detect session mode from the latest host-written mode marker (`00-overview.md` 1, 3.1 row 3).
@@ -251,8 +282,10 @@ pub fn legacy_profile_name_for_events(events: &[Event]) -> &'static str {
 
 /// Resolve the [`ToolProfile`] for a session from its ledger events:
 /// - If `session.start` carries a `tool_profile` field, it must be a string naming a built profile.
-/// - Otherwise, falls back to the latest mode marker (`research/1`, or `investigation/1` when the
-///   latest marker is `investigation.started`).
+/// - If `session.start` exists without `tool_profile`, falls back to the legacy mode profile
+///   (`research/1` or `investigation/1`).
+/// - If `session.start` does not exist yet (new session before its first turn), new Investigate
+///   sessions start under `investigation/2`; other modes resolve via `legacy_profile_name_for_events`.
 pub fn profile_for_session_events(events: &[Event]) -> Result<ToolProfile, String> {
     if let Some(start) = events.iter().find(|e| e.kind == "session.start") {
         if let Some(val) = start.payload.get(TOOL_PROFILE_FIELD) {
@@ -261,9 +294,14 @@ pub fn profile_for_session_events(events: &[Event]) -> Result<ToolProfile, Strin
                 .ok_or_else(|| format!("invalid non-string `{TOOL_PROFILE_FIELD}` in `session.start`"))?;
             return lookup(name).map_err(|e| e.to_string());
         }
+        let inferred = legacy_profile_name_for_events(events);
+        return lookup(inferred).map_err(|e| e.to_string());
     }
-    let inferred = legacy_profile_name_for_events(events);
-    lookup(inferred).map_err(|e| e.to_string())
+    let name = match session_mode_from_events(events) {
+        Mode::Investigate => PROFILE_INVESTIGATION_V2,
+        other => legacy_profile_name_for_mode(other),
+    };
+    lookup(name).map_err(|e| e.to_string())
 }
 
 /// True iff `actual` and `expected` have the exact same length, ids, and `def_hash` in order.
@@ -286,7 +324,7 @@ pub fn register_profile(
     host: ProfileHostTools,
 ) -> Result<Policy, String> {
     match profile.name {
-        PROFILE_RESEARCH_V1 | PROFILE_INVESTIGATION_V1 => {
+        PROFILE_RESEARCH_V1 | PROFILE_INVESTIGATION_V1 | PROFILE_INVESTIGATION_V2 => {
             registry.register_worker_session(
                 builtin::sympy_eval_def(),
                 host.sympy_epoch,
@@ -296,6 +334,9 @@ pub fn register_profile(
             let has_title = host.session_title_handler.is_some();
             if let Some(title_handler) = host.session_title_handler {
                 registry.register(builtin::session_title_def(), title_handler);
+            }
+            if profile.name == PROFILE_INVESTIGATION_V2 {
+                register_map_tools(registry, Arc::clone(&env));
             }
             register_research_tools(registry, env);
 
