@@ -44,12 +44,17 @@ fn fixed_tier_manifests_load_and_validate() {
     assert_eq!(p_selftests, 2);
     assert_eq!(p_evals, 10);
     assert_eq!(p_cases.len(), p_selftests + p_evals);
-    assert_eq!(set.cases_of(Set::Q).len(), 2);
+    assert_eq!(set.cases_of(Set::Q).len(), 17, "2 Q self-tests + 15 fixed Q evaluation cases");
     for (s, case) in set.cases() {
         assert_eq!(case.mode, s.mode());
-        if case.id.contains("-selftest-") {
-            assert!(case.notes.contains("Harness self-test case, not part of the evaluation set"), "{}", case.id);
-        } else if s == Set::P {
+        let is_selftest = case.id.starts_with("P-selftest-") || case.id.starts_with("Q-selftest-");
+        assert_eq!(
+            case.notes.contains("Harness self-test case, not part of the evaluation set"),
+            is_selftest,
+            "{}",
+            case.id
+        );
+        if !is_selftest && s == Set::P {
             assert!(case.notes.contains("Fixed-tier Set P evaluation case"), "{}", case.id);
         } else {
             assert!(!case.notes.trim().is_empty(), "{}", case.id);

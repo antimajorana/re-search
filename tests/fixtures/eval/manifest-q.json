@@ -14,7 +14,10 @@
       "answer_key": {
         "final_answer": "sqrt(pi)",
         "steps": [
-          { "id": "s1", "expected_tier": "Computed" }
+          {
+            "id": "s1",
+            "expected_tier": "Computed"
+          }
         ],
         "planted_step": null
       },
@@ -35,12 +38,1180 @@
       "answer_key": {
         "final_answer": "(x^2 + 2*x)*exp(x)",
         "steps": [
-          { "id": "s1", "expected_tier": "Computed" },
-          { "id": "s2", "expected_tier": "Failed" }
+          {
+            "id": "s1",
+            "expected_tier": "Computed"
+          },
+          {
+            "id": "s2",
+            "expected_tier": "Failed"
+          }
         ],
         "planted_step": "s2"
       },
       "notes": "Harness self-test case, not part of the evaluation set. Step s2 carries the planted error: the factor should be (x^2 + 2*x). No Solve code exists yet, so nothing runs this case; it only exercises the format."
+    },
+    {
+      "id": "Q-calc-01-effective-potential",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "calculate",
+        "statement": "Compute the one-loop effective potential V_1(phi) of massless real scalar lambda*phi^4 theory with tree-level potential V_tree(phi) = lambda*phi^4/4! in d = 4 - 2*eps dimensions using the MS-bar renormalization scheme, and show that the one-loop renormalization group equation mu * d(V_tree + V_1)/dmu + beta(lambda) * dV_tree/dlambda = 0 holds at order lambda^2 (where derivatives are partial derivatives holding the other variables fixed, and the field anomalous dimension gamma_phi = O(lambda^2) drops out at O(lambda^2)). Conventions and assumptions: Euclidean signature, hbar = c = 1, real coupling lambda > 0, nonzero real background field phi != 0, field-dependent squared mass m^2 = V_tree''(phi) = lambda*phi^2/2 > 0, renormalization scale mu > 0 with factor mu^(2*eps) on the bare d-dimensional integral, and MS-bar subtraction of the (1/eps - gamma_E + ln(4*pi)) pole combination."
+      },
+      "answer_key": {
+        "final_answer": "m^4/(64*pi^2)*(ln(m^2/mu^2) - 3/2)",
+        "domain": "real lambda > 0, real phi != 0, m^2 = lambda*phi^2/2 > 0, real mu > 0, dimensional regularization parameter d = 4 - 2*eps as eps -> 0",
+        "assumptions": [
+          "Euclidean signature with natural units hbar = c = 1",
+          "V_tree(phi) = lambda*phi^4/24 with real lambda > 0 and real phi != 0",
+          "m^2(phi) = V_tree''(phi) = lambda*phi^2/2 > 0",
+          "Renormalization scale mu > 0 with mu^(2*eps) on the bare d-dimensional integral and MS-bar subtraction of (1/eps - gamma_E + ln(4*pi))",
+          "Partial derivatives in the RG equation hold the remaining variables fixed; field anomalous dimension gamma_phi = O(lambda^2) contributes only at O(lambda^3)",
+          "Mass dimensions: [phi] = [m] = [mu] = mass^1, [lambda] = mass^0, [V] = mass^4"
+        ],
+        "expected_final_badge": "Unchecked",
+        "steps": [
+          {
+            "id": "s1",
+            "description": "Setup: Euclidean signature, hbar = c = 1, V_tree(phi) = lambda*phi^4/24, m^2 = lambda*phi^2/2 > 0, lambda > 0, phi != 0, mu > 0, d = 4 - 2*eps, and MS-bar conventions.",
+            "depends_on": [],
+            "check_kind": "given",
+            "expected_own_tier": "Given",
+            "expected_tier": "Given"
+          },
+          {
+            "id": "s2",
+            "description": "Record the one-loop effective potential trace-log formula V_1^(d)(phi) = (1/2) * mu^(2*eps) * integral d^d k / (2*pi)^d * ln(k^2 + m^2) without an attached source.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "assumed_by_model",
+            "expected_own_tier": "Assumed by model",
+            "expected_tier": "Assumed by model"
+          },
+          {
+            "id": "s3",
+            "description": "State the dimensionally regularized closed form V_1^(d) = I_d(m^2) = -(1/2) * mu^(2*eps) * Gamma(-d/2) / (4*pi)^(d/2) * (m^2)^(d/2) as the definition of V_1^(d) in d = 4 - 2*eps.",
+            "depends_on": [
+              "s1",
+              "s2"
+            ],
+            "check_kind": "unchecked_definition",
+            "expected_own_tier": "Unchecked",
+            "expected_tier": "Unchecked"
+          },
+          {
+            "id": "s4",
+            "description": "Auxiliary numeric quadrature check of the UV-convergent second m^2-derivative at d = 3, m = 1.3 (omitting mu^(2*eps), i.e., mu = 1): compare numerical quadrature of -(1/2) * (4*pi)/(2*pi)^3 * integral_0^inf k^2 / (k^2 + m^2)^2 dk against the analytic second m^2-derivative -1/(16*pi*m) = -0.015303359912682243824... from two separate runs, agreeing to >12 digits.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_numeric",
+            "expected_own_tier": "Numerically checked",
+            "expected_tier": "Numerically checked"
+          },
+          {
+            "id": "s5",
+            "description": "Laurent-expand I_d(m^2) at d = 4 - 2*eps through O(eps^0): I_d(m^2) = -m^4/(64*pi^2)*(1/eps - gamma_E + ln(4*pi)) + m^4/(64*pi^2)*(ln(m^2/mu^2) - 3/2) + O(eps).",
+            "depends_on": [
+              "s1",
+              "s3"
+            ],
+            "check_kind": "series_match",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Unchecked"
+          },
+          {
+            "id": "s6",
+            "description": "Apply MS-bar subtraction of -m^4/(64*pi^2)*(1/eps - gamma_E + ln(4*pi)) to obtain V_1^MSbar(phi) = m^4/(64*pi^2)*(ln(m^2/mu^2) - 3/2) = lambda^2*phi^4/(256*pi^2)*(ln(lambda*phi^2/(2*mu^2)) - 3/2), checking series match, mass^4 dimensions, and phi -> -phi symmetry.",
+            "depends_on": [
+              "s1",
+              "s5"
+            ],
+            "check_kind": "series_match",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Unchecked"
+          },
+          {
+            "id": "s7",
+            "description": "Record the one-loop beta-function beta(lambda) = 3*lambda^2/(16*pi^2) as an unacknowledged model assumption without an attached source.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "assumed_by_model",
+            "expected_own_tier": "Assumed by model",
+            "expected_tier": "Assumed by model"
+          },
+          {
+            "id": "s8",
+            "description": "Verify one-loop RG invariance to order lambda^2: mu * d(V_tree + V_1^MSbar)/dmu + beta(lambda) * dV_tree/dlambda = -lambda^2*phi^4/(128*pi^2) + (3*lambda^2/(16*pi^2))*(phi^4/24) = 0.",
+            "depends_on": [
+              "s1",
+              "s6",
+              "s7"
+            ],
+            "check_kind": "vanishes_to_order",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Unchecked"
+          },
+          {
+            "id": "s9",
+            "description": "Final answer: V_1^MSbar(phi) = m^4/(64*pi^2)*(ln(m^2/mu^2) - 3/2) with m^2 = lambda*phi^2/2 (equivalently lambda^2*phi^4/(256*pi^2)*(ln(lambda*phi^2/(2*mu^2)) - 3/2)), satisfying one-loop RG invariance at O(lambda^2). Own check passes symbolically, but effective tier is Unchecked because the closure rests on s2 (Assumed by model), s3 (Unchecked), and s7 (Assumed by model).",
+            "depends_on": [
+              "s6",
+              "s8"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Unchecked"
+          }
+        ],
+        "planted_step": null
+      },
+      "notes": "Canonical worked example from docs/design/modes-2026-11/solve.md section 2. Tests honest monotone tier propagation: s5, s6, s8, and s9 pass exact symbolic/series checks on their own, while the final answer remains Unchecked because its closure contains unacknowledged model assumptions (s2 one-loop trace-log formula, s7 one-loop beta-function) and an unchecked dimensional-regularization definition (s3). The auxiliary d=3, m=1.3 quadrature step s4 (at mu = 1) agrees with -1/(16*pi*1.3) = -0.015303359912682243824 to >45 digits in mpmath and does not feed into the final closure. Scripted transport fixture in scripts/Q-calc-01-effective-potential.json uses only merged tools (ledger_note, sympy_eval); full Solve badge execution awaits S9/S11."
+    },
+    {
+      "id": "Q-calc-02-quartic-perturbation-0d",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "calculate",
+        "statement": "Compute the asymptotic expansion through order O(g^2) as g -> 0+ of the zero-dimensional quartic partition function Z(g) = integral_{-infty}^{infty} exp(-x^2/2 - g*x^4) dx and the reduced free energy F(g) = -ln(Z(g)/Z(0)), where Z(0) = integral_{-infty}^{infty} exp(-x^2/2) dx. Domain and assumptions: real integration variable x in (-infty, infty), real coupling g > 0 in the asymptotic limit g -> 0+."
+      },
+      "answer_key": {
+        "final_answer": "Z(g) = sqrt(2*pi)*(1 - 3*g + (105/2)*g^2 + O(g^3)), F(g) = 3*g - 48*g^2 + O(g^3)",
+        "domain": "real x in (-infty, infty), real coupling g > 0 in the asymptotic limit g -> 0+",
+        "assumptions": [
+          "x is real over (-infty, infty)",
+          "g is real and strictly positive (g > 0), with expansion understood as a Poincare asymptotic series as g -> 0+",
+          "Z(0) = integral_{-infty}^{infty} exp(-x^2/2) dx = sqrt(2*pi)"
+        ],
+        "expected_final_badge": "Model agreed",
+        "steps": [
+          {
+            "id": "s1",
+            "description": "Setup: definitions of Z(g) = integral_{-infty}^{infty} exp(-x^2/2 - g*x^4) dx and F(g) = -ln(Z(g)/Z(0)) for real x in (-infty, infty) and real g > 0 as g -> 0+.",
+            "depends_on": [],
+            "check_kind": "given",
+            "expected_own_tier": "Given",
+            "expected_tier": "Given"
+          },
+          {
+            "id": "s2",
+            "description": "Evaluate the free Gaussian normalization Z(0) = sqrt(2*pi) and the even Gaussian moments <x^4>_0 = 3, <x^8>_0 = 105, and <x^12>_0 = 10395 via exact symbolic integration.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s3",
+            "description": "Compute the formal perturbative expansion through O(g^2) from the Gaussian moments: Z_formal(g)/Z(0) = 1 - g*<x^4>_0 + (g^2/2)*<x^8>_0 + O(g^3) = 1 - 3*g + (105/2)*g^2 + O(g^3), so Z_formal(g) = sqrt(2*pi)*(1 - 3*g + (105/2)*g^2 + O(g^3)).",
+            "depends_on": [
+              "s1",
+              "s2"
+            ],
+            "check_kind": "series_match",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s4",
+            "description": "Analytic Poincare asymptotic justification (prose review): for u = g*x^4 >= 0 (g > 0), Lagrange's Taylor remainder satisfies -u^3/6 <= exp(-u) - (1 - u + u^2/2) <= 0, so |Z(g)/Z(0) - (1 - 3*g + (105/2)*g^2)| <= (1/6)*<x^12>_0*g^3 = (3465/2)*g^3; hence the divergent formal series is a valid Poincare asymptotic expansion of Z(g) as g -> 0+.",
+            "depends_on": [
+              "s1",
+              "s2"
+            ],
+            "check_kind": "review_prose",
+            "expected_own_tier": "Model agreed",
+            "expected_tier": "Model agreed"
+          },
+          {
+            "id": "s5",
+            "description": "Expand F(g) = -ln(Z(g)/Z(0)) = -ln(1 - 3*g + (105/2)*g^2 + O(g^3)) = 3*g - (105/2 - 9/2)*g^2 + O(g^3) = 3*g - 48*g^2 + O(g^3). Own check passes series_match (Verified); effective tier is lowered to Model agreed by s4.",
+            "depends_on": [
+              "s1",
+              "s3",
+              "s4"
+            ],
+            "check_kind": "series_match",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Model agreed"
+          },
+          {
+            "id": "s6",
+            "description": "Final answer: Z(g) = sqrt(2*pi)*(1 - 3*g + (105/2)*g^2 + O(g^3)), F(g) = 3*g - 48*g^2 + O(g^3) as g -> 0+. Own check is Verified (series_match); effective tier is Model agreed because the asymptotic validity for the integral rests on s4.",
+            "depends_on": [
+              "s3",
+              "s4",
+              "s5"
+            ],
+            "check_kind": "series_match",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Model agreed"
+          }
+        ],
+        "planted_step": null
+      },
+      "notes": "Gaussian moments and formal series algebra (s2, s3, s5, s6) pass exact symbolic/series checks in SymPy, while the real-analysis Poincare remainder bound |R_3(u)| <= u^3/6 justifying the divergent asymptotic expansion of the integral Z(g) is separated into prose step s4 (Model agreed) under solve.md 4.4 (inequalities and prose proofs cannot earn Verified). Direct mpmath quadrature at g = 1e-5 agrees with 3*g - 48*g^2 + 1584*g^3 to 7.8e-16. Scripted transport fixture in scripts/Q-calc-02-quartic-perturbation-0d.json uses only merged tools (ledger_note, sympy_eval); full Solve badge and verifier execution await S9/S11/S14."
+    },
+    {
+      "id": "Q-calc-03-harmonic-oscillator-thermal",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "calculate",
+        "statement": "For a 1D quantum harmonic oscillator with energy levels E_n = hbar*omega*(n + 1/2) for integer n = 0, 1, 2, ..., compute the canonical partition function Z(beta) = sum_{n=0}^{infty} exp(-beta*E_n), the mean energy <E> = -d(ln Z)/dbeta, and the dimensionless heat capacity C_V/k_B = -beta^2 * d<E>/dbeta in terms of x = beta*hbar*omega, and then derive the high-temperature expansion of C_V/k_B as x -> 0+ through order O(x^4). Domain and assumptions: real positive parameters beta > 0, hbar > 0, omega > 0, k_B > 0 (so x = beta*hbar*omega > 0)."
+      },
+      "answer_key": {
+        "final_answer": "(x/(2*sinh(x/2)))^2 = 1 - x^2/12 + x^4/240 + O(x^6)",
+        "domain": "real beta > 0, hbar > 0, omega > 0, k_B > 0; dimensionless x = beta*hbar*omega > 0, high-temperature limit x -> 0+",
+        "assumptions": [
+          "Discrete non-degenerate spectrum E_n = hbar*omega*(n + 1/2) for integer n >= 0",
+          "beta > 0, hbar > 0, omega > 0, k_B > 0 are strictly positive reals",
+          "x = beta*hbar*omega > 0 so 0 < exp(-x) < 1 and the geometric series converges absolutely",
+          "Canonical relations <E> = -d(ln Z)/dbeta and C_V = -k_B * beta^2 * d<E>/dbeta"
+        ],
+        "expected_final_badge": "Verified",
+        "steps": [
+          {
+            "id": "s1",
+            "description": "Setup: spectrum E_n = hbar*omega*(n + 1/2) (n >= 0), real positive beta, hbar, omega, k_B, x = beta*hbar*omega > 0, and canonical definitions of Z(beta), <E>, and C_V/k_B.",
+            "depends_on": [],
+            "check_kind": "given",
+            "expected_own_tier": "Given",
+            "expected_tier": "Given"
+          },
+          {
+            "id": "s2",
+            "description": "Evaluate the convergent geometric series Z(beta) = exp(-beta*hbar*omega/2) * sum_{n=0}^{infty} exp(-n*beta*hbar*omega) = exp(-beta*hbar*omega/2) / (1 - exp(-beta*hbar*omega)) = 1 / (2*sinh(beta*hbar*omega/2)).",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s3",
+            "description": "Compute the mean energy <E> = -d(ln Z)/dbeta = (hbar*omega/2) * coth(beta*hbar*omega/2) = hbar*omega*(1/2 + 1/(exp(beta*hbar*omega) - 1)).",
+            "depends_on": [
+              "s1",
+              "s2"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s4",
+            "description": "Compute the dimensionless heat capacity C_V/k_B = -beta^2 * d<E>/dbeta = (beta*hbar*omega / (2*sinh(beta*hbar*omega/2)))^2 = (x / (2*sinh(x/2)))^2 with x = beta*hbar*omega > 0.",
+            "depends_on": [
+              "s1",
+              "s3"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s5",
+            "description": "Expand C_V/k_B = (x / (2*sinh(x/2)))^2 as x -> 0+ through O(x^4): C_V/k_B = 1 - x^2/12 + x^4/240 + O(x^6), verifying the classical equipartition limit C_V/k_B -> 1 as x -> 0+ and quantum freeze-out C_V/k_B -> 0 as x -> infty.",
+            "depends_on": [
+              "s1",
+              "s4"
+            ],
+            "check_kind": "series_match",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s6",
+            "description": "Final answer with x = beta*hbar*omega > 0: Z(beta) = 1/(2*sinh(x/2)), <E> = (hbar*omega/2)*coth(x/2), and C_V/k_B = (x/(2*sinh(x/2)))^2 = 1 - x^2/12 + x^4/240 + O(x^6).",
+            "depends_on": [
+              "s2",
+              "s3",
+              "s4",
+              "s5"
+            ],
+            "check_kind": "series_match",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          }
+        ],
+        "planted_step": null
+      },
+      "notes": "Exact closed-form statistical-mechanics calculation with all intermediate steps verified symbolically in SymPy (geometric sum evaluated under 0 < exp(-x) < 1, derivatives rewritten in exponentials to eliminate hyperbolic simplification ambiguity, and Taylor series verified through O(x^5) since odd powers vanish). Scripted transport fixture in scripts/Q-calc-03-harmonic-oscillator-thermal.json uses only merged tools (ledger_note, sympy_eval); full Solve badge execution awaits S9/S11."
+    },
+    {
+      "id": "Q-calc-04-bose-einstein-3d-integral",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "calculate",
+        "statement": "Evaluate the 3D massless boson energy-density integral I = integral_0^{infty} x^3 / (exp(x) - 1) dx exactly in closed form, and include an independent high-precision numerical quadrature cross-check to 50 decimal digits. Domain and assumptions: real integration variable x in (0, infty); you are given the Riemann zeta value zeta(4) = sum_{k=1}^{infty} 1/k^4 = pi^4/90."
+      },
+      "answer_key": {
+        "final_answer": "pi^4/15",
+        "domain": "real x in (0, infty)",
+        "assumptions": [
+          "Real integration domain x in (0, infty) where exp(x) > 1 and 0 < exp(-x) < 1",
+          "Given zeta(4) = sum_{k=1}^{infty} 1/k^4 = pi^4/90"
+        ],
+        "expected_final_badge": "Model agreed",
+        "steps": [
+          {
+            "id": "s1",
+            "description": "Setup: integral I = integral_0^{infty} x^3 / (exp(x) - 1) dx on x in (0, infty), with zeta(4) = sum_{k=1}^{infty} 1/k^4 = pi^4/90 given.",
+            "depends_on": [],
+            "check_kind": "given",
+            "expected_own_tier": "Given",
+            "expected_tier": "Given"
+          },
+          {
+            "id": "s2",
+            "description": "For x > 0, use 0 < exp(-x) < 1 to expand the geometric series 1/(exp(x) - 1) = exp(-x)/(1 - exp(-x)) = sum_{k=1}^{infty} exp(-k*x), so x^3/(exp(x) - 1) = sum_{k=1}^{infty} x^3*exp(-k*x).",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s3",
+            "description": "Analytic interchange (prose review): since x^3*exp(-k*x) > 0 for every x in (0, infty) and integer k >= 1, Tonelli's theorem justifies interchanging integral and sum: I = sum_{k=1}^{infty} integral_0^{infty} x^3*exp(-k*x) dx.",
+            "depends_on": [
+              "s1",
+              "s2"
+            ],
+            "check_kind": "review_prose",
+            "expected_own_tier": "Model agreed",
+            "expected_tier": "Model agreed"
+          },
+          {
+            "id": "s4",
+            "description": "Evaluate each term symbolically for integer k >= 1: integral_0^{infty} x^3 * exp(-k*x) dx = Gamma(4)/k^4 = 6/k^4.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s5",
+            "description": "Combine s3 and s4 and sum over k >= 1 using given zeta(4) = pi^4/90: I = sum_{k=1}^{infty} 6/k^4 = 6*zeta(4) = 6*(pi^4/90) = pi^4/15. Own check is Verified; effective tier is lowered to Model agreed by Tonelli step s3.",
+            "depends_on": [
+              "s1",
+              "s3",
+              "s4"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Model agreed"
+          },
+          {
+            "id": "s6",
+            "description": "Auxiliary non-blocking 50-digit numeric quadrature cross-check: mpmath.quad of x^3/expm1(x) on [0, inf] yields 6.4939394022668291490960221792470074166485057115124, agreeing with pi^4/15 to >50 decimal digits.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_numeric",
+            "expected_own_tier": "Numerically checked",
+            "expected_tier": "Numerically checked"
+          },
+          {
+            "id": "s7",
+            "description": "Final answer: I = pi^4/15, resting on the symbolic-plus-Tonelli derivation s5 (own check Verified, effective tier Model agreed because SymPy does not directly integrate x^3/(exp(x)-1) and the sum-integral interchange rests on prose step s3).",
+            "depends_on": [
+              "s5"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Model agreed"
+          }
+        ],
+        "planted_step": null
+      },
+      "notes": "SymPy 1.14 leaves integral_0^infty x^3/(exp(x)-1) dx unevaluated directly, so the sum-integral interchange by Tonelli's theorem is separated into prose step s3 (Model agreed) under solve.md 4.4, capping the exact derivation's effective tier at Model agreed even though the geometric sum (s2), Gamma integral (s4), and zeta sum (s5) pass exact symbolic checks. The independent 50-digit mpmath quadrature cross-check (s6, error < 1e-65 at 65 dps) earns Checked numerically on its own branch. Scripted transport fixture in scripts/Q-calc-04-bose-einstein-3d-integral.json uses only merged tools (ledger_note, sympy_eval); full Solve badge and verifier execution await S9/S11/S14."
+    },
+    {
+      "id": "Q-calc-05-feynman-log-integral",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "calculate",
+        "statement": "Evaluate the parameter-dependent improper integral I(a) = integral_0^{infty} ln(1 + a^2 * x^2) / (1 + x^2) dx in closed form for real a > 0 via Feynman differentiation under the integral sign, explain explicitly why the assumption a > 0 matters (for general real a, I(a) = pi*ln(1 + |a|)), and include a separate 50-digit numerical quadrature cross-check across 12 positive values of a. Domain and assumptions: real integration variable x in (0, infty) and strictly positive real parameter a > 0."
+      },
+      "answer_key": {
+        "final_answer": "pi*ln(1 + a)",
+        "domain": "real x in (0, infty), real parameter a > 0 (for general real a, I(a) = pi*ln(1 + |a|))",
+        "assumptions": [
+          "Real integration variable x in (0, infty)",
+          "Strictly positive real parameter a > 0 (necessary because the integrand depends only on a^2 so I(a) = pi*ln(1 + |a|) for general real a, and in the Feynman derivative integral_0^infty dx/(1 + a^2*x^2) = pi/(2*|a|) = pi/(2*a) uses a > 0)"
+        ],
+        "expected_final_badge": "Model agreed",
+        "steps": [
+          {
+            "id": "s1",
+            "description": "Setup: I(a) = integral_0^{infty} ln(1 + a^2*x^2)/(1 + x^2) dx on x in (0, infty) with real a > 0, noting evenness I(-a) = I(a) so general real a yields pi*ln(1 + |a|).",
+            "depends_on": [],
+            "check_kind": "given",
+            "expected_own_tier": "Given",
+            "expected_tier": "Given"
+          },
+          {
+            "id": "s2",
+            "description": "Analytic Leibniz/DCT justification (prose review): I(0) = 0 with right-continuity lim_{a -> 0+} I(a) = 0 by dominated convergence (0 <= ln(1 + a^2*x^2)/(1 + x^2) <= ln(1 + x^2)/(1 + x^2) in L^1(0, infty) for 0 <= a <= 1), and differentiation under the integral sign is valid on every compact [a_min, a_max] subset (0, infty) via the L^1 bound |d/da integrand| <= 2*a_max/(a_min^2*(1 + x^2)).",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "review_prose",
+            "expected_own_tier": "Model agreed",
+            "expected_tier": "Model agreed"
+          },
+          {
+            "id": "s3",
+            "description": "Differentiate the integrand symbolically and evaluate integral_0^{infty} 2*a*x^2/((1 + x^2)*(1 + a^2*x^2)) dx for a > 0: partial fractions for a != 1 give (2*a/(a^2 - 1))*(pi/2 - pi/(2*a)) = pi/(1 + a) (where integral_0^{infty} dx/(1 + a^2*x^2) = pi/(2*a) uses a > 0), and direct evaluation at a = 1 gives pi/2 = pi/(1 + 1).",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s4",
+            "description": "Integrate I'(t) = pi/(1 + t) from t = 0 to t = a > 0 using I(0+) = I(0) = 0 (s2) to obtain I(a) = pi*ln(1 + a). Own check is Verified; effective tier is lowered to Model agreed by the analytic Leibniz/DCT step s2.",
+            "depends_on": [
+              "s1",
+              "s2",
+              "s3"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Model agreed"
+          },
+          {
+            "id": "s5",
+            "description": "Auxiliary non-blocking 50-digit numeric quadrature cross-check across 12 positive values a in {0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 7.5, 10.0, 25.0}: mpmath.quad agrees with pi*ln(1 + a) to >50 digits at all 12 points.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_numeric",
+            "expected_own_tier": "Numerically checked",
+            "expected_tier": "Numerically checked"
+          },
+          {
+            "id": "s6",
+            "description": "Final answer: I(a) = pi*ln(1 + a) for real a > 0 (and pi*ln(1 + |a|) for general real a). Own check is Verified; effective tier is Model agreed resting on s2.",
+            "depends_on": [
+              "s4"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Model agreed"
+          }
+        ],
+        "planted_step": null
+      },
+      "notes": "Tests domain sensitivity (a > 0 vs general real a giving pi*ln(1 + |a|), and pi/(2*|a|) in the derivative integral), explicit handling of the removable a = 1 singularity in partial fractions, honest separation of the Leibniz/DCT real-analysis justification into prose step s2 (Model agreed, since SymPy leaves direct integration at a = 1 as an unsimplified meijerg), and a non-blocking 12-point 50-digit numeric quadrature cross-check (s5, max error < 1e-65 at 65 dps). Scripted transport fixture in scripts/Q-calc-05-feynman-log-integral.json uses only merged tools (ledger_note, sympy_eval); full Solve badge and verifier execution await S9/S11/S14."
+    },
+    {
+      "id": "Q-calc-06-pauli-su2-exponential",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "calculate",
+        "statement": "Find the closed form of the 2x2 matrix exponential U = exp(-i * theta * (n_x*sigma_x + n_y*sigma_y + n_z*sigma_z)) for a real parameter theta in R and a real unit vector n = (n_x, n_y, n_z) in R^3 satisfying n_x^2 + n_y^2 + n_z^2 = 1, where sigma_x, sigma_y, sigma_z are the Pauli matrices and I is the 2x2 identity matrix. Verify that U^dagger * U = I and det(U) = 1."
+      },
+      "answer_key": {
+        "final_answer": "cos(theta)*I - i*sin(theta)*(n_x*sigma_x + n_y*sigma_y + n_z*sigma_z)",
+        "domain": "theta in R; n = (n_x, n_y, n_z) in R^3 with n_x^2 + n_y^2 + n_z^2 = 1",
+        "assumptions": [
+          "theta is real (theta in R)",
+          "n_x, n_y, n_z are real (n in R^3)",
+          "unit-vector normalization n_x^2 + n_y^2 + n_z^2 = 1 (without |n| = 1, theta scales by |n| and A^2 = |n|^2*I != I)",
+          "standard Pauli matrices sigma_x = [[0, 1], [1, 0]], sigma_y = [[0, -i], [i, 0]], sigma_z = [[1, 0], [0, -1]] and 2x2 identity I",
+          "reality of theta and n is required for Hermiticity of n.sigma and unitarity U^dagger * U = I"
+        ],
+        "expected_final_badge": "Verified",
+        "steps": [
+          {
+            "id": "s1",
+            "description": "Declare the 2x2 identity I, the Pauli matrices sigma_x, sigma_y, sigma_z, real theta in R, real unit vector n = (n_x, n_y, n_z) in R^3 with n_x^2 + n_y^2 + n_z^2 = 1, and generator A = n_x*sigma_x + n_y*sigma_y + n_z*sigma_z.",
+            "depends_on": [],
+            "check_kind": "given",
+            "expected_own_tier": "Given",
+            "expected_tier": "Given"
+          },
+          {
+            "id": "s2",
+            "description": "Verify symbolically that A^2 = (n_x^2 + n_y^2 + n_z^2)*I = I under n_x^2 + n_y^2 + n_z^2 = 1, tr(A) = 0, and A^dagger = A under real n_x, n_y, n_z.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s3",
+            "description": "Sum the matrix exponential U = exp(-i*theta*A) using A^(2m) = I and A^(2m+1) = A to obtain U = cos(theta)*I - i*sin(theta)*A, verified symbolically against dU/dtheta = -i*A*U with U(0) = I and exact spherical-coordinate Matrix.exp().",
+            "depends_on": [
+              "s1",
+              "s2"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s4",
+            "description": "Verify SU(2) group properties symbolically under real theta, n and n_x^2 + n_y^2 + n_z^2 = 1: U^dagger * U = (cos^2(theta) + sin^2(theta)*(n_x^2 + n_y^2 + n_z^2))*I = I and det(U) = cos^2(theta) + sin^2(theta)*(n_x^2 + n_y^2 + n_z^2) = 1.",
+            "depends_on": [
+              "s1",
+              "s3"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s5",
+            "description": "Conclude U = cos(theta)*I - i*sin(theta)*(n_x*sigma_x + n_y*sigma_y + n_z*sigma_z), satisfying U^dagger * U = I and det(U) = 1 on the stated domain.",
+            "depends_on": [
+              "s3",
+              "s4"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          }
+        ],
+        "planted_step": null
+      },
+      "notes": "Original Group B calculation case. Closed form and SU(2) identities (A^2 = I, dU/dtheta = -i*A*U, spherical Matrix.exp(), Taylor series to O(theta^11), U^dagger*U = I, det(U) = 1) verified symbolically in SymPy and cross-checked numerically in NumPy. Scripted transport fixture in scripts/Q-calc-06-pauli-su2-exponential.json uses only merged tools (ledger_note, sympy_eval); full Solve badge execution awaits S9/S11."
+    },
+    {
+      "id": "Q-calc-07-damped-oscillator-greens-function",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "calculate",
+        "statement": "Compute the retarded Green's function G_R(t) of the strictly underdamped harmonic oscillator satisfying (d^2/dt^2 + 2*gamma*d/dt + omega_0^2) G_R(t) = delta(t) on t in R, subject to causality G_R(t) = 0 for t < 0 and jump conditions G_R(0+) = 0, G_R'(0+) = 1, in the strictly underdamped regime 0 < gamma < omega_0. Express G_R(t) in closed form using the Heaviside step function Theta(t) and explain why 0 < gamma < omega_0 selects the oscillatory form with Omega = sqrt(omega_0^2 - gamma^2) > 0."
+      },
+      "answer_key": {
+        "final_answer": "Theta(t)*exp(-gamma*t)*sin(sqrt(omega_0^2 - gamma^2)*t)/sqrt(omega_0^2 - gamma^2)",
+        "domain": "t in R; real gamma, omega_0 with 0 < gamma < omega_0 (so Omega = sqrt(omega_0^2 - gamma^2) > 0)",
+        "assumptions": [
+          "t is real (t in R)",
+          "gamma and omega_0 are real with 0 < gamma < omega_0 (strictly underdamped regime)",
+          "0 < gamma < omega_0 makes both 0 < gamma (strict exponential decay exp(-gamma*t) -> 0, excluding the undamped gamma = 0 boundary) and 4*(gamma^2 - omega_0^2) < 0 (strictly negative characteristic discriminant), selecting complex-conjugate roots -gamma +- i*Omega with real frequency Omega = sqrt(omega_0^2 - gamma^2) > 0 and oscillatory sin(Omega*t)/Omega rather than critical t*exp(-gamma*t) or overdamped sinh(kappa*t)/kappa",
+          "retarded causality boundary condition G_R(t) = 0 for t < 0",
+          "jump conditions G_R(0+) = 0 and G_R'(0+) = 1 induced by the unit Dirac delta source delta(t)"
+        ],
+        "expected_final_badge": "Verified",
+        "steps": [
+          {
+            "id": "s1",
+            "description": "State the defining distributional ODE (d^2/dt^2 + 2*gamma*d/dt + omega_0^2) G_R(t) = delta(t), causality G_R(t) = 0 for t < 0, jump conditions G_R(0+) = 0 and G_R'(0+) = 1, and strictly underdamped parameters 0 < gamma < omega_0 with Omega = sqrt(omega_0^2 - gamma^2) > 0.",
+            "depends_on": [],
+            "check_kind": "given",
+            "expected_own_tier": "Given",
+            "expected_tier": "Given"
+          },
+          {
+            "id": "s2",
+            "description": "Solve the homogeneous characteristic equation r^2 + 2*gamma*r + omega_0^2 = 0 for t > 0: since 0 < gamma < omega_0, the discriminant is -4*Omega^2 < 0, giving roots r_+- = -gamma +- i*Omega and real oscillatory solution g(t) = exp(-gamma*t)*(C_1*cos(Omega*t) + C_2*sin(Omega*t)).",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s3",
+            "description": "Apply the jump conditions at t = 0+: g(0+) = C_1 = 0 and g'(0+) = -gamma*C_1 + Omega*C_2 = 1 give C_1 = 0 and C_2 = 1/Omega, so g(t) = exp(-gamma*t)*sin(Omega*t)/Omega for t > 0.",
+            "depends_on": [
+              "s1",
+              "s2"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s4",
+            "description": "Verify symbolically that (d^2/dt^2 + 2*gamma*d/dt + omega_0^2) g(t) = 0 for t > 0, g(0+) = 0, g'(0+) = 1 (hence distributional operator on Theta(t)*g(t) yields delta(t)), and verify exact Laplace transform L{g}(s) = 1/(s^2 + 2*gamma*s + omega_0^2).",
+            "depends_on": [
+              "s1",
+              "s3"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s5",
+            "description": "Substitute Omega = sqrt(omega_0^2 - gamma^2) and multiply by Theta(t) to obtain G_R(t) = Theta(t)*exp(-gamma*t)*sin(sqrt(omega_0^2 - gamma^2)*t)/sqrt(omega_0^2 - gamma^2), cross-checking the critical-damping limit Omega -> 0+ gives Theta(t)*t*exp(-gamma*t).",
+            "depends_on": [
+              "s3",
+              "s4"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          }
+        ],
+        "planted_step": null
+      },
+      "notes": "Original Group B calculation case. Characteristic roots, jump conditions, homogeneous ODE residual, Laplace transform 1/(s^2 + 2*gamma*s + omega_0^2), and critical-damping limit Omega -> 0+ verified symbolically in SymPy using omega_0 = sqrt(gamma^2 + Omega^2) with gamma > 0, Omega > 0. Scripted transport fixture in scripts/Q-calc-07-damped-oscillator-greens-function.json uses only merged tools (ledger_note, sympy_eval); full Solve badge execution awaits S9/S11."
+    },
+    {
+      "id": "Q-calc-08-contour-rational-integral",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "calculate",
+        "statement": "Evaluate the definite integral I(a, b) = integral_{-infty}^{infty} dx / ((x^2 + a^2)*(x^2 + b^2)) for real parameters a > 0 and b > 0, covering both a != b and the degenerate limit b -> a+ (giving I(a, a) = pi/(2*a^3)). Explicitly state how the positivity assumptions a > 0, b > 0 determine the pole locations and remove absolute-value or sign ambiguities."
+      },
+      "answer_key": {
+        "final_answer": "pi/(a*b*(a + b))",
+        "domain": "a > 0, b > 0 (real strictly positive parameters, covering both a != b and a = b)",
+        "assumptions": [
+          "a and b are real and strictly positive (a > 0, b > 0)",
+          "because the integrand depends only on a^2 and b^2, for general nonzero real a, b the value is pi/(|a|*|b|*(|a| + |b|)); positivity a > 0, b > 0 places the upper-half-plane poles strictly at z = +i*a and z = +i*b and eliminates absolute values and sign ambiguities",
+          "the integral diverges if a = 0 or b = 0, and converges absolutely for all real a > 0, b > 0 since the integrand decays as O(x^-4) as |x| -> infty"
+        ],
+        "expected_final_badge": "Verified",
+        "steps": [
+          {
+            "id": "s1",
+            "description": "State I(a, b) = integral_{-infty}^{infty} dx / ((x^2 + a^2)*(x^2 + b^2)) with real a > 0, b > 0, noting absolute convergence (O(x^-4) decay) and upper-half-plane poles at z = i*a and z = i*b.",
+            "depends_on": [],
+            "check_kind": "given",
+            "expected_own_tier": "Given",
+            "expected_tier": "Given"
+          },
+          {
+            "id": "s2",
+            "description": "For a != b, verify the partial-fraction identity 1/((x^2 + a^2)*(x^2 + b^2)) = (1/(b^2 - a^2))*(1/(x^2 + a^2) - 1/(x^2 + b^2)) and locate the two simple upper-half-plane poles z = i*a and z = i*b using a > 0, b > 0.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s3",
+            "description": "Evaluate I(a, b) for a != b by summing upper-half-plane residues 2*pi*i*(Res_{z=i*a} + Res_{z=i*b}) = 2*pi*i*(i/(2*a*(a^2 - b^2)) - i/(2*b*(a^2 - b^2))) = pi/(a*b*(a + b)), cross-checked by integrating the partial fractions with integral_{-infty}^{infty} dx/(x^2 + c^2) = pi/c for c > 0.",
+            "depends_on": [
+              "s1",
+              "s2"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s4",
+            "description": "Verify the degenerate case b = a > 0: the continuous limit lim_{b -> a+} pi/(a*b*(a + b)) = pi/(2*a^3) agrees exactly with the double-pole residue 2*pi*i * Res_{z=i*a} 1/(z^2 + a^2)^2 = pi/(2*a^3) and direct integration of integral_{-infty}^{infty} dx/(x^2 + a^2)^2.",
+            "depends_on": [
+              "s1",
+              "s3"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s5",
+            "description": "Conclude that I(a, b) = pi/(a*b*(a + b)) holds uniformly for all real a > 0, b > 0 (both a != b and a = b), verified against direct SymPy integration.",
+            "depends_on": [
+              "s3",
+              "s4"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          }
+        ],
+        "planted_step": null
+      },
+      "notes": "Original Group B calculation case. Partial fractions, simple-pole residues, double-pole residue at b = a, continuous limit b -> a+, and direct SymPy definite integration verified symbolically. Scripted transport fixture in scripts/Q-calc-08-contour-rational-integral.json uses only merged tools (ledger_note, sympy_eval); full Solve badge execution awaits S9/S11."
+    },
+    {
+      "id": "Q-calc-09-hydrogen-radial-expectation",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "calculate",
+        "statement": "For the normalized hydrogen 1s radial wavefunction R_10(r) = 2 * a_0^(-3/2) * exp(-r/a_0) on r in (0, infty) with Bohr radius a_0 > 0 and real positive physical constants hbar > 0, m > 0, compute the exact expectation values <r>, <r^2>, and <1/r>. Also verify the normalization integral_0^{infty} r^2 * |R_10(r)|^2 dr = 1 and the virial relation <T> = -(1/2)*<V> = hbar^2/(2*m*a_0^2) with Coulomb potential V(r) = -e^2/(4*pi*eps_0*r) = -hbar^2/(m*a_0*r) and ground-state energy E_1 = -hbar^2/(2*m*a_0^2)."
+      },
+      "answer_key": {
+        "final_answer": "<r> = (3/2)*a_0, <r^2> = 3*a_0^2, <1/r> = 1/a_0",
+        "domain": "r in (0, infty); real positive physical constants a_0 > 0, hbar > 0, m > 0",
+        "assumptions": [
+          "radial coordinate r in (0, infty) with spherical radial volume weight r^2 dr (angular factor Y_00 integrates to 1)",
+          "Bohr radius a_0 > 0, reduced Planck constant hbar > 0, and reduced mass m > 0 (a_0 > 0 ensures exponential decay exp(-2*r/a_0) and convergence of all moments integral_0^{infty} r^n exp(-2*r/a_0) dr for n > -1)",
+          "Coulomb potential V(r) = -e^2/(4*pi*eps_0*r) = -hbar^2/(m*a_0*r) using a_0 = 4*pi*eps_0*hbar^2/(m*e^2)",
+          "ground-state eigenvalue E_1 = -hbar^2/(2*m*a_0^2) and l = 0 radial kinetic operator T_r = -(hbar^2/(2*m))*(1/r^2)*d/dr(r^2*d/dr)"
+        ],
+        "expected_final_badge": "Verified",
+        "steps": [
+          {
+            "id": "s1",
+            "description": "State R_10(r) = 2*a_0^(-3/2)*exp(-r/a_0) on r in (0, infty) with a_0 > 0, hbar > 0, m > 0, radial measure r^2 dr, Coulomb potential V(r) = -hbar^2/(m*a_0*r), and E_1 = -hbar^2/(2*m*a_0^2).",
+            "depends_on": [],
+            "check_kind": "given",
+            "expected_own_tier": "Given",
+            "expected_tier": "Given"
+          },
+          {
+            "id": "s2",
+            "description": "Verify radial normalization integral_0^{infty} r^2 * R_10(r)^2 dr = 4*a_0^(-3) * 2!*(a_0/2)^3 = 1 for a_0 > 0.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s3",
+            "description": "Evaluate exact radial moments via integral_0^{infty} r^n * exp(-2*r/a_0) dr = n!*(a_0/2)^(n+1): <r> = (3/2)*a_0, <r^2> = 3*a_0^2, and <1/r> = 1/a_0.",
+            "depends_on": [
+              "s1",
+              "s2"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s4",
+            "description": "Verify <V> = -(hbar^2/(m*a_0))*<1/r> = -hbar^2/(m*a_0^2) and direct radial kinetic expectation <T> = integral_0^{infty} r^2 * R_10(r) * (T_r R_10)(r) dr = hbar^2/(2*m*a_0^2), confirming <T> = -(1/2)*<V>, <T> + <V> = E_1, and (T_r + V)*R_10 = E_1*R_10.",
+            "depends_on": [
+              "s1",
+              "s3"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s5",
+            "description": "Conclude <r> = (3/2)*a_0, <r^2> = 3*a_0^2, <1/r> = 1/a_0 together with normalization 1 and virial relation <T> = -(1/2)*<V> = hbar^2/(2*m*a_0^2).",
+            "depends_on": [
+              "s2",
+              "s3",
+              "s4"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          }
+        ],
+        "planted_step": null
+      },
+      "notes": "Original Group B calculation case. Normalization, radial moments <r>, <r^2>, <1/r>, kinetic integral (both directly via Laplacian and via integration by parts), Schrodinger eigenvalue equation, and virial relation verified symbolically in SymPy. Scripted transport fixture in scripts/Q-calc-09-hydrogen-radial-expectation.json uses only merged tools (ledger_note, sympy_eval); full Solve badge execution awaits S9/S11."
+    },
+    {
+      "id": "Q-calc-10-bessel-laplace-integral",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "calculate",
+        "statement": "Evaluate the Laplace transform L(s, a) = integral_0^{infty} exp(-s*t) * J_0(a*t) dt for real s > 0 and all real a in R (covering both |a| < s and |a| >= s), where J_0 is the Bessel function of the first kind of order zero. Derive the closed form on the restricted disc |a| < s by term-by-term power-series integration, and confirm the result across the full real domain s > 0, a in R (including the boundary |a| = s where absolute convergence and term-by-term Fubini-Tonelli integration fail, and |a| > s where the power series diverges) by 50-digit numerical quadrature at 12 sample points."
+      },
+      "answer_key": {
+        "final_answer": "1/sqrt(s^2 + a^2)",
+        "domain": "s > 0 (real), a in R (full real domain covering |a| < s, |a| = s, and |a| > s)",
+        "assumptions": [
+          "s is real and strictly positive (s > 0), guaranteeing absolute exponential convergence since |J_0(a*t)| <= 1 for all real a*t",
+          "a is real (a in R), covering both the restricted disc |a| < s and the exterior |a| >= s where s^2 + a^2 > 0 makes the positive real square root sqrt(s^2 + a^2) unambiguous",
+          "term-by-term integration of J_0(a*t) = sum_{k=0}^{infty} (-1)^k*(a*t/2)^(2k)/(k!)^2 yields the binomial series (1/s)*sum_{k=0}^{infty} binomial(-1/2, k)*(a^2/s^2)^k, which converges absolutely (justifying term-by-term Fubini-Tonelli integration) on |a| < s, converges only conditionally at |a| = s (where absolute convergence fails), and diverges for |a| > s",
+          "confirmation on the full domain s > 0, a in R (including |a| >= s) is performed numerically via 50-digit quadrature at 12 points spanning |a| < s, |a| = s, and |a| > s, so the full-domain conclusion earns Checked numerically rather than Verified"
+        ],
+        "expected_final_badge": "Numerically checked",
+        "steps": [
+          {
+            "id": "s1",
+            "description": "State the Laplace transform L(s, a) = integral_0^{infty} exp(-s*t) * J_0(a*t) dt on the full real domain s > 0, a in R (explicitly covering |a| < s, |a| = s, and |a| > s) and the power series J_0(z) = sum_{k=0}^{infty} (-1)^k*(z/2)^(2k)/(k!)^2.",
+            "depends_on": [],
+            "check_kind": "given",
+            "expected_own_tier": "Given",
+            "expected_tier": "Given"
+          },
+          {
+            "id": "s2",
+            "description": "On the restricted disc |a| < s, integrate the J_0(a*t) series term by term using integral_0^{infty} t^(2k)*exp(-s*t) dt = (2k)!/s^(2k+1) and verify symbolically that (-1)^k*(2k)!/(4^k*(k!)^2) = binomial(-1/2, k), summing the binomial series to (1/s)*(1 + a^2/s^2)^(-1/2) = 1/sqrt(s^2 + a^2) on |a| < s.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s3",
+            "description": "Verify exact Taylor-series agreement between the term-by-term integrated Bessel series and the expansion of 1/sqrt(s^2 + a^2) in a around 0 to O(a^14) (even powers through a^12) on |a| < s, noting that the series radius of convergence is |a| = s and it diverges for |a| > s.",
+            "depends_on": [
+              "s1",
+              "s2"
+            ],
+            "check_kind": "series_match",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s4",
+            "description": "Confirm L(s, a) = 1/sqrt(s^2 + a^2) across the full real domain s > 0, a in R (4 points with |a| < s, 4 points with |a| = s, and 4 points with |a| > s, including negative a) by 50-digit mpmath quadrature against the closed form (all 12 residuals < 1e-50).",
+            "depends_on": [
+              "s1",
+              "s2"
+            ],
+            "check_kind": "identity_numeric",
+            "expected_own_tier": "Numerically checked",
+            "expected_tier": "Numerically checked"
+          },
+          {
+            "id": "s5",
+            "description": "Conclude L(s, a) = 1/sqrt(s^2 + a^2) for all real s > 0 and a in R; the full-domain conclusion carries effective tier Checked numerically (both by its own numeric check and by S2 monotone closure over s4).",
+            "depends_on": [
+              "s2",
+              "s3",
+              "s4"
+            ],
+            "check_kind": "identity_numeric",
+            "expected_own_tier": "Numerically checked",
+            "expected_tier": "Numerically checked"
+          }
+        ],
+        "planted_step": null
+      },
+      "notes": "Original Group B calculation case exercising the distinction between Verified (exact symbolic/series derivation restricted to |a| < s where absolute convergence justifies term-by-term Fubini-Tonelli integration) and Checked numerically (full-domain s > 0, a in R confirmation covering |a| = s where absolute convergence fails and |a| > s where the power series diverges). Verified symbolically for term-by-term Laplace integration, binomial coefficient identity, and series match to O(a^14) in SymPy, and confirmed at 12 points across |a| < s, |a| = s, and |a| > s to > 55 digits (max error ~1.0e-56) in mpmath via both quadosc and Gauss-Legendre quadrature. Scripted transport fixture in scripts/Q-calc-10-bessel-laplace-integral.json uses only merged tools (ledger_note, sympy_eval); full Solve badge execution awaits S9/S11."
+    },
+    {
+      "id": "Q-check-01-sampled-domain-sqrt",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "check_derivation",
+        "statement": "Check the following 3-step derivation computing I = integral_0^4 (sqrt(x^2 - 4*x + 4) + x) dx for real x in [0, 4], where sqrt denotes the principal non-negative real square root.",
+        "steps": [
+          "Rewrite x^2 - 4*x + 4 = (x - 2)^2, so f(x) = sqrt((x - 2)^2) + x for all x in [0, 4].",
+          "Drop the square root as sqrt((x - 2)^2) = x - 2 for all x in [0, 4], obtaining f(x) = (x - 2) + x = 2*x - 2.",
+          "Integrate the step-2 expression g(x) = 2*x - 2 over [0, 4]: integral_0^4 (2*x - 2) dx = [x^2 - 2*x]_0^4 = (16 - 8) - 0 = 8."
+        ]
+      },
+      "answer_key": {
+        "final_answer": "12",
+        "expected_final_badge": "Failed",
+        "assumptions": [
+          "x is real with x in [0, 4]",
+          "sqrt(u) denotes the principal non-negative real square root for u >= 0, so sqrt(t^2) = |t|"
+        ],
+        "steps": [
+          {
+            "id": "s1",
+            "description": "Factor radicand x^2 - 4*x + 4 = (x - 2)^2, yielding f(x) = sqrt((x - 2)^2) + x = |x - 2| + x on [0, 4].",
+            "depends_on": [],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s2",
+            "description": "Planted error: replace sqrt((x - 2)^2) with x - 2 on [0, 4] to get g(x) = 2*x - 2. Holds on [2, 4] (sampled-domain trap) but fails on [0, 2), e.g., at x = 0, sqrt((0 - 2)^2) = 2 != -2 and f(0) - g(0) = 4.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Failed",
+            "expected_tier": "Failed"
+          },
+          {
+            "id": "s3",
+            "description": "Integrate g(x) = 2*x - 2 over [0, 4] to get [x^2 - 2*x]_0^4 = 8. Locally exact integration of g(x), but effective tier is Failed via S2 broken-closure propagation from s2 (displayed as 'Broken: rests on failed s2').",
+            "depends_on": [
+              "s2"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Failed"
+          }
+        ],
+        "planted_step": "s2",
+        "planted_error_kind": "sampled_domain_trap",
+        "counterexample": {
+          "point": "x = 0",
+          "lhs": "sqrt((0 - 2)^2) + 0 = 2",
+          "rhs": "2*0 - 2 = -2",
+          "residual": "4"
+        },
+        "domain": "real x in [0, 4] with principal non-negative real square root"
+      },
+      "notes": "Fulfills 00-overview.md 7.3 requirement for a planted identity true only on a sampled subdomain ([2, 4] inside [0, 4]). True integral: integral_0^2 2 dx + integral_2^4 (2*x - 2) dx = 4 + 8 = 12 (checked symbolically in SymPy and numerically to 50 digits in mpmath). No scripted transport fixture is provided yet because host-evaluated Failed detection and broken-closure propagation require unmerged S9/S11 tools (step_record, check_run, solve_finish)."
+    },
+    {
+      "id": "Q-check-02-branch-cut-log",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "check_derivation",
+        "statement": "Check the following 3-step derivation computing the principal complex logarithm Log(z^2) and principal argument Arg(z^2) for z = r*exp(i*theta) with real r > 0 and theta in (pi/2, pi), using the standard principal branch Arg(w) in (-pi, pi] and Log(w) = ln(|w|) + i*Arg(w) with branch cut along (-infty, 0].",
+        "steps": [
+          "Since r > 0 and theta in (pi/2, pi) subset (-pi, pi], we have |z| = r, Arg(z) = theta, and Log(z) = ln(r) + i*theta.",
+          "Simplify Log(z^2) = 2*Log(z) = 2*ln(r) + 2*i*theta for all r > 0 and theta in (pi/2, pi).",
+          "Extract the imaginary coefficient from the step-2 expression L_2 = 2*ln(r) + 2*i*theta by subtracting 2*ln(r) and dividing by i: (L_2 - 2*ln(r))/i = 2*theta."
+        ]
+      },
+      "answer_key": {
+        "final_answer": "Log(z^2) = 2*ln(r) + i*(2*theta - 2*pi), Arg(z^2) = 2*theta - 2*pi",
+        "expected_final_badge": "Failed",
+        "assumptions": [
+          "r is real with r > 0",
+          "theta is real with pi/2 < theta < pi",
+          "z = r*exp(i*theta)",
+          "Principal complex logarithm Log(w) = ln(|w|) + i*Arg(w) with Arg(w) in (-pi, pi] and branch cut along (-infty, 0]"
+        ],
+        "steps": [
+          {
+            "id": "s1",
+            "description": "Evaluate |z| = r, Arg(z) = theta, and Log(z) = ln(r) + i*theta for r > 0 and theta in (pi/2, pi) subset (-pi, pi].",
+            "depends_on": [],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s2",
+            "description": "Planted error: apply Log(z^2) = 2*Log(z) across the negative real branch cut. Since 2*theta in (pi, 2*pi), Arg(z^2) wraps by -2*pi to 2*theta - 2*pi in (-pi, 0), giving Log(z^2) - 2*Log(z) = -2*pi*i != 0 (caught by the numeric guard on Verified equations, e.g., at r = sqrt(2), theta = 3*pi/4 where z = -1 + i).",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Failed",
+            "expected_tier": "Failed"
+          },
+          {
+            "id": "s3",
+            "description": "Isolate the imaginary part from the step-2 expression: ((2*ln(r) + 2*i*theta) - 2*ln(r))/i = 2*theta. Algebraically valid given s2, but effective tier is Failed via S2 broken-closure propagation from s2 (displayed as 'Broken: rests on failed s2').",
+            "depends_on": [
+              "s2"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Failed"
+          }
+        ],
+        "planted_step": "s2",
+        "planted_error_kind": "branch_cut_simplification",
+        "counterexample": {
+          "point": "r = sqrt(2), theta = 3*pi/4 (z = -1 + i)",
+          "lhs": "Log(z^2) = Log(-2*i) = ln(2) - i*pi/2",
+          "rhs": "2*Log(z) = ln(2) + 3*i*pi/2",
+          "residual": "-2*pi*i"
+        },
+        "domain": "complex z = r*exp(i*theta) with real r > 0 and theta in (pi/2, pi); principal branch Arg(w) in (-pi, pi], Log(w) = ln(|w|) + i*Arg(w)"
+      },
+      "notes": "Fulfills 00-overview.md 7.3 requirement for a planted wrong simplification across a branch cut and exercises the solve.md 4.4 numeric guard on exact symbolic checks. Verified symbolically in SymPy at z = -1 + i and numerically at 50 digits in mpmath across 5 points in r > 0, theta in (pi/2, pi). No scripted transport fixture is provided yet because host-evaluated Failed detection and broken-closure propagation require unmerged S9/S11 tools (step_record, check_run, solve_finish)."
+    },
+    {
+      "id": "Q-check-03-gaussian-moment-ibp",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "check_derivation",
+        "statement": "Check the following 4-step derivation computing the fourth Gaussian moment I_4(alpha) = integral_{-infty}^{infty} x^4 * exp(-alpha*x^2) dx for real alpha > 0 by integration by parts starting from I_0(alpha) = integral_{-infty}^{infty} exp(-alpha*x^2) dx = sqrt(pi/alpha).",
+        "steps": [
+          "Take the standard Gaussian integral I_0(alpha) = integral_{-infty}^{infty} exp(-alpha*x^2) dx = sqrt(pi/alpha) for real alpha > 0.",
+          "Integrate I_2(alpha) = integral_{-infty}^{infty} x * (x * exp(-alpha*x^2)) dx by parts with u = x and dv = x*exp(-alpha*x^2) dx (so v = -exp(-alpha*x^2)/(2*alpha)); the boundary term vanishes as |x| -> infty for alpha > 0, giving I_2(alpha) = I_0(alpha)/(2*alpha) = sqrt(pi)/(2*alpha^(3/2)).",
+          "Integrate I_4(alpha) = integral_{-infty}^{infty} x^3 * (x * exp(-alpha*x^2)) dx by parts with u = x^3 and dv = x*exp(-alpha*x^2) dx (so v = -exp(-alpha*x^2)/(2*alpha)); the boundary term vanishes as |x| -> infty for alpha > 0, obtaining I_4(alpha) = (3/alpha)*I_2(alpha).",
+          "Substitute I_2(alpha) = sqrt(pi)/(2*alpha^(3/2)) from step 2 into the step-3 expression J_4(alpha) = (3/alpha)*I_2(alpha): J_4(alpha) = (3/alpha)*(sqrt(pi)/(2*alpha^(3/2))) = 3*sqrt(pi)/(2*alpha^(5/2))."
+        ]
+      },
+      "answer_key": {
+        "final_answer": "3*sqrt(pi)/(4*alpha^(5/2))",
+        "expected_final_badge": "Failed",
+        "assumptions": [
+          "alpha is real with alpha > 0",
+          "x is real integrated over (-infty, infty)"
+        ],
+        "steps": [
+          {
+            "id": "s1",
+            "description": "State the standard Gaussian integral I_0(alpha) = sqrt(pi/alpha) for alpha > 0.",
+            "depends_on": [],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s2",
+            "description": "Compute I_2(alpha) = I_0(alpha)/(2*alpha) = sqrt(pi)/(2*alpha^(3/2)) by integration by parts with vanishing boundary terms for alpha > 0.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s3",
+            "description": "Planted error: dropped factor of 1/2 in integration by parts of I_4(alpha), claiming (3/alpha)*I_2(alpha) instead of the exact relation (3/(2*alpha))*I_2(alpha). At alpha = 1, I_4(1) = 3*sqrt(pi)/4 while 3*I_2(1) = 3*sqrt(pi)/2 (residual -3*sqrt(pi)/4).",
+            "depends_on": [
+              "s2"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Failed",
+            "expected_tier": "Failed"
+          },
+          {
+            "id": "s4",
+            "description": "Substitute I_2(alpha) = sqrt(pi)/(2*alpha^(3/2)) into (3/alpha)*I_2(alpha) to get 3*sqrt(pi)/(2*alpha^(5/2)). Locally exact substitution given s3, but effective tier is Failed via S2 broken-closure propagation from s3 (displayed as 'Broken: rests on failed s3').",
+            "depends_on": [
+              "s3",
+              "s2"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Failed"
+          }
+        ],
+        "planted_step": "s3",
+        "planted_error_kind": "algebraic_factor_error",
+        "counterexample": {
+          "point": "alpha = 1",
+          "lhs": "I_4(1) = 3*sqrt(pi)/4",
+          "rhs": "(3/1)*I_2(1) = 3*sqrt(pi)/2",
+          "residual": "-3*sqrt(pi)/4"
+        },
+        "domain": "real x in (-infty, infty); real parameter alpha > 0"
+      },
+      "notes": "Exercises detection of a dropped factor of 1/2 in an integration-by-parts recursion and downstream S2 broken-closure propagation across a multi-parent step (s4 depends on s3 and s2). Exact integrals, vanishing boundary limits, and residual verified in SymPy and checked numerically at alpha = 1 and alpha = 2.5 to 40+ digits in mpmath. No scripted transport fixture is provided yet because host-evaluated Failed detection and broken-closure propagation require unmerged S9/S11 tools (step_record, check_run, solve_finish)."
+    },
+    {
+      "id": "Q-prove-01-hermitian-eigenvalues",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "prove",
+        "statement": "Prove that for any Hermitian linear operator H = H^dagger on a finite-dimensional complex inner-product space (V, <.,.>) (where the inner product is antilinear in the first argument, linear in the second argument, and positive definite: <v, v> > 0 for all nonzero v in V), (1) every eigenvalue of H is real, and (2) eigenvectors corresponding to distinct eigenvalues are orthogonal."
+      },
+      "answer_key": {
+        "final_answer": "For any Hermitian operator H = H^dagger on a finite-dimensional complex inner-product space (V, <.,.>), every eigenvalue lambda is real (lambda = conj(lambda)) and eigenvectors for distinct eigenvalues lambda != mu are orthogonal (<u, v> = 0).",
+        "expected_final_badge": "Model agreed",
+        "assumptions": [
+          "(V, <.,.>) is a finite-dimensional complex inner-product space",
+          "<.,.> is antilinear in the first argument, linear in the second argument, and positive definite (<v, v> > 0 for v != 0)",
+          "H: V -> V is linear and Hermitian (H = H^dagger), meaning <H u, v> = <u, H v> for all u, v in V"
+        ],
+        "steps": [
+          {
+            "id": "s1",
+            "description": "State the inner-product space axioms (antilinearity in the first argument, linearity in the second, positive definiteness) and the Hermiticity hypothesis <H u, v> = <u, H v>.",
+            "depends_on": [],
+            "check_kind": "given",
+            "expected_own_tier": "Given",
+            "expected_tier": "Given"
+          },
+          {
+            "id": "s2",
+            "description": "Reality of eigenvalues: for H v = lambda v with v != 0, lambda <v, v> = <v, H v> = <H v, v> = conj(lambda) <v, v>; since <v, v> > 0, (lambda - conj(lambda)) = 0, so lambda is real.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "review_prose",
+            "expected_own_tier": "Model agreed",
+            "expected_tier": "Model agreed"
+          },
+          {
+            "id": "s3",
+            "description": "Orthogonality for distinct eigenvalues: for H u = lambda u and H v = mu v with lambda != mu, reality from s2 gives mu <u, v> = <u, H v> = <H u, v> = conj(lambda) <u, v> = lambda <u, v>, so (mu - lambda) <u, v> = 0 and hence <u, v> = 0.",
+            "depends_on": [
+              "s1",
+              "s2"
+            ],
+            "check_kind": "review_prose",
+            "expected_own_tier": "Model agreed",
+            "expected_tier": "Model agreed"
+          }
+        ],
+        "planted_step": null,
+        "domain": "finite-dimensional complex inner-product space (V, <.,.>) and Hermitian linear operator H = H^dagger"
+      },
+      "notes": "Prose-heavy linear algebra proof establishing that prose proof arguments cannot rise above Model agreed under the S2 badge lattice (no computational badge without exact handle claims). Its runnable scripted transport fixture using ledger_note is in scripts/Q-prove-01-hermitian-eigenvalues.json; full verifier-loop review and host badge assignment require S9/S11."
+    },
+    {
+      "id": "Q-prove-02-primes-3mod4",
+      "mode": "solve",
+      "input": {
+        "kind": "problem",
+        "task": "prove",
+        "statement": "Prove that there are infinitely many prime numbers p congruent to 3 (mod 4). Explicitly assume standard integer arithmetic and the Fundamental Theorem of Arithmetic (every integer n >= 2 factors into a finite product of primes)."
+      },
+      "answer_key": {
+        "final_answer": "There are infinitely many prime numbers p congruent to 3 (mod 4).",
+        "expected_final_badge": "Model agreed",
+        "assumptions": [
+          "Standard integer arithmetic and modular congruence modulo 4",
+          "Fundamental Theorem of Arithmetic: every integer n >= 2 factors into a finite product of primes"
+        ],
+        "steps": [
+          {
+            "id": "s1",
+            "description": "State standard integer arithmetic hypotheses and the Fundamental Theorem of Arithmetic (every integer n >= 2 factors into primes).",
+            "depends_on": [],
+            "check_kind": "given",
+            "expected_own_tier": "Given",
+            "expected_tier": "Given"
+          },
+          {
+            "id": "s2",
+            "description": "Auxiliary algebraic closure lemma: for integers a, b, (4*a + 1)*(4*b + 1) = 4*(4*a*b + a + b) + 1, showing closure of the residue class 1 (mod 4) under multiplication.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "identity_symbolic",
+            "expected_own_tier": "Verified",
+            "expected_tier": "Verified"
+          },
+          {
+            "id": "s3",
+            "description": "Assume finitely many primes p_1, ..., p_k == 3 (mod 4) (k >= 1, with p_1 = 3), and set N = 4*p_1*...*p_k - 1 >= 11. Show N is odd, N == 3 (mod 4), and gcd(N, p_i) = 1 for every i in {1, ..., k}.",
+            "depends_on": [
+              "s1"
+            ],
+            "check_kind": "review_prose",
+            "expected_own_tier": "Model agreed",
+            "expected_tier": "Model agreed"
+          },
+          {
+            "id": "s4",
+            "description": "By the Fundamental Theorem of Arithmetic (s1), N >= 11 factors into odd primes (each 1 or 3 mod 4). By induction using s2, a product solely of primes == 1 (mod 4) is == 1 (mod 4), contradicting N == 3 (mod 4) from s3. Hence N has a prime factor q == 3 (mod 4) outside {p_1, ..., p_k}, a contradiction. Effective tier is min(Model agreed, Verified, Model agreed) = Model agreed (skipping neutral Given s1).",
+            "depends_on": [
+              "s1",
+              "s2",
+              "s3"
+            ],
+            "check_kind": "review_prose",
+            "expected_own_tier": "Model agreed",
+            "expected_tier": "Model agreed"
+          }
+        ],
+        "planted_step": null,
+        "domain": "integers Z and positive prime numbers p >= 2"
+      },
+      "notes": "Prose-heavy number theory proof with one exact symbolic algebraic lemma (s2, Verified) demonstrating S2 monotone closure: a single Verified sub-step cannot lift a prose proof above Model agreed (effective(s4) = min(Model agreed, Verified, Model agreed) = Model agreed). The algebraic identity in s2 and sample N constructions for k = 1..5 were checked in SymPy. Its runnable scripted transport fixture using ledger_note and sympy_eval is in scripts/Q-prove-02-primes-3mod4.json; full verifier-loop review and host badge assignment require S9/S11."
     }
   ]
 }

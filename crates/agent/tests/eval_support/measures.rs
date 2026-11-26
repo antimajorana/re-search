@@ -107,7 +107,7 @@ pub mod solve_wording {
 
     define_solve_wording! {
         verified = "Verified",
-        checked_numerically = "Checked numerically",
+        checked_numerically = "Numerically checked",
         model_agreed = "Model agreed",
         unchecked = "Unchecked",
         failed = "Failed",

@@ -1,0 +1,54 @@
+[
+  {
+    "id": "msg_calc09_1",
+    "stop_reason": "tool_use",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "tu_calc09_1",
+        "name": "ledger_note",
+        "input": {
+          "text": "Setup (s1): R_10(r) = 2*a_0^(-3/2)*exp(-r/a_0) on r in (0, infty) with a_0 > 0, hbar > 0, m > 0, spherical measure r^2 dr, Coulomb potential V(r) = -hbar^2/(m*a_0*r), and E_1 = -hbar^2/(2*m*a_0^2)."
+        }
+      }
+    ]
+  },
+  {
+    "id": "msg_calc09_2",
+    "stop_reason": "tool_use",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "tu_calc09_2",
+        "name": "sympy_eval",
+        "input": {
+          "code": "import sympy as sp\nr, a0 = sp.symbols('r a_0', positive=True)\nR10 = 2 * a0**(-sp.Rational(3, 2)) * sp.exp(-r / a0)\nnorm = sp.integrate(r**2 * R10**2, (r, 0, sp.oo))\nexp_r = sp.integrate(r**3 * R10**2, (r, 0, sp.oo))\nexp_r2 = sp.integrate(r**4 * R10**2, (r, 0, sp.oo))\nexp_inv_r = sp.integrate(r * R10**2, (r, 0, sp.oo))\nassert norm == 1\nassert exp_r == sp.Rational(3, 2) * a0\nassert exp_r2 == 3 * a0**2\nassert exp_inv_r == 1 / a0\nprint('norm =', norm, '<r> =', exp_r, '<r^2> =', exp_r2, '<1/r> =', exp_inv_r)"
+        }
+      }
+    ]
+  },
+  {
+    "id": "msg_calc09_3",
+    "stop_reason": "tool_use",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "tu_calc09_3",
+        "name": "sympy_eval",
+        "input": {
+          "code": "import sympy as sp\nr, a0, hbar, m = sp.symbols('r a_0 hbar m', positive=True)\nR10 = 2 * a0**(-sp.Rational(3, 2)) * sp.exp(-r / a0)\nV_r = -hbar**2 / (m * a0 * r)\nE1 = -hbar**2 / (2 * m * a0**2)\nexp_V = sp.integrate(r**2 * R10**2 * V_r, (r, 0, sp.oo))\nT_R10 = -(hbar**2 / (2*m)) * (1/r**2) * sp.diff(r**2 * sp.diff(R10, r), r)\nexp_T = sp.simplify(sp.integrate(r**2 * R10 * T_R10, (r, 0, sp.oo)))\nassert sp.simplify(exp_V + hbar**2 / (m * a0**2)) == 0\nassert sp.simplify(exp_T - hbar**2 / (2 * m * a0**2)) == 0\nassert sp.simplify(exp_T + sp.Rational(1, 2) * exp_V) == 0\nassert sp.simplify(exp_T + exp_V - E1) == 0\nassert sp.simplify(T_R10 + V_r * R10 - E1 * R10) == 0\nprint('Virial and eigenvalue checks passed: <T> =', exp_T, '<V> =', exp_V)"
+        }
+      }
+    ]
+  },
+  {
+    "id": "msg_calc09_4",
+    "stop_reason": "end_turn",
+    "content": [
+      {
+        "type": "text",
+        "text": "Using the radial weight r^2 dr with a_0 > 0, the hydrogen 1s radial wavefunction R_10(r) = 2*a_0^(-3/2)*exp(-r/a_0) has normalization integral equal to 1 and exact radial expectation values:\n\n<r> = (3/2)*a_0, <r^2> = 3*a_0^2, <1/r> = 1/a_0\n\nWith V(r) = -hbar^2/(m*a_0*r) and E_1 = -hbar^2/(2*m*a_0^2), we find <V> = -hbar^2/(m*a_0^2) and <T> = hbar^2/(2*m*a_0^2), confirming the virial relation <T> = -(1/2)*<V> and <T> + <V> = E_1."
+      }
+    ]
+  }
+]
