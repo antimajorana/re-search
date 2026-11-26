@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="generator" content="LaTeXML">
+  <title>Synthetic Spectral Bounds on Weighted Lattices</title>
+  <style>
+    .ltx_theorem { border: 1px solid #ccc; }
+  </style>
+  <script>
+    const decoy = '<div class="ltx_theorem ltx_theorem_theorem"><h6 class="ltx_title ltx_title_theorem"><span class="ltx_tag ltx_tag_theorem">Theorem 99</span></h6></div>';
+  </script>
+</head>
+<body>
+<article class="ltx_document">
+  <h1 class="ltx_title ltx_title_document">Synthetic Spectral Bounds on Weighted Lattices</h1>
+  <!-- Comment ignored for fingerprint invariance -->
+  <div class="ltx_abstract">
+    <h6 class="ltx_title ltx_title_abstract">Abstract</h6>
+    <p class="ltx_p">We prove exponential mixing in <a class="ltx_ref" href="#S2.Thm2">Theorem 2.2</a> using synthetic energy bounds.</p>
+  </div>
+  <section class="ltx_section" id="S1">
+    <h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">1 </span>Setup &amp; Notation</h2>
+    <div class="ltx_para" id="S1.p1">
+      <p class="ltx_p">Let <math class="ltx_Math" alttext="G=(V,E)" display="inline"><semantics><mrow><mi>G</mi><mo>=</mo><mo>(</mo><mi>V</mi><mo>,</mo><mi>E</mi><mo>)</mo></mrow><annotation encoding="application/x-tex">G=(V,E)</annotation></semantics> be a finite graph with weights &amp; capacities &#x2264; 1.</p>
+      <img src="graph.png" alt="graph">
+    </div>
+    <div class="ltx_theorem ltx_theorem_definition" id="S1.Def1">
+      <h6 class="ltx_title ltx_title_theorem"><span class="ltx_tag ltx_tag_theorem">Definition 1.1</span> (Spectral weight).</h6>
+      <div class="ltx_para"><p class="ltx_p">A weight vector <math class="ltx_Math" alttext="w" display="inline"><mi>w</mi></math> is admissible if every coordinate is strictly positive.</p></div>
+    </div>
+    <table class="ltx_equation ltx_eqn_table" id="S1.E1">
+      <tr class="ltx_equation ltx_eqn_row ltx_align_baseline">
+        <td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+        <td class="ltx_eqn_cell ltx_eqn_eqno"><span class="ltx_tag ltx_tag_equation">(1.1)</span></td>
+        <td class="ltx_eqn_cell ltx_eqn_math"><math class="ltx_Math" alttext="E(u) = \sum_{e} w_e (\nabla u)_e^2" display="block"><mi>E</mi></math></td>
+      </tr>
+    </table>
+    <table class="ltx_equation ltx_eqn_table" id="S1.Ex1">
+      <tr class="ltx_equation ltx_eqn_row">
+        <td class="ltx_eqn_cell ltx_eqn_math"><math class="ltx_Math" alttext="u_0 = 0" display="block"><mi>u</mi></math></td>
+      </tr>
+    </table>
+  </section>
+  <section class="ltx_section" id="S2">
+    <h2 class="ltx_title ltx_title_section"><span class="ltx_tag ltx_tag_section">2 </span>Main Estimates</h2>
+    <section class="ltx_subsection" id="S2.SS1">
+      <h3 class="ltx_title ltx_title_subsection"><span class="ltx_tag ltx_tag_subsection">2.1 </span>Auxiliary Bounds</h3>
+      <div class="ltx_theorem ltx_theorem_lemma" id="S2.Lem1">
+        <h6 class="ltx_title ltx_title_theorem"><span class="ltx_tag ltx_tag_theorem">Lemma 2.1</span> (Coercivity bound).</h6>
+        <div class="ltx_para"><p class="ltx_p">Under <a class="ltx_ref" href="#S1.Def1">Definition 1.1</a> and <a class="ltx_ref" href="#S1.E1">(1.1)</a>, the energy form is non-negative.</p></div>
+      </div>
+      <div class="ltx_proof" id="S2.P1">
+        <h6 class="ltx_title ltx_title_proof"><span class="ltx_tag ltx_tag_proof">Proof.</span></h6>
+        <div class="ltx_para"><p class="ltx_p">Each squared difference term in <a class="ltx_ref" href="#S1.E1">(1.1)</a> is positive.</p></div>
+      </div>
+    </section>
+    <div class="ltx_theorem ltx_theorem_theorem" id="S2.Thm2">
+      <h6 class="ltx_title ltx_title_theorem"><span class="ltx_tag ltx_tag_theorem">Theorem 2.2</span> (<cite class="ltx_cite">[<a class="ltx_ref" href="#bib.bib1">Kel20</a>, Proposition 2.1]</cite>).</h6>
+      <div class="ltx_para"><p class="ltx_p">Synthetic spectral decay holds uniformly across weighted lattices.</p></div>
+    </div>
+    <div class="ltx_proof" id="S2.P2">
+      <h6 class="ltx_title ltx_title_proof">Proof of <a class="ltx_ref" href="#S2.Thm2">Theorem 2.2</a>.</h6>
+      <div class="ltx_para"><p class="ltx_p">Combine <a class="ltx_ref" href="#S2.Lem1">Lemma 2.1</a> with <cite class="ltx_cite">[<a class="ltx_ref" href="#bib.bib2">Doe21</a>]</cite>.</p></div>
+    </div>
+    <figure class="ltx_figure" id="S2.F1">
+      <figcaption class="ltx_caption"><span class="ltx_tag ltx_tag_figure">Figure 1: </span>Synthetic decay rate profile.</figcaption>
+    </figure>
+  </section>
+  <section class="ltx_appendix" id="A1">
+    <h2 class="ltx_title ltx_title_appendix"><span class="ltx_tag ltx_tag_appendix">A </span>Appendix Notes</h2>
+    <div class="ltx_theorem ltx_theorem_remark" id="A1.Rem1">
+      <h6 class="ltx_title ltx_title_theorem"><span class="ltx_tag ltx_tag_theorem">Remark</span></h6>
+      <div class="ltx_para"><p class="ltx_p">Unnumbered remark body inside appendix.</p></div>
+    </div>
+  </section>
+  <section class="ltx_bibliography" id="bib">
+    <h2 class="ltx_title ltx_title_bibliography">References</h2>
+    <ul class="ltx_biblist">
+      <li class="ltx_bibitem" id="bib.bib1">
+        <span class="ltx_tag ltx_tag_bibitem">[Kel20]</span>
+        <span class="ltx_bibblock">B. Synthetic, </span>
+        <span class="ltx_bibblock"><em class="ltx_emph">Weighted Lattice Operators</em>, </span>
+        <span class="ltx_bibblock">arXiv:2601.00055v2.</span>
+      </li>
+      <li class="ltx_bibitem" id="bib.bib2">
+        <span class="ltx_tag ltx_tag_bibitem">[Doe21]</span>
+        <span class="ltx_bibblock">C. Analyst, </span>
+        <span class="ltx_bibblock"><em class="ltx_emph">Discrete Energy Inequalities</em>, </span>
+        <span class="ltx_bibblock">doi:10.1000/synthetic.2021.</span>
+      </li>
+    </ul>
+  </section>
+</article>
+</body>
+</html>

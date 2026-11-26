@@ -8,6 +8,14 @@
 pub mod bib;
 pub mod edges;
 pub mod flatten;
+pub mod html;
+mod html_bib;
+mod html_classify;
+mod html_edges;
+mod html_entities;
+mod html_finalize;
+mod html_lex;
+mod html_walk;
 pub mod locate;
 mod locate_parse;
 pub mod model;
@@ -35,6 +43,12 @@ pub use flatten::{
     flatten_tex_files, load_ingested_tex_source, select_primary_tex, FlattenedLine, FlattenedTex,
     IngestedTexSource, OriginEntry, MAX_FLATTENED_BYTES, MAX_FLATTENED_LINES, MAX_INCLUDE_DEPTH,
 };
+pub use html::{
+    build_html_skeleton, build_html_skeleton_from_ingested, build_html_skeleton_timed,
+    is_html_receipt, is_latexml_html_document, load_ingested_html_source, HtmlSkeletonInput,
+    HtmlSkeletonOutput, IngestedHtmlSource,
+};
+pub use html_lex::MAX_HTML_BYTES;
 pub use locate::{
     detect_tex_counter_drift, format_candidate_label, format_version_caveat, locate_in_skeleton,
     locate_in_skeleton_with_context, parse_locator, LocateCandidate, LocateContext, LocateResult,
