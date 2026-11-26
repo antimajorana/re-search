@@ -276,4 +276,3 @@ fn ui_approver_prompts_and_resolves_outside_a_running_model_turn() {
     assert!(events.iter().any(|e| e.kind == "approval.answered" && e.payload["approved"] == true));
     assert!(list_session_grants(&state, sid).contains(&"write-workspace"));
 }
-
