@@ -207,6 +207,18 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_skip.js"),
         }),
+        "/assets/investigation_wholemap_model.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_wholemap_model.js"),
+        }),
+        "/assets/investigation_wholemap.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_wholemap.js"),
+        }),
+        "/assets/investigation_wholemap.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_wholemap.css"),
+        }),
         "/assets/api.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/api.js"),
