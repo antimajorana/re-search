@@ -125,6 +125,7 @@ Sizes: S up to 2 days, M up to 1 week, L 1 to 2 weeks.
 | F7 | Hand-off packet | Section 4 | `export/src/handoff.rs`, `desktop-server/src/handoff.rs` | S | F4, F5 | V16; hand-off halves of X13 and S21 |
 | F8 | Evaluation harness | Section 7 | `crates/agent/tests/eval_support/`, `tests/fixtures/eval/`, `docs/design/eval-2026-11/` | S | - | S0; harness of X14; the Investigate acceptance set |
 | F9 | Run budget and run state | One function counting model calls of a run from ledger events; one run-state vocabulary (3.3); one run bar | `research-tools/src/run_budget.rs`; uses `run_bar.js` | S | - | budget parts of X3, V6 (6.15), S11 (G4) |
+| F9b | Model role routing and accounting | Use the existing Orchestrator and worker roles for the three modes. Pin assignments, reserve capacity for parallel workers, and report usage by role and model (3.4). | Existing role resolver, delegation and budget code; mode adapters in V6/V8, X6–X11 and S7–S14 | M | F1, F4, F9; each adapter waits for its own mode entry point | - |
 | F10 | Library | 2.7 below | `research-tools/src/library.rs`, `library_schema.rs`; `desktop-server/src/routes_library.rs` | M | F2 | X5 |
 | F11 | Literature services | 2.8 below | `research-tools/src/lit_providers.rs`, `lit_abstracts.rs` | L | F2, F3 | X2 |
 | F12 | Coverage, verdict and wording | 2.9 below. Built for Explore; the Investigate side waits with V14 (deferred) | `research-tools/src/search_coverage.rs`, `prior_work.rs`, `prior_work_wording.rs` | M | F11 | coverage and wording parts of X7; check side of `status_badge.rs` (V7, V14) |
@@ -583,6 +584,48 @@ records corrections on screen (Solve's "Correct this step" in S13).
 | Done with open items | Finished; a list says what is open | - | - | `finished_open_items` |
 
 "Partial" describes a result, not a state: a paused Investigate task shows "Paused: 3 results annotated".
+
+### 3.4 Orchestrator, smaller workers and deterministic tools (F9b)
+
+The user chooses the frontier Orchestrator in model settings. The Orchestrator frames the question,
+chooses the reasoning approach, weighs disagreements and writes the synthesis. A smaller model works
+on a bounded assignment with a compact input and a structured return. Use deterministic code first
+for tasks that can be completed from source text, metadata or a computation without a model.
+
+| Mode | Smaller model assignment | Frontier reasoning | Code |
+|---|---|---|---|
+| Investigate | Locate passages, extract candidate claims and proof steps from the selected source ranges | Identify what matters for the reader, decide how the arguments connect, resolve conflicts, explain the chosen result | Build the skeleton, validate edges and quote anchors, resolve citations and page links |
+| Explore | Draft search variants, triage batches, locate evidence for individual subclaims | Set the search scope, judge substantive overlap and exceptions, synthesize directions | Deduplicate, apply the network and coverage gates, match quotes and assign the strongest permitted wording |
+| Solve | Prepare a checkable expression, run bounded tool retries, collect computation receipts | Choose the derivation, examine assumptions and failed steps, interpret checks and decide the next route | Run exact or numeric checks in the existing sandbox and assign badges from the results |
+
+Reuse the existing role settings, provider transport builder, isolated worker dispatch and tool
+policies. For a new-mode run, resolve and pin the effective provider and model per role before
+sending work. Prefer an explicitly assigned worker, then a compatible smaller model on the
+connected provider. Show unavailable roles and keep deterministic work usable. A frontier-model
+fallback for worker jobs requires an explicit setting for that run or preset, with the selected
+route visible. Keep the legacy Research and Investigation resume paths compatible. A separate
+context on the same frontier model does not count as a smaller-model assignment.
+
+Give a worker one purpose, the pinned source ranges or calculation inputs it needs, allowed
+tools, and a call and result-size limit. Reuse saved results for the same task and pinned inputs.
+Return candidate records with source pointers or tool receipts, concise reasoning and limitations.
+Batch related records for one frontier pass. Give the Orchestrator the matched excerpts it needs
+through F4 so its own citations have caller-specific provenance. Keep worker history out of the
+Orchestrator conversation. Workers may propose records and checks. They cannot set final answers,
+override evidence gates, gain extra tools, or start new workers from a bounded job.
+
+Reserve the shared F9 budget before dispatching parallel requests. Charge each provider request
+once, including any sent retry, with a single task/run ID and the effective role and model. Keep
+enough of the cap for the required frontier decision before distributing the remaining calls to
+workers. Show calls and provider-reported input/output tokens by role and model. Missing token
+counts are unknown. When the run pauses at its cap, keep accepted results and explain what remains.
+
+Acceptance uses two scripted transports. Source-only opening uses neither. Bulk candidate
+extraction or check preparation reaches only the configured worker. The frontier receives bounded
+evidence and retains interpretation. A failed worker can leave a partial result without promoting
+an unverified conclusion. Parallel and retried calls respect the shared cap and are counted once.
+Compare a held-out case with and without delegation and record frontier tokens, total tokens,
+latency, accepted evidence and corrections before making a cost or quality claim.
 
 ---
 
