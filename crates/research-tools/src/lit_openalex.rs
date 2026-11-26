@@ -53,7 +53,7 @@ pub fn build_request_url(
     max_results: usize,
 ) -> Result<String, (QueryStatus, String)> {
     let base = endpoints.openalex_api_base.trim_end_matches('/');
-    let page = (query.offset / max_results) + 1;
+    let page = (query.offset / max_results.max(1)).saturating_add(1);
     match &query.relation {
         QueryRelation::None => {
             let q = query.query.trim();
@@ -115,10 +115,11 @@ fn openalex_filter_target(key: &PaperKey) -> Result<String, (QueryStatus, String
 /// Deterministically reconstruct plain text from an OpenAlex `abstract_inverted_index` JSON
 /// object (`{ "<token>": [pos0, pos1, ...], ... }`).
 ///
-/// Sorts collected `(position, token)` pairs without allocating by `max_pos`, so sparse or
-/// adversarial position numbers cannot trigger huge allocations. Always accompanied by
-/// `AbstractRef { verbatim: false, .. }` so Rule C3 prevents rebuilt abstracts from ever
-/// becoming `evidence.abstract`.
+/// Sorts collected `(position, token)` pairs without allocating by `max_pos`, and stops
+/// appending as soon as [`crate::lit_abstracts::MAX_ABSTRACT_CHARS`] folded characters are
+/// reached so neither sparse positions nor repeated oversized tokens can trigger OOM.
+/// Always accompanied by `AbstractRef { verbatim: false, .. }` so Rule C3 prevents rebuilt
+/// abstracts from ever becoming `evidence.abstract`.
 pub fn reconstruct_abstract_inverted_index(val: &Value) -> Option<String> {
     let map = val.as_object()?;
     if map.is_empty() {
@@ -150,12 +151,35 @@ pub fn reconstruct_abstract_inverted_index(val: &Value) -> Option<String> {
         return None;
     }
     pairs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
-    let mut joined = String::with_capacity(pairs.len().saturating_mul(6));
-    for (idx, (_, word)) in pairs.iter().enumerate() {
-        if idx > 0 {
-            joined.push(' ');
+    let max_chars = crate::lit_abstracts::MAX_ABSTRACT_CHARS;
+    let mut joined = String::with_capacity(max_chars.min(pairs.len().saturating_mul(6)));
+    let mut chars_written = 0usize;
+    let mut prev_space = true;
+    for (_, word) in pairs {
+        if chars_written >= max_chars {
+            break;
         }
-        joined.push_str(word);
+        if !prev_space {
+            joined.push(' ');
+            chars_written += 1;
+            prev_space = true;
+        }
+        for ch in word.chars() {
+            if chars_written >= max_chars {
+                break;
+            }
+            if ch.is_whitespace() {
+                if !prev_space {
+                    joined.push(' ');
+                    chars_written += 1;
+                    prev_space = true;
+                }
+            } else {
+                joined.push(ch);
+                chars_written += 1;
+                prev_space = false;
+            }
+        }
     }
     normalize_abstract(&joined, false)
 }
@@ -206,11 +230,18 @@ pub fn parse_openalex_json(
         }
         let openalex_key = w["id"]
             .as_str()
-            .or_else(|| w["ids"]["openalex"].as_str())
-            .and_then(|s| PaperKey::from_openalex(s).ok());
-        let doi_raw = w["doi"].as_str().or_else(|| w["ids"]["doi"].as_str());
-        let arxiv_raw = extract_openalex_arxiv(w);
-        let Some(paper_ref) = build_openalex_paper_ref(arxiv_raw, doi_raw, openalex_key.clone())
+            .and_then(|s| PaperKey::from_openalex(s).ok())
+            .or_else(|| {
+                w["ids"]["openalex"]
+                    .as_str()
+                    .and_then(|s| PaperKey::from_openalex(s).ok())
+            });
+        let doi = w["doi"]
+            .as_str()
+            .and_then(|s| canonical_doi(s).ok())
+            .or_else(|| w["ids"]["doi"].as_str().and_then(|s| canonical_doi(s).ok()));
+        let arxiv_split = extract_openalex_arxiv(w);
+        let Some(paper_ref) = build_openalex_paper_ref(arxiv_split, doi, openalex_key.clone())
         else {
             continue;
         };
@@ -342,15 +373,14 @@ fn parse_referenced_works(
 }
 
 fn build_openalex_paper_ref(
-    arxiv_raw: Option<&str>,
-    doi_raw: Option<&str>,
+    arxiv_split: Option<(String, Option<String>)>,
+    doi: Option<String>,
     openalex_fallback: Option<PaperKey>,
 ) -> Option<PaperRef> {
-    let (arxiv, version) = arxiv_raw
-        .and_then(|raw| split_arxiv_id(raw).ok())
-        .map(|(base, ver)| (Some(base), ver))
-        .unwrap_or((None, None));
-    let doi = doi_raw.and_then(|raw| canonical_doi(raw).ok());
+    let (arxiv, version) = match arxiv_split {
+        Some((base, ver)) => (Some(base), ver),
+        None => (None, None),
+    };
     PaperRef::from_ids_or(
         PaperIds {
             arxiv,
@@ -364,12 +394,18 @@ fn build_openalex_paper_ref(
     .ok()
 }
 
-fn extract_openalex_arxiv(w: &Value) -> Option<&str> {
-    if let Some(id) = w["ids"]["arxiv"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
-        return Some(id);
+fn extract_openalex_arxiv(w: &Value) -> Option<(String, Option<String>)> {
+    if let Some(parsed) = w["ids"]["arxiv"]
+        .as_str()
+        .and_then(|s| split_arxiv_id(s).ok())
+    {
+        return Some(parsed);
     }
     let landing = w["primary_location"]["landing_page_url"].as_str()?;
-    landing.to_ascii_lowercase().contains("arxiv.org/").then_some(landing)
+    if !landing.to_ascii_lowercase().contains("arxiv.org/") {
+        return None;
+    }
+    split_arxiv_id(landing).ok()
 }
 
 fn extract_openalex_authors(w: &Value) -> Vec<String> {
