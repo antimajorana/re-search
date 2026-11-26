@@ -1,0 +1,54 @@
+[
+  {
+    "id": "msg_calc08_1",
+    "stop_reason": "tool_use",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "tu_calc08_1",
+        "name": "ledger_note",
+        "input": {
+          "text": "Setup (s1): I(a, b) = integral_{-infty}^{infty} dx / ((x^2 + a^2)*(x^2 + b^2)) for real a > 0, b > 0. Positivity fixes the upper-half-plane poles at z = +i*a and z = +i*b and removes absolute values."
+        }
+      }
+    ]
+  },
+  {
+    "id": "msg_calc08_2",
+    "stop_reason": "tool_use",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "tu_calc08_2",
+        "name": "sympy_eval",
+        "input": {
+          "code": "import sympy as sp\nx = sp.Symbol('x', real=True)\nz = sp.Symbol('z')\na, b = sp.symbols('a b', positive=True)\nintegrand = 1 / ((x**2 + a**2)*(x**2 + b**2))\npf = (1/(b**2 - a**2)) * (1/(x**2 + a**2) - 1/(x**2 + b**2))\nassert sp.simplify(integrand - pf) == 0\nf_z = 1 / ((z**2 + a**2)*(z**2 + b**2))\nres_ia = sp.simplify(sp.residue(f_z, z, sp.I*a))\nres_ib = sp.simplify(sp.residue(f_z, z, sp.I*b))\nI_res = sp.simplify(2*sp.pi*sp.I*(res_ia + res_ib))\nI_cf = sp.pi / (a*b*(a + b))\nassert sp.simplify(I_res - I_cf) == 0\nI_pf = sp.simplify((1/(b**2 - a**2))*(sp.integrate(1/(x**2 + a**2), (x, -sp.oo, sp.oo)) - sp.integrate(1/(x**2 + b**2), (x, -sp.oo, sp.oo))))\nassert sp.simplify(I_pf - I_cf) == 0\nprint('Distinct poles a != b verified:', I_res)"
+        }
+      }
+    ]
+  },
+  {
+    "id": "msg_calc08_3",
+    "stop_reason": "tool_use",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "tu_calc08_3",
+        "name": "sympy_eval",
+        "input": {
+          "code": "import sympy as sp\nx = sp.Symbol('x', real=True)\nz = sp.Symbol('z')\na, b = sp.symbols('a b', positive=True)\nI_cf = sp.pi / (a*b*(a + b))\nf_deg = 1 / (z**2 + a**2)**2\nres_deg = sp.simplify(sp.residue(f_deg, z, sp.I*a))\nI_deg_res = sp.simplify(2*sp.pi*sp.I*res_deg)\nI_deg_lim = sp.limit(I_cf, b, a, '+')\nI_deg_direct = sp.integrate(1/(x**2 + a**2)**2, (x, -sp.oo, sp.oo))\nassert sp.simplify(I_deg_res - sp.pi/(2*a**3)) == 0\nassert sp.simplify(I_deg_lim - sp.pi/(2*a**3)) == 0\nassert sp.simplify(I_deg_direct - sp.pi/(2*a**3)) == 0\nI_direct = sp.simplify(sp.integrate(1/((x**2 + a**2)*(x**2 + b**2)), (x, -sp.oo, sp.oo)))\nassert sp.simplify(I_direct - I_cf) == 0\nprint('Degenerate b = a and direct integral verified:', I_deg_res, I_direct)"
+        }
+      }
+    ]
+  },
+  {
+    "id": "msg_calc08_4",
+    "stop_reason": "end_turn",
+    "content": [
+      {
+        "type": "text",
+        "text": "For real a > 0 and b > 0, closing the contour in the upper half-plane encloses the poles at z = +i*a and z = +i*b (simple when a != b, double when b = a). Positivity a > 0, b > 0 ensures these lie in Im(z) > 0 and removes absolute values (otherwise |a| and |b| appear). Both the distinct-pole residue sum and the continuous limit b -> a+ (matching the double-pole value pi/(2*a^3)) yield the uniform closed form:\n\npi/(a*b*(a + b))"
+      }
+    ]
+  }
+]
