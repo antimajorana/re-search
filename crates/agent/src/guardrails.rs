@@ -415,30 +415,30 @@ pub fn run_research_loop(
     let session = router.session();
     let info = transport.info();
     let defs = router.registry().defs();
-    let mut audit = Audit { ledger, session, sink, last_seq: 0 };
-    audit.emit(
-        "session.start",
-        json!({
-            "route": "api",
-            "provenance": "in-core loop, full provenance",
-            "provider": info.provider,
-            "endpoint": info.endpoint,
-            "api_key_env": info.api_key_env,
-            "model_requested": cfg.model_requested,
-            "model": cfg.model,
-            "prompt": cfg.prompt,
-            "system_prompt": system_prompt,
-            "max_turns": cfg.max_turns,
-            "max_tokens": cfg.max_tokens,
-            "policy_version": router.policy().version.as_str(),
-            "containment": cfg.containment,
-            "contained": cfg.contained,
-            "verification_mode": guardrails.verification_mode,
-            "calculation_mode": guardrails.calculation_mode,
-            "pinned_conventions": guardrails.pinned_conventions,
-            "tool_defs": tool_defs_json(&defs),
-        }),
-    )?;
+    let existing = ledger.read_session(session).map_err(|e| e.to_string())?;
+    let mut audit = Audit { ledger, session, sink, last_seq: existing.last().map_or(0, |e| e.seq) };
+    let mut start_payload = json!({
+        "route": "api",
+        "provenance": "in-core loop, full provenance",
+        "provider": info.provider,
+        "endpoint": info.endpoint,
+        "api_key_env": info.api_key_env,
+        "model_requested": cfg.model_requested,
+        "model": cfg.model,
+        "prompt": cfg.prompt,
+        "system_prompt": system_prompt,
+        "max_turns": cfg.max_turns,
+        "max_tokens": cfg.max_tokens,
+        "policy_version": router.policy().version.as_str(),
+        "containment": cfg.containment,
+        "contained": cfg.contained,
+        "verification_mode": guardrails.verification_mode,
+        "calculation_mode": guardrails.calculation_mode,
+        "pinned_conventions": guardrails.pinned_conventions,
+        "tool_defs": tool_defs_json(&defs),
+    });
+    crate::resume_profile::insert_tool_profile(&mut start_payload, router, &existing);
+    audit.emit("session.start", start_payload)?;
 
     let initial_messages = vec![Message {
         role: Role::User,

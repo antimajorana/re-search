@@ -6,13 +6,45 @@
 //! the registry `core.exe` will serve for the same research setting.
 
 use policy::Policy;
+use research_tools::tool_profile::{
+    lookup as lookup_profile, register_profile, ProfileHostTools, PROFILE_RESEARCH_V1,
+};
 use research_tools::ResearchEnv;
 use serde_json::Value;
 use std::sync::Arc;
 use tools::{builtin, CallCtx, Registry, ToolDef, ToolHandler, WorkerEpoch};
 
+fn cli_title_handler() -> Arc<dyn ToolHandler> {
+    Arc::new(|ctx: &CallCtx<'_>, input: &Value| {
+        let ledger = ctx.ledger.lock().map_err(|_| "ledger lock poisoned")?;
+        record_cli_title(&ledger, ctx.session, input)
+    })
+}
+
+/// Register the tools for `profile_name` plus MCP `set_session_title`, returning the profile's
+/// policy. Fails closed if `profile_name` is unbuilt or unknown.
+pub fn register_core_tools_for_profile(
+    registry: &mut Registry,
+    sympy_epoch: Arc<dyn WorkerEpoch>,
+    sympy_handler: Arc<dyn ToolHandler>,
+    env: Arc<ResearchEnv>,
+    profile_name: &str,
+) -> Result<Policy, String> {
+    let profile = lookup_profile(profile_name).map_err(|e| e.to_string())?;
+    register_profile(
+        &profile,
+        registry,
+        env,
+        ProfileHostTools {
+            sympy_epoch,
+            sympy_handler,
+            session_title_handler: Some(cli_title_handler()),
+        },
+    )
+}
+
 /// Register `sympy_eval` (with the caller's worker), `ledger_note`, and, when `research`
-/// is given, the research tools; return the matching policy (`v0.4-research` with
+/// is given, the `research/1` profile tools; return the matching policy (`v0.4-research` with
 /// research tools, the built-in `v0.2` otherwise).
 pub fn register_core_tools(
     registry: &mut Registry,
@@ -20,18 +52,20 @@ pub fn register_core_tools(
     sympy_handler: Arc<dyn ToolHandler>,
     research: Option<Arc<ResearchEnv>>,
 ) -> Policy {
-    registry.register_worker_session(builtin::sympy_eval_def(), sympy_epoch, sympy_handler);
-    registry.register(builtin::ledger_note_def(), builtin::ledger_note_handler());
     match research {
-        Some(env) => {
-            registry.register(builtin::session_title_def(), Arc::new(|ctx: &CallCtx<'_>, input: &Value| {
-                let ledger = ctx.ledger.lock().map_err(|_| "ledger lock poisoned")?;
-                record_cli_title(&ledger, ctx.session, input)
-            }));
-            research_tools::register_research_tools(registry, env);
-            research_tools::research_policy()
+        Some(env) => register_core_tools_for_profile(
+            registry,
+            sympy_epoch,
+            sympy_handler,
+            env,
+            PROFILE_RESEARCH_V1,
+        )
+        .unwrap_or_else(|e| panic!("built-in profile `{PROFILE_RESEARCH_V1}` failed to register: {e}")),
+        None => {
+            registry.register_worker_session(builtin::sympy_eval_def(), sympy_epoch, sympy_handler);
+            registry.register(builtin::ledger_note_def(), builtin::ledger_note_handler());
+            builtin::default_policy()
         }
-        None => builtin::default_policy(),
     }
 }
 
@@ -66,6 +100,18 @@ impl WorkerEpoch for NoWorker {
     fn is_contained(&self) -> bool {
         false
     }
+}
+
+/// What `core.exe` serves for a named tool profile (definitions in id order).
+pub fn core_tool_set_for_profile(
+    env: Arc<ResearchEnv>,
+    profile_name: &str,
+) -> Result<CoreToolSet, String> {
+    let mut registry = Registry::new();
+    let stub: Arc<dyn ToolHandler> =
+        Arc::new(|_: &CallCtx<'_>, _: &Value| Err("tool is served by core.exe, not here".to_string()));
+    let policy = register_core_tools_for_profile(&mut registry, Arc::new(NoWorker), stub, env, profile_name)?;
+    Ok(CoreToolSet { defs: registry.defs().into_iter().cloned().collect(), policy_version: policy.version })
 }
 
 /// What `core.exe` serves with or without research tools (definitions in id order).
@@ -122,5 +168,21 @@ mod tests {
             assert!(ids.contains(&id), "{id} missing from {ids:?}");
         }
         assert_eq!(set.policy_version, research_tools::RESEARCH_POLICY_VERSION);
+    }
+
+    #[test]
+    fn profile_set_builds_known_profiles_and_rejects_unbuilt() {
+        let env = Arc::new(ResearchEnv::new(std::env::temp_dir()));
+        let r1 = core_tool_set_for_profile(Arc::clone(&env), PROFILE_RESEARCH_V1).unwrap();
+        let i1 = core_tool_set_for_profile(
+            Arc::clone(&env),
+            research_tools::tool_profile::PROFILE_INVESTIGATION_V1,
+        )
+        .unwrap();
+        assert_eq!(r1.defs, i1.defs);
+        assert_eq!(r1.defs, core_tool_set(Some(Arc::clone(&env))).defs);
+        let err = core_tool_set_for_profile(env, research_tools::tool_profile::PROFILE_SOLVE_V1)
+            .unwrap_err();
+        assert!(err.contains("profile not built yet"), "{err}");
     }
 }

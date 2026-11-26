@@ -96,7 +96,25 @@ pub(crate) fn build_research_router(
     eval_timeout_s: u64,
     research_opts: ResearchRouterOpts,
 ) -> Result<BuiltRouter, String> {
-    build_router_inner(data_dir, session, worker_setup, eval_timeout_s, Some(research_opts))
+    build_router_inner(data_dir, session, worker_setup, eval_timeout_s, Some((research_opts, None)))
+}
+
+#[allow(dead_code)]
+pub(crate) fn build_router_for_profile(
+    data_dir: &Path,
+    session: &str,
+    worker_setup: Option<WorkerSetup>,
+    eval_timeout_s: u64,
+    research_opts: ResearchRouterOpts,
+    profile_name: &str,
+) -> Result<BuiltRouter, String> {
+    build_router_inner(
+        data_dir,
+        session,
+        worker_setup,
+        eval_timeout_s,
+        Some((research_opts, Some(profile_name))),
+    )
 }
 
 fn build_router_inner(
@@ -104,7 +122,7 @@ fn build_router_inner(
     session: &str,
     worker_setup: Option<WorkerSetup>,
     eval_timeout_s: u64,
-    research_opts: Option<ResearchRouterOpts>,
+    research_opts: Option<(ResearchRouterOpts, Option<&str>)>,
 ) -> Result<BuiltRouter, String> {
     let worker = match worker_setup {
         Some(setup) => Some(build_worker(data_dir, session, setup)?),
@@ -119,24 +137,19 @@ fn build_router_inner(
     let worker = Arc::new(Mutex::new(worker));
     let timeout = Duration::from_secs(eval_timeout_s);
 
-    let mut registry = Registry::new();
-    registry.register_worker_session(
-        builtin::sympy_eval_def(),
-        Arc::new(WorkerEpochAdapter { epoch: epoch_handle, contained }),
-        Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
-            let code = args["code"].as_str().ok_or("`code` must be a string")?;
-            let mut guard = worker.lock().map_err(|_| "worker lock poisoned".to_string())?;
-            let w = guard.as_mut().ok_or("no compute worker is configured for this session")?;
-            let (result, ran_epoch) =
-                w.evaluate_in_epoch(code, timeout, ctx.required_epoch).map_err(|e| e.to_string())?;
-            ctx.record_worker_execution(ran_epoch, w.last_request_id());
-            if let Some(hello) = w.hello() {
-                ctx.record_worker_environment(hello);
-            }
-            Ok(result)
-        }),
-    );
-    registry.register(builtin::ledger_note_def(), builtin::ledger_note_handler());
+    let sympy_epoch: Arc<dyn WorkerEpoch> = Arc::new(WorkerEpochAdapter { epoch: epoch_handle, contained });
+    let sympy_handler: Arc<dyn tools::ToolHandler> = Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
+        let code = args["code"].as_str().ok_or("`code` must be a string")?;
+        let mut guard = worker.lock().map_err(|_| "worker lock poisoned".to_string())?;
+        let w = guard.as_mut().ok_or("no compute worker is configured for this session")?;
+        let (result, ran_epoch) =
+            w.evaluate_in_epoch(code, timeout, ctx.required_epoch).map_err(|e| e.to_string())?;
+        ctx.record_worker_execution(ran_epoch, w.last_request_id());
+        if let Some(hello) = w.hello() {
+            ctx.record_worker_environment(hello);
+        }
+        Ok(result)
+    });
 
     let router_ledger = Ledger::open(data_dir).map_err(|e| e.to_string())?;
     let approval_ledger = Ledger::open(data_dir).map_err(|e| e.to_string())?;
@@ -146,8 +159,16 @@ fn build_router_inner(
         containment.clone(),
         contained,
     );
-    let policy = match research_opts {
-        Some(ro) => {
+    let mut registry = Registry::new();
+    let (policy, active_profile) = match research_opts {
+        Some((ro, explicit_profile)) => {
+            let profile = match explicit_profile {
+                Some(name) => research_tools::tool_profile::lookup(name).map_err(|e| e.to_string())?,
+                None => {
+                    let existing = router_ledger.read_session(session).map_err(|e| e.to_string())?;
+                    research_tools::tool_profile::profile_for_session_events(&existing)?
+                }
+            };
             approver = approver.with_research_env(data_dir.to_path_buf(), ro.workspace_root.clone())?;
             let env = match ro.workspace_root {
                 Some(ws) => research_tools::ResearchEnv::with_workspace(data_dir.to_path_buf(), ws)
@@ -155,11 +176,27 @@ fn build_router_inner(
                 None => research_tools::ResearchEnv::new(data_dir.to_path_buf()),
             }
             .with_endpoints(ro.literature_endpoints);
-            research_tools::register_research_tools(&mut registry, Arc::new(env));
-            research_tools::research_policy()
+            let policy = research_tools::tool_profile::register_profile(
+                &profile,
+                &mut registry,
+                Arc::new(env),
+                research_tools::tool_profile::ProfileHostTools {
+                    sympy_epoch,
+                    sympy_handler,
+                    session_title_handler: None,
+                },
+            )?;
+            (policy, Some(profile.name))
         }
-        None => builtin::default_policy(),
+        None => {
+            registry.register_worker_session(builtin::sympy_eval_def(), sympy_epoch, sympy_handler);
+            registry.register(builtin::ledger_note_def(), builtin::ledger_note_handler());
+            (builtin::default_policy(), None)
+        }
     };
-    let router = Router::new(registry, policy, router_ledger, session, Arc::new(approver));
+    let mut router = Router::new(registry, policy, router_ledger, session, Arc::new(approver));
+    if let Some(profile_name) = active_profile {
+        router = router.with_tool_profile(profile_name);
+    }
     Ok(BuiltRouter { router, containment, contained })
 }

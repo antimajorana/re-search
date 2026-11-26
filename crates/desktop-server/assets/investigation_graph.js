@@ -1,63 +1,18 @@
 // Keep one card per paper statement. A collapsed connection represents paths whose
 // internal statements are hidden; expanding it exposes all contributing statements.
+import { collectUpstreamDependencies, computeTopology, projectVisibleGraph } from './graph_layout.js';
+
 export function paperTopology(map) {
-  const incoming = new Map(map.nodes.map(n => [n.id, []]));
-  const outgoing = new Map(map.nodes.map(n => [n.id, []]));
-  for (const edge of map.edges || []) {
-    if (!incoming.has(edge.to) || !outgoing.has(edge.from)) continue;
-    incoming.get(edge.to).push(edge); outgoing.get(edge.from).push(edge);
-  }
-  const remaining = new Map([...incoming].map(([id, edges]) => [id, edges.length]));
-  const order = map.nodes.filter(n => !remaining.get(n.id)).map(n => n.id);
-  for (let i = 0; i < order.length; i++) for (const edge of outgoing.get(order[i])) {
-    remaining.set(edge.to, remaining.get(edge.to) - 1);
-    if (!remaining.get(edge.to)) order.push(edge.to);
-  }
+  const { order, incoming, outgoing } = computeTopology(map.nodes, map.edges, { includeCyclic: false });
   return { order, incoming, outgoing };
 }
 
 export function projectedPaperGraph(map, shown) {
-  const visible = new Set(shown);
-  const { order, incoming, outgoing } = paperTopology(map);
-  const edges = [];
-  const level = new Map(order.map(id => [id, 0]));
-  for (const from of order.filter(id => visible.has(id))) {
-    const paths = new Map([[from, { via: new Set(), inferred: false, explicit: true, kinds: new Set() }]]);
-    for (const id of order) {
-      const current = paths.get(id);
-      if (!current) continue;
-      if (id !== from && visible.has(id)) {
-        edges.push({ from, to: id, via: [...current.via], inferred: current.inferred,
-          explicit: current.explicit, kinds: [...current.kinds] });
-        level.set(id, Math.max(level.get(id), level.get(from) + 1));
-        continue;
-      }
-      for (const edge of outgoing.get(id)) {
-        const next = paths.get(edge.to) || { via: new Set(), inferred: false, explicit: false, kinds: new Set() };
-        if (id !== from) next.via.add(id);
-        for (const hidden of current.via) next.via.add(hidden);
-        next.inferred ||= current.inferred || edge.basis === 'inferred';
-        next.explicit ||= current.explicit && edge.basis === 'explicit';
-        next.kinds.add(edge.kind);
-        paths.set(edge.to, next);
-      }
-    }
-  }
-  const rows = [];
-  const neighbors = new Map();
-  for (const id of order.filter(id => visible.has(id))) {
-    (rows[level.get(id)] ||= []).push(id);
-    neighbors.set(id, [...new Set([...incoming.get(id).map(e => e.from), ...outgoing.get(id).map(e => e.to)])].filter(x => !visible.has(x)));
-  }
-  return { rows, edges, neighbors };
+  return projectVisibleGraph(map.nodes, map.edges, shown);
 }
 
 export function resultDependencies(map, resultId) {
-  const { incoming, order } = paperTopology(map);
-  const keep = new Set([resultId]);
-  for (const id of [...order].reverse()) {
-    if (keep.has(id)) for (const edge of incoming.get(id)) keep.add(edge.from);
-  }
+  const keep = collectUpstreamDependencies(map.nodes, map.edges, resultId);
   return { ...map, nodes: map.nodes.filter(n => keep.has(n.id)),
     edges: (map.edges || []).filter(e => keep.has(e.from) && keep.has(e.to)),
     answer_node_ids: map.answer_node_ids?.filter(id => keep.has(id)) };
