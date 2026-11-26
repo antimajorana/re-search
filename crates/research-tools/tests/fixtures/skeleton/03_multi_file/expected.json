@@ -34,7 +34,11 @@
     }
   ],
   "macros": [
-    { "name": "\\Hilb", "arity": 0, "body": "\\mathcal{H}" }
+    {
+      "name": "\\Hilb",
+      "arity": 0,
+      "body": "\\mathcal{H}"
+    }
   ],
   "nodes": [
     {
@@ -44,14 +48,26 @@
       "label": "sec:model",
       "parent_order": null,
       "spans": [
-        { "path": "sections/setup.tex", "start_line": 1, "end_line": 8 },
-        { "path": "sections/sub_lemma.tex", "start_line": 1, "end_line": 6 },
-        { "path": "sections/setup.tex", "start_line": 10, "end_line": 10 }
+        {
+          "path": "sections/setup.tex",
+          "start_line": 1,
+          "end_line": 8
+        },
+        {
+          "path": "sections/sub_lemma.tex",
+          "start_line": 1,
+          "end_line": 6
+        },
+        {
+          "path": "sections/setup.tex",
+          "start_line": 10,
+          "end_line": 10
+        }
       ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_heading",
       "proof_hint": null
     },
@@ -61,11 +77,17 @@
       "title": "Chain Hamiltonian",
       "label": "def:ham",
       "parent_order": 0,
-      "spans": [{ "path": "sections/setup.tex", "start_line": 3, "end_line": 8 }],
+      "spans": [
+        {
+          "path": "sections/setup.tex",
+          "start_line": 3,
+          "end_line": 8
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1.1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -75,11 +97,17 @@
       "title": null,
       "label": "eq:ham",
       "parent_order": 1,
-      "spans": [{ "path": "sections/setup.tex", "start_line": 5, "end_line": 7 }],
+      "spans": [
+        {
+          "path": "sections/setup.tex",
+          "start_line": 5,
+          "end_line": 7
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -89,11 +117,17 @@
       "title": "Norm bound",
       "label": "lem:norm",
       "parent_order": 0,
-      "spans": [{ "path": "sections/sub_lemma.tex", "start_line": 1, "end_line": 3 }],
+      "spans": [
+        {
+          "path": "sections/sub_lemma.tex",
+          "start_line": 1,
+          "end_line": 3
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1.2",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -103,13 +137,22 @@
       "title": null,
       "label": null,
       "parent_order": 0,
-      "spans": [{ "path": "sections/sub_lemma.tex", "start_line": 4, "end_line": 6 }],
+      "spans": [
+        {
+          "path": "sections/sub_lemma.tex",
+          "start_line": 4,
+          "end_line": 6
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
       "number": null,
       "number_basis": null,
       "confidence": "tex_env",
-      "proof_hint": { "kind": "adjacent", "target_order": 3 }
+      "proof_hint": {
+        "kind": "adjacent",
+        "target_order": 3
+      }
     },
     {
       "kind": "section",
@@ -117,11 +160,17 @@
       "title": "Boundary modes",
       "label": "sec:modes",
       "parent_order": null,
-      "spans": [{ "path": "sections/results.tex", "start_line": 1, "end_line": 8 }],
+      "spans": [
+        {
+          "path": "sections/results.tex",
+          "start_line": 1,
+          "end_line": 8
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "2",
+      "number_basis": "computed",
       "confidence": "tex_heading",
       "proof_hint": null
     },
@@ -131,11 +180,17 @@
       "title": "Edge-state criterion",
       "label": "thm:edge",
       "parent_order": 5,
-      "spans": [{ "path": "sections/results.tex", "start_line": 2, "end_line": 4 }],
+      "spans": [
+        {
+          "path": "sections/results.tex",
+          "start_line": 2,
+          "end_line": 4
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "2.1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -145,11 +200,17 @@
       "title": "Localized amplitude profile $|\\psi_j|$ for $v_1=2t$.",
       "label": "fig:edge",
       "parent_order": 5,
-      "spans": [{ "path": "sections/results.tex", "start_line": 5, "end_line": 8 }],
+      "spans": [
+        {
+          "path": "sections/results.tex",
+          "start_line": 5,
+          "end_line": 8
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -159,7 +220,13 @@
       "title": "References",
       "label": null,
       "parent_order": null,
-      "spans": [{ "path": "main.tex", "start_line": 7, "end_line": 9 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 7,
+          "end_line": 9
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
       "number": null,

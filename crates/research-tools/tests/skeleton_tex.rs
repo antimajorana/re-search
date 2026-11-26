@@ -139,12 +139,24 @@ fn assert_fixture_dir(rel_dir: &str) -> research_tools::skeleton::TexSkeletonOut
             .collect::<Vec<_>>()
     );
 
+    let mut seen_tags = std::collections::BTreeSet::new();
     for (idx, (actual, exp)) in out.skeleton.nodes.iter().zip(expected.nodes.iter()).enumerate() {
-        // V1 invariants: tags, parent tags, and proof_of tags are unset.
         assert_eq!(actual.order, idx, "{rel_dir} node {idx}: order");
-        assert!(actual.tag.is_none(), "{rel_dir} node {idx}: V1 must leave tag unset");
-        assert!(actual.parent.is_none(), "{rel_dir} node {idx}: V1 must leave parent tag unset");
-        assert!(actual.proof_of.is_none(), "{rel_dir} node {idx}: V1 must leave proof_of tag unset");
+        let tag = actual
+            .tag
+            .as_deref()
+            .unwrap_or_else(|| panic!("{rel_dir} node {idx}: V2 must assign tag"));
+        assert!(
+            tag.starts_with("n-") && tag.len() == 12,
+            "{rel_dir} node {idx}: invalid tag `{tag}`"
+        );
+        assert!(seen_tags.insert(tag.to_string()), "{rel_dir} node {idx}: duplicate tag `{tag}`");
+        let expected_parent_tag =
+            out.parent_orders[idx].and_then(|p| out.skeleton.nodes[p].tag.clone());
+        assert_eq!(actual.parent, expected_parent_tag, "{rel_dir} node {idx}: parent tag");
+        if actual.kind != SkNodeKind::Proof {
+            assert!(actual.proof_of.is_none(), "{rel_dir} node {idx}: non-proof proof_of");
+        }
         assert_eq!(actual.fp.len(), 12, "{rel_dir} node {idx}: fp length");
         assert!(
             actual.fp.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
@@ -173,6 +185,7 @@ fn assert_fixture_dir(rel_dir: &str) -> research_tools::skeleton::TexSkeletonOut
         .collect();
     let crlf_out = build_tex_skeleton(&TexSkeletonInput { files: crlf_files, ..input });
     assert_eq!(crlf_out.skeleton.nodes, out.skeleton.nodes, "{rel_dir}: CRLF changed nodes");
+    assert_eq!(crlf_out.skeleton.edges, out.skeleton.edges, "{rel_dir}: CRLF changed edges");
 
     out
 }
