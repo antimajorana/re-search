@@ -20,8 +20,9 @@
 
 use crate::investigation::{is_investigation, latest};
 use crate::investigation_skeleton::{
-    build_and_record_skeleton, derive_paper_identity, is_tex_receipt,
-    pin_source_and_build_skeleton, EVENT_INVESTIGATION_PAPER, EVENT_INVESTIGATION_SKELETON,
+    build_and_record_skeleton, build_skeleton_from_receipt, derive_paper_identity,
+    is_skeleton_receipt, pin_source_and_build_skeleton, EVENT_INVESTIGATION_PAPER,
+    EVENT_INVESTIGATION_SKELETON,
 };
 use crate::routes_session::{bad, conflict, internal, not_found, parse_json_body, ApiResult};
 use crate::state::{now_ms, DesktopState};
@@ -33,7 +34,7 @@ use research_tools::paper_fetch::{
     FetchStage, FetchWant, PaperMetadata, DEFAULT_INVESTIGATE_FETCH_LIMIT,
 };
 use research_tools::paper_key::{PaperIds, PaperKey, PaperKeyKind, PaperRef};
-use research_tools::skeleton::{build_tex_skeleton_from_ingested, PaperSkeleton, SkNodeKind};
+use research_tools::skeleton::{PaperSkeleton, SkNodeKind};
 use research_tools::{validate_session_id, ResearchEnv};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -322,7 +323,7 @@ fn finish_local_source(
     snap: &mut OpenJobSnapshot, done_msgs: (&str, &str),
 ) -> Result<(), (u16, String)> {
     let source_id = snap.source_id.clone().ok_or_else(|| internal("missing source_id while finishing paper open"))?;
-    if is_tex_receipt(receipt) {
+    if is_skeleton_receipt(receipt) {
         snap.advance(OpenStep::Skeleton, "running", "Building deterministic paper skeleton.");
         let rec = if opts.should_pin {
             pin_source_and_build_skeleton(state, session_id, &source_id, opts.key_override.clone(), opts.version.clone(), opts.question.as_deref())?
@@ -422,8 +423,8 @@ fn run_network_open_inner(cfg: &OpenWorkerConfig, slot: &Arc<OpenJobSlot>) -> Re
         .or_else(|| find_source_receipt(&events, &ingested.source_id, None))
         .ok_or_else(|| "ingested paper is missing its source.ingested receipt".to_string())?;
 
-    // Step 4: pin primary paper and build deterministic skeleton for TeX sources.
-    if is_tex_receipt(receipt) {
+    // Step 4: pin primary paper and build deterministic skeleton for TeX and PDF sources.
+    if is_skeleton_receipt(receipt) {
         update_slot(slot, |s| s.advance(OpenStep::Skeleton, "running", "Building deterministic paper skeleton."));
         let built = pin_and_build_for_env(cfg, &ledger, &events, &ingested.source_id, receipt, &fetched.paper)?;
         update_slot(slot, |s| {
@@ -436,7 +437,7 @@ fn run_network_open_inner(cfg: &OpenWorkerConfig, slot: &Arc<OpenJobSlot>) -> Re
             pin_paper_event(&ledger, &events, &cfg.session_id, &ingested.source_id, cfg.question.as_deref(), false)
                 .map_err(|(_, msg)| msg)?;
         }
-        update_slot(slot, |s| s.advance(OpenStep::Done, "done", "PDF ingested; PDF skeleton awaits V17"));
+        update_slot(slot, |s| s.advance(OpenStep::Done, "done", "Source ingested."));
     }
     Ok(())
 }
@@ -457,9 +458,8 @@ fn pin_and_build_for_env(
         return Ok(BuiltSkeletonSummary { event_seq, blob_hash: blob_hash.to_string(), timing_us: None });
     }
     let (paper_key, version) = derive_paper_identity(receipt, Some(paper.key.clone()), paper.version.clone())?;
-    let (output, timing) =
-        build_tex_skeleton_from_ingested(&cfg.env.sandbox(), &cfg.session_id, receipt, paper_key, version)?;
-    let skel = output.skeleton;
+    let (skel, timing) =
+        build_skeleton_from_receipt(&cfg.env.sandbox(), &cfg.session_id, receipt, paper_key, version)?;
     let blob_hash = ledger.put_blob(&serde_json::to_vec(&skel).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let payload = json!({
         "source_id": skel.source_id, "source_seq": skel.source_seq, "builder": skel.builder,

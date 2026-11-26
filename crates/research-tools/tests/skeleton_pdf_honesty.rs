@@ -432,4 +432,3 @@ fn receipt_loader_fails_closed_on_missing_page_map_or_invalid_receipt_fields() {
         .unwrap_err()
         .contains("invalid line range"));
 }
-

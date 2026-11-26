@@ -5,9 +5,11 @@
 
 import * as api from '/assets/api.js';
 import { createGraphView } from '/assets/graph_view.js';
+import { renderInvestigationEntry } from '/assets/investigation_entry.js';
 import { renderInvestigationNodeCard } from '/assets/investigation_node.js';
 import { createQualityBanner, renderInvestigationOutline } from '/assets/investigation_outline.js';
 import { RESULT_KINDS, filterResultNodes, renderInvestigationResults } from '/assets/investigation_results.js';
+import { lookupNearestSymbol, renderReadingPlanStrip, renderSymbolPopover } from '/assets/investigation_skip.js';
 
 const GRAPH_STATEMENT_KINDS = new Set([
   ...RESULT_KINDS, 'definition', 'assumption', 'equation',
@@ -36,6 +38,17 @@ export function isTexSource(source) {
     if (assembled && path === assembled && path !== source.primary_path) return false;
     return /\.(tex|ltx)$/i.test(path);
   });
+}
+
+export function isSkeletonFileName(name) {
+  return isTexFileName(name) || /\.pdf$/i.test(String(name || '').trim());
+}
+
+export function isSkeletonSource(source) {
+  if (isTexSource(source)) return true;
+  if (!source || typeof source !== 'object') return false;
+  if (String(source.status || '') === 'empty_text_layer') return false;
+  return String(source.format || '').toLowerCase() === 'pdf';
 }
 
 function buildFocusedGraphData(mapview, selectedTag, wholeMap) {
@@ -154,9 +167,19 @@ export function createInvestigationV3Controller(deps = {}) {
       toolbar.appendChild(backBtn);
     }
 
+    const symInput = el('input', 'inv-symbol-input');
+    symInput.type = 'search';
+    symInput.placeholder = 'Symbol (e.g. E, \\alpha)';
+    symInput.setAttribute('aria-label', 'Find symbol definition');
+    const symBtn = el('button', 'inv-node-action-btn', 'Define symbol');
+    symBtn.type = 'button';
+    toolbar.append(symInput, symBtn);
+
+    const skipHost = el('div', 'inv-skip-stage');
+    const symHost = el('div', 'inv-symbol-stage');
     const graphHost = el('div', 'inv-graph-stage');
     const resultsHost = el('div', 'inv-results-stage');
-    centerCol.append(toolbar, graphHost, resultsHost);
+    centerCol.append(toolbar, symHost, skipHost, graphHost, resultsHost);
 
     const outlineHost = el('div', 'inv-outline-stage');
     leftCol.appendChild(outlineHost);
@@ -203,6 +226,37 @@ export function createInvestigationV3Controller(deps = {}) {
       nodeTexts: plainTexts,
       onFilterChange: (nextFilter) => { st.filter = nextFilter; },
       onSelectNode: (tag) => selectNode(tag, true),
+    });
+
+    if (mv.skip_plan) {
+      renderReadingPlanStrip(skipHost, mv.skip_plan, {
+        dimUnreferenced: st.dimUnreferenced !== false,
+        onToggleDim: (enabled) => { st.dimUnreferenced = enabled; },
+        onSelectSection: (secTag) => selectNode(secTag, true),
+      });
+    }
+
+    const runSymbolLookup = () => {
+      const q = symInput.value.trim();
+      if (!q) return;
+      const res = lookupNearestSymbol(mv.symbols || [], mv.nodes || [], q, st.selectedTag, null);
+      renderSymbolPopover(symHost, res, {
+        onJumpToDefinition: (found) => {
+          if (found?.in_node) selectNode(found.in_node, true);
+          else if (found?.span && mv.source_id) {
+            hooks?.openSource?.(sessionId, {
+              source_id: mv.source_id,
+              path: found.span.path,
+              start_line: found.span.start_line,
+              end_line: Math.min(found.span.end_line || found.span.start_line, found.span.start_line + 64),
+            });
+          }
+        },
+      });
+    };
+    symBtn.addEventListener('click', runSymbolLookup);
+    symInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); runSymbolLookup(); }
     });
 
     const modelConnected = Boolean(hooks?.isModelConnected?.());
@@ -289,9 +343,76 @@ export function createInvestigationV3Controller(deps = {}) {
     }
   }
 
+  let entryHost = null;
+  let entryCtrl = null;
+  let entrySessionId = null;
+
+  function ensureEntryCard(sessionId, show, hooks) {
+    if (typeof document === 'undefined') return;
+    const setupEl = document.getElementById('investigation-setup');
+    if (!setupEl || !setupEl.parentNode) return;
+    if (!entryHost) {
+      entryHost = el('div', 'inv-v4-entry-host');
+      entryHost.id = 'investigation-v4-entry';
+      setupEl.parentNode.insertBefore(entryHost, setupEl);
+    }
+    if (!show) {
+      entryHost.hidden = true;
+      return;
+    }
+    entryHost.hidden = false;
+    if (entrySessionId === sessionId && entryCtrl) return;
+    entrySessionId = sessionId;
+    const pollJob = async (jobId) => {
+      for (let i = 0; i < 120; i += 1) {
+        if (activeSessionId !== sessionId) return;
+        const res = await apiMod.getInvestigationOpenStatus(sessionId, jobId);
+        const snap = res?.job || res;
+        entryCtrl?.setSnapshot(snap);
+        if (snap?.metadata) entryCtrl?.setMetadata(snap.metadata);
+        if (snap?.status && snap.status !== 'running') {
+          entryCtrl?.setBusy(false);
+          if (snap.status === 'done') await hooks?.refresh?.(sessionId);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      entryCtrl?.setBusy(false);
+    };
+    const startOpen = async (payload) => {
+      entryCtrl?.setBusy(true);
+      try {
+        const res = await apiMod.openInvestigationPaper(sessionId, payload);
+        const snap = res?.job || res;
+        entryCtrl?.setSnapshot(snap);
+        if (snap?.metadata) entryCtrl?.setMetadata(snap.metadata);
+        if (snap?.status === 'running' && (res?.job_id || snap?.job_id)) {
+          await pollJob(res.job_id || snap.job_id);
+        } else {
+          entryCtrl?.setBusy(false);
+          if (snap?.status === 'done') await hooks?.refresh?.(sessionId);
+        }
+      } catch (err) {
+        entryCtrl?.setBusy(false);
+        entryCtrl?.setSnapshot({ status: 'failed', error: err?.message || 'Could not open paper' });
+      }
+    };
+    entryCtrl = renderInvestigationEntry(entryHost, {
+      modelConnected: Boolean(hooks?.isModelConnected?.()),
+      onOpenInput: (payload) => { void startOpen(payload); },
+      onOpenLibraryKey: (key) => { void startOpen({ library_key: key }); },
+      onRequestFile: () => { document.getElementById('investigation-file')?.click?.(); },
+    });
+    void apiMod.listLibraryPapers?.({ limit: '5' })?.then((res) => {
+      if (entrySessionId === sessionId) entryCtrl?.setRecentPapers(res?.papers || res?.items || []);
+    }).catch(() => {});
+  }
+
   return {
     isTexFileName,
     isTexSource,
+    isSkeletonFileName,
+    isSkeletonSource,
     async pinAndOpen(sessionId, sourceId, question) {
       const res = await apiMod.pinInvestigationSkeleton(sessionId, {
         source_id: sourceId,
@@ -311,6 +432,7 @@ export function createInvestigationV3Controller(deps = {}) {
       if (!host) return false;
       if (!sessionId || sessionData?.mode !== 'investigation') {
         activeKey = '';
+        ensureEntryCard(sessionId, false, hooks);
         host.hidden = true;
         host.replaceChildren();
         return false;
@@ -319,7 +441,9 @@ export function createInvestigationV3Controller(deps = {}) {
       const pinned = inv.source_id
         ? sessionData.sources?.find((s) => s.source_id === inv.source_id)
         : null;
-      const eligible = inv.skeleton_seq != null || Boolean(inv.skeleton) || isTexSource(pinned);
+      const showEntry = !inv.source_id && !inv.map && !(inv.answers?.length);
+      ensureEntryCard(sessionId, showEntry, hooks);
+      const eligible = inv.skeleton_seq != null || Boolean(inv.skeleton) || isSkeletonSource(pinned);
       if (!eligible) {
         activeKey = '';
         host.hidden = true;
@@ -346,6 +470,7 @@ export function createInvestigationV3Controller(deps = {}) {
         activeKey = `${sessionId}:${mv.skeleton_seq}:${mv.source_id ?? ''}`;
         const setupEl = document.getElementById('investigation-setup');
         if (setupEl) setupEl.hidden = true;
+        ensureEntryCard(sessionId, false, hooks);
         renderShell(host, sessionId, sessionData, hooks);
         return true;
       } catch (err) {

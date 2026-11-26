@@ -480,5 +480,3 @@ fn node_cap_and_json_cap_truncate_safely_without_promoting_to_full() {
         .unwrap()
         .contains("exceeded"));
 }
-
-

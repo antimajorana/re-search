@@ -209,6 +209,29 @@ export function getInvestigationNodeText(id, tag, seq) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/investigation/node-text?${qs}`);
 }
 
+export function openInvestigationPaper(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/open`, payload);
+}
+
+export function getInvestigationOpenStatus(id, jobId) {
+  const qs = new URLSearchParams({ job_id: String(jobId) });
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/investigation/open-status?${qs}`);
+}
+
+export function listLibraryPapers(params = {}) {
+  const qs = new URLSearchParams(params);
+  const suffix = qs.toString() ? `?${qs}` : '';
+  return rawJson('GET', `/api/library${suffix}`);
+}
+
+export function createHandoff(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/handoff`, payload);
+}
+
+export function getHandoffs(id) {
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/handoffs`);
+}
+
 export function getSession(id) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}`);
 }

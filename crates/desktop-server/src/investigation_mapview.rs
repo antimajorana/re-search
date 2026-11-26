@@ -8,8 +8,9 @@
 use ledger::Event;
 use research_tools::sandbox::WorkspaceSandbox;
 use research_tools::skeleton::{
-    load_ingested_tex_source, EdgeConfidence, PaperSkeleton, SkEdge, SkEdgeKind, SkNode,
-    SkNodeKind, SkeletonBuilder, SkeletonQuality, Span,
+    load_ingested_pdf_source, load_ingested_tex_source, node_page_basis, page_range_for_node,
+    render_formulas_as_math, EdgeConfidence, IngestedPdfSource, PaperSkeleton, SkEdge, SkEdgeKind,
+    SkNode, SkNodeKind, SkeletonBuilder, SkeletonQuality, Span, PDF_QUALITY_REASON_BASE,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -45,8 +46,23 @@ pub fn format_quality_line(skeleton: &PaperSkeleton) -> String {
         out.push_str(ver);
     }
     if let Some(reason) = non_empty(skeleton.quality_reason.as_deref()) {
-        out.push_str(" — ");
-        out.push_str(reason);
+        let extra = if skeleton.builder == SkeletonBuilder::Pdf1 {
+            let trimmed = if reason.len() >= PDF_QUALITY_REASON_BASE.len()
+                && reason[..PDF_QUALITY_REASON_BASE.len()]
+                    .eq_ignore_ascii_case(PDF_QUALITY_REASON_BASE)
+            {
+                reason[PDF_QUALITY_REASON_BASE.len()..].trim_start_matches([';', ' '])
+            } else {
+                reason
+            };
+            non_empty(Some(trimmed))
+        } else {
+            Some(reason)
+        };
+        if let Some(detail) = extra {
+            out.push_str(" — ");
+            out.push_str(detail);
+        }
     }
     out
 }
@@ -226,7 +242,34 @@ pub fn build_mapview_json_with_plan(
     mv
 }
 
-/// Reads the exact hash-checked physical TeX lines for `tag` (and its attached proof, if any)
+/// Attaches dynamic physical PDF page ranges, OCR basis, and `render_math` flags (`investigate.md`
+/// rule 6.21) to a built `mapview` JSON without storing page numbers on [`SkNode`].
+pub fn attach_pdf_page_metadata(mv: &mut Value, skeleton: &PaperSkeleton, pdf: &IngestedPdfSource) {
+    let node_by_tag: HashMap<String, &SkNode> =
+        skeleton.nodes.iter().map(|n| (node_id(n), n)).collect();
+    if let Some(arr) = mv["nodes"].as_array_mut() {
+        for item in arr.iter_mut() {
+            let id = item["id"].as_str().unwrap_or("");
+            if let Some(node) = node_by_tag.get(id) {
+                let page_range = page_range_for_node(&pdf.page_map, node);
+                let basis = node_page_basis(&pdf.page_map, node);
+                item["page_range"] = json!(page_range);
+                item["page_basis"] = json!(basis);
+                item["render_math"] = json!(render_formulas_as_math(basis));
+            }
+        }
+    }
+    let image_only: Vec<usize> = pdf
+        .page_map
+        .pages()
+        .iter()
+        .filter(|p| p.basis == research_tools::pdf_pages::PageBasis::None)
+        .map(|p| p.page)
+        .collect();
+    mv["image_only_pages"] = json!(image_only);
+}
+
+/// Reads the exact hash-checked physical TeX or PDF lines for `tag` (and its attached proof, if any)
 /// from the `source.ingested` receipt under `sandbox`.
 pub fn read_verified_node_text(
     sandbox: &WorkspaceSandbox,
@@ -235,12 +278,30 @@ pub fn read_verified_node_text(
     skeleton: &PaperSkeleton,
     tag: &str,
 ) -> Result<Value, String> {
-    let ingested = load_ingested_tex_source(sandbox, session_id, receipt)?;
     let node = skeleton.nodes.iter().find(|n| n.tag.as_deref() == Some(tag))
         .ok_or_else(|| format!("skeleton node `{tag}` not found"))?;
-    let text = extract_spans_text(&ingested.files, &node.spans)?;
     let proof_node = skeleton.nodes.iter()
         .find(|p| p.kind == SkNodeKind::Proof && p.proof_of.as_deref() == Some(tag));
+    if skeleton.builder == SkeletonBuilder::Pdf1 {
+        let pdf = load_ingested_pdf_source(sandbox, session_id, receipt)?;
+        let files = BTreeMap::from([(pdf.primary_path.clone(), pdf.text.clone())]);
+        let text = extract_spans_text(&files, &node.spans)?;
+        let (proof_tag, proof_spans, proof_text) = match proof_node {
+            Some(p) => (p.tag.clone(), Some(p.spans.clone()), Some(extract_spans_text(&files, &p.spans)?)),
+            None => (None, None, None),
+        };
+        let basis = node_page_basis(&pdf.page_map, node);
+        return Ok(json!({
+            "tag": tag, "kind": node.kind, "number": node.number, "title": node.title,
+            "spans": node.spans, "text": text,
+            "page_range": page_range_for_node(&pdf.page_map, node),
+            "page_basis": basis,
+            "render_math": render_formulas_as_math(basis),
+            "proof_tag": proof_tag, "proof_spans": proof_spans, "proof_text": proof_text,
+        }));
+    }
+    let ingested = load_ingested_tex_source(sandbox, session_id, receipt)?;
+    let text = extract_spans_text(&ingested.files, &node.spans)?;
     let (proof_tag, proof_spans, proof_text) = match proof_node {
         Some(p) => (p.tag.clone(), Some(p.spans.clone()), Some(extract_spans_text(&ingested.files, &p.spans)?)),
         None => (None, None, None),
