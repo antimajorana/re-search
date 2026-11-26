@@ -50,11 +50,17 @@
       "title": "Convex cones",
       "label": null,
       "parent_order": null,
-      "spans": [{ "path": "main.tex", "start_line": 8, "end_line": 35 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 8,
+          "end_line": 35
+        }
+      ],
       "head_cites": [],
       "eq_count": 1,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_heading",
       "proof_hint": null
     },
@@ -64,11 +70,17 @@
       "title": null,
       "label": null,
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 9, "end_line": 11 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 9,
+          "end_line": 11
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -78,11 +90,17 @@
       "title": null,
       "label": null,
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 12, "end_line": 14 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 12,
+          "end_line": 14
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -92,11 +110,17 @@
       "title": "Bipolar identity",
       "label": null,
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 15, "end_line": 20 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 15,
+          "end_line": 20
+        }
+      ],
       "head_cites": [],
       "eq_count": 1,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -106,13 +130,22 @@
       "title": null,
       "label": null,
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 21, "end_line": 23 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 21,
+          "end_line": 23
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
       "number": null,
       "number_basis": null,
       "confidence": "tex_env",
-      "proof_hint": { "kind": "adjacent", "target_order": 3 }
+      "proof_hint": {
+        "kind": "adjacent",
+        "target_order": 3
+      }
     },
     {
       "kind": "remark",
@@ -120,11 +153,17 @@
       "title": null,
       "label": null,
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 24, "end_line": 26 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 24,
+          "end_line": 26
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -134,11 +173,17 @@
       "title": null,
       "label": null,
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 27, "end_line": 29 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 27,
+          "end_line": 29
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "2",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -148,11 +193,17 @@
       "title": null,
       "label": "eq:selfdual",
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 30, "end_line": 32 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 30,
+          "end_line": 32
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     }

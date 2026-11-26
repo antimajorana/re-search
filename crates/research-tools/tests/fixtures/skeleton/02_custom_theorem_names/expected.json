@@ -77,11 +77,17 @@
       "title": "Weighted sequence spaces",
       "label": "sec:weighted",
       "parent_order": null,
-      "spans": [{ "path": "main.tex", "start_line": 12, "end_line": 33 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 12,
+          "end_line": 33
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_heading",
       "proof_hint": null
     },
@@ -91,7 +97,13 @@
       "title": "Positive weight sequence",
       "label": "ass:weight",
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 13, "end_line": 15 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 13,
+          "end_line": 15
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
       "number": null,
@@ -105,11 +117,17 @@
       "title": "Shift boundedness",
       "label": "lem:shift",
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 16, "end_line": 18 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 16,
+          "end_line": 18
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1.1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -119,13 +137,22 @@
       "title": null,
       "label": null,
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 19, "end_line": 21 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 19,
+          "end_line": 21
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
       "number": null,
       "number_basis": null,
       "confidence": "tex_env",
-      "proof_hint": { "kind": "adjacent", "target_order": 2 }
+      "proof_hint": {
+        "kind": "adjacent",
+        "target_order": 2
+      }
     },
     {
       "kind": "theorem",
@@ -133,11 +160,17 @@
       "title": "Weighted contraction fixed point",
       "label": "thm:fixed",
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 22, "end_line": 24 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 22,
+          "end_line": 24
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1.2",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -147,11 +180,17 @@
       "title": "Geometric convergence",
       "label": "cor:geom",
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 25, "end_line": 27 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 25,
+          "end_line": 27
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1.3",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -161,11 +200,17 @@
       "title": null,
       "label": null,
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 28, "end_line": 30 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 28,
+          "end_line": 30
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -175,11 +220,17 @@
       "title": null,
       "label": null,
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 31, "end_line": 33 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 31,
+          "end_line": 33
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     }

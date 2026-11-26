@@ -138,13 +138,16 @@ fn property_random_tex_interleavings_terminate_nest_and_map_origins() {
             origin_set.insert((fl.origin.path.as_str(), fl.origin.line));
         }
 
-        // Check every node invariant.
+        // Check every node invariant (V1 + V2).
         assert_eq!(out.skeleton.nodes.len(), out.parent_orders.len());
+        let mut seen_tags: BTreeSet<&str> = BTreeSet::new();
         for (idx, node) in out.skeleton.nodes.iter().enumerate() {
             assert_eq!(node.order, idx, "seed {seed}: order mismatch");
-            assert!(node.tag.is_none(), "seed {seed}: V1 tag must be None");
-            assert!(node.parent.is_none(), "seed {seed}: V1 parent tag must be None");
-            assert!(node.proof_of.is_none(), "seed {seed}: V1 proof_of tag must be None");
+            let tag = node.tag.as_deref().expect("V2 tag must be assigned");
+            assert!(tag.starts_with("n-") && tag.len() == 12, "seed {seed}: invalid tag `{tag}`");
+            assert!(seen_tags.insert(tag), "seed {seed}: duplicate tag `{tag}`");
+            let expected_parent = out.parent_orders[idx].and_then(|p| out.skeleton.nodes[p].tag.as_deref());
+            assert_eq!(node.parent.as_deref(), expected_parent, "seed {seed}: parent tag mismatch");
             assert_eq!(node.fp.len(), 12, "seed {seed}: fp length");
             assert!(!node.spans.is_empty(), "seed {seed}: node {idx} has empty spans");
 
