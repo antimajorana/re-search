@@ -1,6 +1,33 @@
 // Left rail session list: Active vs Archived filter, search query filter,
-// verification/step/running badges, and inline Archive/Unarchive + Delete actions.
+// mode rail tags (F5; overview 5.2, 5.3), verification/step/running badges,
+// and inline Archive/Unarchive + Delete actions.
 import { escapeHtml, mathTextToHtml } from '/assets/math.js';
+
+// Named constants for on-screen mode rail tags (overview 5.2, 5.3, 8.2 decision 7).
+export const MODE_TAG_LABELS = Object.freeze({
+  investigate: 'Investigate',
+  explore: 'Explore',
+  solve: 'Solve',
+  research: 'Research (earlier)',
+});
+
+/**
+ * Normalize a session `mode` field into its display rail tag descriptor.
+ * Unknown or absent modes fall back to `Research (earlier)`.
+ */
+export function formatModeTag(rawMode) {
+  const norm = String(rawMode || '').trim().toLowerCase();
+  if (norm === 'investigation' || norm === 'investigate') {
+    return { mode: 'investigate', label: MODE_TAG_LABELS.investigate, tone: 'mode-investigate' };
+  }
+  if (norm === 'explore') {
+    return { mode: 'explore', label: MODE_TAG_LABELS.explore, tone: 'mode-explore' };
+  }
+  if (norm === 'solve') {
+    return { mode: 'solve', label: MODE_TAG_LABELS.solve, tone: 'mode-solve' };
+  }
+  return { mode: 'research', label: MODE_TAG_LABELS.research, tone: 'mode-research' };
+}
 
 function basenameOf(p) {
   if (!p) return '';
@@ -55,7 +82,8 @@ export function renderSessionRailList(containerEl, opts = {}) {
   const byArchive = sessions.filter((s) => Boolean(s.archived) === showArchived);
   const filtered = query
     ? byArchive.filter((s) => {
-        const hay = `${s.title || ''} ${s.id || ''} ${s.workspace_root || ''} ${(s.stats && s.stats.model) || ''}`.toLowerCase();
+        const tag = formatModeTag(s.mode);
+        const hay = `${s.title || ''} ${s.id || ''} ${tag.label} ${s.workspace_root || ''} ${(s.stats && s.stats.model) || ''}`.toLowerCase();
         return hay.includes(query);
       })
     : byArchive;
@@ -81,7 +109,10 @@ export function renderSessionRailList(containerEl, opts = {}) {
     if (s.id === activeSessionId) btn.setAttribute('aria-current', 'true');
 
     const stats = s.stats || {};
-    const badges = [];
+    const modeTag = formatModeTag(s.mode);
+    const badges = [
+      `<span class="mini-pill mode-tag ${modeTag.tone}" data-mode-tag="${modeTag.mode}" title="Mode: ${escapeHtml(modeTag.label)}">${escapeHtml(modeTag.label)}</span>`,
+    ];
     if (s.running) {
       badges.push('<span class="mini-pill accent" title="Turn currently running">● Run</span>');
     }

@@ -1,0 +1,24 @@
+          <div class="panel-toolbar">
+            <button id="dag-verify-btn" type="button" class="pill-btn sm" title="Check the fingerprints of the saved events and files">Check record integrity</button>
+            <button id="dag-fork-btn" type="button" class="pill-btn sm" title="Branch this session at a proof step with a modified assumption">Fork Branch</button>
+            <button id="dag-narrate-btn" type="button" class="pill-btn sm" title="Synthesize a clean prose derivation sheet from accepted DAG steps">Narrate Proof</button>
+            <span id="dag-verify-badge" class="badge" hidden></span>
+          </div>
+          <div class="dag-layout">
+            <div id="dag-fork-bar" class="dag-detail-card" hidden>
+              <div id="fork-assumption-impact" class="assumption-impact" hidden></div>
+              <div class="form-row">
+                <label for="fork-assumption-input">Counterfactual assumption (forking at seq <span id="fork-seq-label">latest</span>)</label>
+                <input id="fork-assumption-input" class="text-input" type="text" placeholder="Optional modified assumption (e.g. set \mu \neq 0 or open boundary conditions)...">
+              </div>
+              <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end;">
+                <button id="fork-cancel-btn" type="button" class="pill-btn sm">Cancel</button>
+                <button id="fork-confirm-btn" type="button" class="pill-btn sm primary">Create fork</button>
+              </div>
+            </div>
+            <div id="dag-views" class="dag-views" role="group" aria-label="Proof view" hidden>
+              <button id="dag-view-graph" class="pill-btn sm" type="button" aria-pressed="true" aria-controls="dag-map">Graph</button>
+              <button id="dag-view-list" class="pill-btn sm" type="button" aria-pressed="false" aria-controls="dag-reading-list">Steps in order</button>
+            </div>
+            <p id="dag-direction" class="dag-direction" hidden>Arrows point from a prerequisite to the step it supports.</p>
+            <ol id="dag-reading-list" class="dag-reading-list" aria-label="Proof steps in dependency order" hidden></ol>

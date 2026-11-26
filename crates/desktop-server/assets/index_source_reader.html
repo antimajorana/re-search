@@ -1,0 +1,18 @@
+    <div class="modal-card modal-wide">
+      <div class="modal-header">
+        <h2 id="source-reader-title">Source Reader</h2>
+        <button id="source-reader-close" type="button" class="icon-btn" aria-label="Close Source Reader">✕</button>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <select id="source-reader-file" class="compact-select" aria-label="Source file"></select>
+          <div class="segmented-group" role="group" aria-label="Source view mode">
+            <button id="source-reader-mode-rendered" type="button" class="seg-btn is-active" aria-pressed="true">Rendered</button>
+            <button id="source-reader-mode-raw" type="button" class="seg-btn" aria-pressed="false">Raw</button>
+          </div>
+        </div>
+        <div id="source-reader-ext-links" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+      </div>
+      <p id="source-reader-status" role="status"></p>
+      <div id="source-reader-body" tabindex="0" aria-label="Source contents"></div>
+    </div>
