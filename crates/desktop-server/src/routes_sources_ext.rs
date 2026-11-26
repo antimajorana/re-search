@@ -96,7 +96,9 @@ pub fn handle_export_bibtex(state: &DesktopState, body: &[u8]) -> ApiResult {
         let version = detail
             .source_items
             .iter()
-            .find_map(|it| it.version.clone())
+            .find(|it| it.ids.arxiv == detail.paper.ids.arxiv && it.version.is_some())
+            .or_else(|| detail.source_items.iter().find(|it| it.version.is_some()))
+            .and_then(|it| it.version.clone())
             .filter(|v| !v.trim().is_empty());
         let pref = PaperRef {
             key: canonical.clone(),
@@ -169,9 +171,9 @@ pub fn handle_send_kandinsky_with_bin(
     kandinsky_bin: &Path,
 ) -> ApiResult {
     let val = parse_json_body(body)?;
-    if val.get("user_initiated").and_then(Value::as_bool) == Some(false) {
+    if val.get("user_initiated").and_then(Value::as_bool) != Some(true) {
         return Err(bad(
-            "Send to Kandinsky is opt-in only and requires explicit user confirmation",
+            "Send to Kandinsky is opt-in only and requires explicit `user_initiated: true` confirmation",
         ));
     }
     let mode = val

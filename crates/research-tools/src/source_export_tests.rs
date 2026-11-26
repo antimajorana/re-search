@@ -108,21 +108,38 @@ fn bibtex_export_preserves_user_citekey_escapes_and_refuses_source_roots() {
 
     // Refuses writing inside any registered read-only PaperSource root.
     let inside_src = data_dir.join("seed_src/evil.bib");
-    let err_src = export_library_bibtex_to_path(&lib, &[k1.clone()], &inside_src).unwrap_err();
+    let err_src =
+        export_library_bibtex_to_path(&lib, std::slice::from_ref(&k1), &inside_src).unwrap_err();
     assert!(err_src.contains("registered read-only paper source"), "{err_src}");
 
     // Refuses `..` traversal.
     let traversal = out_dir.join("../user_exports/tricky.bib");
-    let err_dotdot = export_library_bibtex_to_path(&lib, &[k1.clone()], &traversal).unwrap_err();
+    let err_dotdot =
+        export_library_bibtex_to_path(&lib, std::slice::from_ref(&k1), &traversal).unwrap_err();
     assert!(err_dotdot.contains(".."), "{err_dotdot}");
 
-    // Refuses Kandinsky vault or Zotero dir even when unregistered.
+    // Refuses Kandinsky vault or Zotero dir (including subdirectories) even when unregistered.
     let fake_zot = tmp.path().join("fake_zotero");
-    fs::create_dir_all(&fake_zot).unwrap();
+    fs::create_dir_all(fake_zot.join("storage/ATT1")).unwrap();
     fs::write(fake_zot.join("zotero.sqlite"), b"stub").unwrap();
-    let err_zot =
-        export_library_bibtex_to_path(&lib, &[k1.clone()], &fake_zot.join("out.bib")).unwrap_err();
+    let err_zot = export_library_bibtex_to_path(
+        &lib,
+        std::slice::from_ref(&k1),
+        &fake_zot.join("storage/ATT1/out.bib"),
+    )
+    .unwrap_err();
     assert!(err_zot.contains("Kandinsky vault or Zotero"), "{err_zot}");
+
+    let fake_vault = tmp.path().join("fake_vault");
+    fs::create_dir_all(fake_vault.join(".kandinsky")).unwrap();
+    fs::create_dir_all(fake_vault.join("refs/papers")).unwrap();
+    let err_vault = export_library_bibtex_to_path(
+        &lib,
+        std::slice::from_ref(&k1),
+        &fake_vault.join("refs/papers/evil.bib"),
+    )
+    .unwrap_err();
+    assert!(err_vault.contains("Kandinsky vault or Zotero"), "{err_vault}");
 
     #[cfg(unix)]
     {

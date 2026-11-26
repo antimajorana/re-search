@@ -170,9 +170,14 @@ fn deduplicate_bibtex_key(base: &str, used: &mut BTreeSet<String>) -> String {
 }
 
 fn rewrite_entry_citekey(raw: &str, new_key: &str) -> String {
-    let Some(open) = raw.find('{') else {
+    let Some(at) = raw.find('@') else {
         return raw.to_string();
     };
+    let after_at = &raw[at + 1..];
+    let Some(open_rel) = after_at.find(['{', '(']) else {
+        return raw.to_string();
+    };
+    let open = at + 1 + open_rel;
     let rest = &raw[open + 1..];
     let Some(comma) = rest.find(',') else {
         return raw.to_string();
@@ -193,6 +198,10 @@ fn escape_bibtex_value(s: &str) -> String {
             '\r' | '\n' => out.push(' '),
             _ => out.push(ch),
         }
+    }
+    if out.ends_with('\\') {
+        out.pop();
+        out.push_str("\\textbackslash{}");
     }
     out
 }

@@ -144,18 +144,19 @@ fn send_to_kandinsky_route_validates_rejects_injection_and_invokes_stub_argv_onl
         "{link}"
     );
 
-    // 2. Rejects non-user-initiated calls and injection payloads.
-    let auto_body = serde_json::to_vec(&json!({
-        "target": "arXiv:2407.01234",
-        "user_initiated": false,
-    }))
-    .unwrap();
-    assert_eq!(
-        handle_sources_ext(&state, "POST", &["send", "kandinsky"], &empty_q(), &auto_body)
-            .unwrap_err()
-            .0,
-        400
-    );
+    // 2. Rejects non-user-initiated and omitted-confirmation calls, plus injection payloads.
+    for unconfirmed in [
+        json!({ "target": "arXiv:2407.01234", "user_initiated": false }),
+        json!({ "target": "arXiv:2407.01234" }),
+    ] {
+        let auto_body = serde_json::to_vec(&unconfirmed).unwrap();
+        assert_eq!(
+            handle_sources_ext(&state, "POST", &["send", "kandinsky"], &empty_q(), &auto_body)
+                .unwrap_err()
+                .0,
+            400
+        );
+    }
 
     for bad_target in [
         "--config=/etc/passwd",
@@ -166,7 +167,8 @@ fn send_to_kandinsky_route_validates_rejects_injection_and_invokes_stub_argv_onl
         "file:///etc/passwd",
         "javascript:alert(1)",
     ] {
-        let payload = serde_json::to_vec(&json!({ "target": bad_target })).unwrap();
+        let payload =
+            serde_json::to_vec(&json!({ "target": bad_target, "user_initiated": true })).unwrap();
         let (st, _) =
             handle_sources_ext(&state, "POST", &["send", "kandinsky"], &empty_q(), &payload)
                 .unwrap_err();

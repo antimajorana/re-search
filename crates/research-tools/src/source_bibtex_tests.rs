@@ -131,42 +131,42 @@ fn bibtex_adapter_resolves_attachments_and_refuses_escapes_and_symlinks() {
         std::os::unix::fs::symlink(outside.join("secret.pdf"), base.join("pdfs/link.pdf")).unwrap();
     }
 
+    assert_eq!(decode_tex_text(r"Foo \'{} Bar"), "Foo Bar");
+
     let bib_path = base.join("library.bib");
     fs::write(
         &bib_path,
-        format!(
-            "@article{{good2024,\n\
-               author = {{Ada Synth}},\n\
-               title = {{Valid Local Attachment}},\n\
-               year = {{2024}},\n\
-               doi = {{10.9999/good.2024}},\n\
-               file = {{Full Text:pdfs/local.pdf:application/pdf}}\n\
-             }}\n\
-             @article{{ext2024,\n\
-               author = {{Ben Pool}},\n\
-               title = {{External Root Attachment}},\n\
-               year = {{2024}},\n\
-               file = {{../SharedPool/shared.pdf}}\n\
-             }}\n\
-             @article{{escape2024,\n\
-               author = {{Eve Escape}},\n\
-               title = {{Escaping Path}},\n\
-               year = {{2024}},\n\
-               file = {{:../outside/secret.pdf:PDF}}\n\
-             }}\n\
-             @article{{symlink2024,\n\
-               author = {{Sam Link}},\n\
-               title = {{Symlink Path}},\n\
-               year = {{2024}},\n\
-               file = {{:pdfs/link.pdf:PDF}}\n\
-             }}\n\
-             @article{{missing2024,\n\
-               author = {{Mia Gone}},\n\
-               title = {{Missing File Entry}},\n\
-               year = {{2024}},\n\
-               file = {{:pdfs/gone.pdf:PDF}}\n\
-             }}\n"
-        ),
+        "@article{good2024,\n\
+           author = {Ada Synth},\n\
+           title = {Valid Local Attachment},\n\
+           year = {2024},\n\
+           doi = {10.9999/good.2024},\n\
+           file = {Full Text:pdfs/local.pdf:application/pdf}\n\
+         }\n\
+         @article{ext2024,\n\
+           author = {Ben Pool},\n\
+           title = {External Root Attachment},\n\
+           year = {2024},\n\
+           file = {../SharedPool/shared.pdf}\n\
+         }\n\
+         @article{escape2024,\n\
+           author = {Eve Escape},\n\
+           title = {Escaping Path},\n\
+           year = {2024},\n\
+           file = {:../outside/secret.pdf:PDF}\n\
+         }\n\
+         @article{symlink2024,\n\
+           author = {Sam Link},\n\
+           title = {Symlink Path},\n\
+           year = {2024},\n\
+           file = {:pdfs/link.pdf:PDF}\n\
+         }\n\
+         @article{missing2024,\n\
+           author = {Mia Gone},\n\
+           title = {Missing File Entry},\n\
+           year = {2024},\n\
+           file = {:pdfs/gone.pdf:PDF}\n\
+         }\n",
     )
     .unwrap();
 

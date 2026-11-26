@@ -167,13 +167,15 @@ pub fn validate_export_destination(lib: &Library, dest_path: &Path) -> Result<Pa
         }
     }
 
-    // Defense-in-depth: never write into a Kandinsky vault or Zotero database directory even if
-    // not currently registered as a source.
-    if canon_parent.join(".kandinsky").is_dir() || canon_parent.join("zotero.sqlite").is_file() {
-        return Err(format!(
-            "refused BibTeX export inside a Kandinsky vault or Zotero directory `{}`",
-            canon_parent.display()
-        ));
+    // Defense-in-depth: never write anywhere inside a Kandinsky vault or Zotero directory
+    // (including subdirectories such as `refs/papers/` or `storage/`) even when unregistered.
+    for anc in canon_parent.ancestors() {
+        if anc.join(".kandinsky").is_dir() || anc.join("zotero.sqlite").is_file() {
+            return Err(format!(
+                "refused BibTeX export inside a Kandinsky vault or Zotero directory `{}`",
+                anc.display()
+            ));
+        }
     }
 
     Ok(canon_dest)
@@ -260,6 +262,18 @@ pub fn write_bibtex_export_atomic(
     if let Err(e) = write_res {
         let _ = fs::remove_file(&tmp_path);
         return Err(format!("write export file `{}`: {e}", canon_dest.display()));
+    }
+    // Re-verify parent identity and destination non-symlink status right before rename (TOCTOU guard).
+    let rechecked_parent = fs::canonicalize(parent).map(|p| strip_verbatim_prefix(&p));
+    let dest_swapped = fs::symlink_metadata(&canon_dest)
+        .map(|m| is_symlink_or_junction(&canon_dest, &m) || m.is_dir())
+        .unwrap_or(false);
+    if rechecked_parent.as_deref().ok() != Some(parent) || dest_swapped {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(format!(
+            "refused export rename: destination `{}` changed concurrently",
+            canon_dest.display()
+        ));
     }
     if let Err(e) = fs::rename(&tmp_path, &canon_dest) {
         let _ = fs::remove_file(&tmp_path);

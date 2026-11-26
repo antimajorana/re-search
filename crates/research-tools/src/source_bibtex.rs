@@ -135,9 +135,24 @@ impl PaperSourceAdapter for BibtexAdapter {
             });
         }
 
-        for entry in entries {
+        let mut seen_keys: BTreeMap<String, usize> = BTreeMap::new();
+        for mut entry in entries {
+            let raw_key = entry.citekey.trim().to_string();
+            let count = seen_keys.entry(raw_key.clone()).or_insert(0);
+            *count += 1;
+            let external_id = if *count == 1 {
+                raw_key.clone()
+            } else {
+                out.warnings.push(ScanWarning {
+                    path: bib_label.clone(),
+                    reason: format!("duplicate BibTeX citekey `{raw_key}` (#{})", *count),
+                });
+                format!("{raw_key}#{}", *count)
+            };
+            entry.citekey = raw_key;
             let scanned = build_bibtex_item(
                 &source.id,
+                &external_id,
                 &bib_dir,
                 &ext_roots,
                 &entry,
@@ -153,6 +168,7 @@ impl PaperSourceAdapter for BibtexAdapter {
 
 fn build_bibtex_item(
     source_id: &str,
+    external_id: &str,
     bib_dir: &Path,
     ext_roots: &[ExternalPdfRoot],
     entry: &BibEntryRaw,
@@ -160,7 +176,7 @@ fn build_bibtex_item(
     warnings: &mut Vec<ScanWarning>,
 ) -> ScannedItem {
     let citekey = entry.citekey.trim().to_string();
-    let prev = ctx.previous_by_id.get(&citekey);
+    let prev = ctx.previous_by_id.get(external_id);
     let (ids, version) = extract_bibtex_ids(&entry.fields);
 
     let title = entry
@@ -289,7 +305,7 @@ fn build_bibtex_item(
     ScannedItem {
         item: SourceItemRecord {
             source_id: source_id.to_string(),
-            external_id: citekey.clone(),
+            external_id: external_id.to_string(),
             key,
             citekey: Some(citekey),
             ids,
@@ -360,10 +376,8 @@ fn resolve_bibtex_attachment(
     ext_roots: &[ExternalPdfRoot],
     raw_path: &str,
 ) -> AttachResolve {
-    let stripped = raw_path
-        .trim()
-        .strip_prefix("file://")
-        .unwrap_or(raw_path.trim());
+    let trimmed = raw_path.trim();
+    let stripped = strip_file_uri_prefix(trimmed);
     let norm = clean_ref_token(stripped).replace('\\', "/");
     if norm.is_empty() || norm.bytes().any(|b| b < 0x20 || b == 0x7f) {
         return AttachResolve::Refused("empty or control-character attachment path".into());
@@ -474,12 +488,48 @@ fn resolve_rel_with_missing_check(root: &Path, rel: &str, display: &str) -> Atta
     }
 }
 
+fn strip_file_uri_prefix(raw: &str) -> &str {
+    let after = raw
+        .strip_prefix("file://localhost")
+        .or_else(|| raw.strip_prefix("file://"))
+        .unwrap_or(raw);
+    // Standard Windows file URI: `file:///C:/...` -> `C:/...`.
+    if after.len() >= 4
+        && after.as_bytes()[0] == b'/'
+        && after.as_bytes()[1].is_ascii_alphabetic()
+        && after.as_bytes()[2] == b':'
+        && matches!(after.as_bytes()[3], b'/' | b'\\')
+    {
+        &after[1..]
+    } else {
+        after
+    }
+}
+
 fn is_syntactically_inside_missing(root: &Path, cand: &Path) -> bool {
-    let Ok(rel) = cand.strip_prefix(root) else {
+    let clean_root = crate::sandbox::strip_verbatim_prefix(root);
+    let clean_cand = crate::sandbox::strip_verbatim_prefix(cand);
+    let r_comps: Vec<_> = clean_root.components().collect();
+    let c_comps: Vec<_> = clean_cand.components().collect();
+    if c_comps.len() <= r_comps.len() {
         return false;
-    };
-    let mut cur = root.to_path_buf();
-    for comp in rel.components() {
+    }
+    for (rc, cc) in r_comps.iter().zip(c_comps.iter()) {
+        #[cfg(windows)]
+        let eq = rc
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&cc.as_os_str().to_string_lossy());
+        #[cfg(not(windows))]
+        let eq = rc == cc;
+        if !eq {
+            return false;
+        }
+    }
+    let r_len = r_comps.len();
+    drop(r_comps);
+    let mut cur = clean_root;
+    for comp in &c_comps[r_len..] {
         let Component::Normal(os) = comp else {
             return false;
         };

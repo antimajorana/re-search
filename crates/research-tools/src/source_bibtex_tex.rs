@@ -102,6 +102,9 @@ fn read_accent_arg(chars: &[char], mut i: usize) -> Option<(char, usize)> {
     }
     if chars[i] == '{' {
         i += 1;
+        if i >= chars.len() || chars[i] == '}' {
+            return None;
+        }
         let base = if i + 1 < chars.len() && chars[i] == '\\' && matches!(chars[i + 1], 'i' | 'j') {
             let b = chars[i + 1];
             i += 2;

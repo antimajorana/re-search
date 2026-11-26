@@ -72,12 +72,16 @@ pub(crate) fn reconcile_items(
                 .files
                 .iter()
                 .filter(|f| f.role != FILE_ROLE_NOTE)
-                .find_map(|f| prev_id_by_path.get(&f.path).cloned())
+                .find_map(|f| {
+                    prev_id_by_path
+                        .get(&f.path)
+                        .filter(|pid| prev_by_id.contains_key(*pid))
+                        .cloned()
+                })
         };
 
-        if let Some(pid) = matched_id {
+        if let Some((pid, prev)) = matched_id.and_then(|pid| prev_by_id.remove(&pid).map(|p| (pid, p))) {
             matched_prev_ids.insert(pid.clone());
-            let prev = prev_by_id.remove(&pid).unwrap();
             // Keep stable external_id for items matched by current path after an earlier move.
             sc.item.external_id = pid;
             if sc.reused_unchanged && prev.state != SourceItemState::Missing {

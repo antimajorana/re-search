@@ -200,3 +200,48 @@ fn refuses_symlink_zotero_sqlite() {
     let err = read_zotero_library(&link_dir).unwrap_err();
     assert!(err.contains("symlink"), "unexpected error: {err}");
 }
+
+#[test]
+fn wal_mode_zotero_database_reads_uncheckpointed_rows_via_snapshot_cleanly() {
+    let tmp = TempDir::new().unwrap();
+    let zot_dir = tmp.path().join("ZoteroWal");
+    let snap_root = tmp.path().join("snap_wal");
+    fs::create_dir_all(&zot_dir).unwrap();
+    fs::create_dir_all(&snap_root).unwrap();
+    create_synthetic_zotero_db(&zot_dir);
+
+    let db_path = zot_dir.join("zotero.sqlite");
+    let writer = Connection::open(&db_path).unwrap();
+    writer
+        .execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA wal_autocheckpoint = 0;
+             INSERT INTO items VALUES(13,1,'ZWAL003','2026-02-01');
+             INSERT INTO itemDataValues VALUES(8,'WAL Uncheckpointed Paper');
+             INSERT INTO itemData VALUES(13,1,8);",
+        )
+        .unwrap();
+
+    let wal_path = PathBuf::from(format!("{}-wal", db_path.display()));
+    assert!(
+        fs::metadata(&wal_path).is_ok_and(|m| m.len() > 0),
+        "expected non-empty -wal sidecar"
+    );
+    let db_hash_before = sha256_file(&db_path);
+    let wal_hash_before = sha256_file(&wal_path);
+
+    let snap = read_zotero_library_with_temp_root(&zot_dir, Some(&snap_root)).unwrap();
+    assert!(snap.used_snapshot);
+    assert_eq!(snap.items.len(), 3);
+    assert!(snap
+        .items
+        .iter()
+        .any(|i| i.zotero_key == "ZWAL003"
+            && i.fields.get("title").map(String::as_str) == Some("WAL Uncheckpointed Paper")));
+
+    let leftovers: Vec<_> = fs::read_dir(&snap_root).unwrap().flatten().collect();
+    assert!(leftovers.is_empty(), "snapshot dir leaked: {leftovers:?}");
+    assert_eq!(sha256_file(&db_path), db_hash_before);
+    assert_eq!(sha256_file(&wal_path), wal_hash_before);
+    drop(writer);
+}

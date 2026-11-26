@@ -88,8 +88,8 @@ pub fn read_zotero_library_with_temp_root(
 
     let has_wal = sidecar_has_bytes(&db_path, "-wal");
     if !has_wal {
-        if let Ok(direct) = open_direct_readonly(&db_path) {
-            match query_zotero_conn(&direct.conn, false) {
+        match open_direct_readonly(&db_path) {
+            Ok(direct) => match query_zotero_conn(&direct.conn, false) {
                 Ok(mut snap) => {
                     attach_bbt_keys(data_dir, temp_root, &mut snap.items);
                     return Ok(snap);
@@ -98,11 +98,15 @@ pub fn read_zotero_library_with_temp_root(
                     // Fall through to isolated snapshot copy below.
                 }
                 Err(ReadErr::Other(msg)) => return Err(msg),
+            },
+            Err(ReadErr::Locked) => {
+                // Fall through to isolated snapshot copy below.
             }
+            Err(ReadErr::Other(msg)) => return Err(msg),
         }
     }
 
-    let opened = open_snapshot_readonly(&db_path, temp_root)?;
+    let opened = open_snapshot_readonly_with_retry(&db_path, temp_root)?;
     let mut snap = query_zotero_conn(&opened.conn, opened.used_snapshot).map_err(|e| match e {
         ReadErr::Locked => format!("{}: snapshot database unexpectedly locked", db_path.display()),
         ReadErr::Other(msg) => msg,
@@ -213,6 +217,19 @@ fn sqlite_ro_immutable_uri(path: &Path) -> String {
     format!("file:{lead}{enc}?mode=ro&immutable=1")
 }
 
+fn open_snapshot_readonly_with_retry(
+    db_path: &Path,
+    temp_root: Option<&Path>,
+) -> Result<OpenedDb, String> {
+    match open_snapshot_readonly(db_path, temp_root) {
+        Ok(opened) => Ok(opened),
+        Err(first_err) => {
+            // One retry handles a concurrent Zotero WAL checkpoint mid-copy.
+            open_snapshot_readonly(db_path, temp_root).map_err(|_| first_err)
+        }
+    }
+}
+
 fn open_snapshot_readonly(db_path: &Path, temp_root: Option<&Path>) -> Result<OpenedDb, String> {
     let snap = make_snap_dir(temp_root)?;
     let fname = db_path
@@ -223,17 +240,16 @@ fn open_snapshot_readonly(db_path: &Path, temp_root: Option<&Path>) -> Result<Op
     let dst = snap.0.join(fname);
     fs::copy(db_path, &dst).map_err(|e| format!("snapshot {}: {e}", db_path.display()))?;
 
+    // Copy non-empty `-wal` sidecar (propagating copy errors), and deliberately do NOT copy
+    // `-shm` so SQLite reconstructs a clean shared-memory index in our isolated temp directory.
     let mut copied_wal = false;
-    for ext in ["-wal", "-shm"] {
-        let side = PathBuf::from(format!("{}{ext}", db_path.display()));
-        if let Ok(meta) = fs::symlink_metadata(&side) {
-            if !meta.file_type().is_symlink() && meta.is_file() {
-                let side_dst = PathBuf::from(format!("{}{ext}", dst.display()));
-                let _ = fs::copy(&side, &side_dst);
-                if ext == "-wal" && meta.len() > 0 {
-                    copied_wal = true;
-                }
-            }
+    let wal_side = PathBuf::from(format!("{}-wal", db_path.display()));
+    if let Ok(meta) = fs::symlink_metadata(&wal_side) {
+        if !meta.file_type().is_symlink() && meta.is_file() && meta.len() > 0 {
+            let wal_dst = PathBuf::from(format!("{}-wal", dst.display()));
+            fs::copy(&wal_side, &wal_dst)
+                .map_err(|e| format!("snapshot WAL {}: {e}", wal_side.display()))?;
+            copied_wal = true;
         }
     }
 
@@ -242,11 +258,25 @@ fn open_snapshot_readonly(db_path: &Path, temp_root: Option<&Path>) -> Result<Op
             | OpenFlags::SQLITE_OPEN_URI
             | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         Connection::open_with_flags(sqlite_ro_immutable_uri(&dst), flags)
+            .map_err(|e| format!("open snapshot {}: {e}", db_path.display()))?
     } else {
-        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        Connection::open_with_flags(&dst, flags)
-    }
-    .map_err(|e| format!("open snapshot {}: {e}", db_path.display()))?;
+        // When an uncheckpointed `-wal` was copied into our private temp snapshot, SQLite must
+        // create a fresh `-shm` index inside `snap.0` to replay WAL frames. The user's live
+        // `zotero.sqlite` is NEVER opened read-write; only the disposable temp copy allows `-shm`
+        // creation, and `PRAGMA query_only = ON` is enabled immediately afterwards.
+        let ro_flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        match Connection::open_with_flags(&dst, ro_flags).and_then(|c| {
+            c.query_row("PRAGMA quick_check(1)", [], |r| r.get::<_, String>(0))?;
+            Ok(c)
+        }) {
+            Ok(c) => c,
+            Err(_) => {
+                let rw_flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+                Connection::open_with_flags(&dst, rw_flags)
+                    .map_err(|e| format!("open WAL snapshot {}: {e}", db_path.display()))?
+            }
+        }
+    };
 
     harden_readonly_conn(&conn).map_err(|e| match e {
         ReadErr::Locked => format!("{}: snapshot locked", db_path.display()),
@@ -528,41 +558,31 @@ fn read_bbt_keys(
         let opened = if !sidecar_has_bytes(&path, "-wal") {
             match open_direct_readonly(&path) {
                 Ok(db) => Ok(db),
-                Err(ReadErr::Locked) => open_snapshot_readonly(&path, temp_root),
+                Err(ReadErr::Locked) => open_snapshot_readonly_with_retry(&path, temp_root),
                 Err(ReadErr::Other(_)) => continue,
             }
         } else {
-            open_snapshot_readonly(&path, temp_root)
+            open_snapshot_readonly_with_retry(&path, temp_root)
         };
-        let Ok(db) = opened else {
-            continue;
-        };
-        let Ok(cols) = table_cols(&db.conn, "citationkey") else {
-            continue;
-        };
+        let Ok(db) = opened else { continue };
+        let Ok(cols) = table_cols(&db.conn, "citationkey") else { continue };
         if cols.contains("itemID") && cols.contains("citationKey") {
-            if let Ok(rows) = qvec(&db.conn, "SELECT itemID, citationKey FROM citationkey", |r| {
+            let rows = qvec(&db.conn, "SELECT itemID, citationKey FROM citationkey", |r| {
                 Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-            }) {
-                for (id, ck) in rows {
-                    let trimmed = ck.trim().to_string();
-                    if !trimmed.is_empty() {
-                        by_id.insert(id, trimmed);
-                    }
+            });
+            for (id, ck) in rows.unwrap_or_default() {
+                if !ck.trim().is_empty() {
+                    by_id.insert(id, ck.trim().to_string());
                 }
             }
         }
         if cols.contains("itemKey") && cols.contains("citationKey") {
-            if let Ok(rows) =
-                qvec(&db.conn, "SELECT itemKey, citationKey FROM citationkey", |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-                })
-            {
-                for (ik, ck) in rows {
-                    let trimmed = ck.trim().to_string();
-                    if !trimmed.is_empty() {
-                        by_key.insert(ik, trimmed);
-                    }
+            let rows = qvec(&db.conn, "SELECT itemKey, citationKey FROM citationkey", |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            });
+            for (ik, ck) in rows.unwrap_or_default() {
+                if !ck.trim().is_empty() {
+                    by_key.insert(ik, ck.trim().to_string());
                 }
             }
         }

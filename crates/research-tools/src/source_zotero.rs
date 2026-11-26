@@ -121,7 +121,10 @@ fn resolve_base_attachment_dir(canon_dir: &Path, settings: &Value) -> Option<Pat
     {
         let p = Path::new(prefs_raw);
         if let Ok(meta) = fs::symlink_metadata(p) {
-            if !meta.file_type().is_symlink() && meta.is_file() && meta.len() <= MAX_SOURCE_TEXT_BYTES as u64 {
+            if !is_symlink_or_junction(p, &meta)
+                && meta.is_file()
+                && meta.len() <= MAX_SOURCE_TEXT_BYTES as u64
+            {
                 if let Ok(txt) = fs::read_to_string(p) {
                     let prefs = parse_prefs_js(&txt);
                     let raw = prefs.base_attachment_path.or(prefs.zotmoov_dst_dir)?;
