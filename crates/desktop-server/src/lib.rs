@@ -4,6 +4,8 @@
 pub mod agent_models;
 mod api_dispatch;
 mod investigation;
+pub mod investigation_cited;
+mod investigation_cited_support;
 mod investigation_cites;
 mod investigation_finish;
 pub mod investigation_mapview;

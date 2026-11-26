@@ -288,6 +288,9 @@ pub(crate) fn dispatch_api(
                 crate::investigation_open::handle(state, method, id, op, &req.query, &req.body),
             );
         }
+        ("POST", ["api", "sessions", id, "investigation", "cited"]) => {
+            write_api_res(&mut stream, crate::investigation_cited::handle(state, id, &req.body));
+        }
         ("POST", ["api", "sessions", id, "investigation", operation]) => {
             write_api_res(&mut stream, crate::investigation::handle(state, id, operation, &req.body));
         }
