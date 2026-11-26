@@ -2,6 +2,7 @@
 // Block A shows source-backed content by code (solid); Block B holds model explanations (dashed).
 import { BORDER_DASHED, BORDER_SOLID, createBadge, createNodeCardShell } from './ui_badge.js';
 import { renderMathTextInto } from './math.js';
+import { renderInvestigationBadges } from './investigation_badges.js';
 
 // Named wording constants (00-overview.md §2.6, §3.2, investigate.md §3).
 export const NODE_BLOCK_A_LABEL = 'From source (by code)';
@@ -243,6 +244,27 @@ export function renderInvestigationNodeCard(host, mapview, tag, opts = {}) {
   }
   blockAContent.appendChild(statementEl);
 
+  // 2a. V7 authors'-claim half-badge, deterministic heading cites, and reader pin toggle.
+  let badgesCtrl = null;
+  const showBadges = Boolean(
+    node.authors_claim
+    || node.effective_is_main_result
+    || node.pin
+    || node.pinned
+    || (Array.isArray(node.head_cites) && node.head_cites.length > 0)
+    || typeof opts.onTogglePin === 'function',
+  );
+  if (showBadges) {
+    const badgesSlot = document.createElement('div');
+    badgesSlot.className = 'inv-node-badges-slot';
+    badgesCtrl = renderInvestigationBadges(badgesSlot, node, {
+      onTogglePin: opts.onTogglePin,
+      onOpenQuote: opts.onOpenQuote,
+      onOpenPageImage: opts.onOpenPageImage,
+    });
+    blockAContent.appendChild(badgesSlot);
+  }
+
   // 2. Expandable inline Proof preview when proofText is provided.
   const hasProofText = typeof opts.proofText === 'string' && opts.proofText.length > 0;
   let proofSection = null;
@@ -330,5 +352,5 @@ export function renderInvestigationNodeCard(host, mapview, tag, opts = {}) {
   });
 
   if (host) host.replaceChildren(card);
-  return { card, relations, toggleProof };
+  return { card, relations, toggleProof, badgesCtrl };
 }

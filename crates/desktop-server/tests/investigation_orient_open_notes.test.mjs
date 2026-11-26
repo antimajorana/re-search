@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
@@ -11,7 +12,10 @@ import {
   UNPIN_ACTION_LABEL,
   formatHeadingCiteLine,
   renderInvestigationBadges,
+  resolveEffectiveMainResult,
 } from '../assets/investigation_badges.js';
+import { renderInvestigationNodeCard } from '../assets/investigation_node.js';
+import * as apiExports from '../assets/api.js';
 import {
   extractAuthorsClaimLabel,
   inspectMapviewCapabilities,
@@ -20,9 +24,11 @@ import {
 
 function makeFakeDom() {
   let innerHtmlWrites = 0;
+  const byId = new Map();
   const makeEl = (tag = 'div', ns = null) => {
     let text = '';
     let html = '';
+    let idVal = '';
     const attrs = new Map();
     const classes = new Set();
     const listeners = new Map();
@@ -40,6 +46,15 @@ function makeFakeDom() {
       hidden: false,
       disabled: false,
       checked: false,
+      tabIndex: 0,
+      clientWidth: 800,
+      clientHeight: 500,
+      get id() { return idVal; },
+      set id(v) {
+        if (idVal && byId.get(idVal) === el) byId.delete(idVal);
+        idVal = String(v || '');
+        if (idVal) byId.set(idVal, el);
+      },
       get className() { return [...classes].join(' '); },
       set className(v) {
         classes.clear();
@@ -62,19 +77,25 @@ function makeFakeDom() {
       get innerHTML() { return html; },
       set innerHTML(v) { innerHtmlWrites += 1; this.children = []; html = String(v ?? ''); },
       attributes: attrs,
-      setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'class') this.className = v; },
+      setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'class') this.className = v; if (k === 'id') this.id = v; },
       getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
       removeAttribute(k) { attrs.delete(k); },
       append(...nodes) { this.children.push(...nodes); },
       appendChild(node) { this.children.push(node); return node; },
       replaceChildren(...nodes) { this.children = [...nodes]; text = ''; html = ''; },
+      insertBefore(node) { this.children.unshift(node); return node; },
       addEventListener(type, fn) { (listeners.has(type) ? listeners : listeners.set(type, [])).get(type).push(fn); },
+      removeEventListener(type, fn) {
+        const list = listeners.get(type);
+        if (list) listeners.set(type, list.filter((f) => f !== fn));
+      },
       dispatch(type, event = {}) {
         const ev = { preventDefault() {}, stopPropagation() {}, target: this, ...event };
         for (const fn of listeners.get(type) || []) fn(ev);
       },
       click() { if (!this.disabled) this.dispatch('click'); },
       focus() { this._focused = true; },
+      getBoundingClientRect() { return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight }; },
       querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
       querySelectorAll(sel) {
         const out = [];
@@ -100,6 +121,7 @@ function makeFakeDom() {
     document: {
       createElement: (t) => makeEl(t, null),
       createElementNS: (ns, t) => makeEl(t, ns),
+      getElementById: (id) => byId.get(id) || null,
     },
     makeEl,
     get innerHtmlWrites() { return innerHtmlWrites; },
@@ -266,4 +288,178 @@ test('V7 enriched mapview automatically activates V13 Main results and Authors l
   assert.equal(isMainResultNode(mv.nodes[1], caps.mainResultIds), false, 'reader pin=not_main_result overrides model role');
   assert.equal(extractAuthorsClaimLabel(mv.nodes[0]), 'new');
   assert.equal(extractAuthorsClaimLabel(mv.nodes[1]), 'restated');
+  assert.equal(resolveEffectiveMainResult({ role: 'main_result', effective_is_main_result: false, stale: true }), false);
+});
+
+test('V7 api.js exports and investigation_node mounts .inv-node-badges-slot cleanly without V8/V10', () => {
+  for (const fn of ['startInvestigationTask', 'saveInvestigationNote', 'getInvestigateSettings', 'putInvestigateSettings']) {
+    assert.equal(typeof apiExports[fn], 'function', `api.js must export ${fn}`);
+  }
+  const dom = makeFakeDom();
+  globalThis.document = dom.document;
+  const host = dom.makeEl('div');
+  const pinCalls = [];
+  const quoteCalls = [];
+  const pageCalls = [];
+  const mv = {
+    nodes: [{
+      id: 'n-thm1',
+      kind: 'theorem',
+      label: 'Theorem 1: Main',
+      fp: 'fp-1',
+      role: 'main_result',
+      effective_is_main_result: true,
+      page_basis: 'scan_text_layer',
+      head_cites: ['Toy95'],
+      authors_claim: {
+        label: 'new',
+        text: AUTHORS_CLAIM_LABELS.new,
+        cues: ['we prove'],
+        quotes: [{ source_id: 'src-1', path: 'paper.pdf.txt', start_line: 3, end_line: 4, page: 2, quote: 'We prove...' }],
+      },
+      spans: [{ path: 'paper.pdf.txt', start_line: 3, end_line: 5 }],
+    }],
+    edges: [],
+    tasks: [],
+  };
+  const ctrl = renderInvestigationNodeCard(host, mv, 'n-thm1', {
+    nodeText: 'Statement text.',
+    modelConnected: true,
+    onTogglePin: (n, pin) => pinCalls.push({ id: n.id, pin }),
+    onOpenQuote: (q) => quoteCalls.push(q),
+    onOpenPageImage: (q) => pageCalls.push(q),
+  });
+  assert.ok(ctrl.badgesCtrl);
+  assert.ok(host.querySelector('.inv-node-badges-slot'));
+  assert.ok(host.querySelector('.inv-v7-badges'));
+  assert.equal(host.querySelector('.inv-v8-model'), null);
+  assert.equal(host.querySelector('.inv-v10-notes'), null);
+  ctrl.badgesCtrl.togglePopover(true);
+  host.querySelector('.ui-quote-chip-open').click();
+  assert.equal(pageCalls.length, 1, 'OCR quote chip invokes onOpenPageImage');
+  assert.equal(quoteCalls.length, 0);
+  host.querySelector('.inv-v7-pin-btn').click();
+  assert.deepEqual(pinCalls, [{ id: 'n-thm1', pin: 'not_main_result' }]);
+  assert.equal(dom.innerHtmlWrites, 0);
+});
+
+async function loadShellController() {
+  const shellUrl = new URL('../assets/investigation_v3_shell.js', import.meta.url);
+  const src = await readFile(shellUrl, 'utf8');
+  const rewritten = src.replace(/(['"])\/assets\/([^'"]+)\1/g, (_, _q, file) =>
+    JSON.stringify(new URL(`../assets/${file}`, import.meta.url).href));
+  const dataUrl = `data:text/javascript;base64,${Buffer.from(rewritten, 'utf8').toString('base64')}`;
+  return import(dataUrl);
+}
+
+test('V7 investigation_v3_shell wires orient_auto_start, Orient button, pin toggle, quote open, and safe ask/note', async () => {
+  const dom = makeFakeDom();
+  globalThis.document = dom.document;
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+
+  const shellHost = dom.makeEl('div');
+  shellHost.id = 'investigation-v3-shell';
+  const composerInput = dom.makeEl('textarea');
+  composerInput.id = 'composer-input';
+
+  const { createInvestigationV3Controller } = await loadShellController();
+
+  const taskCalls = [];
+  const noteCalls = [];
+  const openSourceCalls = [];
+  let refreshCount = 0;
+  let mvFetchCount = 0;
+  let currentMv = {
+    etag: 'h1',
+    skeleton_seq: 4,
+    source_id: 'src-1',
+    orient_auto_start: true,
+    tasks: [],
+    nodes: [{
+      id: 'n-thm1',
+      kind: 'theorem',
+      label: 'Theorem 1: Main',
+      fp: 'fp-1',
+      role: 'main_result',
+      effective_is_main_result: true,
+      head_cites: ['Toy95'],
+      authors_claim: {
+        label: 'new',
+        text: AUTHORS_CLAIM_LABELS.new,
+        cues: ['we prove'],
+        quotes: [{ source_id: 'src-1', path: 'main.tex', start_line: 10, end_line: 11, quote: 'We prove main bound.' }],
+      },
+      spans: [{ path: 'main.tex', start_line: 10, end_line: 12 }],
+    }],
+    edges: [],
+    bib: [],
+    symbols: [],
+  };
+
+  const ctrl = createInvestigationV3Controller({
+    api: {
+      getInvestigationMapview: async () => { mvFetchCount += 1; return currentMv; },
+      getInvestigationNodeText: async () => ({ text: 'Statement line.' }),
+      startInvestigationTask: async (sid, payload) => { taskCalls.push({ sid, payload }); return { status: 'running' }; },
+      saveInvestigationNote: async (sid, payload) => { noteCalls.push({ sid, payload }); return { seq: 7, ...payload }; },
+    },
+  });
+
+  const sessionData = {
+    mode: 'investigation',
+    investigation: { source_id: 'src-1', skeleton_seq: 4 },
+    sources: [{ source_id: 'src-1', format: 'tex' }],
+    events: [{ seq: 4 }],
+  };
+  const hooks = {
+    isModelConnected: () => true,
+    openSource: (sid, target) => openSourceCalls.push({ sid, target }),
+    refresh: async () => { refreshCount += 1; await ctrl.syncSession('s1', sessionData, hooks); },
+  };
+
+  const ok = await ctrl.syncSession('s1', sessionData, hooks);
+  assert.equal(ok, true);
+  await new Promise((r) => setTimeout(r, 10));
+
+  // orient_auto_start fires once when modelConnected=true and no prior orient task exists.
+  assert.equal(taskCalls.length, 1);
+  assert.deepEqual(taskCalls[0], { sid: 's1', payload: { task: 'orient' } });
+  assert.ok(refreshCount >= 1);
+  assert.ok(mvFetchCount >= 2, 'refreshMv invalidates activeKey so updated mapview loads');
+
+  // Manual "Orient paper" button starts orient.
+  const orientBtn = shellHost.querySelector('[data-action="orient"]');
+  assert.ok(orientBtn);
+  assert.equal(orientBtn.disabled, false);
+  orientBtn.click();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(taskCalls.length, 2);
+
+  // Pin toggle sends saveInvestigationNote and refreshes.
+  const pinBtn = shellHost.querySelector('.inv-v7-pin-btn');
+  assert.ok(pinBtn);
+  pinBtn.click();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(noteCalls, [{ sid: 's1', payload: { tag: 'n-thm1', node_fp: 'fp-1', pin: 'not_main_result' } }]);
+
+  // Quote chip in popover opens source via hooks.openSource.
+  shellHost.querySelector('[data-half="left"]').click();
+  shellHost.querySelector('.ui-quote-chip-open').click();
+  assert.equal(openSourceCalls.length, 1);
+  assert.equal(openSourceCalls[0].target.start_line, 10);
+
+  // Safe ask/note actions focus composer without V10 mounted.
+  const noteActionBtn = shellHost.querySelector('[data-action="note"]');
+  noteActionBtn.click();
+  assert.ok(composerInput.value.includes('n-thm1'));
+  assert.equal(composerInput._focused, true);
+
+  // When orient_auto_start is false or model disconnected, auto-start does not trigger.
+  currentMv = { ...currentMv, orient_auto_start: false };
+  const callsBefore = taskCalls.length;
+  await ctrl.syncSession('s2', { ...sessionData, events: [{ seq: 1 }] }, { ...hooks, isModelConnected: () => false });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(taskCalls.length, callsBefore);
+  assert.equal(shellHost.querySelector('[data-action="orient"]').disabled, true);
+  assert.equal(dom.innerHtmlWrites, 0);
 });

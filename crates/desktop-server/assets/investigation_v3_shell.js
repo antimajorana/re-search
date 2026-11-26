@@ -118,6 +118,8 @@ export function createInvestigationV3Controller(deps = {}) {
     }
 
     host.hidden = false;
+    const modelConnected = Boolean(hooks?.isModelConnected?.());
+    const refreshMv = () => { st.etag = ''; activeKey = ''; return hooks?.refresh?.(sessionId); };
     const banner = createQualityBanner(mv);
     const leftCol = el('div', 'inv-col inv-col--outline');
     const centerCol = el('div', 'inv-col inv-col--center');
@@ -130,7 +132,14 @@ export function createInvestigationV3Controller(deps = {}) {
     const mapBtn = el('button', 'inv-node-action-btn', 'Whole paper graph');
     mapBtn.type = 'button';
     mapBtn.setAttribute('aria-pressed', st.wholeMap ? 'true' : 'false');
-    toolbar.append(focusBtn, mapBtn);
+    const orientBtn = el('button', 'inv-node-action-btn', 'Orient paper');
+    orientBtn.type = 'button';
+    orientBtn.setAttribute('data-action', 'orient');
+    orientBtn.disabled = !modelConnected;
+    orientBtn.addEventListener('click', () => {
+      void apiMod.startInvestigationTask?.(sessionId, { task: 'orient' })?.then(refreshMv).catch((err) => hooks?.showStatus?.(err?.message || 'Could not start Orient.'));
+    });
+    toolbar.append(focusBtn, mapBtn, orientBtn);
 
     if (st.trail.length > 1) {
       const backBtn = el('button', 'inv-node-action-btn', '← Previous statement');
@@ -244,7 +253,6 @@ export function createInvestigationV3Controller(deps = {}) {
       if (ev.key === 'Enter') { ev.preventDefault(); runSymbolLookup(); }
     });
 
-    const modelConnected = Boolean(hooks?.isModelConnected?.());
     const hasPdf = Boolean(
       sessionData?.sources?.some((s) => s.source_id === mv.source_id && s.format === 'pdf'),
     );
@@ -335,6 +343,11 @@ export function createInvestigationV3Controller(deps = {}) {
         hasPdf,
         modelConnected,
         onSelectNode: (id) => selectNode(id, true),
+        onTogglePin: (node, pin) => {
+          void apiMod.saveInvestigationNote?.(sessionId, { tag: node.id, node_fp: node.fp, pin })?.then(refreshMv).catch((err) => hooks?.showStatus?.(err?.message || 'Could not update pin.'));
+        },
+        onOpenQuote: (t) => { if (t?.source_id && t?.path) hooks?.openSource?.(sessionId, t); },
+        onOpenPageImage: (t) => { if (t?.source_id) hooks?.openPdf?.(t); },
         onSelectCitation: (cite) => {
           const locator = Array.isArray(cite.locators) && cite.locators.length
             ? cite.locators[0]
@@ -374,6 +387,11 @@ export function createInvestigationV3Controller(deps = {}) {
       });
     };
     mountNodeCard(currentEntry);
+
+    if (mv.orient_auto_start && modelConnected && !st.orientAutoStarted && !(mv.tasks || []).some((t) => t.task === 'orient')) {
+      st.orientAutoStarted = true;
+      void apiMod.startInvestigationTask?.(sessionId, { task: 'orient' })?.then(refreshMv).catch(() => {});
+    }
 
     focusBtn.addEventListener('click', () => {
       if (!st.wholeMap && st.graphMode === VIEW_MODES.FOCUSED) return;
@@ -532,7 +550,9 @@ export function createInvestigationV3Controller(deps = {}) {
         return false;
       }
       const st = sessionState(sessionId);
-      const nextKey = `${sessionId}:${inv.skeleton_seq ?? 'auto'}:${inv.source_id ?? ''}`;
+      const evs = Array.isArray(sessionData.events) ? sessionData.events : [];
+      const tailSeq = evs.length ? (evs[evs.length - 1]?.seq ?? evs.length) : 0;
+      const nextKey = `${sessionId}:${inv.skeleton_seq ?? 'auto'}:${inv.source_id ?? ''}:${tailSeq}`;
       if (st.mapview && activeKey === nextKey) {
         renderShell(host, sessionId, sessionData, hooks);
         return true;
@@ -549,7 +569,7 @@ export function createInvestigationV3Controller(deps = {}) {
         }
         st.mapview = mv;
         st.etag = mv.etag || '';
-        activeKey = `${sessionId}:${mv.skeleton_seq}:${mv.source_id ?? ''}`;
+        activeKey = nextKey;
         const setupEl = document.getElementById('investigation-setup');
         if (setupEl) setupEl.hidden = true;
         ensureEntryCard(sessionId, false, hooks);
