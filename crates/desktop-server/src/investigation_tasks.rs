@@ -9,7 +9,7 @@
 use crate::investigation::{is_investigation, latest};
 use crate::investigation_skeleton::{EVENT_INVESTIGATION_PAPER, EVENT_INVESTIGATION_SKELETON};
 use crate::investigation_task_context::{
-    build_task_context, record_context_supplied, DEFAULT_CONTEXT_CHAR_BUDGET,
+    build_task_context_with_events, record_context_supplied, DEFAULT_CONTEXT_CHAR_BUDGET,
 };
 use crate::routes_session::{bad, conflict, internal, not_found, parse_json_body, ApiResult};
 use crate::state::DesktopState;
@@ -86,7 +86,7 @@ pub fn handle(state: &Arc<DesktopState>, session_id: &str, body: &[u8]) -> ApiRe
     // (auto-building from hash-verified ingested source on older pinned Investigation sessions per §8.4).
     let (source_id, skeleton_seq, skeleton) =
         load_pinned_skeleton(state, session_id, &ledger, &events, None)?;
-    let tags = parse_and_validate_tags(req_json.get("tags"), task, &skeleton)?;
+    let tags = parse_and_validate_tags(req_json.get("tags"), task, &skeleton, &events)?;
     let cap = clamp_cap(req_json.get("max_turns").and_then(Value::as_u64), task_cap_for(task));
     let prev_last_seq = events.last().map_or(0, |e| e.seq).max(skeleton_seq);
 
@@ -153,7 +153,7 @@ pub(crate) fn prepare_task(
     if source_id != expected_source {
         return Err(conflict("The pinned paper changed before the Investigate task started."));
     }
-    let tags = parse_and_validate_tags(spec.get("tags"), task, &skeleton)?;
+    let tags = parse_and_validate_tags(spec.get("tags"), task, &skeleton, &events)?;
     let receipt = find_source_receipt(&events, &source_id, Some(skeleton.source_seq))
         .or_else(|| find_source_receipt(&events, &source_id, None))
         .ok_or_else(|| not_found(format!("source receipt `{source_id}` not found")))?;
@@ -168,8 +168,8 @@ pub(crate) fn prepare_task(
         ledger.append(session_id, MARKER_TASK_REQUESTED, 1, &marker_payload).map_err(storage)?
     };
 
-    let built = match build_task_context(
-        &env.sandbox(), session_id, receipt, &skeleton, skeleton_seq, request_seq,
+    let built = match build_task_context_with_events(
+        &env.sandbox(), session_id, receipt, &events, &skeleton, skeleton_seq, request_seq,
         task, &tags, depth.as_deref(), focus.as_deref(), DEFAULT_CONTEXT_CHAR_BUDGET,
     ) {
         Ok(ctx) => ctx,
@@ -378,7 +378,7 @@ fn parse_optional_text(val: Option<&Value>, field: &str, limit: usize) -> Result
 }
 
 fn parse_and_validate_tags(
-    val: Option<&Value>, task: InvestigationTaskKind, skeleton: &PaperSkeleton,
+    val: Option<&Value>, task: InvestigationTaskKind, skeleton: &PaperSkeleton, events: &[Event],
 ) -> Result<Vec<String>, (u16, String)> {
     let mut tags = Vec::new();
     let mut seen = HashSet::new();
@@ -396,16 +396,18 @@ fn parse_and_validate_tags(
         Some(_) => return Err(bad("`tags` must be an array of tag strings.")),
     }
     if matches!(task, InvestigationTaskKind::Open | InvestigationTaskKind::Context) && tags.is_empty() {
-        return Err(bad(format!("Task `{}` requires at least one skeleton tag in `tags`.", task.as_str())));
+        return Err(bad(format!("Task `{}` requires at least one node tag in `tags`.", task.as_str())));
     }
 
-    let valid_tags: Vec<&str> = skeleton.nodes.iter().filter_map(|n| n.tag.as_deref()).collect();
+    let model_nodes = research_tools::map_model_nodes::collect_existing_model_nodes(skeleton, events);
+    let mut valid_tags: Vec<&str> = skeleton.nodes.iter().filter_map(|n| n.tag.as_deref()).collect();
+    valid_tags.extend(model_nodes.keys().map(String::as_str));
     let valid_set: HashSet<&str> = valid_tags.iter().copied().collect();
     for tag in &tags {
         if !valid_set.contains(tag.as_str()) {
             let nearby = suggest_nearby_tags(tag, &valid_tags);
             let hint = if nearby.is_empty() { String::new() } else { format!(" Valid tags include: {}.", nearby.join(", ")) };
-            return Err(bad(format!("Unknown skeleton tag `{tag}` for this pinned paper.{hint}")));
+            return Err(bad(format!("Unknown node tag `{tag}` for this pinned paper.{hint}")));
         }
     }
     Ok(tags)

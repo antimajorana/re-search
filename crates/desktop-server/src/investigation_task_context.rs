@@ -41,13 +41,37 @@ struct SelectedBlock {
     span: Span,
 }
 
-/// Builds task-specific quoted source context from hash-verified ingested TeX files
+/// Builds task-specific quoted source context from hash-verified ingested TeX or PDF files
 /// (`investigate.md` §5.1, rules 6.17 and 6.19).
 #[allow(clippy::too_many_arguments)]
 pub fn build_task_context(
     sandbox: &WorkspaceSandbox,
     session_id: &str,
     receipt: &Event,
+    skeleton: &PaperSkeleton,
+    skeleton_seq: u64,
+    request_seq: u64,
+    task: InvestigationTaskKind,
+    tags: &[String],
+    depth: Option<&str>,
+    focus: Option<&str>,
+    max_chars: usize,
+) -> Result<BuiltTaskContext, String> {
+    build_task_context_with_events(
+        sandbox, session_id, receipt, &[], skeleton, skeleton_seq, request_seq,
+        task, tags, depth, focus, max_chars,
+    )
+}
+
+/// Builds task-specific quoted source context with session ledger `events` so V8 `open` tasks
+/// targeting nested `m-` model nodes inject the step's ancestor chain alongside the owning
+/// skeleton node's statement, proof, and direct prerequisites (`investigate.md` §3, §5.1).
+#[allow(clippy::too_many_arguments)]
+pub fn build_task_context_with_events(
+    sandbox: &WorkspaceSandbox,
+    session_id: &str,
+    receipt: &Event,
+    events: &[Event],
     skeleton: &PaperSkeleton,
     skeleton_seq: u64,
     request_seq: u64,
@@ -87,8 +111,15 @@ pub fn build_task_context(
         instructions.push_str(&build_theorem_headings_index(&ordered, budget));
     }
 
+    // Resolve any V8 `m-` target tags to their owning skeleton tags while surfacing the step's
+    // saved parent chain and gist so Open expands only that step (`investigate.md` §3, §4.2).
+    let (resolved_sk_tags, model_step_notes) = resolve_open_target_tags(skeleton, events, tags);
+    if !model_step_notes.is_empty() && instructions.chars().count() + model_step_notes.chars().count() < max_chars {
+        instructions.push_str(&model_step_notes);
+    }
+
     let mut raw_ranges: Vec<SuppliedRange> = Vec::new();
-    for block in select_blocks(skeleton, &ordered, task, tags) {
+    for block in select_blocks(skeleton, &ordered, task, &resolved_sk_tags) {
         let content = ingested_files.get(&block.span.path).ok_or_else(|| {
             format!("source file `{}` referenced by skeleton is missing from verified receipt", block.span.path)
         })?;
@@ -120,6 +151,42 @@ pub fn build_task_context(
 
     let supplied_ranges = normalize_supplied_ranges(raw_ranges);
     Ok(BuiltTaskContext { instructions, supplied_ranges })
+}
+
+fn resolve_open_target_tags(
+    skeleton: &PaperSkeleton,
+    events: &[Event],
+    tags: &[String],
+) -> (Vec<String>, String) {
+    if !tags.iter().any(|t| research_tools::map_model_nodes::is_model_node_tag(t)) {
+        return (tags.to_vec(), String::new());
+    }
+    let models = research_tools::map_model_nodes::collect_existing_model_nodes(skeleton, events);
+    let folded = research_tools::map_fold::fold_map(skeleton, events, false);
+    let sk_tags: BTreeSet<&str> = skeleton.nodes.iter().filter_map(|n| n.tag.as_deref()).collect();
+    let mut resolved = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut notes = String::from("\nSelected model step context (prior reading metadata, not raw source lines):\n");
+    let mut added_notes = false;
+    for tag in tags {
+        if let Some(m) = models.get(tag) {
+            if seen.insert(m.root_skeleton_tag.clone()) {
+                resolved.push(m.root_skeleton_tag.clone());
+            }
+            let chain = research_tools::map_model_nodes::ancestor_chain(tag, &sk_tags, &models)
+                .map(|mut c| { c.reverse(); c.join(" -> ") })
+                .unwrap_or_else(|| format!("{} -> {}", m.attach_to, m.tag));
+            let gist = folded.nodes.get(tag)
+                .and_then(|r| r.gist.current.as_ref())
+                .map(|v| v.value.as_str())
+                .unwrap_or("");
+            let _ = writeln!(notes, "- [{tag}] kind={} path=[{chain}] gist=\"{gist}\"", m.kind);
+            added_notes = true;
+        } else if seen.insert(tag.clone()) {
+            resolved.push(tag.clone());
+        }
+    }
+    (resolved, if added_notes { notes } else { String::new() })
 }
 
 /// Appends a validated F4 `context.supplied` ledger event crediting `ranges` to `caller`

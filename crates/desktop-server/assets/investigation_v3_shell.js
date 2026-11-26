@@ -340,6 +340,9 @@ export function createInvestigationV3Controller(deps = {}) {
     const contextDrawer = st.contextDrawer;
     contextHost.replaceChildren(contextDrawer.element);
 
+    const refreshMv = () => { st.etag = ''; activeKey = ''; return hooks?.refresh?.(sessionId); };
+    const startOpenTag = (tag) => apiMod.startInvestigationTask?.(sessionId, { task: 'open', tags: [tag] })?.then(refreshMv).catch((err) => hooks?.showStatus?.(err?.message || 'Could not open node.'));
+
     const mountNodeCard = (entry) => {
       renderInvestigationNodeCard(nodeCardHost, mv, st.selectedTag, {
         nodeText: entry ? entry.text : (st.selectedTag ? null : ''),
@@ -350,6 +353,11 @@ export function createInvestigationV3Controller(deps = {}) {
         onTogglePin: (node, pin) => {
           void apiMod.saveInvestigationNote?.(sessionId, { tag: node.id, node_fp: node.fp, pin })?.then(refreshMv).catch((err) => hooks?.showStatus?.(err?.message || 'Could not update pin.'));
         },
+        onSaveNote: async (payload) => { const res = await apiMod.saveInvestigationNote?.(sessionId, payload); void refreshMv(); return res; },
+        onOpenNode: (id) => { void startOpenTag(id); },
+        onContinueTask: (_t, node) => { if (node?.id) void startOpenTag(node.id); },
+        onRetryTask: (_t, node) => { if (node?.id) void startOpenTag(node.id); },
+        onStopTask: () => { void apiMod.stopTurn?.(sessionId)?.then(refreshMv); },
         onOpenQuote: (t) => { if (t?.source_id && t?.path) hooks?.openSource?.(sessionId, t); },
         onOpenPageImage: (t) => { if (t?.source_id) hooks?.openPdf?.(t); },
         onSelectCitation: (cite) => {
@@ -378,7 +386,7 @@ export function createInvestigationV3Controller(deps = {}) {
               start_line: span.start_line,
               label: node.label,
             });
-          } else if (actionId === 'ask' || actionId === 'note') {
+          } else if (actionId === 'ask') {
             const input = typeof document !== 'undefined' ? document.getElementById('composer-input') : null;
             if (input) {
               if (!input.value) input.value = `Regarding ${node.label} (${node.id}): `;

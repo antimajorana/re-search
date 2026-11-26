@@ -92,7 +92,18 @@ pub fn read_map_node(
     let receipt = find_source_receipt(&events, source_id, skeleton.source_seq)
         .ok_or_else(|| format!("Source `{source_id}` has no source.ingested receipt in this session."))?;
 
-    let target = resolve_node(&skeleton, source_id, node_query)?;
+    let model_meta = if crate::map_model_nodes::is_model_node_tag(node_query) {
+        let models = crate::map_model_nodes::collect_existing_model_nodes(&skeleton, &events);
+        Some(models.get(node_query).cloned().ok_or_else(|| {
+            format!("Model node `{node_query}` not found for source `{source_id}`.")
+        })?)
+    } else {
+        None
+    };
+    let lookup_query = model_meta
+        .as_ref()
+        .map_or(node_query, |m| m.root_skeleton_tag.as_str());
+    let target = resolve_node(&skeleton, source_id, lookup_query)?;
     let include = parse_include(args.get("include"));
     let max_chars = args
         .get("max_chars")
@@ -147,6 +158,12 @@ pub fn read_map_node(
     base.insert("number".into(), json!(target.number));
     base.insert("title".into(), json!(target.title));
     base.insert("spans".into(), json!(target.spans));
+    if let Some(m) = model_meta {
+        base.insert("model_node".into(), json!({
+            "tag": m.tag, "attach_to": m.attach_to, "kind": m.kind,
+            "root_skeleton_tag": m.root_skeleton_tag,
+        }));
+    }
 
     if include.proof {
         let proof_val = proof_nodes.first().map_or(Value::Null, |first| {
