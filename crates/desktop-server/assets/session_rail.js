@@ -58,6 +58,7 @@ export function renderSessionRailList(containerEl, opts = {}) {
   if (!containerEl) return;
   const sessions = Array.isArray(opts.sessions) ? opts.sessions : [];
   const activeSessionId = opts.activeSessionId || null;
+  globalThis.__reSearchModeStages?.syncFromRail?.(activeSessionId, sessions);
   const query = String(opts.query || '').trim().toLowerCase();
   const showArchived = opts.filterMode === 'archived';
 

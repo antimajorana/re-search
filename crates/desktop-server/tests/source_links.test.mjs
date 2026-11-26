@@ -155,6 +155,7 @@ test('Project library normalizes citations and finds excerpts across session sou
     .replace("'/assets/math.js'", JSON.stringify(mathUrl));
   const libraryCode = fs.readFileSync(path.join(assetsDir, 'project_library.js'), 'utf8')
     .replace("'/assets/api.js'", JSON.stringify(moduleUrl('export {};')))
+    .replace("'/assets/library_send_back.js'", JSON.stringify(pathToFileURL(path.join(assetsDir, 'library_send_back.js')).href))
     .replace("'/assets/project_edits.js'", JSON.stringify(pathToFileURL(path.join(assetsDir, 'project_edits.js')).href))
     .replace("'/assets/math.js'", JSON.stringify(mathUrl))
     .replace("'/assets/source_links.js'", JSON.stringify(moduleUrl(linksCode)));

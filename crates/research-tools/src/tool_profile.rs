@@ -359,24 +359,50 @@ pub fn legacy_profile_name_for_events(events: &[Event]) -> &'static str {
 /// - If `session.start` carries a `tool_profile` field, it must be a string naming a built profile.
 /// - If `session.start` exists without `tool_profile`, falls back to the legacy mode profile
 ///   (`research/1`, `investigation/1`, or `solve/1`).
+/// - If `session.start` resolved to `investigation/1` and a `session.resume` event in `events`
+///   recorded `"tool_profile": "investigation/2"`, returns `investigation/2`.
 /// - If `session.start` does not exist yet (new session before its first turn), new Investigate
 ///   sessions start under `investigation/2`; other modes resolve via `legacy_profile_name_for_events`.
 pub fn profile_for_session_events(events: &[Event]) -> Result<ToolProfile, String> {
     if let Some(start) = events.iter().find(|e| e.kind == "session.start") {
-        if let Some(val) = start.payload.get(TOOL_PROFILE_FIELD) {
+        let mut profile = if let Some(val) = start.payload.get(TOOL_PROFILE_FIELD) {
             let name = val
                 .as_str()
                 .ok_or_else(|| format!("invalid non-string `{TOOL_PROFILE_FIELD}` in `session.start`"))?;
-            return lookup(name).map_err(|e| e.to_string());
+            lookup(name).map_err(|e| e.to_string())?
+        } else {
+            let inferred = legacy_profile_name_for_events(events);
+            lookup(inferred).map_err(|e| e.to_string())?
+        };
+        if profile.name == PROFILE_INVESTIGATION_V1
+            && events.iter().any(|e| {
+                e.kind == "session.resume"
+                    && e.payload.get(TOOL_PROFILE_FIELD).and_then(Value::as_str)
+                        == Some(PROFILE_INVESTIGATION_V2)
+            })
+        {
+            profile = investigation_v2();
         }
-        let inferred = legacy_profile_name_for_events(events);
-        return lookup(inferred).map_err(|e| e.to_string());
+        return Ok(profile);
     }
     let name = match session_mode_from_events(events) {
         Mode::Investigate => PROFILE_INVESTIGATION_V2,
         other => legacy_profile_name_for_mode(other),
     };
     lookup(name).map_err(|e| e.to_string())
+}
+
+/// Resolve the active [`ToolProfile`] for running or resuming `events`: calls
+/// [`profile_for_session_events`] and upgrades `investigation/1` to `investigation/2`
+/// (`00-overview.md` 2.2, `investigate.md` §8.2), leaving `research/1` (including explicit
+/// `"tool_profile": "research/1"` and `investigation.handoff`) and `solve/1` untouched.
+pub fn active_profile_for_session_events(events: &[Event]) -> Result<ToolProfile, String> {
+    let profile = profile_for_session_events(events)?;
+    if profile.name == PROFILE_INVESTIGATION_V1 {
+        Ok(investigation_v2())
+    } else {
+        Ok(profile)
+    }
 }
 
 /// True iff `actual` and `expected` have the exact same length, ids, and `def_hash` in order.

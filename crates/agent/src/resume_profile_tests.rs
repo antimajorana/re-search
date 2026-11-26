@@ -329,12 +329,10 @@ fn resolve_session_profile_handles_explicit_legacy_unbuilt_and_r2_drift() {
     assert!(r_v2.explicit);
 
     // Reserved / unbuilt profiles fail closed with Drift ("profile not built yet").
-    for name in [PROFILE_EXPLORE_V1] {
-        let evs = [dummy_event(1, "session.start", json!({ "tool_profile": name }))];
-        let err = resolve_session_profile("s-res", &evs).unwrap_err();
-        assert_eq!(err.kind, ResumeRejectKind::Drift);
-        assert!(err.message.contains("profile not built yet"), "{}", err.message);
-    }
+    let evs = [dummy_event(1, "session.start", json!({ "tool_profile": PROFILE_EXPLORE_V1 }))];
+    let err = resolve_session_profile("s-res", &evs).unwrap_err();
+    assert_eq!(err.kind, ResumeRejectKind::Drift);
+    assert!(err.message.contains("profile not built yet"), "{}", err.message);
 
     // Explicit `solve/1` and `solve.started` now resolve to built profile `solve/1` (`v0.5-solve`).
     let solve_explicit = [dummy_event(1, "session.start", json!({ "tool_profile": PROFILE_SOLVE_V1 }))];
@@ -352,15 +350,13 @@ fn resolve_session_profile_handles_explicit_legacy_unbuilt_and_r2_drift() {
     assert!(!r.explicit);
 
     // Legacy markers for unbuilt modes also fail closed.
-    for marker in [MARKER_IDEA_STARTED] {
-        let evs = [
-            dummy_event(1, marker, json!({})),
-            dummy_event(2, "session.start", json!({})),
-        ];
-        let err = resolve_session_profile("s-m", &evs).unwrap_err();
-        assert_eq!(err.kind, ResumeRejectKind::Drift);
-        assert!(err.message.contains("profile not built yet"), "{}", err.message);
-    }
+    let evs = [
+        dummy_event(1, MARKER_IDEA_STARTED, json!({})),
+        dummy_event(2, "session.start", json!({})),
+    ];
+    let err = resolve_session_profile("s-m", &evs).unwrap_err();
+    assert_eq!(err.kind, ResumeRejectKind::Drift);
+    assert!(err.message.contains("profile not built yet"), "{}", err.message);
 
     // Non-string tool_profile fails closed.
     let evs = [dummy_event(1, "session.start", json!({ "tool_profile": null }))];

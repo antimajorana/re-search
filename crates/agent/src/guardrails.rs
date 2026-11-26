@@ -331,46 +331,6 @@ fn load_dag_with_computation_check(ledger: &Ledger, session: &str) -> Result<Pro
     Ok(dag)
 }
 
-#[cfg(test)]
-mod computation_tests {
-    use super::*;
-
-    #[test]
-    fn calculation_gate_requires_linked_successful_results() {
-        let tmp = tempfile::tempdir().unwrap();
-        let ledger = Ledger::open(tmp.path()).unwrap();
-        let session = "calc";
-        let append = |kind, payload| ledger.append(session, kind, 1, &payload).unwrap();
-        append("session.start", json!({}));
-        append("tool.request", json!({"call_id": "failed", "tool": "sympy_eval"}));
-        append("tool.result", json!({"call_id": "failed", "ok": false, "error": {"inline": "worker unavailable"}}));
-        append("tool.request", json!({"call_id": "exception", "tool": "sympy_eval"}));
-        append("tool.result", json!({"call_id": "exception", "ok": true, "result": {
-            "inline": json!({"value": null, "error": {"message": "division by zero"}}).to_string()
-        }}));
-        assert!(check_computation_interpretation(&ledger, session).is_ok());
-
-        append("proof.entry", json!({"entry_id": "e-early", "entry_type": "result",
-            "summary": "Result asserted before evaluation", "tool_call_ref": "actual"}));
-        append("tool.request", json!({"call_id": "actual", "tool": "sympy_eval"}));
-        let blob = ledger.put_blob(br#"{"value":"4","stdout":""}"#).unwrap();
-        let result_seq = append("tool.result", json!({"call_id": "actual", "ok": true, "result": {"blob": blob}}));
-        // The substring rule previously credited "actual" inside this unrelated citation.
-        append("proof.entry", json!({"entry_id": "e-1", "entry_type": "result",
-            "summary": "Unrelated result", "tool_call_ref": "unactualized"}));
-        let error = check_computation_interpretation(&ledger, session).unwrap_err();
-        assert!(error.contains(&format!("[{result_seq}]")), "{error}");
-
-        append("proof.entry", json!({"entry_id": "e-2", "entry_type": "symbolic_computation",
-            "summary": "Evaluate 2+2", "tool_call_ref": "actual"}));
-        append("proof.entry", json!({"entry_id": "e-3", "entry_type": "result",
-            "summary": "The sum is 4", "depends_on": ["e-2"]}));
-        assert!(check_computation_interpretation(&ledger, session).is_ok());
-        append("proof.supersede", json!({"entry_id": "e-3", "replaced_by": "e-1"}));
-        assert!(check_computation_interpretation(&ledger, session).is_err());
-    }
-}
-
 /// Checks whether a final answer may be accepted under `verification_mode`.
 /// When `verification_mode` is `true`, requires both computation interpretation
 /// and an accepted full-solution verification of the current proof.
@@ -488,4 +448,44 @@ pub fn run_research_loop(
         }))?;
     }
     Ok(leg.outcome)
+}
+
+#[cfg(test)]
+mod computation_tests {
+    use super::*;
+
+    #[test]
+    fn calculation_gate_requires_linked_successful_results() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(tmp.path()).unwrap();
+        let session = "calc";
+        let append = |kind, payload| ledger.append(session, kind, 1, &payload).unwrap();
+        append("session.start", json!({}));
+        append("tool.request", json!({"call_id": "failed", "tool": "sympy_eval"}));
+        append("tool.result", json!({"call_id": "failed", "ok": false, "error": {"inline": "worker unavailable"}}));
+        append("tool.request", json!({"call_id": "exception", "tool": "sympy_eval"}));
+        append("tool.result", json!({"call_id": "exception", "ok": true, "result": {
+            "inline": json!({"value": null, "error": {"message": "division by zero"}}).to_string()
+        }}));
+        assert!(check_computation_interpretation(&ledger, session).is_ok());
+
+        append("proof.entry", json!({"entry_id": "e-early", "entry_type": "result",
+            "summary": "Result asserted before evaluation", "tool_call_ref": "actual"}));
+        append("tool.request", json!({"call_id": "actual", "tool": "sympy_eval"}));
+        let blob = ledger.put_blob(br#"{"value":"4","stdout":""}"#).unwrap();
+        let result_seq = append("tool.result", json!({"call_id": "actual", "ok": true, "result": {"blob": blob}}));
+        // The substring rule previously credited "actual" inside this unrelated citation.
+        append("proof.entry", json!({"entry_id": "e-1", "entry_type": "result",
+            "summary": "Unrelated result", "tool_call_ref": "unactualized"}));
+        let error = check_computation_interpretation(&ledger, session).unwrap_err();
+        assert!(error.contains(&format!("[{result_seq}]")), "{error}");
+
+        append("proof.entry", json!({"entry_id": "e-2", "entry_type": "symbolic_computation",
+            "summary": "Evaluate 2+2", "tool_call_ref": "actual"}));
+        append("proof.entry", json!({"entry_id": "e-3", "entry_type": "result",
+            "summary": "The sum is 4", "depends_on": ["e-2"]}));
+        assert!(check_computation_interpretation(&ledger, session).is_ok());
+        append("proof.supersede", json!({"entry_id": "e-3", "replaced_by": "e-1"}));
+        assert!(check_computation_interpretation(&ledger, session).is_err());
+    }
 }

@@ -540,3 +540,12 @@ fn inheritance_and_failure_propagation_preserve_distinct_labels_and_wording_rule
     assert!(b_ocr_low.flags.contains(&wording::FLAG_OCR_SOURCE.to_string()));
     assert_not_machine_confirmed(&b_ocr_low, "lowered OCR cited step");
 }
+
+#[test]
+fn numeric_tier_label_and_ui_badge_use_numerically_checked_everywhere() {
+    assert_eq!(Tier::CheckedNumerically.label(), "Numerically checked");
+    assert_eq!(wording::BADGE_CHECKED_NUMERICALLY, "Numerically checked");
+    let ui_badge_js = include_str!("../../desktop-server/assets/ui_badge.js");
+    assert!(ui_badge_js.contains("export const SOLVE_NUMERIC_WORD = 'Numerically checked';"));
+    assert!(!ui_badge_js.contains("Checked numerically"));
+}

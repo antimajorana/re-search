@@ -78,6 +78,7 @@ fn build_v2_router(data_dir: &std::path::Path, env: Arc<ResearchEnv>, sid: &str)
             sympy_epoch: Arc::new(NoEpoch),
             sympy_handler: noop,
             session_title_handler: None,
+            solve_check: None,
         },
     )
     .unwrap();

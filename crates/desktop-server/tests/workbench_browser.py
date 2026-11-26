@@ -16,6 +16,7 @@ from pdf_preview_browser import check_pdf_preview
 from recovery_example_browser import check_recovery_example
 from investigation_browser import check_investigation
 from session_folders_browser import check_session_folders
+from mode_stages_browser import check_mode_stages
 
 
 def check_workbench(browser, binary, width, height):
@@ -163,6 +164,7 @@ def main():
         ("recovery example", lambda b: check_recovery_example(b, binary)),
         ("investigation", lambda b: check_investigation(b, binary)),
         ("session folders", lambda b: check_session_folders(b, binary)),
+        ("mode stages", lambda b: check_mode_stages(b, binary)),
     ]
     failures = []
     with sync_playwright() as playwright:

@@ -437,7 +437,7 @@
         ],
         "planted_step": null
       },
-      "notes": "SymPy 1.14 leaves integral_0^infty x^3/(exp(x)-1) dx unevaluated directly, so the sum-integral interchange by Tonelli's theorem is separated into prose step s3 (Model agreed) under solve.md 4.4, capping the exact derivation's effective tier at Model agreed even though the geometric sum (s2), Gamma integral (s4), and zeta sum (s5) pass exact symbolic checks. The independent 50-digit mpmath quadrature cross-check (s6, error < 1e-65 at 65 dps) earns Checked numerically on its own branch. Scripted transport fixture in scripts/Q-calc-04-bose-einstein-3d-integral.json uses only merged tools (ledger_note, sympy_eval); full Solve badge and verifier execution await S9/S11/S14."
+      "notes": "SymPy 1.14 leaves integral_0^infty x^3/(exp(x)-1) dx unevaluated directly, so the sum-integral interchange by Tonelli's theorem is separated into prose step s3 (Model agreed) under solve.md 4.4, capping the exact derivation's effective tier at Model agreed even though the geometric sum (s2), Gamma integral (s4), and zeta sum (s5) pass exact symbolic checks. The independent 50-digit mpmath quadrature cross-check (s6, error < 1e-65 at 65 dps) earns Numerically checked on its own branch. Scripted transport fixture in scripts/Q-calc-04-bose-einstein-3d-integral.json uses only merged tools (ledger_note, sympy_eval); full Solve badge and verifier execution await S9/S11/S14."
     },
     {
       "id": "Q-calc-05-feynman-log-integral",
@@ -838,7 +838,7 @@
           "s is real and strictly positive (s > 0), guaranteeing absolute exponential convergence since |J_0(a*t)| <= 1 for all real a*t",
           "a is real (a in R), covering both the restricted disc |a| < s and the exterior |a| >= s where s^2 + a^2 > 0 makes the positive real square root sqrt(s^2 + a^2) unambiguous",
           "term-by-term integration of J_0(a*t) = sum_{k=0}^{infty} (-1)^k*(a*t/2)^(2k)/(k!)^2 yields the binomial series (1/s)*sum_{k=0}^{infty} binomial(-1/2, k)*(a^2/s^2)^k, which converges absolutely (justifying term-by-term Fubini-Tonelli integration) on |a| < s, converges only conditionally at |a| = s (where absolute convergence fails), and diverges for |a| > s",
-          "confirmation on the full domain s > 0, a in R (including |a| >= s) is performed numerically via 50-digit quadrature at 12 points spanning |a| < s, |a| = s, and |a| > s, so the full-domain conclusion earns Checked numerically rather than Verified"
+          "confirmation on the full domain s > 0, a in R (including |a| >= s) is performed numerically via 50-digit quadrature at 12 points spanning |a| < s, |a| = s, and |a| > s, so the full-domain conclusion earns Numerically checked rather than Verified"
         ],
         "expected_final_badge": "Numerically checked",
         "steps": [
@@ -884,7 +884,7 @@
           },
           {
             "id": "s5",
-            "description": "Conclude L(s, a) = 1/sqrt(s^2 + a^2) for all real s > 0 and a in R; the full-domain conclusion carries effective tier Checked numerically (both by its own numeric check and by S2 monotone closure over s4).",
+            "description": "Conclude L(s, a) = 1/sqrt(s^2 + a^2) for all real s > 0 and a in R; the full-domain conclusion carries effective tier Numerically checked (both by its own numeric check and by S2 monotone closure over s4).",
             "depends_on": [
               "s2",
               "s3",
@@ -897,7 +897,7 @@
         ],
         "planted_step": null
       },
-      "notes": "Original Group B calculation case exercising the distinction between Verified (exact symbolic/series derivation restricted to |a| < s where absolute convergence justifies term-by-term Fubini-Tonelli integration) and Checked numerically (full-domain s > 0, a in R confirmation covering |a| = s where absolute convergence fails and |a| > s where the power series diverges). Verified symbolically for term-by-term Laplace integration, binomial coefficient identity, and series match to O(a^14) in SymPy, and confirmed at 12 points across |a| < s, |a| = s, and |a| > s to > 55 digits (max error ~1.0e-56) in mpmath via both quadosc and Gauss-Legendre quadrature. Scripted transport fixture in scripts/Q-calc-10-bessel-laplace-integral.json uses only merged tools (ledger_note, sympy_eval); full Solve badge execution awaits S9/S11."
+      "notes": "Original Group B calculation case exercising the distinction between Verified (exact symbolic/series derivation restricted to |a| < s where absolute convergence justifies term-by-term Fubini-Tonelli integration) and Numerically checked (full-domain s > 0, a in R confirmation covering |a| = s where absolute convergence fails and |a| > s where the power series diverges). Verified symbolically for term-by-term Laplace integration, binomial coefficient identity, and series match to O(a^14) in SymPy, and confirmed at 12 points across |a| < s, |a| = s, and |a| > s to > 55 digits (max error ~1.0e-56) in mpmath via both quadosc and Gauss-Legendre quadrature. Scripted transport fixture in scripts/Q-calc-10-bessel-laplace-integral.json uses only merged tools (ledger_note, sympy_eval); full Solve badge execution awaits S9/S11."
     },
     {
       "id": "Q-check-01-sampled-domain-sqrt",

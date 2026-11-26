@@ -235,6 +235,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_v3_shell.js"),
         }),
+        "/assets/mode_stages.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/mode_stages.js"),
+        }),
         "/assets/investigation_shell.css" => Some(StaticAsset {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_shell.css"),

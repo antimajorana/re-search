@@ -6,9 +6,9 @@
 use ledger::Event;
 use research_tools::paper_key::Mode;
 use research_tools::tool_profile::{
-    legacy_profile_name_for_mode, lookup as lookup_profile, profile_for_session_events,
+    active_profile_for_session_events, legacy_profile_name_for_mode, lookup as lookup_profile,
     ProfileError, ToolProfile, MARKER_IDEA_STARTED, MARKER_INVESTIGATION_HANDOFF,
-    MARKER_INVESTIGATION_STARTED, MARKER_SOLVE_STARTED,
+    MARKER_INVESTIGATION_STARTED, MARKER_SOLVE_STARTED, PROFILE_INVESTIGATION_V2,
 };
 
 /// Wire mode string for earlier Research sessions on `/api/sessions` (`00-overview.md` 5.2).
@@ -103,14 +103,18 @@ pub fn profile_for_mode(mode: Mode) -> Result<ToolProfile, String> {
             mode_label(mode)
         ));
     }
-    let profile_name = legacy_profile_name_for_mode(mode);
+    let profile_name = match mode {
+        Mode::Investigate => PROFILE_INVESTIGATION_V2,
+        other => legacy_profile_name_for_mode(other),
+    };
     lookup_profile(profile_name).map_err(|err| format_profile_error(mode, &err))
 }
 
 /// Resolve the [`ToolProfile`] for an existing session from its ledger events.
 ///
-/// Respects an explicit `session.start["tool_profile"]` if present, otherwise maps
-/// [`session_mode`] to its profile. Returns a plain error when the mode or profile is not
+/// Respects an explicit `session.start["tool_profile"]` if present (upgrading older
+/// `investigation/1` sessions onto `investigation/2` per `investigate.md` §8.2), otherwise maps
+/// [`session_mode`] to its active profile. Returns a plain error when the mode or profile is not
 /// built yet in the desktop server.
 pub fn profile_for_session(events: &[Event]) -> Result<ToolProfile, String> {
     let mode = session_mode(events);
@@ -120,7 +124,7 @@ pub fn profile_for_session(events: &[Event]) -> Result<ToolProfile, String> {
             mode_label(mode)
         ));
     }
-    profile_for_session_events(events).map_err(|msg| {
+    active_profile_for_session_events(events).map_err(|msg| {
         if msg.contains("profile not built yet") {
             format!("{} mode is not built yet ({msg}).", mode_label(mode))
         } else {
@@ -148,7 +152,9 @@ fn format_profile_error(mode: Mode, err: &ProfileError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use research_tools::tool_profile::{PROFILE_INVESTIGATION_V1, PROFILE_RESEARCH_V1};
+    use research_tools::tool_profile::{
+        PROFILE_INVESTIGATION_V1, PROFILE_INVESTIGATION_V2, PROFILE_RESEARCH_V1,
+    };
     use serde_json::json;
 
     fn ev(seq: u64, kind: &str, payload: serde_json::Value) -> Event {
@@ -194,11 +200,36 @@ mod tests {
     #[test]
     fn built_and_unbuilt_modes_resolve_or_error_plainly() {
         assert_eq!(profile_for_mode(Mode::Research).unwrap().name, PROFILE_RESEARCH_V1);
-        assert_eq!(profile_for_mode(Mode::Investigate).unwrap().name, PROFILE_INVESTIGATION_V1);
+        assert_eq!(profile_for_mode(Mode::Investigate).unwrap().name, PROFILE_INVESTIGATION_V2);
         assert!(is_mode_built(Mode::Research));
         assert!(is_mode_built(Mode::Investigate));
         assert!(!is_mode_built(Mode::Explore));
         assert!(!is_mode_built(Mode::Solve));
+
+        // Older investigation/1 sessions (marker-inferred or explicit) upgrade to investigation/2.
+        assert_eq!(
+            profile_for_session(&[
+                ev(1, MARKER_INVESTIGATION_STARTED, json!({})),
+                ev(2, "session.start", json!({})),
+            ])
+            .unwrap()
+            .name,
+            PROFILE_INVESTIGATION_V2
+        );
+        assert_eq!(
+            profile_for_session(&[
+                ev(1, MARKER_INVESTIGATION_STARTED, json!({})),
+                ev(2, "session.start", json!({ "tool_profile": PROFILE_INVESTIGATION_V1 })),
+            ])
+            .unwrap()
+            .name,
+            PROFILE_INVESTIGATION_V2
+        );
+        // Research sessions stay research/1.
+        assert_eq!(
+            profile_for_session(&[ev(1, "session.start", json!({}))]).unwrap().name,
+            PROFILE_RESEARCH_V1
+        );
 
         let explore_err = profile_for_mode(Mode::Explore).unwrap_err();
         assert!(explore_err.contains("Explore mode is not built yet"), "{explore_err}");

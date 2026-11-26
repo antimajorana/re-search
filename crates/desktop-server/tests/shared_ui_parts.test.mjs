@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { createGraphView } from '../assets/graph_view.js';
+import { TIER_NUMERIC_WORD, TIER_VERIFIED_WORD } from '../assets/solve_state.js';
 import {
   BORDER_DASHED,
   BORDER_SOLID,
+  SOLVE_EXACT_WORD,
+  SOLVE_NUMERIC_WORD,
   createBadge,
   createNodeCardShell,
   createSplitBadge,
@@ -388,6 +394,26 @@ test('XSS payloads through every F6 component create zero injected elements and 
     }
     assert.ok(roots.some((r) => r.textContent.includes(xss1)));
     assert.ok(roots.some((r) => r.textContent.includes(xss2)));
+  } finally {
+    dom.restore();
+  }
+});
+
+test('SOLVE_NUMERIC_WORD and TIER_NUMERIC_WORD equal "Numerically checked" and never "Checked numerically"', () => {
+  const dom = makeFakeDom();
+  try {
+    assert.equal(SOLVE_EXACT_WORD, 'Verified');
+    assert.equal(TIER_VERIFIED_WORD, 'Verified');
+    assert.equal(SOLVE_NUMERIC_WORD, 'Numerically checked');
+    assert.equal(TIER_NUMERIC_WORD, 'Numerically checked');
+
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const uiBadgeSrc = fs.readFileSync(path.resolve(here, '..', 'assets', 'ui_badge.js'), 'utf8');
+    assert.ok(!uiBadgeSrc.includes('Checked numerically'), 'ui_badge.js must not contain retired spelling');
+
+    const badge = createBadge({ text: SOLVE_NUMERIC_WORD, grade: 'checked_numerically', icon: 'numeric' });
+    assert.equal(badge.querySelector('.ui-badge-text').textContent, 'Numerically checked');
+    assert.ok(!badge.textContent.includes('Checked numerically'));
   } finally {
     dom.restore();
   }

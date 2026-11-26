@@ -199,9 +199,13 @@ export function mountExploreCard(containerEl, opts = {}) {
   }
   ensureIdeaStylesheet();
   containerEl.hidden = false;
+  const onCreated = typeof opts.onCreated === 'function'
+    ? opts.onCreated
+    : (res) => globalThis.__reSearchModeStages?.openExploreCreated?.(res);
   return renderIdeaSetupCard(containerEl, {
     onFocusInvestigate: defaultFocusInvestigate,
     ...opts,
+    onCreated,
   });
 }
 

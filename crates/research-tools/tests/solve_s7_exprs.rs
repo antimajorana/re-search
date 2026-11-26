@@ -31,20 +31,41 @@ use tools::{
     WorkerEpoch,
 };
 
-fn python_exe() -> String {
-    if let Ok(p) = std::env::var("RE_SEARCH_PYTHON") {
-        if !p.trim().is_empty() {
-            return p;
+fn resolve_sympy_python() -> Option<(String, Vec<&'static str>)> {
+    for var in ["RE_SEARCH_PYTHON", "RESEARCH_CORE_PYTHON"] {
+        if let Ok(p) = std::env::var(var) {
+            if !p.trim().is_empty() {
+                return Some((p, Vec::new()));
+            }
         }
     }
-    if cfg!(windows) {
-        "python".to_string()
+    let candidates: &[(&str, &[&str])] = if cfg!(windows) {
+        &[("py", &["-3"])]
     } else {
-        "python3".to_string()
+        &[("python3", &[])]
+    };
+    for &(prog, prefix) in candidates {
+        let ok = Command::new(prog)
+            .args(prefix)
+            .args(["-c", "import sympy"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if ok {
+            return Some((prog.to_string(), prefix.to_vec()));
+        }
     }
+    None
 }
 
 fn worker_script_path() -> PathBuf {
+    if let Ok(s) = std::env::var("RE_SEARCH_WORKER_SCRIPT") {
+        if !s.trim().is_empty() {
+            return PathBuf::from(s);
+        }
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join("python")
@@ -61,8 +82,9 @@ struct StdioWorkerProcess {
 }
 
 impl StdioWorkerProcess {
-    fn spawn(role: &str, cwd: &Path) -> Self {
-        let mut child = Command::new(python_exe())
+    fn spawn(py: &(String, Vec<&'static str>), role: &str, cwd: &Path) -> Self {
+        let mut child = Command::new(&py.0)
+            .args(&py.1)
             .arg("-u")
             .arg(worker_script_path())
             .arg("--stdio")
@@ -215,14 +237,18 @@ fn build_solve_router(
 
 #[test]
 fn cross_process_r5_solver_monkey_patch_latex_cannot_alter_solve_expr_latex() {
+    let Some(py) = resolve_sympy_python() else {
+        eprintln!("SKIPPED: set RE_SEARCH_PYTHON (Python with SymPy) to run cross-process S7 worker test");
+        return;
+    };
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().join("data");
     let scratch = tmp.path().join("scratch");
     std::fs::create_dir_all(&data_dir).unwrap();
     std::fs::create_dir_all(&scratch).unwrap();
 
-    let mut solver = StdioWorkerProcess::spawn("solver", &scratch);
-    let checker = RealCheckProcessCanonicalizer(Mutex::new(StdioWorkerProcess::spawn("check", &scratch)));
+    let mut solver = StdioWorkerProcess::spawn(&py, "solver", &scratch);
+    let checker = RealCheckProcessCanonicalizer(Mutex::new(StdioWorkerProcess::spawn(&py, "check", &scratch)));
 
     // Solver poisons `sympy.latex` in its own process and saves an expression.
     let code = r#"
@@ -294,14 +320,18 @@ expr_val
 
 #[test]
 fn cross_process_r6_non_allowlisted_lambda_and_hostile_srepr_mark_non_portable() {
+    let Some(py) = resolve_sympy_python() else {
+        eprintln!("SKIPPED: set RE_SEARCH_PYTHON (Python with SymPy) to run cross-process S7 worker test");
+        return;
+    };
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().join("data");
     let scratch = tmp.path().join("scratch");
     std::fs::create_dir_all(&data_dir).unwrap();
     std::fs::create_dir_all(&scratch).unwrap();
 
-    let mut solver = StdioWorkerProcess::spawn("solver", &scratch);
-    let checker = RealCheckProcessCanonicalizer(Mutex::new(StdioWorkerProcess::spawn("check", &scratch)));
+    let mut solver = StdioWorkerProcess::spawn(&py, "solver", &scratch);
+    let checker = RealCheckProcessCanonicalizer(Mutex::new(StdioWorkerProcess::spawn(&py, "check", &scratch)));
 
     let code = r#"
 x = Symbol("x", real=True)
@@ -365,20 +395,24 @@ save_expr("good_poly", x**3 - 1)
 
 #[test]
 fn cross_process_worker_restart_restages_exprs_in_from_ledger_blobs_without_cas_bus() {
+    let Some(py) = resolve_sympy_python() else {
+        eprintln!("SKIPPED: set RE_SEARCH_PYTHON (Python with SymPy) to run cross-process S7 worker test");
+        return;
+    };
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().join("data");
     let scratch = tmp.path().join("scratch");
     std::fs::create_dir_all(&data_dir).unwrap();
     std::fs::create_dir_all(&scratch).unwrap();
 
-    let checker = RealCheckProcessCanonicalizer(Mutex::new(StdioWorkerProcess::spawn("check", &scratch)));
+    let checker = RealCheckProcessCanonicalizer(Mutex::new(StdioWorkerProcess::spawn(&py, "check", &scratch)));
     let ledger = Ledger::open(&data_dir).unwrap();
     let sid = "s-restart-restage";
     ledger.append(sid, event_kinds::SOLVE_STARTED, 1, &json!({})).unwrap();
 
     // First solver process saves V1@1, updates to V1@2, and saves non-portable bad_lam@1.
     let pid1 = {
-        let mut solver1 = StdioWorkerProcess::spawn("solver", &scratch);
+        let mut solver1 = StdioWorkerProcess::spawn(&py, "solver", &scratch);
         let r1 = solver1.evaluate(
             r#"
 x = assumed_symbol("x", positive=True)
@@ -425,7 +459,7 @@ save_expr("bad_lam", Lambda(x, x + 1))
     assert!(!staged.contains_key("bad_lam"));
 
     // Spawn a brand-new solver process and verify `expr("V1")` resolves to V1@2 and `bad_lam` is absent.
-    let mut solver2 = StdioWorkerProcess::spawn("solver", &scratch);
+    let mut solver2 = StdioWorkerProcess::spawn(&py, "solver", &scratch);
     assert_ne!(solver2.pid, pid1, "must be a fresh solver OS process");
 
     let check_res = solver2.evaluate(
