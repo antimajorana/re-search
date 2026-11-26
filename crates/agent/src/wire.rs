@@ -27,6 +27,7 @@ pub(crate) fn serialize_request(req: &ModelRequest) -> Result<Vec<u8>, Transport
     if req.max_tokens == 0 {
         return Err(config_err("max_tokens must be >= 1"));
     }
+    crate::vision::validate_request_images(crate::transport::ProviderKind::Anthropic, req)?;
     let mut obj = serde_json::Map::new();
     obj.insert("model".into(), json!(req.model));
     obj.insert("max_tokens".into(), json!(req.max_tokens));
@@ -92,6 +93,9 @@ fn encode_block(block: &ContentBlock) -> Value {
             "is_error": is_error,
             "content": content,
         }),
+        ContentBlock::Image { media_type, data_base64 } => {
+            crate::vision::encode_anthropic_image(media_type, data_base64)
+        }
         ContentBlock::Other { raw, .. } => raw.clone(),
     }
 }

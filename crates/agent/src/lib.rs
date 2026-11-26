@@ -34,6 +34,7 @@ pub(crate) mod stream_codecs;
 pub(crate) mod stream_http;
 pub mod transport;
 pub mod verifiers;
+pub mod vision;
 pub(crate) mod wire;
 
 pub use anthropic::{

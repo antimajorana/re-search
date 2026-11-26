@@ -18,6 +18,9 @@ pub(super) fn record_content_blocks(audit: &mut Audit<'_>, content: &[ContentBlo
                 ("model.tool_use", json!({ "id": id, "name": name, "input": input }))
             }
             ContentBlock::ToolResult { .. } => ("model.other", json!({ "block_type": "tool_result" })),
+            ContentBlock::Image { media_type, .. } => {
+                ("model.other", json!({ "block_type": "image", "media_type": media_type }))
+            }
             ContentBlock::Other { block_type, .. } => ("model.other", json!({ "block_type": block_type })),
         };
         audit.emit(kind, data)?;

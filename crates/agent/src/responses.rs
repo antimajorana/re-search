@@ -196,6 +196,7 @@ pub fn serialize_responses_request(req: &ModelRequest) -> Result<Vec<u8>, Transp
     if req.model.trim().is_empty() {
         return Err(config_err("model name is empty"));
     }
+    crate::vision::validate_request_images(ProviderKind::ChatGpt, req)?;
     let mut obj = Map::new();
     obj.insert("model".into(), json!(req.model));
     if let Some(sys) = req.system.as_deref().filter(|s| !s.is_empty()) {
@@ -256,7 +257,9 @@ fn encode_tool(spec: &ToolSpec) -> Value {
 fn encode_message(msg: &Message, out: &mut Vec<Value>) -> Result<(), TransportError> {
     match msg.role {
         Role::User => {
+            let has_image = msg.content.iter().any(|b| matches!(b, ContentBlock::Image { .. }));
             let mut text = Vec::new();
+            let mut parts = Vec::new();
             for block in &msg.content {
                 match block {
                     ContentBlock::ToolResult { tool_use_id, content, .. } => out.push(json!({
@@ -264,11 +267,24 @@ fn encode_message(msg: &Message, out: &mut Vec<Value>) -> Result<(), TransportEr
                         "call_id": tool_use_id,
                         "output": content,
                     })),
-                    ContentBlock::Text { text: t } if !t.is_empty() => text.push(t.as_str()),
+                    ContentBlock::Text { text: t } if !t.is_empty() => {
+                        if has_image {
+                            parts.push(json!({ "type": "input_text", "text": t }));
+                        } else {
+                            text.push(t.as_str());
+                        }
+                    }
+                    ContentBlock::Image { media_type, data_base64 } => {
+                        parts.push(crate::vision::encode_responses_image(media_type, data_base64));
+                    }
                     _ => {}
                 }
             }
-            if !text.is_empty() {
+            if has_image {
+                if !parts.is_empty() {
+                    out.push(json!({ "role": "user", "content": parts }));
+                }
+            } else if !text.is_empty() {
                 out.push(json!({ "role": "user", "content": text.join("\n") }));
             }
         }
