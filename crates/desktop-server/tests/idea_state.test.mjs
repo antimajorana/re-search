@@ -518,4 +518,3 @@ test('XSS payloads inject zero elements, assets.rs registers X4, and idea.css us
     assert.ok(tokensCss.includes(m[1]), `idea.css references unknown token ${m[1]}`);
   }
 });
-

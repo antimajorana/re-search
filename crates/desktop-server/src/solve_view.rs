@@ -577,4 +577,3 @@ pub fn build_solve_approval_grants(state: &crate::state::DesktopState, session_i
         "grants": grants,
     })
 }
-

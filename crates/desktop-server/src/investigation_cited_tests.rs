@@ -231,4 +231,3 @@ fn cited_lookup_library_hit_unresolved_pick_and_raise_budget() {
     let err_self = handle_with_gate(&state, sid, &body_self_pick, &gate).unwrap_err();
     assert_eq!(err_self.0, 400, "picking pinned primary source must be rejected");
 }
-

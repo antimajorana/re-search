@@ -398,4 +398,3 @@ export function buildLocalGivenPreviewSteps(payload) {
   for (const a of payload.assumptions || []) pushGiven(`Assumption (${a.id})`, a.text);
   return out;
 }
-

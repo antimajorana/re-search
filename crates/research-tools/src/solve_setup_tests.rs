@@ -305,4 +305,3 @@ fn prefill_avoids_false_positives_and_unwraps_big_o_vanishes_cue() {
     assert!(!names.contains(&"x"), "x-ray should not be scanned as symbol x");
     assert!(!names.contains(&"b"), "(b) should not be scanned as symbol b");
 }
-

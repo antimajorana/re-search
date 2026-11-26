@@ -429,4 +429,3 @@ fn carbon_audit_regressions_scanner_ambiguous_locators_and_disjoint_sections() {
         r_disj.outcome
     );
 }
-

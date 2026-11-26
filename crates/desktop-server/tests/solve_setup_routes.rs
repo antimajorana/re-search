@@ -4,7 +4,9 @@
 mod common;
 
 use common::{launch_cookie, raw_http, test_cfg};
-use desktop_server::solve_view::{LINUX_TOOLBOX_LINE, WORKER_RESTART_NOTE};
+#[cfg(not(windows))]
+use desktop_server::solve_view::LINUX_TOOLBOX_LINE;
+use desktop_server::solve_view::WORKER_RESTART_NOTE;
 use desktop_server::start_desktop_server;
 use ledger::Ledger;
 use research_tools::solve_model::{
@@ -148,6 +150,11 @@ fn solve_prefill_is_deterministic_fast_zero_model_and_has_linux_toolbox_fallback
     {
         assert_eq!(v["toolbox"]["available"], false);
         assert_eq!(v["toolbox"]["line"], LINUX_TOOLBOX_LINE);
+    }
+    #[cfg(windows)]
+    {
+        assert_eq!(v["toolbox"]["sandbox"], "appcontainer");
+        assert_eq!(v["toolbox"]["available"], false);
     }
 
     // Approval grants include both `worker_session` and `session_capability` kinds.
@@ -559,5 +566,3 @@ fn solve_view_handles_interrupted_done_open_items_and_stale_graph_legend() {
     assert_eq!(done_view["run_state"]["state"], "done_open_items");
     assert_eq!(done_view["run_state"]["open_items"].as_array().unwrap().len(), 2);
 }
-
-

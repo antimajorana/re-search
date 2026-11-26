@@ -298,4 +298,3 @@ fn solve_run_status_maps_onto_f9_solve_run_state_and_run_state() {
         assert_ne!(status.to_run_state(), Some(RunState::Failed));
     }
 }
-

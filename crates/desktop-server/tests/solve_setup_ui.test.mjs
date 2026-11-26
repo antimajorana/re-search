@@ -484,4 +484,3 @@ test('approval_card.js allowListed remains safe when update() replaces grants mi
     dom.restore();
   }
 });
-
