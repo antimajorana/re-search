@@ -126,6 +126,7 @@ pub(crate) fn build_desktop_router_for_profile(
             sympy_epoch,
             sympy_handler,
             session_title_handler: None,
+            solve_check: None,
         },
     )?;
 

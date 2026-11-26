@@ -89,9 +89,20 @@ pub fn parse_requested_mode(raw: &str) -> Result<Mode, String> {
     }
 }
 
+/// Desktop-server gate for Solve session creation and turns (`solve/1` tool profile is frozen
+/// in package S7, while Solve session creation, setup, and turn execution land in S4/S12).
+const DESKTOP_MODE_SOLVE_ENABLED: bool = false;
+
 /// Resolve the built [`ToolProfile`] for a mode, returning a plain user-facing error when
-/// that mode's profile has not been built yet (never faking or falling back to Research).
+/// that mode's desktop session flow or tool profile has not been built yet (never faking
+/// or falling back to Research).
 pub fn profile_for_mode(mode: Mode) -> Result<ToolProfile, String> {
+    if mode == Mode::Solve && !DESKTOP_MODE_SOLVE_ENABLED {
+        return Err(format!(
+            "{} mode is not built yet (session setup and loop pending S4/S12).",
+            mode_label(mode)
+        ));
+    }
     let profile_name = legacy_profile_name_for_mode(mode);
     lookup_profile(profile_name).map_err(|err| format_profile_error(mode, &err))
 }
@@ -99,9 +110,16 @@ pub fn profile_for_mode(mode: Mode) -> Result<ToolProfile, String> {
 /// Resolve the [`ToolProfile`] for an existing session from its ledger events.
 ///
 /// Respects an explicit `session.start["tool_profile"]` if present, otherwise maps
-/// [`session_mode`] to its profile. Returns a plain error when the profile is not built yet.
+/// [`session_mode`] to its profile. Returns a plain error when the mode or profile is not
+/// built yet in the desktop server.
 pub fn profile_for_session(events: &[Event]) -> Result<ToolProfile, String> {
     let mode = session_mode(events);
+    if mode == Mode::Solve && !DESKTOP_MODE_SOLVE_ENABLED {
+        return Err(format!(
+            "{} mode is not built yet (session setup and loop pending S4/S12).",
+            mode_label(mode)
+        ));
+    }
     profile_for_session_events(events).map_err(|msg| {
         if msg.contains("profile not built yet") {
             format!("{} mode is not built yet ({msg}).", mode_label(mode))
@@ -111,7 +129,7 @@ pub fn profile_for_session(events: &[Event]) -> Result<ToolProfile, String> {
     })
 }
 
-/// True iff `mode`'s tool profile is built in this binary.
+/// True iff `mode` is built and enabled in the desktop server.
 pub fn is_mode_built(mode: Mode) -> bool {
     profile_for_mode(mode).is_ok()
 }

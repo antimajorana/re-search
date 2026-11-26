@@ -124,6 +124,7 @@ pub fn build_profile_router(
             sympy_epoch: Arc::new(NoWorkerEpoch),
             sympy_handler: stub,
             session_title_handler: None,
+            solve_check: None,
         },
     )
     .unwrap();
