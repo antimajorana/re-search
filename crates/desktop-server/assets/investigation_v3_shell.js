@@ -11,6 +11,7 @@ import { createQualityBanner, renderInvestigationOutline } from '/assets/investi
 import { filterResultNodes, renderInvestigationResults } from '/assets/investigation_results.js';
 import { lookupNearestSymbol, renderReadingPlanStrip, renderSymbolPopover } from '/assets/investigation_skip.js';
 import { createInvestigateWholeMap, VIEW_MODES } from '/assets/investigation_wholemap.js';
+import { mountOrientControls } from '/assets/investigation_orient_ui.js';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -66,8 +67,13 @@ export function createInvestigationV3Controller(deps = {}) {
   let activeKey = '';
   let loadToken = 0;
   let activeWholeMap = null;
+  let stopModelWatch = null;
 
   function destroyWholeMap() {
+    if (stopModelWatch) {
+      stopModelWatch();
+      stopModelWatch = null;
+    }
     if (activeWholeMap) {
       activeWholeMap.destroy?.();
       activeWholeMap = null;
@@ -135,11 +141,9 @@ export function createInvestigationV3Controller(deps = {}) {
     const orientBtn = el('button', 'inv-node-action-btn', 'Orient paper');
     orientBtn.type = 'button';
     orientBtn.setAttribute('data-action', 'orient');
-    orientBtn.disabled = !modelConnected;
-    orientBtn.addEventListener('click', () => {
-      void apiMod.startInvestigationTask?.(sessionId, { task: 'orient' })?.then(refreshMv).catch((err) => hooks?.showStatus?.(err?.message || 'Could not start Orient.'));
-    });
     toolbar.append(focusBtn, mapBtn, orientBtn);
+    const orientStatusHost = el('div', 'inv-v7-orient-runbar');
+    stopModelWatch = mountOrientControls({ toolbar, statusHost: orientStatusHost, orientBtn, apiMod, sessionId, mv, st, hooks, onRefresh: refreshMv }).stopWatch;
 
     if (st.trail.length > 1) {
       const backBtn = el('button', 'inv-node-action-btn', '← Previous statement');
@@ -164,7 +168,7 @@ export function createInvestigationV3Controller(deps = {}) {
     const symHost = el('div', 'inv-symbol-stage');
     const graphHost = el('div', 'inv-graph-stage');
     const resultsHost = el('div', 'inv-results-stage');
-    centerCol.append(toolbar, symHost, skipHost, graphHost, resultsHost);
+    centerCol.append(toolbar, orientStatusHost, symHost, skipHost, graphHost, resultsHost);
 
     const outlineHost = el('div', 'inv-outline-stage');
     leftCol.appendChild(outlineHost);
@@ -387,11 +391,6 @@ export function createInvestigationV3Controller(deps = {}) {
       });
     };
     mountNodeCard(currentEntry);
-
-    if (mv.orient_auto_start && modelConnected && !st.orientAutoStarted && !(mv.tasks || []).some((t) => t.task === 'orient')) {
-      st.orientAutoStarted = true;
-      void apiMod.startInvestigationTask?.(sessionId, { task: 'orient' })?.then(refreshMv).catch(() => {});
-    }
 
     focusBtn.addEventListener('click', () => {
       if (!st.wholeMap && st.graphMode === VIEW_MODES.FOCUSED) return;

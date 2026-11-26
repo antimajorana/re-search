@@ -121,6 +121,15 @@ export function renderInvestigationBadges(host, node, opts = {}) {
     }));
   }
 
+  if (node.changed_since_last || claim?.changed) {
+    pinRow.appendChild(createBadge({
+      text: 'Changed since you last opened this',
+      icon: 'info',
+      tone: 'info',
+      border: BORDER_DASHED,
+    }));
+  }
+
   if (typeof opts.onTogglePin === 'function' && !node.model_node) {
     const nextPin = isMain ? 'not_main_result' : 'main_result';
     const pinBtn = el('button', 'inv-v7-pin-btn', isMain ? UNPIN_ACTION_LABEL : PIN_ACTION_LABEL);
@@ -131,6 +140,10 @@ export function renderInvestigationBadges(host, node, opts = {}) {
     pinRow.appendChild(pinBtn);
   }
   if (pinRow.children.length > 0) wrap.appendChild(pinRow);
+
+  if (typeof node.gist === 'string' && node.gist.trim()) {
+    wrap.appendChild(el('p', 'inv-v7-gist', formatModelText(node.gist.trim())));
+  }
 
   // 2. Deterministic heading-cite badge by code (never "attributed by the authors to").
   if (headingCiteLine) {
@@ -227,7 +240,14 @@ export function renderInvestigationBadges(host, node, opts = {}) {
           start_line: q.start_line,
           end_line: q.end_line,
           page: q.page,
-          ocr: node.page_basis === 'scan_text_layer',
+          end_page: q.end_page,
+          ocr: Boolean(
+            q.ocr
+            || q.page_basis === 'scan_text_layer'
+            || q.page_basis === 'ocr'
+            || node.page_basis === 'scan_text_layer'
+            || node.page_basis === 'ocr'
+          ),
         }, {
           onOpen: opts.onOpenQuote,
           onOpenPageImage: opts.onOpenPageImage,

@@ -302,6 +302,9 @@
 .inv-cited-bib-title { font-weight: 600; }
 .inv-cited-bib-raw { margin: 4px 0 0; color: var(--ink-muted, #606569); }
 .inv-cited-overlay { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--accent, #0b57d0); border-left-width: 4px; border-radius: var(--radius-md, 12px); background: var(--bg-surface, #f8fafd); }
+.inv-v7-gist { margin: 4px 0 0; font-size: 0.85rem; color: var(--ink-secondary, #444746); }
+.inv-v7-orient-runbar { margin-bottom: 6px; }
+.inv-v7-auto-orient-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--ink-secondary, #444746); cursor: pointer; }
 
 @media (max-width: 900px) {
   .inv-shell { grid-template-columns: 1fr; }

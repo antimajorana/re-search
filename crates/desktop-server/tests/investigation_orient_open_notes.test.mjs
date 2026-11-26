@@ -463,3 +463,114 @@ test('V7 investigation_v3_shell wires orient_auto_start, Orient button, pin togg
   assert.equal(shellHost.querySelector('[data-action="orient"]').disabled, true);
   assert.equal(dom.innerHtmlWrites, 0);
 });
+
+test('V7 badges render ocr page_basis, node.gist (model), and changed_since_last badge', () => {
+  const dom = makeFakeDom();
+  globalThis.document = dom.document;
+  const slot = dom.makeEl('div');
+  const pageImgs = [];
+  renderInvestigationBadges(slot, {
+    id: 'n-ocr',
+    page_basis: 'ocr',
+    gist: 'Spectral gap bound holds under exponential damping.',
+    changed_since_last: { label: 'Changed since you last opened this', changes: [{ field: 'gist' }] },
+    effective_is_main_result: true,
+    authors_claim: {
+      present: true,
+      label: 'new',
+      text: 'Authors: New (model)',
+      cue_line: 'Cues in quoted lines: we prove',
+      quotes: [{ quote: 'We prove positive gap.', source_id: 's1', path: 'p.txt', start_line: 12, end_line: 12, page: 4 }],
+    },
+  }, { onOpenPageImage: (t) => pageImgs.push(t), initialPopoverOpen: true });
+
+  const text = slot.textContent;
+  assert.match(text, /Changed since you last opened this/);
+  assert.match(text, /Spectral gap bound holds under exponential damping\. \(model\)/);
+  assert.match(text, /matched in OCR text, p\. 4/);
+  assert.doesNotMatch(text, /\bverified\b/i);
+  slot.querySelector('.ui-quote-chip-open').click();
+  assert.equal(pageImgs.length, 1);
+  assert.equal(pageImgs[0].openPageImage, true);
+  assert.equal(dom.innerHtmlWrites, 0);
+});
+
+test('V7 Orient UI renders RunBar (Paused not Partial), model choices, Auto-orient toggle, and model watcher', async () => {
+  const dom = makeFakeDom();
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  const prevGetById = dom.document.getElementById;
+  const composerModel = dom.makeEl('select');
+  composerModel.hidden = true;
+  composerModel.value = '__none__';
+  const composerConnect = dom.makeEl('button');
+  composerConnect.hidden = false;
+  const setupEl = dom.makeEl('div');
+  const shellHost = dom.makeEl('div');
+  const byId = {
+    'investigation-v3-shell': shellHost, 'investigation-setup': setupEl,
+    'composer-model': composerModel, 'composer-connect': composerConnect,
+  };
+  dom.document.getElementById = (id) => byId[id] || prevGetById?.(id) || null;
+  globalThis.document = dom.document;
+
+  const taskCalls = [];
+  const stopCalls = [];
+  const settingCalls = [];
+  let mv = {
+    etag: 'h-v7-ui',
+    source_id: 'src1', skeleton_seq: 1, builder: 'tex-1', orient_auto_start: true,
+    nodes: [{ id: 'n1', kind: 'theorem', label: 'Thm 1', order: 0, fp: 'fp1' }],
+    tasks: [{ task: 'orient', run_state: 'partial', reason: 'step cap reached', model_calls: { used: 8, cap: 8 } }],
+    edges: [], bib: [], symbols: [],
+  };
+  const apiStub = {
+    async getInvestigationMapview() { return mv; },
+    async getInvestigationNodeText() { return { text: 'Thm body.' }; },
+    async startInvestigationTask(id, body) { taskCalls.push({ id, body }); return {}; },
+    async stopTurn(id) { stopCalls.push(id); return {}; },
+    async putInvestigateSettings(body) { settingCalls.push(body); return body; },
+  };
+  const { createInvestigationV3Controller } = await loadShellController();
+  const ctrl = createInvestigationV3Controller({ api: apiStub });
+  const isModelConnected = () => !composerModel.hidden && composerModel.value !== '__none__' && composerConnect.hidden;
+  const hooks = {
+    isModelConnected,
+    getTaskModelOptions: () => ({ provider: 'openai', model: 'gpt-5.4' }),
+    refresh: async () => {},
+  };
+  const sessionData = { mode: 'investigation', investigation: { source_id: 'src1', skeleton_seq: 1 }, events: [{ seq: 1 }] };
+  await ctrl.syncSession('s3', sessionData, hooks);
+  assert.match(shellHost.textContent, /Paused: step cap reached/);
+  assert.doesNotMatch(shellHost.textContent, /\bPartial\b/i);
+  shellHost.querySelector('[data-run-action="continue"]').click();
+  assert.deepEqual(taskCalls[0], { id: 's3', body: { task: 'orient', provider: 'openai', model: 'gpt-5.4' } });
+
+  // Toggle Auto-orient checkbox -> persists via putInvestigateSettings.
+  const autoBox = shellHost.querySelector('[data-setting="orient_auto_start"]');
+  assert.equal(autoBox.checked, true);
+  autoBox.checked = false;
+  await autoBox.dispatch('change');
+  assert.deepEqual(settingCalls, [{ orient_auto_start: false }]);
+
+  // Running orient disables Orient button and Stop button invokes stopTurn.
+  mv = { ...mv, tasks: [{ task: 'orient', run_state: 'running', model_calls: { used: 1, cap: 8 } }] };
+  await ctrl.syncSession('s3', { ...sessionData, events: [{ seq: 2 }] }, hooks);
+  assert.equal(shellHost.querySelector('[data-action="orient"]').disabled, true);
+  shellHost.querySelector('[data-run-action="stop"]').click();
+  assert.deepEqual(stopCalls, ['s3']);
+
+  // Boot race: initial sync while model disconnected -> auto-starts once model connects via change.
+  mv = { ...mv, orient_auto_start: true, tasks: [] };
+  composerModel.hidden = true;
+  composerConnect.hidden = false;
+  await ctrl.syncSession('s4', { ...sessionData, events: [{ seq: 3 }] }, hooks);
+  assert.equal(taskCalls.length, 1);
+  assert.equal(shellHost.querySelector('[data-action="orient"]').disabled, true);
+  composerModel.hidden = false;
+  composerModel.value = 'openai::gpt-5.4';
+  composerConnect.hidden = true;
+  composerModel.dispatch('change');
+  assert.equal(taskCalls.length, 2);
+  assert.equal(taskCalls[1].id, 's4');
+  assert.equal(dom.innerHtmlWrites, 0);
+});
