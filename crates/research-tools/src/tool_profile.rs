@@ -5,7 +5,10 @@
 //! Adding a new mode adds a profile here without mutating `research/1` or `investigation/1`.
 
 use crate::paper_key::Mode;
-use crate::{all_research_tool_defs, investigation, register_research_tools, research_policy, ResearchEnv};
+use crate::{
+    all_research_tool_defs, investigation, register_research_tools, research_policy, solve_defs,
+    solve_exprs, solve_policy, ResearchEnv,
+};
 use ledger::Event;
 use policy::{EffectClass, Policy};
 use serde_json::Value;
@@ -25,16 +28,19 @@ pub const PROFILE_INVESTIGATION_V1: &str = "investigation/1";
 pub const PROFILE_INVESTIGATION_V2: &str = "investigation/2";
 /// Reserved profile for Explore conversation turns (`00-overview.md` 2.2, 8.2 decision 1).
 pub const PROFILE_EXPLORE_V1: &str = "explore/1";
-/// Reserved profile for Solve (`00-overview.md` 2.2, `solve.md` 5.1, 8.2 decision 1).
+/// Frozen profile for Solve (`00-overview.md` 2.2, `solve.md` 5.1, 8.2 decision 1, package S7).
 pub const PROFILE_SOLVE_V1: &str = "solve/1";
 
 /// Built profiles available in this build, in canonical order.
-pub const BUILT_PROFILE_NAMES: &[&str] = &[PROFILE_RESEARCH_V1, PROFILE_INVESTIGATION_V1];
+pub const BUILT_PROFILE_NAMES: &[&str] = &[
+    PROFILE_RESEARCH_V1,
+    PROFILE_INVESTIGATION_V1,
+    PROFILE_SOLVE_V1,
+];
 /// Known future profiles whose tools are not implemented yet.
 pub const RESERVED_PROFILE_NAMES: &[&str] = &[
     PROFILE_INVESTIGATION_V2,
     PROFILE_EXPLORE_V1,
-    PROFILE_SOLVE_V1,
 ];
 
 /// Host-written mode marker events (`00-overview.md` 3.1 row 3, 5.2, 8.2 decision 1).
@@ -127,6 +133,41 @@ impl ToolProfile {
     }
 }
 
+/// Optional Solve host bindings for `solve/1` registration (check-worker epoch and S8/S9/S11
+/// handler drop-in slots). Leaving any handler `None` uses the fail-closed S7 stub handler.
+pub struct SolveCheckHost {
+    pub check_epoch: Arc<dyn WorkerEpoch>,
+    pub check_handler: Option<Arc<dyn ToolHandler>>,
+    pub step_record_handler: Option<Arc<dyn ToolHandler>>,
+    pub solve_finish_handler: Option<Arc<dyn ToolHandler>>,
+}
+
+impl SolveCheckHost {
+    pub fn new(check_epoch: Arc<dyn WorkerEpoch>) -> Self {
+        Self {
+            check_epoch,
+            check_handler: None,
+            step_record_handler: None,
+            solve_finish_handler: None,
+        }
+    }
+
+    pub fn with_check_handler(mut self, handler: Arc<dyn ToolHandler>) -> Self {
+        self.check_handler = Some(handler);
+        self
+    }
+
+    pub fn with_step_record_handler(mut self, handler: Arc<dyn ToolHandler>) -> Self {
+        self.step_record_handler = Some(handler);
+        self
+    }
+
+    pub fn with_solve_finish_handler(mut self, handler: Arc<dyn ToolHandler>) -> Self {
+        self.solve_finish_handler = Some(handler);
+        self
+    }
+}
+
 /// Host bindings supplied by a router builder when registering a profile's tools.
 pub struct ProfileHostTools {
     pub sympy_epoch: Arc<dyn WorkerEpoch>,
@@ -134,6 +175,30 @@ pub struct ProfileHostTools {
     /// Supplied only by `cli-route` / `mcp-server` (`core.exe`), which exposes `set_session_title`
     /// through MCP. In-core routers leave this `None`.
     pub session_title_handler: Option<Arc<dyn ToolHandler>>,
+    /// Optional Solve check-worker epoch and S8/S9/S11 handler bindings for `solve/1`.
+    /// When `None`, `register_profile` binds an uncontained fallback epoch and fail-closed S7 stubs.
+    pub solve_check: Option<SolveCheckHost>,
+}
+
+impl ProfileHostTools {
+    pub fn new(sympy_epoch: Arc<dyn WorkerEpoch>, sympy_handler: Arc<dyn ToolHandler>) -> Self {
+        Self {
+            sympy_epoch,
+            sympy_handler,
+            session_title_handler: None,
+            solve_check: None,
+        }
+    }
+
+    pub fn with_session_title(mut self, handler: Arc<dyn ToolHandler>) -> Self {
+        self.session_title_handler = Some(handler);
+        self
+    }
+
+    pub fn with_solve_check(mut self, solve_check: SolveCheckHost) -> Self {
+        self.solve_check = Some(solve_check);
+        self
+    }
 }
 
 /// Research tool list plus host tools registered on the desktop and CLI research routers, sorted by id.
@@ -199,13 +264,26 @@ pub fn investigation_v1() -> ToolProfile {
     }
 }
 
-/// Look up a profile by name. Reserved future profiles (`investigation/2`, `explore/1`, `solve/1`)
+/// Profile `solve/1`: frozen 16-tool Solve tool list (12 reused `research/1` tools +
+/// `expr_show`, `step_record`, `check_run`, `solve_finish`) and `solve_policy()` (`v0.5-solve`).
+pub fn solve_v1() -> ToolProfile {
+    ToolProfile {
+        name: PROFILE_SOLVE_V1,
+        defs: solve_defs::solve_v1_defs(),
+        may_gain: Vec::new(),
+        earlier_defs: BTreeMap::new(),
+        policy: solve_policy(),
+    }
+}
+
+/// Look up a profile by name. Reserved future profiles (`investigation/2`, `explore/1`)
 /// return `Err(ProfileError::NotBuiltYet)` with a clear error message, never panicking.
 pub fn lookup(name: &str) -> Result<ToolProfile, ProfileError> {
     match name {
         PROFILE_RESEARCH_V1 => Ok(research_v1()),
         PROFILE_INVESTIGATION_V1 => Ok(investigation_v1()),
-        PROFILE_INVESTIGATION_V2 | PROFILE_EXPLORE_V1 | PROFILE_SOLVE_V1 => {
+        PROFILE_SOLVE_V1 => Ok(solve_v1()),
+        PROFILE_INVESTIGATION_V2 | PROFILE_EXPLORE_V1 => {
             Err(ProfileError::NotBuiltYet { name: name.to_string() })
         }
         _ => Err(ProfileError::Unknown { name: name.to_string() }),
@@ -214,7 +292,7 @@ pub fn lookup(name: &str) -> Result<ToolProfile, ProfileError> {
 
 /// All profiles built in this binary, in canonical order.
 pub fn built_profiles() -> Vec<ToolProfile> {
-    vec![research_v1(), investigation_v1()]
+    vec![research_v1(), investigation_v1(), solve_v1()]
 }
 
 /// Detect session mode from the latest host-written mode marker (`00-overview.md` 1, 3.1 row 3).
@@ -251,8 +329,7 @@ pub fn legacy_profile_name_for_events(events: &[Event]) -> &'static str {
 
 /// Resolve the [`ToolProfile`] for a session from its ledger events:
 /// - If `session.start` carries a `tool_profile` field, it must be a string naming a built profile.
-/// - Otherwise, falls back to the latest mode marker (`research/1`, or `investigation/1` when the
-///   latest marker is `investigation.started`).
+/// - Otherwise, falls back to the latest mode marker (`research/1`, `investigation/1`, or `solve/1`).
 pub fn profile_for_session_events(events: &[Event]) -> Result<ToolProfile, String> {
     if let Some(start) = events.iter().find(|e| e.kind == "session.start") {
         if let Some(val) = start.payload.get(TOOL_PROFILE_FIELD) {
@@ -285,6 +362,7 @@ pub fn register_profile(
     env: Arc<ResearchEnv>,
     host: ProfileHostTools,
 ) -> Result<Policy, String> {
+    let has_title = host.session_title_handler.is_some();
     match profile.name {
         PROFILE_RESEARCH_V1 | PROFILE_INVESTIGATION_V1 => {
             registry.register_worker_session(
@@ -293,30 +371,71 @@ pub fn register_profile(
                 host.sympy_handler,
             );
             registry.register(builtin::ledger_note_def(), builtin::ledger_note_handler());
-            let has_title = host.session_title_handler.is_some();
             if let Some(title_handler) = host.session_title_handler {
                 registry.register(builtin::session_title_def(), title_handler);
             }
             register_research_tools(registry, env);
-
-            let expected = if has_title {
-                profile.mcp_defs()
-            } else {
-                profile.defs.clone()
-            };
-            let actual = registry.defs();
-            if !defs_match_exact(&actual, &expected) {
-                return Err(format!(
-                    "registered tools do not match profile `{}` (expected {} tools, got {})",
-                    profile.name,
-                    expected.len(),
-                    actual.len()
-                ));
-            }
-            Ok(profile.policy.clone())
         }
-        other => Err(format!("tool profile `{other}` cannot be registered: profile not built yet")),
+        PROFILE_SOLVE_V1 => {
+            registry.register_worker_session(
+                builtin::sympy_eval_def(),
+                host.sympy_epoch,
+                host.sympy_handler,
+            );
+            registry.register(builtin::ledger_note_def(), builtin::ledger_note_handler());
+            if let Some(title_handler) = host.session_title_handler {
+                registry.register(builtin::session_title_def(), title_handler);
+            }
+            solve_defs::register_solve_v1_reused_tools(registry, env);
+            registry.register(solve_defs::expr_show_def(), solve_exprs::expr_show_handler());
+
+            let (check_epoch, check_handler, step_record_handler, solve_finish_handler) =
+                match host.solve_check {
+                    Some(sc) => (
+                        sc.check_epoch,
+                        sc.check_handler.unwrap_or_else(solve_defs::check_run_stub_handler),
+                        sc.step_record_handler
+                            .unwrap_or_else(solve_defs::step_record_stub_handler),
+                        sc.solve_finish_handler
+                            .unwrap_or_else(solve_defs::solve_finish_stub_handler),
+                    ),
+                    None => (
+                        Arc::new(solve_defs::FallbackCheckEpoch) as Arc<dyn WorkerEpoch>,
+                        solve_defs::check_run_stub_handler(),
+                        solve_defs::step_record_stub_handler(),
+                        solve_defs::solve_finish_stub_handler(),
+                    ),
+                };
+            registry.register_worker_session(
+                solve_defs::check_run_def(),
+                check_epoch,
+                check_handler,
+            );
+            registry.register(solve_defs::step_record_def(), step_record_handler);
+            registry.register(solve_defs::solve_finish_def(), solve_finish_handler);
+        }
+        other => {
+            return Err(format!(
+                "tool profile `{other}` cannot be registered: profile not built yet"
+            ));
+        }
     }
+
+    let expected = if has_title {
+        profile.mcp_defs()
+    } else {
+        profile.defs.clone()
+    };
+    let actual = registry.defs();
+    if !defs_match_exact(&actual, &expected) {
+        return Err(format!(
+            "registered tools do not match profile `{}` (expected {} tools, got {})",
+            profile.name,
+            expected.len(),
+            actual.len()
+        ));
+    }
+    Ok(profile.policy.clone())
 }
 
 /// True when `payload` carries an explicit `tool_profile` field (even if malformed).

@@ -138,9 +138,16 @@ fn profile_for_session_events_prefers_recorded_field_and_fails_closed_on_invalid
     assert_eq!(profile_for_session_events(&explicit).unwrap().name, PROFILE_RESEARCH_V1);
 
     // Unbuilt explicit profile fails closed.
-    let unbuilt = [dummy_event(1, "session.start", json!({ "tool_profile": "solve/1" }))];
+    let unbuilt = [dummy_event(1, "session.start", json!({ "tool_profile": "explore/1" }))];
     let err = profile_for_session_events(&unbuilt).unwrap_err();
     assert!(err.contains("profile not built yet"), "{err}");
+
+    // Explicit `solve/1` resolves cleanly to solve/1 with v0.5-solve policy.
+    let solve_explicit = [dummy_event(1, "session.start", json!({ "tool_profile": "solve/1" }))];
+    let sp = profile_for_session_events(&solve_explicit).unwrap();
+    assert_eq!(sp.name, PROFILE_SOLVE_V1);
+    assert_eq!(sp.policy.version, crate::SOLVE_POLICY_VERSION);
+    assert_eq!(sp.defs.len(), 16);
 
     // Non-string tool_profile fails closed.
     let bad = [dummy_event(1, "session.start", json!({ "tool_profile": 42 }))];
@@ -153,12 +160,81 @@ fn profile_for_session_events_prefers_recorded_field_and_fails_closed_on_invalid
     ];
     assert_eq!(profile_for_session_events(&legacy_inv).unwrap().name, PROFILE_INVESTIGATION_V1);
 
-    // Marker for unbuilt mode fails closed.
+    // Marker for built Solve mode resolves to solve/1.
     let legacy_solve = [
         dummy_event(1, MARKER_SOLVE_STARTED, json!({})),
         dummy_event(2, "session.start", json!({})),
     ];
-    assert!(profile_for_session_events(&legacy_solve).unwrap_err().contains("profile not built yet"));
+    assert_eq!(profile_for_session_events(&legacy_solve).unwrap().name, PROFILE_SOLVE_V1);
+
+    // Marker for unbuilt Explore mode fails closed.
+    let legacy_explore = [
+        dummy_event(1, MARKER_IDEA_STARTED, json!({})),
+        dummy_event(2, "session.start", json!({})),
+    ];
+    assert!(profile_for_session_events(&legacy_explore).unwrap_err().contains("profile not built yet"));
+}
+
+#[test]
+fn solve_v1_contains_16_tools_excludes_forbidden_and_preserves_reused_def_hashes() {
+    let r1 = research_v1();
+    let s1 = solve_v1();
+    assert_eq!(s1.name, PROFILE_SOLVE_V1);
+    assert_eq!(s1.policy.version, crate::SOLVE_POLICY_VERSION);
+    assert_eq!(s1.defs.len(), 16);
+    assert!(s1.may_gain.is_empty());
+    assert!(s1.earlier_defs.is_empty());
+
+    for pair in s1.defs.windows(2) {
+        assert!(pair[0].id < pair[1].id, "not strictly sorted: {} >= {}", pair[0].id, pair[1].id);
+    }
+
+    let ids: Vec<&str> = s1.defs.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(ids, crate::solve_defs::SOLVE_V1_TOOL_IDS);
+
+    // Every reused tool matches research/1 def_hash byte for byte.
+    for reused in [
+        "sympy_eval",
+        "ledger_supersede",
+        "ledger_query",
+        "ledger_note",
+        "read_paper_lines",
+        "search_paper_passages",
+        "arxiv_search",
+        "literature_search",
+        "fs_read",
+        "fs_list",
+        "check_expression_sanity",
+        "tex_audit",
+    ] {
+        assert_eq!(
+            s1.def_for(reused).unwrap().def_hash(),
+            r1.def_for(reused).unwrap().def_hash(),
+            "reused tool `{reused}` def_hash drifted"
+        );
+    }
+
+    // Explicitly excluded tools are absent.
+    for excluded in [
+        "doc_ingest",
+        "ledger_append",
+        "lean_check",
+        "search_formal_library",
+        "fs_write",
+        "latex_patch",
+        "latex_compile",
+        "record_paper_map",
+        "record_paper_summary",
+        "record_paper_branch",
+        "record_paper_conventions",
+        "read_map_node",
+        "record_map_reading",
+        "record_context_cards",
+        "idea_search",
+        "idea_fetch_papers",
+    ] {
+        assert!(s1.def_for(excluded).is_none(), "excluded tool `{excluded}` found in solve/1");
+    }
 }
 
 #[test]
@@ -172,11 +248,7 @@ fn register_profile_matches_profile_defs_and_mcp_defs() {
             &profile,
             &mut reg,
             Arc::clone(&env),
-            ProfileHostTools {
-                sympy_epoch: Arc::new(DummyEpoch),
-                sympy_handler: Arc::clone(&stub),
-                session_title_handler: None,
-            },
+            ProfileHostTools::new(Arc::new(DummyEpoch), Arc::clone(&stub)),
         )
         .unwrap();
         assert_eq!(pol.version, profile.policy.version);
@@ -187,11 +259,8 @@ fn register_profile_matches_profile_defs_and_mcp_defs() {
             &profile,
             &mut mcp_reg,
             Arc::clone(&env),
-            ProfileHostTools {
-                sympy_epoch: Arc::new(DummyEpoch),
-                sympy_handler: Arc::clone(&stub),
-                session_title_handler: Some(Arc::clone(&stub)),
-            },
+            ProfileHostTools::new(Arc::new(DummyEpoch), Arc::clone(&stub))
+                .with_session_title(Arc::clone(&stub)),
         )
         .unwrap();
         assert_eq!(mcp_pol.version, profile.policy.version);
