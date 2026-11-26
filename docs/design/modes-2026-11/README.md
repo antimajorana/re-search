@@ -26,6 +26,7 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | Later lane briefs | Neon planning launched | `gemini/modes/draft-next-lanes` |
 | F8 Solve evaluation gate and badge names | brief ready | `agents/eval-solve-badges.md` |
 | F9b Orchestrator and smaller worker routing | design recorded; Carbon review brief ready | `agents/audit-orchestration-routing.md` |
+| Solve evidence labels | brief ready; S2 merged | `agents/solve-evidence-labels.md` |
 | F3 network gate and paper fetch | done, reviewed and merged | `net_rate.rs`, `paper_fetch*.rs`, `ledger/src/fulltext_cache.rs`; report `reports/f3-net-gate.md` |
 | F4 quote core, F9 run budget | done, reviewed and merged | `quote_core.rs`, `lines_sent.rs`, `run_budget.rs`; report `reports/f4-f9-quote-budget.md` |
 | V1 skeleton core for TeX | done, reviewed and merged | `crates/research-tools/src/skeleton/`; report `reports/v1-skeleton.md` |
