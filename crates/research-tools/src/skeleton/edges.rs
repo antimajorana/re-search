@@ -31,7 +31,9 @@ pub fn build_edges(
 ) -> Vec<SkEdge> {
     let (mut label_to_idx, mut kind_num_map, mut tag_to_idx) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
     for (idx, n) in nodes.iter().enumerate() {
-        if let Some(l) = n.label.as_deref().map(str::trim).filter(|s| !s.is_empty()) { label_to_idx.entry(l.to_string()).or_insert(idx); }
+        if let Some(label) = n.label.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            label_to_idx.entry(label.to_string()).and_modify(|target| *target = None).or_insert(Some(idx));
+        }
         if let Some(num) = n.number.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             kind_num_map.entry((n.kind, num.to_string())).and_modify(|s| *s = None).or_insert(Some(idx));
         }
@@ -63,7 +65,7 @@ fn first_span(n: &SkNode) -> Span { n.spans.first().cloned().unwrap_or_else(|| S
 fn link_proofs(
     nodes: &mut [SkNode],
     proof_hints: &BTreeMap<usize, ProofHint>,
-    label_to_idx: &BTreeMap<String, usize>,
+    label_to_idx: &BTreeMap<String, Option<usize>>,
     kind_num_map: &BTreeMap<(SkNodeKind, String), Option<usize>>,
     edges: &mut Vec<SkEdge>,
 ) {
@@ -73,7 +75,7 @@ fn link_proofs(
         let Some(p_tag) = nodes[p_idx].tag.clone() else { continue };
         let resolved = match proof_hints.get(&p_idx) {
             Some(ProofHint::HeaderRef { label, .. }) => label_to_idx
-                .get(label.trim()).copied().filter(|&t| t != p_idx)
+                .get(label.trim()).copied().flatten().filter(|&t| t != p_idx)
                 .map(|t| (t, SkEdgeRule::ProofHeader, EdgeConfidence::Explicit)),
             Some(ProofHint::HeaderMention { kind_word, target_text, .. }) => {
                 map_kind_word(kind_word, false).and_then(|kind| {
@@ -315,7 +317,7 @@ impl<'a> EdgeCtx<'a> {
         }
     }
 
-    fn scan_ref_uses(&mut self, nodes: &mut [SkNode], label_to_idx: &BTreeMap<String, usize>, active: &[String]) {
+    fn scan_ref_uses(&mut self, nodes: &mut [SkNode], label_to_idx: &BTreeMap<String, Option<usize>>, active: &[String]) {
         static REF_RE: OnceLock<Regex> = OnceLock::new();
         let re = REF_RE.get_or_init(|| Regex::new(r"\\(eqref|cref|Cref|autoref|pageref|nameref|vref|fullref|ref)\*?\s*\{([^{}]*)\}").unwrap());
         for (idx0, line) in active.iter().enumerate() {
@@ -332,7 +334,7 @@ impl<'a> EdgeCtx<'a> {
                 let Some(enc) = *enc_cache.get_or_insert_with(|| self.span_index.enclosing(self.flattened, idx0 + 1)) else { continue };
                 let site = Span::new(origin.path.clone(), origin.line, origin.line);
                 for part in caps[2].split(',') {
-                    if let Some(&target) = label_to_idx.get(part.trim()) {
+                    if let Some(&Some(target)) = label_to_idx.get(part.trim()) {
                         self.emit_uses(nodes, target, enc, &site, rule, EdgeConfidence::Explicit);
                     }
                 }
