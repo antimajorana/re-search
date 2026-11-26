@@ -196,7 +196,13 @@ fn eq_claim(lhs: HandleRef, rhs: HandleRef) -> Claim {
 fn wording_constants_allow_verified_only_for_verified_badge_and_own_check_line() {
     assert_eq!(wording::BADGE_VERIFIED, "Verified");
     assert_eq!(wording::OWN_CHECK_VERIFIED, "own check: verified");
-    assert_eq!(wording::BADGE_CHECKED_NUMERICALLY, "Checked numerically");
+    assert_eq!(wording::BADGE_CHECKED_NUMERICALLY, "Numerically checked");
+    assert_eq!(wording::BADGE_CITED, "Found");
+    assert_eq!(serde_json::to_value(Tier::Verified).unwrap(), json!("verified"));
+    assert_eq!(serde_json::to_value(Tier::CheckedNumerically).unwrap(), json!("checked_numerically"));
+    assert_eq!(serde_json::to_value(Tier::Cited).unwrap(), json!("cited"));
+    assert_eq!(serde_json::to_value(Tier::Failed).unwrap(), json!("failed"));
+    assert_eq!(serde_json::to_value(Tier::Stale).unwrap(), json!("stale"));
 
     for &c in wording::NON_VERIFIED_CONSTANTS {
         let lower = c.to_ascii_lowercase();
@@ -207,6 +213,19 @@ fn wording_constants_allow_verified_only_for_verified_badge_and_own_check_line()
                 "disallowed word `{word}` in constant `{c}`"
             );
         }
+    }
+
+    // Only machine-confirmed tiers receive DisplayGrade::ByCode (00-overview.md 2.10).
+    for tier in [Tier::Verified, Tier::CheckedNumerically] {
+        assert_eq!(tier.display_grade(), DisplayGrade::ByCode);
+        assert_eq!(tier.border_style(), BorderStyle::Solid);
+    }
+    for tier in [
+        Tier::Cited, Tier::Given, Tier::CheckedByYou, Tier::ModelAgreed,
+        Tier::ModelAgreedSameModel, Tier::AssumedByModel, Tier::Unchecked,
+        Tier::Stale, Tier::Failed,
+    ] {
+        assert_ne!(tier.display_grade(), DisplayGrade::ByCode, "{tier:?} must not use ByCode");
     }
 
     // Explicit tier order: Unchecked (0) < SameModel (1) < ModelAgreed/CheckedByYou (2)
@@ -353,10 +372,10 @@ fn r8_weak_checks_numeric_guard_series_exact_vs_numeric_and_value_runs() {
     assert_eq!(h.state.tier("e-4").unwrap().own, Tier::CheckedNumerically);
     assert!(h.state.tier("e-4").unwrap().sublabels.contains(&wording::SUBLABEL_TWO_RUNS_AGREE.to_string()));
 
-    // 6. independent_recompute: exact -> Verified, otherwise -> CheckedNumerically.
+    // 6. independent_recompute: explicit numeric -> CheckedNumerically, explicit exact -> Verified.
     let (c_ir, _) = h.add_step("e-5", StepEntryType::Result, Some(StepOrigin::Solver), (&[], &[]), vec![eq_claim(a.clone(), c)], "blind");
     let c_ir = c_ir.unwrap();
-    h.add_check(&c_ir, 0, "e-5", "independent_recompute", CheckOutcome::Pass, json!({"exact": false}));
+    h.add_check(&c_ir, 0, "e-5", "independent_recompute", CheckOutcome::Pass, json!({"comparison": "numeric", "exact": false}));
     assert_eq!(h.state.tier("e-5").unwrap().own, Tier::CheckedNumerically);
     h.add_check(&c_ir, 0, "e-5", "independent_recompute", CheckOutcome::Pass, json!({"exact": true}));
     assert_eq!(h.state.tier("e-5").unwrap().own, Tier::Verified);
@@ -408,12 +427,16 @@ fn fail_is_permanent_and_propagates_broken_notice_and_supersede_causes_stale() {
 
     h.add_check(&c6, 0, "e-6", "series_match", CheckOutcome::Fail, json!({"counterexample": "0.0312"}));
     h.add_check(&c6, 0, "e-6", "identity_symbolic", CheckOutcome::Pass, json!({}));
-    assert_eq!(h.state.badge("e-6").unwrap().label, wording::BADGE_FAILED);
+    let b6 = h.state.badge("e-6").unwrap();
+    assert_eq!(b6.label, wording::BADGE_FAILED);
+    assert_eq!(b6.grade, DisplayGrade::ModelStatement);
+    assert_eq!(b6.border, BorderStyle::None);
     let b7 = h.state.badge("e-7").unwrap();
     assert_eq!(b7.own, Tier::Verified);
     assert_eq!(b7.effective, Tier::Failed);
     assert_eq!(b7.label, "Broken: rests on failed e-6");
     assert_eq!(b7.own_check_line.as_deref(), Some(wording::OWN_CHECK_VERIFIED));
+    assert_eq!(b7.grade, DisplayGrade::ModelStatement);
     assert_eq!(b7.border, BorderStyle::None);
 
     let (c8, _) = h.add_step("e-8", StepEntryType::Derivation, Some(StepOrigin::Solver), (&[], &[]), vec![eq_claim(c, d.clone())], "ok step");
@@ -422,8 +445,11 @@ fn fail_is_permanent_and_propagates_broken_notice_and_supersede_causes_stale() {
     h.add_check(&c9.unwrap(), 0, "e-9", "identity_symbolic", CheckOutcome::Pass, json!({}));
     assert_eq!(h.state.tier("e-9").unwrap().effective, Tier::Verified);
     h.emit(event_kinds::PROOF_SUPERSEDE, json!({"entry_id": "e-8", "replaced_by": "e-8b", "reason": "cleanup"}));
-    assert!(h.state.badge("e-9").unwrap().stale);
-    assert_eq!(h.state.badge("e-9").unwrap().effective, Tier::Stale);
+    let b9 = h.state.badge("e-9").unwrap();
+    assert!(b9.stale);
+    assert_eq!(b9.effective, Tier::Stale);
+    assert_eq!(b9.grade, DisplayGrade::ModelStatement);
+    assert_eq!(b9.border, BorderStyle::None);
 }
 
 #[test]
@@ -432,7 +458,7 @@ fn given_cited_ocr_and_earlier_lean_receipt_and_r24_lessons_invariance() {
     let r1 = h.add_sympy_run("c1", "code1");
     h.add_step("e-1", StepEntryType::Assumption, Some(StepOrigin::Setup), (&[], &[]), vec![], "setup");
 
-    // Full-text matched quote -> Cited (MatchedQuoteFullText).
+    // Full-text matched quote -> stored tier Cited, rendered as "Found" (MatchedQuoteFullText).
     let q_seq = h.emit(
         event_kinds::EVIDENCE_QUOTE,
         json!({"source_id": "src-1", "path": "paper.tex", "start_line": 10, "end_line": 12, "file_sha256": "f".repeat(64), "quote_sha256": "q".repeat(64)}),
@@ -445,11 +471,13 @@ fn given_cited_ocr_and_earlier_lean_receipt_and_r24_lessons_invariance() {
         event_kinds::PROOF_ENTRY,
         json!({"entry_id": "e-2", "entry_type": "reference_lookup", "summary": "cited", "details": "d", "depends_on": [], "source_ref": qref}),
     );
-    assert_eq!(h.state.tier("e-2").unwrap().effective, Tier::Cited);
-    assert_eq!(h.state.badge("e-2").unwrap().grade, DisplayGrade::MatchedQuoteFullText);
-    assert_eq!(h.state.badge("e-2").unwrap().border, BorderStyle::Solid);
+    let b2 = h.state.badge("e-2").unwrap();
+    assert_eq!(b2.effective, Tier::Cited);
+    assert_eq!(b2.label, "Found");
+    assert_eq!(b2.grade, DisplayGrade::MatchedQuoteFullText);
+    assert_eq!(b2.border, BorderStyle::Solid);
 
-    // OCR scanned-page quote -> Cited + MatchedQuoteScannedPage + "OCR" tag + "OCR source" flag.
+    // OCR scanned-page quote -> stored tier Cited, rendered as "Found" + MatchedQuoteScannedPage + "OCR" tag + "OCR source" flag.
     let q_ocr_seq = h.emit(
         event_kinds::EVIDENCE_QUOTE,
         json!({"source_id": "src-2", "path": "scan.pdf", "start_line": 3, "end_line": 4, "file_sha256": "c".repeat(64), "quote_sha256": "d".repeat(64), "ocr": true}),
@@ -464,6 +492,7 @@ fn given_cited_ocr_and_earlier_lean_receipt_and_r24_lessons_invariance() {
     );
     let b_ocr = h.state.badge("e-2b").unwrap();
     assert_eq!(b_ocr.effective, Tier::Cited);
+    assert_eq!(b_ocr.label, "Found");
     assert_eq!(b_ocr.grade, DisplayGrade::MatchedQuoteScannedPage);
     assert_eq!(b_ocr.provenance_tag.as_deref(), Some(wording::TAG_OCR));
     assert!(b_ocr.flags.contains(&wording::FLAG_OCR_SOURCE.to_string()));

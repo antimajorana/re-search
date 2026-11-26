@@ -268,6 +268,46 @@ fn assert_r22_wording(badge: &StepBadge) {
             badge.label
         );
     }
+    // Accepted 2026-11-26 evidence labels and machine-confirmed grade exclusivity (00-overview.md 2.10).
+    match badge.effective {
+        Tier::Verified => {
+            assert_eq!(badge.label, "Verified");
+            assert_eq!(badge.grade, DisplayGrade::ByCode);
+            assert_eq!(badge.border, BorderStyle::Solid);
+        }
+        Tier::CheckedNumerically => {
+            assert_eq!(badge.label, "Numerically checked");
+            assert_eq!(badge.grade, DisplayGrade::ByCode);
+            assert_eq!(badge.border, BorderStyle::Solid);
+        }
+        Tier::Cited => {
+            assert_eq!(badge.label, "Found");
+            assert!(matches!(
+                badge.grade,
+                DisplayGrade::MatchedQuoteFullText | DisplayGrade::MatchedQuoteScannedPage
+            ));
+            assert_eq!(badge.border, BorderStyle::Solid);
+        }
+        Tier::Given | Tier::CheckedByYou => {
+            assert_eq!(badge.grade, DisplayGrade::UserStatement);
+            assert_eq!(badge.border, BorderStyle::Plain);
+        }
+        Tier::Failed | Tier::Stale => {
+            assert_eq!(badge.grade, DisplayGrade::ModelStatement);
+            assert_eq!(badge.border, BorderStyle::None);
+            assert_ne!(badge.label, "Numerically checked");
+            assert_ne!(badge.label, "Found");
+        }
+        Tier::ModelAgreed
+        | Tier::ModelAgreedSameModel
+        | Tier::AssumedByModel
+        | Tier::Unchecked => {
+            assert_eq!(badge.grade, DisplayGrade::ModelStatement);
+            assert_eq!(badge.border, BorderStyle::Dashed);
+            assert_ne!(badge.label, "Numerically checked");
+            assert_ne!(badge.label, "Found");
+        }
+    }
     // `own_check_line` is "own check: verified" iff own == Verified && effective != Verified.
     if badge.own == Tier::Verified && badge.effective != Tier::Verified {
         assert_eq!(badge.own_check_line.as_deref(), Some(wording::OWN_CHECK_VERIFIED));

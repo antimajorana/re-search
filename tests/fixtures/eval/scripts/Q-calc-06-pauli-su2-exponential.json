@@ -1,0 +1,54 @@
+[
+  {
+    "id": "msg_calc06_1",
+    "stop_reason": "tool_use",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "tu_calc06_1",
+        "name": "ledger_note",
+        "input": {
+          "text": "Setup (s1): theta in R, real unit vector n = (n_x, n_y, n_z) in R^3 with n_x^2 + n_y^2 + n_z^2 = 1, Pauli matrices sigma_x, sigma_y, sigma_z, 2x2 identity I, and generator A = n_x*sigma_x + n_y*sigma_y + n_z*sigma_z."
+        }
+      }
+    ]
+  },
+  {
+    "id": "msg_calc06_2",
+    "stop_reason": "tool_use",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "tu_calc06_2",
+        "name": "sympy_eval",
+        "input": {
+          "code": "import sympy as sp\ntheta = sp.Symbol('theta', real=True)\nnx, ny, nz = sp.symbols('n_x n_y n_z', real=True)\nI2 = sp.eye(2)\nsx = sp.Matrix([[0, 1], [1, 0]])\nsy = sp.Matrix([[0, -sp.I], [sp.I, 0]])\nsz = sp.Matrix([[1, 0], [0, -1]])\nA = nx*sx + ny*sy + nz*sz\nA2_unit = sp.simplify(sp.expand(A*A).subs(nz**2, 1 - nx**2 - ny**2))\nassert A2_unit == I2\nassert sp.simplify(A.trace()) == 0\nassert sp.simplify(A.H - A) == sp.zeros(2)\nU = sp.cos(theta)*I2 - sp.I*sp.sin(theta)*A\ndU_res = sp.simplify(sp.expand(sp.diff(U, theta) + sp.I*A*U).subs(nz**2, 1 - nx**2 - ny**2))\nassert dU_res == sp.zeros(2)\nassert U.subs(theta, 0) == I2\nalpha, beta = sp.symbols('alpha beta', real=True)\nA_sph = A.subs({nx: sp.sin(alpha)*sp.cos(beta), ny: sp.sin(alpha)*sp.sin(beta), nz: sp.cos(alpha)})\nU_sph = U.subs({nx: sp.sin(alpha)*sp.cos(beta), ny: sp.sin(alpha)*sp.sin(beta), nz: sp.cos(alpha)})\ndiff_exp = ((-sp.I*theta*A_sph).exp() - U_sph).applyfunc(lambda e: sp.simplify(e.rewrite(sp.exp)))\nassert diff_exp == sp.zeros(2)\nprint('A^2 = I, dU/dtheta = -i*A*U, U(0) = I, Matrix.exp() match: OK')"
+        }
+      }
+    ]
+  },
+  {
+    "id": "msg_calc06_3",
+    "stop_reason": "tool_use",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "tu_calc06_3",
+        "name": "sympy_eval",
+        "input": {
+          "code": "import sympy as sp\ntheta = sp.Symbol('theta', real=True)\nnx, ny, nz = sp.symbols('n_x n_y n_z', real=True)\nI2 = sp.eye(2)\nsx = sp.Matrix([[0, 1], [1, 0]])\nsy = sp.Matrix([[0, -sp.I], [sp.I, 0]])\nsz = sp.Matrix([[1, 0], [0, -1]])\nA = nx*sx + ny*sy + nz*sz\nU = sp.cos(theta)*I2 - sp.I*sp.sin(theta)*A\nUdU = sp.simplify(sp.expand(U.H * U).subs(nz**2, 1 - nx**2 - ny**2))\ndetU = sp.simplify(sp.expand(U.det()).subs(nz**2, 1 - nx**2 - ny**2))\nassert UdU == I2\nassert detU == 1\nprint('U^dagger * U = I and det(U) = 1: OK')"
+        }
+      }
+    ]
+  },
+  {
+    "id": "msg_calc06_4",
+    "stop_reason": "end_turn",
+    "content": [
+      {
+        "type": "text",
+        "text": "For real theta in R and a real unit vector n = (n_x, n_y, n_z) in R^3 with n_x^2 + n_y^2 + n_z^2 = 1, the generator A = n_x*sigma_x + n_y*sigma_y + n_z*sigma_z satisfies A^2 = I, tr(A) = 0, and A^dagger = A. Summing even and odd powers of the matrix exponential gives the closed form:\n\ncos(theta)*I - i*sin(theta)*(n_x*sigma_x + n_y*sigma_y + n_z*sigma_z)\n\nDirect symbolic evaluation confirms dU/dtheta = -i*A*U with U(0) = I, exact agreement with Matrix.exp() on the unit sphere, unitarity U^dagger * U = I, and det(U) = 1."
+      }
+    ]
+  }
+]

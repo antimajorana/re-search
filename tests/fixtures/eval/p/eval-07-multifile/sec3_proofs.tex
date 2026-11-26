@@ -1,0 +1,31 @@
+% Original fixed-tier evaluation fixture for Set P (not a real paper).
+% Section 3 of eval-07-multifile: deferred proofs with cross-file references.
+\section{Deferred proofs}
+\label{sec:proofs}
+
+\begin{proof}[Proof of Proposition~\ref{prop:stability}]
+By Definition~\ref{def:resolvent}, $H_0 - zI : \dom(H_0) \to \mathcal{H}$ is
+bijective with bounded inverse $R_{H_0}(z)$. Factoring on $\dom(H_0)$ gives
+\[
+H - zI = \bigl(I + V R_{H_0}(z)\bigr)(H_0 - zI).
+\]
+Since $\opnorm{V R_{H_0}(z)} \le \opnorm{V}\opnorm{R_{H_0}(z)} < 1$, the
+bounded operator $I + V R_{H_0}(z)$ is invertible on $\mathcal{H}$ with
+bounded inverse. Therefore $H - zI : \dom(H_0) \to \mathcal{H}$ is bijective
+with bounded inverse $R_{H_0}(z)\bigl(I + V R_{H_0}(z)\bigr)^{-1}$, which
+places $z \in \rho(H)$ by Definition~\ref{def:resolvent}.
+\end{proof}
+
+\begin{proof}[Proof of Theorem~\ref{thm:perturbation}]
+By Proposition~\ref{prop:stability}, we have $z \in \rho(H)$ and the
+factorized inverse $R_H(z) = R_{H_0}(z)(I + B)^{-1}$, where $B = V R_{H_0}(z)$
+satisfies $\opnorm{B} \le \theta < 1$. Applying \eqref{eq:neumann-series}
+gives
+\[
+R_H(z) - R_{H_0}(z) = R_{H_0}(z)\sum_{n=1}^{\infty} (-1)^n B^n
+= - R_{H_0}(z) B (I + B)^{-1}.
+\]
+Using the norm estimate in \eqref{eq:neumann-series}, we obtain
+$\opnorm{R_H(z) - R_{H_0}(z)} \le \opnorm{R_{H_0}(z)} \opnorm{B} (1 - \opnorm{B})^{-1}
+\le \frac{\theta}{1 - \theta}\opnorm{R_{H_0}(z)}$.
+\end{proof}

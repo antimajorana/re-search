@@ -371,6 +371,14 @@ pub(crate) fn dispatch_api(
             &mut stream,
             crate::routes_library::handle_library(state, method, rest, &req.query, &req.body),
         ),
+        (_, ["api", "sources", rest @ ..]) => write_api_res(
+            &mut stream,
+            crate::routes_sources::handle_sources(state, method, rest, &req.query, &req.body),
+        ),
+        (_, ["api", "lessons", rest @ ..]) => write_api_res(
+            &mut stream,
+            crate::routes_lessons::handle_lessons(state, method, rest, &req.query, &req.body),
+        ),
         ("POST", ["api", "idea", "preview"]) => {
             write_api_res(&mut stream, crate::routes_idea::handle_idea_preview(state, &req.body));
         }

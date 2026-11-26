@@ -23,8 +23,10 @@ pub mod wording {
     pub const BADGE_VERIFIED: &str = "Verified";
     /// Owner decision (`solve.md` 3, R22): shown when `own == Verified` and `effective != Verified`.
     pub const OWN_CHECK_VERIFIED: &str = "own check: verified";
-    /// Owner decision (`00-overview.md` 8.3 question 11, `solve.md` D1): numeric check passed.
-    pub const BADGE_CHECKED_NUMERICALLY: &str = "Checked numerically";
+    /// Owner clarification of 2026-11-26 (`00-overview.md` 2.10, superseding the earlier
+    /// `"Checked numerically"` spelling in 8.3 question 11): numeric check passed.
+    /// The serialized tier remains `checked_numerically`.
+    pub const BADGE_CHECKED_NUMERICALLY: &str = "Numerically checked";
     /// Overview 3.2 row 24 (model verdicts start "Model agreed").
     pub const BADGE_MODEL_AGREED: &str = "Model agreed";
     /// `solve.md` decision D2 (same-model review weaker label).
@@ -34,8 +36,10 @@ pub mod wording {
     pub const BADGE_UNCHECKED: &str = "Unchecked";
     pub const BADGE_FAILED: &str = "Failed";
     pub const BADGE_GIVEN: &str = "Given";
-    /// Owner decision 3 (quotes are "matched", never "verified").
-    pub const BADGE_CITED: &str = "Cited";
+    /// Owner clarification of 2026-11-26 (`00-overview.md` 2.10): source-backed `cited` step
+    /// renders as `"Found"` (locates a claim without asserting correctness).
+    /// The serialized tier remains `cited`.
+    pub const BADGE_CITED: &str = "Found";
     /// `solve.md` decision D10 (unacknowledged solver assumption).
     pub const BADGE_ASSUMED_BY_MODEL: &str = "Assumed by model";
     pub const BADGE_STALE: &str = "Stale";
@@ -217,12 +221,17 @@ impl Tier {
         }
     }
 
+    /// Shared display grade (`00-overview.md` 2.10, owner clarification 2026-11-26):
+    /// `ByCode` is reserved strictly for machine-confirmed claims (`Verified` and
+    /// `CheckedNumerically`). A citation, model opinion, unchecked run, stale check, or
+    /// failed check must never be styled with `DisplayGrade::ByCode`.
     pub fn display_grade(self) -> DisplayGrade {
         match self {
-            Self::Verified | Self::CheckedNumerically | Self::Failed => DisplayGrade::ByCode,
+            Self::Verified | Self::CheckedNumerically => DisplayGrade::ByCode,
             Self::Cited => DisplayGrade::MatchedQuoteFullText,
             Self::Given | Self::CheckedByYou => DisplayGrade::UserStatement,
-            Self::ModelAgreed
+            Self::Failed
+            | Self::ModelAgreed
             | Self::ModelAgreedSameModel
             | Self::AssumedByModel
             | Self::Unchecked
