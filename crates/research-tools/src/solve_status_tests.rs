@@ -372,10 +372,10 @@ fn r8_weak_checks_numeric_guard_series_exact_vs_numeric_and_value_runs() {
     assert_eq!(h.state.tier("e-4").unwrap().own, Tier::CheckedNumerically);
     assert!(h.state.tier("e-4").unwrap().sublabels.contains(&wording::SUBLABEL_TWO_RUNS_AGREE.to_string()));
 
-    // 6. independent_recompute: exact -> Verified, otherwise -> CheckedNumerically.
+    // 6. independent_recompute: explicit numeric -> CheckedNumerically, explicit exact -> Verified.
     let (c_ir, _) = h.add_step("e-5", StepEntryType::Result, Some(StepOrigin::Solver), (&[], &[]), vec![eq_claim(a.clone(), c)], "blind");
     let c_ir = c_ir.unwrap();
-    h.add_check(&c_ir, 0, "e-5", "independent_recompute", CheckOutcome::Pass, json!({"exact": false}));
+    h.add_check(&c_ir, 0, "e-5", "independent_recompute", CheckOutcome::Pass, json!({"comparison": "numeric", "exact": false}));
     assert_eq!(h.state.tier("e-5").unwrap().own, Tier::CheckedNumerically);
     h.add_check(&c_ir, 0, "e-5", "independent_recompute", CheckOutcome::Pass, json!({"exact": true}));
     assert_eq!(h.state.tier("e-5").unwrap().own, Tier::Verified);
