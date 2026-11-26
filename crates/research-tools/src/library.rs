@@ -358,6 +358,36 @@ impl Library {
             .collect()
     }
 
+    pub fn list_all_source_items(&self) -> Result<Vec<SourceItemRecord>, String> {
+        self.db
+            .list_all_source_items()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(SourceItemRecord::from_row)
+            .collect()
+    }
+
+    pub fn delete_source_item(&self, source_id: &str, external_id: &str) -> Result<bool, String> {
+        self.db
+            .delete_source_item(source_id, external_id)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn delete_user_library_fulltext_for_paths(&self, paths: &[String]) -> Result<usize, String> {
+        self.db
+            .delete_user_library_fulltext_for_paths(paths)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn has_seen(&self, key: &PaperKey) -> Result<bool, String> {
+        let canonical = self.resolve_key(key)?.unwrap_or_else(|| key.clone());
+        let rows = self
+            .db
+            .list_seen_for_paper(canonical.as_str())
+            .map_err(|e| e.to_string())?;
+        Ok(!rows.is_empty())
+    }
+
     pub fn upsert_search_cache(&self, record: &SearchCacheRecord) -> Result<(), String> {
         self.db
             .upsert_search_cache(&ledger::library_db::LibrarySearchCacheRow {
