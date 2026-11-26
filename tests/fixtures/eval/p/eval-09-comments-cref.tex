@@ -1,0 +1,110 @@
+% Original fixed-tier evaluation fixture for Set P (not a real paper).
+% Tests comment traps, multi-label cleveref, inner equation in proof, and diverse kinds.
+\documentclass{article}
+\usepackage{amsmath,amssymb,amsthm,cleveref}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{conjecture}[theorem]{Conjecture}
+\theoremstyle{definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\newtheorem{example}[theorem]{Example}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\begin{document}
+
+\section{Subadditive cocycles}
+\label{sec:cocycles}
+
+\begin{assumption}
+\label{assump:integrable}
+Let $(\Omega, \mathcal{F}, \mathbb{P})$ be a probability space equipped with an
+ergodic measure-preserving map $T : \Omega \to \Omega$, and let
+$M : \Omega \to \mathrm{GL}_d(\mathbb{R})$ be a measurable matrix-valued map
+with positive entries satisfying $\log^+ \|M\| \in L^1(\mathbb{P})$.
+\end{assumption}
+
+\begin{lemma}
+\label{lem:subadd}
+Define the cocycle products $A_n(\omega) = M(T^{n-1}\omega) \cdots M(\omega)$
+and $F_n(\omega) = \log \|A_n(\omega)\|$ for $n \ge 1$. Then for all integers
+$m, n \ge 1$ and every $\omega \in \Omega$,
+\begin{equation}
+\label{eq:kingman-step}
+F_{m+n}(\omega) \le F_m(\omega) + F_n(T^m \omega).
+\end{equation}
+\end{lemma}
+\begin{proof}
+Because $A_{m+n}(\omega) = A_n(T^m \omega) A_m(\omega)$, submultiplicativity
+of the operator norm yields
+$\|A_{m+n}(\omega)\| \le \|A_n(T^m \omega)\| \|A_m(\omega)\|$. Taking
+logarithms gives the subadditive inequality.
+\end{proof}
+
+% \begin{theorem}
+% \label{thm:commented-trap}
+% Commented-out statement referencing Lemma~\ref{lem:subadd}.
+% \end{theorem}
+
+\section{Lyapunov exponent and examples}
+\label{sec:lyapunov}
+
+\begin{theorem}
+\label{thm:lyapunov}
+Under \cref{assump:integrable,lem:subadd}, there exists a constant
+$\Lambda \in [-\infty, \infty)$ such that
+\[
+\lim_{n \to \infty} \frac{1}{n} F_n(\omega) = \Lambda
+\qquad \text{for } \mathbb{P}\text{-almost every } \omega \in \Omega,
+\]
+and moreover $\Lambda = \inf_{n \ge 1} \frac{1}{n} \mathbb{E}[F_n]$.
+\end{theorem}
+\begin{proof}
+Taking expectations in \eqref{eq:kingman-step} and using $T$-invariance of
+$\mathbb{P}$ gives $\mathbb{E}[F_{m+n}] \le \mathbb{E}[F_m] + \mathbb{E}[F_n]$,
+so $a_n = \mathbb{E}[F_n]$ is subadditive and $a_n / n \to \Lambda = \inf_{n \ge 1} a_n / n$.
+% By Assumption~\ref{assump:integrable} we could stop early.
+Iterating \eqref{eq:kingman-step} along blocks of length $k$ and applying
+Birkhoff's ergodic theorem yields $\limsup_{n \to \infty} n^{-1} F_n(\omega) \le a_k / k$
+almost surely; sending $k \to \infty$ establishes the upper bound, while the
+standard maximal inequality supplies the matching almost-sure lower bound.
+\end{proof}
+
+\begin{corollary}
+\label{cor:rate}
+If in addition $\log^+ \|M^{-1}\| \in L^1(\mathbb{P})$, then the top
+Lyapunov exponent $\Lambda$ is finite and obeys
+$\Lambda \ge -\mathbb{E}[\log^+ \|M^{-1}\|]$.
+% Suppose Assumption~\ref{assump:integrable} fails.
+\end{corollary}
+\begin{proof}
+Since $1 = \|A_n(\omega)^{-1} A_n(\omega)\| \le \|A_n(\omega)^{-1}\| \|A_n(\omega)\|$,
+we have $F_n(\omega) \ge -\sum_{j=0}^{n-1} \log^+ \|M(T^j \omega)^{-1}\|$.
+Dividing by $n$, taking expectations, and applying Theorem~\ref{thm:lyapunov}
+gives $\Lambda \ge -\mathbb{E}[\log^+ \|M^{-1}\|] > -\infty$.
+\end{proof}
+
+\begin{example}
+\label{ex:diagonal}
+If $M(\omega) = \operatorname{diag}(e^{X_1(\omega)}, \dots, e^{X_d(\omega)})$
+for integrable random variables $X_1, \dots, X_d$, then the cocycle is
+commutative and $\Lambda = \max_{1 \le i \le d} \mathbb{E}[X_i]$.
+\end{example}
+
+\begin{remark}
+\label{rem:nonnegative}
+When every entry of $M(\omega)$ is at least $1$, each product satisfies
+$\|A_n(\omega)\| \ge 1$ and hence $\Lambda \ge 0$.
+\end{remark}
+
+\begin{conjecture}
+\label{conj:analyticity}
+For any positive measurable perturbation $N : \Omega \to \mathbb{R}^{d \times d}$
+with $\log^+ \|N\| \in L^1(\mathbb{P})$, the top Lyapunov exponent
+$\varepsilon \mapsto \Lambda(M + \varepsilon N)$ is real-analytic on an open
+interval containing $[0, \infty)$.
+\end{conjecture}
+
+\end{document}

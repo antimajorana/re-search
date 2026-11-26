@@ -21,7 +21,7 @@ Format: one sheet per run (overview section 7.1). Measures and targets: section 
 PASS needs every measure that has a pass rule to be measured and to pass. A measure without a value counts as not measured, never as a pass.
 
 - Failed (0): none
-- Pass rule, not measured (15): `time_to_skeleton_tex_s`, `time_to_candidates_s`, `time_to_solve_setup_s`, `runs_above_cap`, `statement_recall_tex_theorem_envs`, `section_recall_tex_theorem_envs`, `wrong_carry_overs`, `judged_same_key_different_unreviewed`, `wrong_statement_located`, `planted_error_ends_failed_pct`, `planted_error_ends_computed`, `quotes_surviving_handover_pct`, `old_ledgers_not_resuming`, `old_ledgers_view_differs`, `forbidden_word_property_failures`
+- Pass rule, not measured (16): `time_to_skeleton_tex_s`, `time_to_candidates_s`, `time_to_solve_setup_s`, `runs_above_cap`, `statement_recall_tex_theorem_envs`, `section_recall_tex_theorem_envs`, `wrong_carry_overs`, `judged_same_key_different_unreviewed`, `wrong_statement_located`, `planted_error_ends_failed_pct`, `planted_error_ends_verified`, `planted_error_ends_checked_numerically`, `quotes_surviving_handover_pct`, `old_ledgers_not_resuming`, `old_ledgers_view_differs`, `forbidden_word_property_failures`
 
 ## Measures
 
@@ -53,8 +53,10 @@ PASS needs every measure that has a pass rule to be measured and to pass. A meas
 | Quotes accepted per model call | `quotes_accepted_per_model_call` | Investigate tasks, Explore readers | recorded | not measured | not measured |  |  |
 | Quotes rejected (reasons in the note) | `quotes_rejected` | Investigate tasks, Explore readers | recorded | not measured | not measured |  |  |
 | Planted error ends Failed | `planted_error_ends_failed_pct` | Q | must equal 100 | not measured | not measured | Must be 100 percent |  |
-| Planted error ends Computed | `planted_error_ends_computed` | Q | must be 0 | not measured | not measured | ending Computed is a release blocker |  |
-| Share of steps Computed | `steps_computed_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
+| Planted error ends Verified | `planted_error_ends_verified` | Q | must be 0 | not measured | not measured | ending Verified or Numerically checked is a release blocker |  |
+| Planted error ends Numerically checked | `planted_error_ends_checked_numerically` | Q | must be 0 | not measured | not measured | ending Verified or Numerically checked is a release blocker |  |
+| Share of steps Verified | `steps_verified_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
+| Share of steps Numerically checked | `steps_checked_numerically_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
 | Share of steps Model agreed | `steps_model_agreed_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
 | Share of steps Unchecked | `steps_unchecked_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
 | Final answer equals the key | `final_answer_equals_key` | Q | recorded | not measured | not measured |  |  |
@@ -66,7 +68,7 @@ PASS needs every measure that has a pass rule to be measured and to pass. A meas
 | Build time on the reference laptop | `build_time_s` | All | recorded | not measured | not measured | Recorded at each milestone |  |
 | Failing property tests for "new", "novel", "proved", "verified" outside the allowed places | `forbidden_word_property_failures` | All | must be 0 | not measured | not measured | Property tests in CI |  |
 
-38 measures: 15 with a pass rule, 23 recorded only.
+40 measures: 16 with a pass rule, 24 recorded only.
 
 ## Remarks
 

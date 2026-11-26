@@ -1,0 +1,35 @@
+% Original fixed-tier evaluation fixture for Set P (not a real paper).
+% Section 2 of eval-07-multifile: resolvent perturbation statements.
+\section{Perturbation bounds}
+\label{sec:results}
+
+\begin{myprop}
+\label{prop:stability}
+Under Assumption~\ref{assump:domain}, let $H = H_0 + V$ with
+$\dom(H) = \dom(H_0)$. For every $z \in \rho(H_0)$ satisfying
+$\opnorm{V} \opnorm{\res{H_0}{zI}} < 1$, we have $z \in \rho(H)$.
+\end{myprop}
+
+\begin{mythm}
+\label{thm:perturbation}
+Let $H = H_0 + V$ on $\dom(H_0)$, and let $R_{H_0}(z)$ and $R_H(z)$ denote
+their resolvents as in Definition~\ref{def:resolvent}. Whenever
+$z \in \rho(H_0)$ satisfies $\theta = \opnorm{V} \opnorm{R_{H_0}(z)} < 1$,
+the perturbed resolvent obeys
+\[
+\opnorm{R_H(z) - R_{H_0}(z)} \le \frac{\theta}{1 - \theta} \opnorm{R_{H_0}(z)}.
+\]
+\end{mythm}
+
+\begin{mycor}
+\label{cor:gap-preserve}
+Suppose $(a, b) \subset \mathbb{R} \cap \rho(H_0)$ is a spectral gap with
+$b - a > 2 \opnorm{V}$. Then by Theorem~\ref{thm:perturbation}, the narrowed
+interval $(a + \opnorm{V}, b - \opnorm{V})$ is contained in $\rho(H_0 + V)$.
+\end{mycor}
+\begin{proof}
+For every $x \in (a + \opnorm{V}, b - \opnorm{V})$, the distance from $x$ to
+the spectrum of $H_0$ strictly exceeds $\opnorm{V}$. By the spectral theorem
+for self-adjoint operators, $\opnorm{R_{H_0}(x)} < \opnorm{V}^{-1}$, so
+$\theta = \opnorm{V}\opnorm{R_{H_0}(x)} < 1$ and $x \in \rho(H_0 + V)$.
+\end{proof}

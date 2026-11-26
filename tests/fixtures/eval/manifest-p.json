@@ -6,19 +6,56 @@
     {
       "id": "P-selftest-theorems",
       "mode": "investigate",
-      "input": { "kind": "fixture", "files": ["p/selftest-theorems.tex"] },
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p/selftest-theorems.tex"
+        ]
+      },
       "answer_key": {
         "statements": [
-          { "label": "def:even", "kind": "definition" },
-          { "label": "lem:sum", "kind": "lemma" },
-          { "label": "thm:finite-sum", "kind": "theorem" }
+          {
+            "label": "def:even",
+            "kind": "definition"
+          },
+          {
+            "label": "lem:sum",
+            "kind": "lemma"
+          },
+          {
+            "label": "thm:finite-sum",
+            "kind": "theorem"
+          }
         ],
-        "sections": ["Introduction", "Even integers"],
+        "sections": [
+          "Introduction",
+          "Even integers"
+        ],
         "uses_edges": [
-          { "from": "lem:sum", "to": "def:even", "role": "statement", "right": true },
-          { "from": "lem:sum", "to": "def:even", "role": "proof", "right": true },
-          { "from": "thm:finite-sum", "to": "def:even", "role": "statement", "right": true },
-          { "from": "thm:finite-sum", "to": "lem:sum", "role": "proof", "right": true }
+          {
+            "from": "lem:sum",
+            "to": "def:even",
+            "role": "statement",
+            "right": true
+          },
+          {
+            "from": "lem:sum",
+            "to": "def:even",
+            "role": "proof",
+            "right": true
+          },
+          {
+            "from": "thm:finite-sum",
+            "to": "def:even",
+            "role": "statement",
+            "right": true
+          },
+          {
+            "from": "thm:finite-sum",
+            "to": "lem:sum",
+            "role": "proof",
+            "right": true
+          }
         ]
       },
       "notes": "Harness self-test case, not part of the evaluation set. The TeX and this key were written by the builder of the harness; a real key is written by a reviewer who is not the builder."
@@ -26,13 +63,2918 @@
     {
       "id": "P-selftest-oscillator",
       "mode": "investigate",
-      "input": { "kind": "fixture", "files": ["p/selftest-oscillator.tex"] },
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p/selftest-oscillator.tex"
+        ]
+      },
       "answer_key": {
         "statements": [],
-        "sections": ["Setup", "Equation of motion", "Energy"],
+        "sections": [
+          "Setup",
+          "Equation of motion",
+          "Energy"
+        ],
         "uses_edges": []
       },
       "notes": "Harness self-test case, not part of the evaluation set. A self-written physics-style note with no theorem environments."
+    },
+    {
+      "id": "P-eval-01-damped-wave",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p/eval-01-damped-wave.tex"
+        ]
+      },
+      "answer_key": {
+        "has_theorem_envs": false,
+        "sections": [
+          {
+            "id": "sec:setup",
+            "level": 1,
+            "title": "Field equation and boundary conditions",
+            "numbered": true,
+            "number": "1",
+            "parent": null,
+            "label": "sec:setup",
+            "file": "p/eval-01-damped-wave.tex",
+            "line": 19
+          },
+          {
+            "id": "sec:dispersion",
+            "level": 1,
+            "title": "Plane-wave dispersion",
+            "numbered": true,
+            "number": "2",
+            "parent": null,
+            "label": "sec:dispersion",
+            "file": "p/eval-01-damped-wave.tex",
+            "line": 31
+          },
+          {
+            "id": "subsec:overdamped",
+            "level": 2,
+            "title": "Overdamped and underdamped regimes",
+            "numbered": true,
+            "number": "2.1",
+            "parent": "sec:dispersion",
+            "label": "subsec:overdamped",
+            "file": "p/eval-01-damped-wave.tex",
+            "line": 45
+          },
+          {
+            "id": "sec:energy",
+            "level": 1,
+            "title": "Energy dissipation",
+            "numbered": true,
+            "number": "3",
+            "parent": null,
+            "label": "sec:energy",
+            "file": "p/eval-01-damped-wave.tex",
+            "line": 55
+          }
+        ],
+        "statements": [],
+        "equations": [
+          {
+            "label": "eq:wave",
+            "enclosing_node": "sec:setup",
+            "number": "1",
+            "file": "p/eval-01-damped-wave.tex",
+            "start_line": 25,
+            "end_line": 27
+          },
+          {
+            "label": "eq:dispersion",
+            "enclosing_node": "sec:dispersion",
+            "number": "2",
+            "file": "p/eval-01-damped-wave.tex",
+            "start_line": 36,
+            "end_line": 38
+          },
+          {
+            "label": "eq:energy-def",
+            "enclosing_node": "sec:energy",
+            "number": "3",
+            "file": "p/eval-01-damped-wave.tex",
+            "start_line": 58,
+            "end_line": 60
+          },
+          {
+            "label": "eq:energy-rate",
+            "enclosing_node": "sec:energy",
+            "number": "4",
+            "file": "p/eval-01-damped-wave.tex",
+            "start_line": 68,
+            "end_line": 70
+          }
+        ],
+        "uses_edges": [
+          {
+            "from": "eq:wave",
+            "to": "sec:energy",
+            "role": "prose",
+            "connection": "heuristic_mention",
+            "confidence": "heuristic",
+            "rule": "text_mention",
+            "printed_mention": "Eq. (1)",
+            "site": {
+              "file": "p/eval-01-damped-wave.tex",
+              "line": 66
+            },
+            "right": true
+          }
+        ],
+        "prose_refs": [
+          {
+            "from": "eq:wave",
+            "to": "sec:dispersion",
+            "rule": "eqref",
+            "site": {
+              "file": "p/eval-01-damped-wave.tex",
+              "line": 35
+            }
+          },
+          {
+            "from": "eq:energy-def",
+            "to": "sec:energy",
+            "rule": "eqref",
+            "site": {
+              "file": "p/eval-01-damped-wave.tex",
+              "line": 61
+            }
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set P evaluation case: original physics note without theorem environments, testing section/subsection nesting, labelled equations, explicit prose \\eqref, and plain-text heuristic equation mention Eq. (1)."
+    },
+    {
+      "id": "P-eval-02-ising-meanfield",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p/eval-02-ising-meanfield.tex"
+        ]
+      },
+      "answer_key": {
+        "has_theorem_envs": false,
+        "sections": [
+          {
+            "id": "sec:model",
+            "level": 1,
+            "title": "Spin Hamiltonian",
+            "numbered": true,
+            "number": "1",
+            "parent": null,
+            "label": "sec:model",
+            "file": "p/eval-02-ising-meanfield.tex",
+            "line": 20
+          },
+          {
+            "id": "sec:self-consistency",
+            "level": 1,
+            "title": "Mean-field self-consistency",
+            "numbered": true,
+            "number": "2",
+            "parent": null,
+            "label": "sec:self-consistency",
+            "file": "p/eval-02-ising-meanfield.tex",
+            "line": 29
+          },
+          {
+            "id": "sec:landau",
+            "level": 1,
+            "title": "Landau free energy and susceptibility",
+            "numbered": true,
+            "number": "3",
+            "parent": null,
+            "label": "sec:landau",
+            "file": "p/eval-02-ising-meanfield.tex",
+            "line": 45
+          },
+          {
+            "id": "sec:app-cumulant",
+            "level": 1,
+            "title": "Cumulant expansion check",
+            "numbered": true,
+            "number": "A",
+            "parent": null,
+            "label": "sec:app-cumulant",
+            "file": "p/eval-02-ising-meanfield.tex",
+            "line": 68
+          },
+          {
+            "id": "coord:p/eval-02-ising-meanfield.tex:L80",
+            "level": 1,
+            "title": "Acknowledgments",
+            "numbered": false,
+            "number": null,
+            "parent": null,
+            "label": null,
+            "file": "p/eval-02-ising-meanfield.tex",
+            "line": 80
+          }
+        ],
+        "statements": [],
+        "equations": [
+          {
+            "label": "eq:hamiltonian",
+            "enclosing_node": "sec:model",
+            "number": "1",
+            "file": "p/eval-02-ising-meanfield.tex",
+            "start_line": 24,
+            "end_line": 26
+          },
+          {
+            "label": "eq:mfeq",
+            "enclosing_node": "sec:self-consistency",
+            "number": "2",
+            "file": "p/eval-02-ising-meanfield.tex",
+            "start_line": 39,
+            "end_line": 41
+          },
+          {
+            "label": "eq:landau-f",
+            "enclosing_node": "sec:landau",
+            "number": "3",
+            "file": "p/eval-02-ising-meanfield.tex",
+            "start_line": 51,
+            "end_line": 53
+          },
+          {
+            "label": "eq:chi",
+            "enclosing_node": "sec:landau",
+            "number": "4",
+            "file": "p/eval-02-ising-meanfield.tex",
+            "start_line": 57,
+            "end_line": 63
+          }
+        ],
+        "uses_edges": [
+          {
+            "from": "eq:mfeq",
+            "to": "sec:landau",
+            "role": "prose",
+            "connection": "heuristic_mention",
+            "confidence": "heuristic",
+            "rule": "text_mention",
+            "printed_mention": "Eq. (2)",
+            "site": {
+              "file": "p/eval-02-ising-meanfield.tex",
+              "line": 47
+            },
+            "right": true
+          }
+        ],
+        "prose_refs": [
+          {
+            "from": "eq:hamiltonian",
+            "to": "sec:self-consistency",
+            "rule": "eqref",
+            "site": {
+              "file": "p/eval-02-ising-meanfield.tex",
+              "line": 32
+            }
+          },
+          {
+            "from": "eq:landau-f",
+            "to": "sec:landau",
+            "rule": "eqref",
+            "site": {
+              "file": "p/eval-02-ising-meanfield.tex",
+              "line": 54
+            }
+          }
+        ],
+        "citations_with_locators": [
+          {
+            "bib_key": "kerr2019ising",
+            "locator": "Section 3.1",
+            "in_node": "sec:landau",
+            "role": "prose",
+            "rule": "cite",
+            "site": {
+              "file": "p/eval-02-ising-meanfield.tex",
+              "line": 49
+            }
+          }
+        ],
+        "bibliography": [
+          {
+            "key": "kerr2019ising",
+            "doi": "10.0000/eval.ising.2019",
+            "arxiv_id": null,
+            "file": "p/eval-02-ising-meanfield.tex",
+            "line": 86,
+            "env_start_line": 85,
+            "env_end_line": 87
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set P evaluation case: original physics note without theorem environments, testing \\appendix section numbering, an unnumbered unlabelled starred section, a plain-text equation mention Eq. (2), and a citation with locator \\cite[Section~3.1]{kerr2019ising}."
+    },
+    {
+      "id": "P-eval-03-berry-chern",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p/eval-03-berry-chern.tex"
+        ]
+      },
+      "answer_key": {
+        "has_theorem_envs": false,
+        "sections": [
+          {
+            "id": "sec:bloch",
+            "level": 1,
+            "title": "Two-band Bloch model",
+            "numbered": true,
+            "number": "1",
+            "parent": null,
+            "label": "sec:bloch",
+            "file": "p/eval-03-berry-chern.tex",
+            "line": 21
+          },
+          {
+            "id": "sec:connection",
+            "level": 1,
+            "title": "Berry connection and curvature",
+            "numbered": true,
+            "number": "2",
+            "parent": null,
+            "label": "sec:connection",
+            "file": "p/eval-03-berry-chern.tex",
+            "line": 38
+          },
+          {
+            "id": "subsec:gauge",
+            "level": 2,
+            "title": "Gauge transformation",
+            "numbered": true,
+            "number": "2.1",
+            "parent": "sec:connection",
+            "label": "subsec:gauge",
+            "file": "p/eval-03-berry-chern.tex",
+            "line": 56
+          },
+          {
+            "id": "sec:chern",
+            "level": 1,
+            "title": "Chern number on the torus",
+            "numbered": true,
+            "number": "3",
+            "parent": null,
+            "label": "sec:chern",
+            "file": "p/eval-03-berry-chern.tex",
+            "line": 69
+          }
+        ],
+        "statements": [],
+        "equations": [
+          {
+            "label": "eq:bloch-h",
+            "enclosing_node": "sec:bloch",
+            "number": "1",
+            "file": "p/eval-03-berry-chern.tex",
+            "start_line": 29,
+            "end_line": 31
+          },
+          {
+            "label": "eq:berry-a",
+            "enclosing_node": "sec:connection",
+            "number": "2",
+            "file": "p/eval-03-berry-chern.tex",
+            "start_line": 43,
+            "end_line": 46,
+            "label_line": 44
+          },
+          {
+            "label": "eq:berry-f",
+            "enclosing_node": "sec:connection",
+            "number": "3",
+            "file": "p/eval-03-berry-chern.tex",
+            "start_line": 43,
+            "end_line": 46,
+            "label_line": 45
+          },
+          {
+            "label": "eq:chern-int",
+            "enclosing_node": "sec:chern",
+            "number": "4",
+            "file": "p/eval-03-berry-chern.tex",
+            "start_line": 73,
+            "end_line": 75
+          }
+        ],
+        "uses_edges": [
+          {
+            "from": "eq:berry-f",
+            "to": "sec:chern",
+            "role": "prose",
+            "connection": "heuristic_mention",
+            "confidence": "heuristic",
+            "rule": "text_mention",
+            "printed_mention": "Eq. (3)",
+            "site": {
+              "file": "p/eval-03-berry-chern.tex",
+              "line": 71
+            },
+            "right": true
+          }
+        ],
+        "prose_refs": [
+          {
+            "from": "eq:bloch-h",
+            "to": "sec:connection",
+            "rule": "eqref",
+            "site": {
+              "file": "p/eval-03-berry-chern.tex",
+              "line": 40
+            }
+          },
+          {
+            "from": "eq:berry-a",
+            "to": "subsec:gauge",
+            "rule": "eqref",
+            "site": {
+              "file": "p/eval-03-berry-chern.tex",
+              "line": 61
+            }
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set P evaluation case: original physics note without theorem environments, testing multi-label align environment (eq:berry-a as (2), eq:berry-f as (3)) and heuristic equation mention Eq. (3) resolving to the second align row."
+    },
+    {
+      "id": "P-eval-04-rg-flow",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p/eval-04-rg-flow.tex"
+        ]
+      },
+      "answer_key": {
+        "has_theorem_envs": false,
+        "sections": [
+          {
+            "id": "sec:action",
+            "level": 1,
+            "title": "Euclidean action",
+            "numbered": true,
+            "number": "1",
+            "parent": null,
+            "label": "sec:action",
+            "file": "p/eval-04-rg-flow.tex",
+            "line": 20
+          },
+          {
+            "id": "sec:shell",
+            "level": 1,
+            "title": "Momentum-shell integration",
+            "numbered": true,
+            "number": "2",
+            "parent": null,
+            "label": "sec:shell",
+            "file": "p/eval-04-rg-flow.tex",
+            "line": 33
+          },
+          {
+            "id": "subsec:oneloop",
+            "level": 2,
+            "title": "One-loop vertex correction",
+            "numbered": true,
+            "number": "2.1",
+            "parent": "sec:shell",
+            "label": "subsec:oneloop",
+            "file": "p/eval-04-rg-flow.tex",
+            "line": 42
+          },
+          {
+            "id": "subsubsec:rescaling",
+            "level": 3,
+            "title": "Field and coupling rescaling",
+            "numbered": true,
+            "number": "2.1.1",
+            "parent": "subsec:oneloop",
+            "label": "subsubsec:rescaling",
+            "file": "p/eval-04-rg-flow.tex",
+            "line": 56
+          },
+          {
+            "id": "sec:fixedpoints",
+            "level": 1,
+            "title": "Fixed points in $4-\\epsilon$ dimensions",
+            "numbered": true,
+            "number": "3",
+            "parent": null,
+            "label": "sec:fixedpoints",
+            "file": "p/eval-04-rg-flow.tex",
+            "line": 69
+          }
+        ],
+        "statements": [],
+        "equations": [
+          {
+            "label": "eq:action",
+            "enclosing_node": "sec:action",
+            "number": "1",
+            "file": "p/eval-04-rg-flow.tex",
+            "start_line": 26,
+            "end_line": 28
+          },
+          {
+            "label": "eq:beta",
+            "enclosing_node": "subsubsec:rescaling",
+            "number": "2",
+            "file": "p/eval-04-rg-flow.tex",
+            "start_line": 64,
+            "end_line": 66
+          },
+          {
+            "label": "eq:wf-fp",
+            "enclosing_node": "sec:fixedpoints",
+            "number": "3",
+            "file": "p/eval-04-rg-flow.tex",
+            "start_line": 74,
+            "end_line": 76
+          }
+        ],
+        "uses_edges": [
+          {
+            "from": "eq:beta",
+            "to": "sec:fixedpoints",
+            "role": "prose",
+            "connection": "heuristic_mention",
+            "confidence": "heuristic",
+            "rule": "text_mention",
+            "printed_mention": "Eq. (2)",
+            "site": {
+              "file": "p/eval-04-rg-flow.tex",
+              "line": 71
+            },
+            "right": true
+          }
+        ],
+        "prose_refs": [
+          {
+            "from": "eq:action",
+            "to": "sec:shell",
+            "rule": "eqref",
+            "site": {
+              "file": "p/eval-04-rg-flow.tex",
+              "line": 38
+            }
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set P evaluation case: original physics note without theorem environments, testing 3-level section hierarchy (section/subsection/subsubsection), math in a section title, and heuristic equation mention Eq. (2)."
+    },
+    {
+      "id": "P-eval-05-pos-refs",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p/eval-05-pos-refs.tex"
+        ]
+      },
+      "answer_key": {
+        "has_theorem_envs": true,
+        "sections": [
+          {
+            "id": "sec:intro",
+            "level": 1,
+            "title": "Introduction",
+            "numbered": true,
+            "number": "1",
+            "parent": null,
+            "label": "sec:intro",
+            "file": "p/eval-05-pos-refs.tex",
+            "line": 17
+          },
+          {
+            "id": "sec:prelim",
+            "level": 1,
+            "title": "Coercive forms and energy identity",
+            "numbered": true,
+            "number": "2",
+            "parent": null,
+            "label": "sec:prelim",
+            "file": "p/eval-05-pos-refs.tex",
+            "line": 24
+          },
+          {
+            "id": "sec:main",
+            "level": 1,
+            "title": "Main decay results",
+            "numbered": true,
+            "number": "3",
+            "parent": null,
+            "label": "sec:main",
+            "file": "p/eval-05-pos-refs.tex",
+            "line": 56
+          },
+          {
+            "id": "sec:deferred-proofs",
+            "level": 1,
+            "title": "Proof of the decay theorem",
+            "numbered": true,
+            "number": "4",
+            "parent": null,
+            "label": "sec:deferred-proofs",
+            "file": "p/eval-05-pos-refs.tex",
+            "line": 104
+          }
+        ],
+        "statements": [
+          {
+            "id": "def:coercive",
+            "kind": "definition",
+            "env_name": "definition",
+            "label": "def:coercive",
+            "section": "sec:prelim",
+            "number": "2.1",
+            "number_status": "confirmed",
+            "file": "p/eval-05-pos-refs.tex",
+            "start_line": 27,
+            "end_line": 33,
+            "has_proof": false
+          },
+          {
+            "id": "lem:energy",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:energy",
+            "section": "sec:prelim",
+            "number": "2.2",
+            "number_status": "confirmed",
+            "file": "p/eval-05-pos-refs.tex",
+            "start_line": 35,
+            "end_line": 45,
+            "has_proof": true,
+            "proof_file": "p/eval-05-pos-refs.tex",
+            "proof_start_line": 46,
+            "proof_end_line": 54
+          },
+          {
+            "id": "prop:contraction",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:contraction",
+            "section": "sec:main",
+            "number": "3.1",
+            "number_status": "confirmed",
+            "file": "p/eval-05-pos-refs.tex",
+            "start_line": 59,
+            "end_line": 64,
+            "has_proof": true,
+            "proof_file": "p/eval-05-pos-refs.tex",
+            "proof_start_line": 65,
+            "proof_end_line": 70
+          },
+          {
+            "id": "thm:decay",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:decay",
+            "section": "sec:main",
+            "number": "3.2",
+            "number_status": "confirmed",
+            "file": "p/eval-05-pos-refs.tex",
+            "start_line": 72,
+            "end_line": 80,
+            "has_proof": true,
+            "proof_file": "p/eval-05-pos-refs.tex",
+            "proof_start_line": 107,
+            "proof_end_line": 119
+          },
+          {
+            "id": "rem:sharpness",
+            "kind": "remark",
+            "env_name": "remark",
+            "label": "rem:sharpness",
+            "section": "sec:main",
+            "number": "3.3",
+            "number_status": "confirmed",
+            "file": "p/eval-05-pos-refs.tex",
+            "start_line": 84,
+            "end_line": 90,
+            "has_proof": false
+          },
+          {
+            "id": "cor:uniqueness",
+            "kind": "corollary",
+            "env_name": "corollary",
+            "label": "cor:uniqueness",
+            "section": "sec:main",
+            "number": "3.4",
+            "number_status": "confirmed",
+            "file": "p/eval-05-pos-refs.tex",
+            "start_line": 92,
+            "end_line": 97,
+            "has_proof": true,
+            "proof_file": "p/eval-05-pos-refs.tex",
+            "proof_start_line": 98,
+            "proof_end_line": 102
+          }
+        ],
+        "equations": [
+          {
+            "label": "eq:energy-id",
+            "enclosing_node": "lem:energy",
+            "number": "1",
+            "file": "p/eval-05-pos-refs.tex",
+            "start_line": 41,
+            "end_line": 44
+          }
+        ],
+        "uses_edges": [
+          {
+            "from": "def:coercive",
+            "to": "prop:contraction",
+            "role": "statement",
+            "connection": "statement_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-05-pos-refs.tex",
+              "line": 61
+            },
+            "right": true
+          },
+          {
+            "from": "lem:energy",
+            "to": "prop:contraction",
+            "role": "proof",
+            "connection": "proof_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-05-pos-refs.tex",
+              "line": 66
+            },
+            "right": true
+          },
+          {
+            "from": "def:coercive",
+            "to": "thm:decay",
+            "role": "statement",
+            "connection": "statement_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-05-pos-refs.tex",
+              "line": 74
+            },
+            "right": true
+          },
+          {
+            "from": "lem:energy",
+            "to": "thm:decay",
+            "role": "proof",
+            "connection": "proof_use",
+            "confidence": "explicit",
+            "rule": "lifted",
+            "direct_from": "eq:energy-id",
+            "site": {
+              "file": "p/eval-05-pos-refs.tex",
+              "line": 111
+            },
+            "right": true
+          },
+          {
+            "from": "prop:contraction",
+            "to": "thm:decay",
+            "role": "proof",
+            "connection": "proof_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-05-pos-refs.tex",
+              "line": 108
+            },
+            "right": true
+          },
+          {
+            "from": "thm:decay",
+            "to": "cor:uniqueness",
+            "role": "statement",
+            "connection": "statement_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-05-pos-refs.tex",
+              "line": 94
+            },
+            "right": true
+          }
+        ],
+        "prose_refs": [
+          {
+            "from": "thm:decay",
+            "to": "sec:intro",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-05-pos-refs.tex",
+              "line": 21
+            }
+          },
+          {
+            "from": "lem:energy",
+            "to": "sec:main",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-05-pos-refs.tex",
+              "line": 82
+            }
+          }
+        ],
+        "non_edges": [
+          {
+            "from": "lem:energy",
+            "to": "thm:decay",
+            "role": "statement",
+            "site": {
+              "file": "p/eval-05-pos-refs.tex",
+              "line": 82
+            },
+            "reason": "Line 82 lies in plain section prose after \\end{theorem}, not inside thm:decay."
+          },
+          {
+            "from": "lem:energy",
+            "to": "rem:sharpness",
+            "role": "statement",
+            "site": {
+              "file": "p/eval-05-pos-refs.tex",
+              "line": 82
+            },
+            "reason": "Line 82 lies in plain section prose before \\begin{remark}, not inside rem:sharpness."
+          },
+          {
+            "from": "thm:decay",
+            "to": "thm:decay",
+            "role": "proof",
+            "site": {
+              "file": "p/eval-05-pos-refs.tex",
+              "line": 107
+            },
+            "reason": "Line 107 is the deferred proof header [Proof of Theorem~\\ref{thm:decay}]; it binds proves (rule proof_header) and must not emit a self-loop uses edge."
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set P evaluation case: tests position-sensitive cross-references (statement vs adjacent proof vs deferred proof via \\begin{proof}[Proof of Theorem~\\ref{thm:decay}] vs plain section prose between environments) and an inner labelled equation (eq:energy-id inside lem:energy) lifted into a proof use of thm:decay."
+    },
+    {
+      "id": "P-eval-06-ambiguous-nums",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p/eval-06-ambiguous-nums.tex"
+        ]
+      },
+      "answer_key": {
+        "has_theorem_envs": true,
+        "sections": [
+          {
+            "id": "sec:laplacian",
+            "level": 1,
+            "title": "Weighted Laplacian and Rayleigh quotient",
+            "numbered": true,
+            "number": "1",
+            "parent": null,
+            "label": "sec:laplacian",
+            "file": "p/eval-06-ambiguous-nums.tex",
+            "line": 13
+          },
+          {
+            "id": "sec:cuts",
+            "level": 1,
+            "title": "Cut bounds and counter collisions",
+            "numbered": true,
+            "number": "2",
+            "parent": null,
+            "label": "sec:cuts",
+            "file": "p/eval-06-ambiguous-nums.tex",
+            "line": 61
+          },
+          {
+            "id": "sec:app-bound",
+            "level": 1,
+            "title": "Auxiliary discrete bound",
+            "numbered": true,
+            "number": "A",
+            "parent": null,
+            "label": "sec:app-bound",
+            "file": "p/eval-06-ambiguous-nums.tex",
+            "line": 108
+          }
+        ],
+        "statements": [
+          {
+            "id": "lem:rayleigh",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:rayleigh",
+            "section": "sec:laplacian",
+            "number": "1",
+            "number_status": "ambiguous",
+            "file": "p/eval-06-ambiguous-nums.tex",
+            "start_line": 31,
+            "end_line": 39,
+            "has_proof": true,
+            "proof_file": "p/eval-06-ambiguous-nums.tex",
+            "proof_start_line": 40,
+            "proof_end_line": 45
+          },
+          {
+            "id": "thm:spectral-lower",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:spectral-lower",
+            "section": "sec:laplacian",
+            "number": "1",
+            "number_status": "confirmed",
+            "file": "p/eval-06-ambiguous-nums.tex",
+            "start_line": 47,
+            "end_line": 51,
+            "has_proof": true,
+            "proof_file": "p/eval-06-ambiguous-nums.tex",
+            "proof_start_line": 52,
+            "proof_end_line": 59
+          },
+          {
+            "id": "prop:cut-upper",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:cut-upper",
+            "section": "sec:cuts",
+            "number": "2.1",
+            "number_status": "ambiguous",
+            "file": "p/eval-06-ambiguous-nums.tex",
+            "start_line": 64,
+            "end_line": 70,
+            "has_proof": false
+          },
+          {
+            "id": "prop:cut-refined",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:cut-refined",
+            "section": "sec:cuts",
+            "number": "2.1",
+            "number_status": "ambiguous",
+            "file": "p/eval-06-ambiguous-nums.tex",
+            "start_line": 75,
+            "end_line": 81,
+            "has_proof": false
+          },
+          {
+            "id": "thm:cheeger",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:cheeger",
+            "section": "sec:cuts",
+            "number": "2",
+            "number_status": "confirmed",
+            "file": "p/eval-06-ambiguous-nums.tex",
+            "start_line": 83,
+            "end_line": 89,
+            "has_proof": true,
+            "proof_file": "p/eval-06-ambiguous-nums.tex",
+            "proof_start_line": 90,
+            "proof_end_line": 97
+          },
+          {
+            "id": "coord:p/eval-06-ambiguous-nums.tex:L101-104",
+            "kind": "claim",
+            "env_name": "claim*",
+            "label": null,
+            "section": "sec:cuts",
+            "number": null,
+            "number_status": "unnumbered",
+            "file": "p/eval-06-ambiguous-nums.tex",
+            "start_line": 101,
+            "end_line": 104,
+            "has_proof": false
+          },
+          {
+            "id": "lem:app-sum",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:app-sum",
+            "section": "sec:app-bound",
+            "number": "A.1",
+            "number_status": "ambiguous",
+            "file": "p/eval-06-ambiguous-nums.tex",
+            "start_line": 113,
+            "end_line": 121,
+            "has_proof": false
+          }
+        ],
+        "equations": [
+          {
+            "label": "eq:rayleigh-quot",
+            "enclosing_node": "sec:laplacian",
+            "number": "1",
+            "file": "p/eval-06-ambiguous-nums.tex",
+            "start_line": 22,
+            "end_line": 25
+          }
+        ],
+        "uses_edges": [
+          {
+            "from": "lem:rayleigh",
+            "to": "thm:spectral-lower",
+            "role": "proof",
+            "connection": "proof_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-06-ambiguous-nums.tex",
+              "line": 53
+            },
+            "right": true
+          },
+          {
+            "from": "lem:rayleigh",
+            "to": "thm:cheeger",
+            "role": "proof",
+            "connection": "heuristic_mention",
+            "confidence": "heuristic",
+            "rule": "text_mention",
+            "printed_mention": "Lemma 1",
+            "site": {
+              "file": "p/eval-06-ambiguous-nums.tex",
+              "line": 94
+            },
+            "right": true
+          },
+          {
+            "from": "thm:spectral-lower",
+            "to": "thm:cheeger",
+            "role": "proof",
+            "connection": "heuristic_mention",
+            "confidence": "heuristic",
+            "rule": "text_mention",
+            "printed_mention": "Theorem 1",
+            "site": {
+              "file": "p/eval-06-ambiguous-nums.tex",
+              "line": 96
+            },
+            "right": true
+          },
+          {
+            "from": "thm:spectral-lower",
+            "to": "coord:p/eval-06-ambiguous-nums.tex:L101-104",
+            "role": "statement",
+            "connection": "statement_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-06-ambiguous-nums.tex",
+              "line": 102
+            },
+            "right": true
+          }
+        ],
+        "non_edges": [
+          {
+            "from": "prop:cut-upper",
+            "to": "sec:cuts",
+            "role": "prose",
+            "site": {
+              "file": "p/eval-06-ambiguous-nums.tex",
+              "line": 99
+            },
+            "reason": "Plain-text mention 'Proposition 2.1' is genuinely ambiguous because \\addtocounter{proposition}{-1} at line 73 makes both prop:cut-upper and prop:cut-refined print as Proposition 2.1; must not be confirmed-resolved to prop:cut-upper alone."
+          },
+          {
+            "from": "prop:cut-refined",
+            "to": "sec:cuts",
+            "role": "prose",
+            "site": {
+              "file": "p/eval-06-ambiguous-nums.tex",
+              "line": 99
+            },
+            "reason": "Symmetric to prop:cut-upper: plain-text mention 'Proposition 2.1' at line 99 must not be confirmed-resolved to prop:cut-refined alone."
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set P evaluation case: tests independent colliding counters (Lemma 1, Theorem 1, Eq. (1)), manual counter decrement creating duplicate printed Proposition 2.1, an unnumbered unlabelled claim* resolved by physical coordinates, and appendix \\renewcommand{\\thelemma}{A.\\arabic{lemma}} numbering."
+    },
+    {
+      "id": "P-eval-07-multifile-macros",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p/eval-07-multifile/main.tex"
+        ]
+      },
+      "answer_key": {
+        "has_theorem_envs": true,
+        "included_files": [
+          "p/eval-07-multifile/macros.tex",
+          "p/eval-07-multifile/sec1_defs.tex",
+          "p/eval-07-multifile/sec2_results.tex",
+          "p/eval-07-multifile/sec3_proofs.tex"
+        ],
+        "sections": [
+          {
+            "id": "sec:setup",
+            "level": 1,
+            "title": "Operator setup and Neumann series",
+            "numbered": true,
+            "number": "1",
+            "parent": null,
+            "label": "sec:setup",
+            "file": "p/eval-07-multifile/sec1_defs.tex",
+            "line": 3
+          },
+          {
+            "id": "sec:results",
+            "level": 1,
+            "title": "Perturbation bounds",
+            "numbered": true,
+            "number": "2",
+            "parent": null,
+            "label": "sec:results",
+            "file": "p/eval-07-multifile/sec2_results.tex",
+            "line": 3
+          },
+          {
+            "id": "sec:proofs",
+            "level": 1,
+            "title": "Deferred proofs",
+            "numbered": true,
+            "number": "3",
+            "parent": null,
+            "label": "sec:proofs",
+            "file": "p/eval-07-multifile/sec3_proofs.tex",
+            "line": 3
+          }
+        ],
+        "statements": [
+          {
+            "id": "assump:domain",
+            "kind": "assumption",
+            "env_name": "myassump",
+            "label": "assump:domain",
+            "section": "sec:setup",
+            "number": "1",
+            "number_status": "confirmed",
+            "file": "p/eval-07-multifile/sec1_defs.tex",
+            "start_line": 6,
+            "end_line": 11,
+            "has_proof": false
+          },
+          {
+            "id": "def:resolvent",
+            "kind": "definition",
+            "env_name": "mydef",
+            "label": "def:resolvent",
+            "section": "sec:setup",
+            "number": "1.1",
+            "number_status": "confirmed",
+            "file": "p/eval-07-multifile/sec1_defs.tex",
+            "start_line": 13,
+            "end_line": 19,
+            "has_proof": false
+          },
+          {
+            "id": "lem:neumann",
+            "kind": "lemma",
+            "env_name": "mylem",
+            "label": "lem:neumann",
+            "section": "sec:setup",
+            "number": "1.2",
+            "number_status": "confirmed",
+            "file": "p/eval-07-multifile/sec1_defs.tex",
+            "start_line": 21,
+            "end_line": 31,
+            "has_proof": true,
+            "proof_file": "p/eval-07-multifile/sec1_defs.tex",
+            "proof_start_line": 32,
+            "proof_end_line": 39
+          },
+          {
+            "id": "prop:stability",
+            "kind": "proposition",
+            "env_name": "myprop",
+            "label": "prop:stability",
+            "section": "sec:results",
+            "number": "2.1",
+            "number_status": "confirmed",
+            "file": "p/eval-07-multifile/sec2_results.tex",
+            "start_line": 6,
+            "end_line": 11,
+            "has_proof": true,
+            "proof_file": "p/eval-07-multifile/sec3_proofs.tex",
+            "proof_start_line": 6,
+            "proof_end_line": 17
+          },
+          {
+            "id": "thm:perturbation",
+            "kind": "theorem",
+            "env_name": "mythm",
+            "label": "thm:perturbation",
+            "section": "sec:results",
+            "number": "2.2",
+            "number_status": "confirmed",
+            "file": "p/eval-07-multifile/sec2_results.tex",
+            "start_line": 13,
+            "end_line": 22,
+            "has_proof": true,
+            "proof_file": "p/eval-07-multifile/sec3_proofs.tex",
+            "proof_start_line": 19,
+            "proof_end_line": 31
+          },
+          {
+            "id": "cor:gap-preserve",
+            "kind": "corollary",
+            "env_name": "mycor",
+            "label": "cor:gap-preserve",
+            "section": "sec:results",
+            "number": "2.3",
+            "number_status": "confirmed",
+            "file": "p/eval-07-multifile/sec2_results.tex",
+            "start_line": 24,
+            "end_line": 29,
+            "has_proof": true,
+            "proof_file": "p/eval-07-multifile/sec2_results.tex",
+            "proof_start_line": 30,
+            "proof_end_line": 35
+          }
+        ],
+        "equations": [
+          {
+            "label": "eq:neumann-series",
+            "enclosing_node": "lem:neumann",
+            "number": "1",
+            "file": "p/eval-07-multifile/sec1_defs.tex",
+            "start_line": 25,
+            "end_line": 30
+          }
+        ],
+        "uses_edges": [
+          {
+            "from": "assump:domain",
+            "to": "prop:stability",
+            "role": "statement",
+            "connection": "statement_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-07-multifile/sec2_results.tex",
+              "line": 8
+            },
+            "right": true
+          },
+          {
+            "from": "def:resolvent",
+            "to": "thm:perturbation",
+            "role": "statement",
+            "connection": "statement_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-07-multifile/sec2_results.tex",
+              "line": 16
+            },
+            "right": true
+          },
+          {
+            "from": "lem:neumann",
+            "to": "thm:perturbation",
+            "role": "proof",
+            "connection": "proof_use",
+            "confidence": "explicit",
+            "rule": "lifted",
+            "direct_from": "eq:neumann-series",
+            "site": {
+              "file": "p/eval-07-multifile/sec3_proofs.tex",
+              "line": 22
+            },
+            "alt_sites": [
+              {
+                "file": "p/eval-07-multifile/sec3_proofs.tex",
+                "line": 28
+              }
+            ],
+            "right": true
+          },
+          {
+            "from": "prop:stability",
+            "to": "thm:perturbation",
+            "role": "proof",
+            "connection": "proof_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-07-multifile/sec3_proofs.tex",
+              "line": 20
+            },
+            "right": true
+          },
+          {
+            "from": "thm:perturbation",
+            "to": "cor:gap-preserve",
+            "role": "statement",
+            "connection": "statement_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-07-multifile/sec2_results.tex",
+              "line": 27
+            },
+            "right": true
+          }
+        ],
+        "non_edges": [
+          {
+            "from": "prop:stability",
+            "to": "prop:stability",
+            "role": "proof",
+            "site": {
+              "file": "p/eval-07-multifile/sec3_proofs.tex",
+              "line": 6
+            },
+            "reason": "Line 6 is the deferred proof header [Proof of Proposition~\\ref{prop:stability}]; it binds proves (rule proof_header) and must not emit a self-loop uses edge."
+          },
+          {
+            "from": "thm:perturbation",
+            "to": "thm:perturbation",
+            "role": "proof",
+            "site": {
+              "file": "p/eval-07-multifile/sec3_proofs.tex",
+              "line": 19
+            },
+            "reason": "Line 19 is the deferred proof header [Proof of Theorem~\\ref{thm:perturbation}]; it binds proves (rule proof_header) and must not emit a self-loop uses edge."
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set P evaluation case: multi-file TeX bundle (main.tex \\input-ting macros.tex, sec1_defs.tex, sec2_results.tex, sec3_proofs.tex) with custom theorem environment names (mythm, mylem, myprop, mycor, mydef, myassump), cross-file deferred proofs, and a cross-file lifted inner equation proof use."
+    },
+    {
+      "id": "P-eval-08-cited-locator",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p/eval-08-cited-locator.tex"
+        ],
+        "locator": "Theorem 2.1"
+      },
+      "answer_key": {
+        "has_theorem_envs": true,
+        "sections": [
+          {
+            "id": "sec:markov-intro",
+            "level": 1,
+            "title": "Reversible chains and Dirichlet forms",
+            "numbered": true,
+            "number": "1",
+            "parent": null,
+            "label": "sec:markov-intro",
+            "file": "p/eval-08-cited-locator.tex",
+            "line": 14
+          },
+          {
+            "id": "sec:gap-results",
+            "level": 1,
+            "title": "Spectral gap comparison",
+            "numbered": true,
+            "number": "2",
+            "parent": null,
+            "label": "sec:gap-results",
+            "file": "p/eval-08-cited-locator.tex",
+            "line": 29
+          }
+        ],
+        "statements": [
+          {
+            "id": "def:dirichlet",
+            "kind": "definition",
+            "env_name": "definition",
+            "label": "def:dirichlet",
+            "section": "sec:markov-intro",
+            "number": "1.1",
+            "number_status": "confirmed",
+            "file": "p/eval-08-cited-locator.tex",
+            "start_line": 17,
+            "end_line": 27,
+            "has_proof": false
+          },
+          {
+            "id": "thm:spectral-gap",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:spectral-gap",
+            "section": "sec:gap-results",
+            "number": "2.1",
+            "number_status": "confirmed",
+            "file": "p/eval-08-cited-locator.tex",
+            "start_line": 32,
+            "end_line": 44,
+            "has_proof": true,
+            "proof_file": "p/eval-08-cited-locator.tex",
+            "proof_start_line": 45,
+            "proof_end_line": 57
+          },
+          {
+            "id": "prop:comparison",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:comparison",
+            "section": "sec:gap-results",
+            "number": "2.2",
+            "number_status": "confirmed",
+            "file": "p/eval-08-cited-locator.tex",
+            "start_line": 59,
+            "end_line": 66,
+            "has_proof": true,
+            "proof_file": "p/eval-08-cited-locator.tex",
+            "proof_start_line": 67,
+            "proof_end_line": 73
+          },
+          {
+            "id": "cor:mixing",
+            "kind": "corollary",
+            "env_name": "corollary",
+            "label": "cor:mixing",
+            "section": "sec:gap-results",
+            "number": "2.3",
+            "number_status": "confirmed",
+            "file": "p/eval-08-cited-locator.tex",
+            "start_line": 75,
+            "end_line": 86,
+            "has_proof": true,
+            "proof_file": "p/eval-08-cited-locator.tex",
+            "proof_start_line": 87,
+            "proof_end_line": 92
+          }
+        ],
+        "equations": [],
+        "uses_edges": [
+          {
+            "from": "def:dirichlet",
+            "to": "thm:spectral-gap",
+            "role": "statement",
+            "connection": "statement_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-08-cited-locator.tex",
+              "line": 37
+            },
+            "right": true
+          },
+          {
+            "from": "thm:spectral-gap",
+            "to": "prop:comparison",
+            "role": "proof",
+            "connection": "proof_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-08-cited-locator.tex",
+              "line": 71
+            },
+            "right": true
+          },
+          {
+            "from": "prop:comparison",
+            "to": "cor:mixing",
+            "role": "statement",
+            "connection": "statement_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-08-cited-locator.tex",
+              "line": 77
+            },
+            "right": true
+          }
+        ],
+        "located_statement": {
+          "locator": "Theorem 2.1",
+          "target": "thm:spectral-gap",
+          "file": "p/eval-08-cited-locator.tex",
+          "start_line": 32,
+          "end_line": 44
+        },
+        "citations_with_locators": [
+          {
+            "bib_key": "nord2024operator",
+            "locator": "Theorem 2.1",
+            "in_node": "prop:comparison",
+            "role": "statement",
+            "rule": "head_cite",
+            "site": {
+              "file": "p/eval-08-cited-locator.tex",
+              "line": 59
+            }
+          },
+          {
+            "bib_key": "hale2023bounds",
+            "locator": "Proposition 4.3",
+            "in_node": "cor:mixing",
+            "role": "proof",
+            "rule": "cite",
+            "site": {
+              "file": "p/eval-08-cited-locator.tex",
+              "line": 91
+            }
+          }
+        ],
+        "bibliography": [
+          {
+            "key": "nord2024operator",
+            "arxiv_id": "0000.00001",
+            "doi": null,
+            "file": "p/eval-08-cited-locator.tex",
+            "line": 95,
+            "env_start_line": 94,
+            "env_end_line": 97
+          },
+          {
+            "key": "hale2023bounds",
+            "arxiv_id": null,
+            "doi": "10.0000/eval.markov.2023",
+            "file": "p/eval-08-cited-locator.tex",
+            "line": 96,
+            "env_start_line": 94,
+            "env_end_line": 97
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set P evaluation case: exercises Input::Fixture.locator ('Theorem 2.1' resolving to thm:spectral-gap) together with TeX citation locators in a proposition heading (head_cite) and a proof body (cite) backed by synthetic bibliography entries."
+    },
+    {
+      "id": "P-eval-09-comments-cref",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p/eval-09-comments-cref.tex"
+        ]
+      },
+      "answer_key": {
+        "has_theorem_envs": true,
+        "sections": [
+          {
+            "id": "sec:cocycles",
+            "level": 1,
+            "title": "Subadditive cocycles",
+            "numbered": true,
+            "number": "1",
+            "parent": null,
+            "label": "sec:cocycles",
+            "file": "p/eval-09-comments-cref.tex",
+            "line": 18
+          },
+          {
+            "id": "sec:lyapunov",
+            "level": 1,
+            "title": "Lyapunov exponent and examples",
+            "numbered": true,
+            "number": "2",
+            "parent": null,
+            "label": "sec:lyapunov",
+            "file": "p/eval-09-comments-cref.tex",
+            "line": 51
+          }
+        ],
+        "statements": [
+          {
+            "id": "assump:integrable",
+            "kind": "assumption",
+            "env_name": "assumption",
+            "label": "assump:integrable",
+            "section": "sec:cocycles",
+            "number": "1.1",
+            "number_status": "confirmed",
+            "file": "p/eval-09-comments-cref.tex",
+            "start_line": 21,
+            "end_line": 27,
+            "has_proof": false
+          },
+          {
+            "id": "lem:subadd",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:subadd",
+            "section": "sec:cocycles",
+            "number": "1.2",
+            "number_status": "confirmed",
+            "file": "p/eval-09-comments-cref.tex",
+            "start_line": 29,
+            "end_line": 38,
+            "has_proof": true,
+            "proof_file": "p/eval-09-comments-cref.tex",
+            "proof_start_line": 39,
+            "proof_end_line": 44
+          },
+          {
+            "id": "thm:lyapunov",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:lyapunov",
+            "section": "sec:lyapunov",
+            "number": "2.1",
+            "number_status": "confirmed",
+            "file": "p/eval-09-comments-cref.tex",
+            "start_line": 54,
+            "end_line": 63,
+            "has_proof": true,
+            "proof_file": "p/eval-09-comments-cref.tex",
+            "proof_start_line": 64,
+            "proof_end_line": 73
+          },
+          {
+            "id": "cor:rate",
+            "kind": "corollary",
+            "env_name": "corollary",
+            "label": "cor:rate",
+            "section": "sec:lyapunov",
+            "number": "2.2",
+            "number_status": "confirmed",
+            "file": "p/eval-09-comments-cref.tex",
+            "start_line": 75,
+            "end_line": 81,
+            "has_proof": true,
+            "proof_file": "p/eval-09-comments-cref.tex",
+            "proof_start_line": 82,
+            "proof_end_line": 87
+          },
+          {
+            "id": "ex:diagonal",
+            "kind": "example",
+            "env_name": "example",
+            "label": "ex:diagonal",
+            "section": "sec:lyapunov",
+            "number": "2.3",
+            "number_status": "confirmed",
+            "file": "p/eval-09-comments-cref.tex",
+            "start_line": 89,
+            "end_line": 94,
+            "has_proof": false
+          },
+          {
+            "id": "rem:nonnegative",
+            "kind": "remark",
+            "env_name": "remark",
+            "label": "rem:nonnegative",
+            "section": "sec:lyapunov",
+            "number": "2.4",
+            "number_status": "confirmed",
+            "file": "p/eval-09-comments-cref.tex",
+            "start_line": 96,
+            "end_line": 100,
+            "has_proof": false
+          },
+          {
+            "id": "conj:analyticity",
+            "kind": "conjecture",
+            "env_name": "conjecture",
+            "label": "conj:analyticity",
+            "section": "sec:lyapunov",
+            "number": "2.5",
+            "number_status": "confirmed",
+            "file": "p/eval-09-comments-cref.tex",
+            "start_line": 102,
+            "end_line": 108,
+            "has_proof": false
+          }
+        ],
+        "equations": [
+          {
+            "label": "eq:kingman-step",
+            "enclosing_node": "lem:subadd",
+            "number": "1",
+            "file": "p/eval-09-comments-cref.tex",
+            "start_line": 34,
+            "end_line": 37
+          }
+        ],
+        "uses_edges": [
+          {
+            "from": "assump:integrable",
+            "to": "thm:lyapunov",
+            "role": "statement",
+            "connection": "statement_use",
+            "confidence": "explicit",
+            "rule": "cref",
+            "site": {
+              "file": "p/eval-09-comments-cref.tex",
+              "line": 56
+            },
+            "right": true
+          },
+          {
+            "from": "lem:subadd",
+            "to": "thm:lyapunov",
+            "role": "statement",
+            "connection": "statement_use",
+            "confidence": "explicit",
+            "rule": "cref",
+            "site": {
+              "file": "p/eval-09-comments-cref.tex",
+              "line": 56
+            },
+            "right": true
+          },
+          {
+            "from": "lem:subadd",
+            "to": "thm:lyapunov",
+            "role": "proof",
+            "connection": "proof_use",
+            "confidence": "explicit",
+            "rule": "lifted",
+            "direct_from": "eq:kingman-step",
+            "site": {
+              "file": "p/eval-09-comments-cref.tex",
+              "line": 65
+            },
+            "alt_sites": [
+              {
+                "file": "p/eval-09-comments-cref.tex",
+                "line": 69
+              }
+            ],
+            "right": true
+          },
+          {
+            "from": "thm:lyapunov",
+            "to": "cor:rate",
+            "role": "proof",
+            "connection": "proof_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-09-comments-cref.tex",
+              "line": 85
+            },
+            "right": true
+          }
+        ],
+        "non_edges": [
+          {
+            "from": "lem:subadd",
+            "to": "thm:commented-trap",
+            "role": "statement",
+            "site": {
+              "file": "p/eval-09-comments-cref.tex",
+              "line": 48
+            },
+            "reason": "Lines 46-49 are TeX comments; thm:commented-trap must not exist as a node or edge target."
+          },
+          {
+            "from": "assump:integrable",
+            "to": "thm:lyapunov",
+            "role": "proof",
+            "site": {
+              "file": "p/eval-09-comments-cref.tex",
+              "line": 68
+            },
+            "reason": "Line 68 is a TeX comment inside the proof of thm:lyapunov; must not emit a proof edge."
+          },
+          {
+            "from": "assump:integrable",
+            "to": "cor:rate",
+            "role": "statement",
+            "site": {
+              "file": "p/eval-09-comments-cref.tex",
+              "line": 80
+            },
+            "reason": "Line 80 is a TeX comment inside the statement of cor:rate; must not emit a statement edge."
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set P evaluation case: tests multi-label \\cref{assump:integrable,lem:subadd}, comment-only traps (fake theorem and commented refs inside real statement and proof), lifted inner equation proof use, and diverse theorem-like kinds (assumption, lemma, theorem, corollary, example, remark, conjecture)."
+    },
+    {
+      "id": "P-eval-10-long-monograph",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p/eval-10-long-monograph.tex"
+        ]
+      },
+      "answer_key": {
+        "has_theorem_envs": true,
+        "sections": [
+          {
+            "id": "sec:s01",
+            "level": 1,
+            "title": "Hypercubic Lattice Geometry and Local Configuration Spaces",
+            "numbered": true,
+            "number": "1",
+            "parent": null,
+            "label": "sec:s01",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 34
+          },
+          {
+            "id": "subsec:s01a",
+            "level": 2,
+            "title": "Toroidal Boxes, Slice Decompositions, and Boundary Geometry",
+            "numbered": true,
+            "number": "1.1",
+            "parent": "sec:s01",
+            "label": "subsec:s01a",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 61
+          },
+          {
+            "id": "subsec:s01b",
+            "level": 2,
+            "title": "Local Observables, Cylinder Algebras, and Support Norms",
+            "numbered": true,
+            "number": "1.2",
+            "parent": "sec:s01",
+            "label": "subsec:s01b",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 240
+          },
+          {
+            "id": "sec:s02",
+            "level": 1,
+            "title": "Gibbs Measures, Partition Functions, and Free-Energy Densities",
+            "numbered": true,
+            "number": "2",
+            "parent": null,
+            "label": "sec:s02",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 426
+          },
+          {
+            "id": "subsec:s02a",
+            "level": 2,
+            "title": "Finite-Volume Gibbs Distributions and Relative Entropy",
+            "numbered": true,
+            "number": "2.1",
+            "parent": "sec:s02",
+            "label": "subsec:s02a",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 453
+          },
+          {
+            "id": "subsec:s02b",
+            "level": 2,
+            "title": "Boundary Sensitivity and Subadditive Pressure Bounds",
+            "numbered": true,
+            "number": "2.2",
+            "parent": "sec:s02",
+            "label": "subsec:s02b",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 623
+          },
+          {
+            "id": "sec:s03",
+            "level": 1,
+            "title": "Polymer Models and Convergent Cluster Expansions",
+            "numbered": true,
+            "number": "3",
+            "parent": null,
+            "label": "sec:s03",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 797
+          },
+          {
+            "id": "subsec:s03a",
+            "level": 2,
+            "title": "Connected Polymers, Incompatibility Graphs, and Ursell Functions",
+            "numbered": true,
+            "number": "3.1",
+            "parent": "sec:s03",
+            "label": "subsec:s03a",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 821
+          },
+          {
+            "id": "subsec:s03b",
+            "level": 2,
+            "title": "Analyticity of the Log-Partition Function and Truncated Cumulants",
+            "numbered": true,
+            "number": "3.2",
+            "parent": "sec:s03",
+            "label": "subsec:s03b",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 995
+          },
+          {
+            "id": "sec:s04",
+            "level": 1,
+            "title": "High-Temperature Graph Representations and Contour Weights",
+            "numbered": true,
+            "number": "4",
+            "parent": null,
+            "label": "sec:s04",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 1174
+          },
+          {
+            "id": "subsec:s04a",
+            "level": 2,
+            "title": "Bond-Variable Expansions and Eulerian Subgraphs",
+            "numbered": true,
+            "number": "4.1",
+            "parent": "sec:s04",
+            "label": "subsec:s04a",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 1204
+          },
+          {
+            "id": "subsec:s04b",
+            "level": 2,
+            "title": "Low-Temperature Contours and Peierls Suppression",
+            "numbered": true,
+            "number": "4.2",
+            "parent": "sec:s04",
+            "label": "subsec:s04b",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 1385
+          },
+          {
+            "id": "sec:s05",
+            "level": 1,
+            "title": "Transfer Operators, Positivity, and Perron--Frobenius Structure",
+            "numbered": true,
+            "number": "5",
+            "parent": null,
+            "label": "sec:s05",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 1576
+          },
+          {
+            "id": "subsec:s05a",
+            "level": 2,
+            "title": "Slice Hilbert Spaces and Symmetrized Transfer Kernels",
+            "numbered": true,
+            "number": "5.1",
+            "parent": "sec:s05",
+            "label": "subsec:s05a",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 1601
+          },
+          {
+            "id": "subsec:s05b",
+            "level": 2,
+            "title": "Strict Positivity and Principal Eigenvalue Uniqueness",
+            "numbered": true,
+            "number": "5.2",
+            "parent": "sec:s05",
+            "label": "subsec:s05b",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 1766
+          },
+          {
+            "id": "sec:s06",
+            "level": 1,
+            "title": "Reflection Positivity and Spectral Representations",
+            "numbered": true,
+            "number": "6",
+            "parent": null,
+            "label": "sec:s06",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 1954
+          },
+          {
+            "id": "subsec:s06a",
+            "level": 2,
+            "title": "Reflection Planes and Osterwalder--Schrader Inner Products",
+            "numbered": true,
+            "number": "6.1",
+            "parent": "sec:s06",
+            "label": "subsec:s06a",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 1978
+          },
+          {
+            "id": "subsec:s06b",
+            "level": 2,
+            "title": "Kallen--Lehmann Representations and Spectral Measures",
+            "numbered": true,
+            "number": "6.2",
+            "parent": "sec:s06",
+            "label": "subsec:s06b",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 2150
+          },
+          {
+            "id": "sec:s07",
+            "level": 1,
+            "title": "Cluster Expansion of the Transfer-Matrix Spectrum",
+            "numbered": true,
+            "number": "7",
+            "parent": null,
+            "label": "sec:s07",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 2345
+          },
+          {
+            "id": "subsec:s07a",
+            "level": 2,
+            "title": "One-Particle Subspaces and Projected Transfer Kernels",
+            "numbered": true,
+            "number": "7.1",
+            "parent": "sec:s07",
+            "label": "subsec:s07a",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 2375
+          },
+          {
+            "id": "subsec:s07b",
+            "level": 2,
+            "title": "Dispersion Relations and Isolated Excitation Branches",
+            "numbered": true,
+            "number": "7.2",
+            "parent": "sec:s07",
+            "label": "subsec:s07b",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 2573
+          },
+          {
+            "id": "sec:s08",
+            "level": 1,
+            "title": "Correlation Decay and Uniform Spectral-Gap Estimates",
+            "numbered": true,
+            "number": "8",
+            "parent": null,
+            "label": "sec:s08",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 2777
+          },
+          {
+            "id": "subsec:s08a",
+            "level": 2,
+            "title": "Truncated Two-Point Functions and Correlation Length",
+            "numbered": true,
+            "number": "8.1",
+            "parent": "sec:s08",
+            "label": "subsec:s08a",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 2803
+          },
+          {
+            "id": "subsec:s08b",
+            "level": 2,
+            "title": "Uniform-in-Volume Mass Gap from Pinned Cluster Bounds",
+            "numbered": true,
+            "number": "8.2",
+            "parent": "sec:s08",
+            "label": "subsec:s08b",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 2974
+          },
+          {
+            "id": "sec:s09",
+            "level": 1,
+            "title": "Finite-Size Scaling and Thermodynamic Convergence of Spectra",
+            "numbered": true,
+            "number": "9",
+            "parent": null,
+            "label": "sec:s09",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 3166
+          },
+          {
+            "id": "subsec:s09a",
+            "level": 2,
+            "title": "Cylinder-to-Torus Perturbation and Boundary Decoupling",
+            "numbered": true,
+            "number": "9.1",
+            "parent": "sec:s09",
+            "label": "subsec:s09a",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 3192
+          },
+          {
+            "id": "subsec:s09b",
+            "level": 2,
+            "title": "Convergence of Ground-State Expectation Values and Gaps",
+            "numbered": true,
+            "number": "9.2",
+            "parent": "sec:s09",
+            "label": "subsec:s09b",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 3368
+          },
+          {
+            "id": "sec:s10",
+            "level": 1,
+            "title": "Synthesis: Unified Spectral-Cluster Equivalence on Hypercubic Slabs",
+            "numbered": true,
+            "number": "10",
+            "parent": null,
+            "label": "sec:s10",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 3561
+          },
+          {
+            "id": "subsec:s10a",
+            "level": 2,
+            "title": "Equivalence of Analytic Pressure, Mass Gap, and Mixing",
+            "numbered": true,
+            "number": "10.1",
+            "parent": "sec:s10",
+            "label": "subsec:s10a",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 3590
+          },
+          {
+            "id": "subsec:s10b",
+            "level": 2,
+            "title": "Main Equivalence Theorem and Stability under Local Perturbations",
+            "numbered": true,
+            "number": "10.2",
+            "parent": "sec:s10",
+            "label": "subsec:s10b",
+            "file": "p/eval-10-long-monograph.tex",
+            "line": 3776
+          }
+        ],
+        "statements": [
+          {
+            "id": "def:s01-lattice",
+            "kind": "definition",
+            "env_name": "definition",
+            "label": "def:s01-lattice",
+            "section": "subsec:s01a",
+            "number": "1.1",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 116,
+            "end_line": 129,
+            "has_proof": false
+          },
+          {
+            "id": "lem:s01-slice-count",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:s01-slice-count",
+            "section": "subsec:s01a",
+            "number": "1.2",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 171,
+            "end_line": 186,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 187,
+            "proof_end_line": 203
+          },
+          {
+            "id": "prop:s01-cylinder-density",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:s01-cylinder-density",
+            "section": "subsec:s01b",
+            "number": "1.3",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 289,
+            "end_line": 299,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 300,
+            "proof_end_line": 317
+          },
+          {
+            "id": "thm:s01-factorization",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:s01-factorization",
+            "section": "subsec:s01b",
+            "number": "1.4",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 362,
+            "end_line": 376,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 377,
+            "proof_end_line": 395
+          },
+          {
+            "id": "def:s02-gibbs",
+            "kind": "definition",
+            "env_name": "definition",
+            "label": "def:s02-gibbs",
+            "section": "subsec:s02a",
+            "number": "2.1",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 502,
+            "end_line": 516,
+            "has_proof": false
+          },
+          {
+            "id": "lem:s02-free-energy",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:s02-free-energy",
+            "section": "subsec:s02a",
+            "number": "2.2",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 555,
+            "end_line": 569,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 570,
+            "proof_end_line": 591
+          },
+          {
+            "id": "prop:s02-boundary-ratio",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:s02-boundary-ratio",
+            "section": "subsec:s02b",
+            "number": "2.3",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 669,
+            "end_line": 678,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 679,
+            "proof_end_line": 694
+          },
+          {
+            "id": "thm:s02-thermo-limit",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:s02-thermo-limit",
+            "section": "subsec:s02b",
+            "number": "2.4",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 736,
+            "end_line": 745,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 746,
+            "proof_end_line": 767
+          },
+          {
+            "id": "def:s03-polymer",
+            "kind": "definition",
+            "env_name": "definition",
+            "label": "def:s03-polymer",
+            "section": "subsec:s03a",
+            "number": "3.1",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 870,
+            "end_line": 883,
+            "has_proof": false
+          },
+          {
+            "id": "lem:s03-cluster",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:s03-cluster",
+            "section": "subsec:s03a",
+            "number": "3.2",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 919,
+            "end_line": 936,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 937,
+            "proof_end_line": 962
+          },
+          {
+            "id": "prop:s03-cumulant-decay",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:s03-cumulant-decay",
+            "section": "subsec:s03b",
+            "number": "3.3",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 1040,
+            "end_line": 1054,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 1055,
+            "proof_end_line": 1071
+          },
+          {
+            "id": "thm:s03-cluster-conv",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:s03-cluster-conv",
+            "section": "subsec:s03b",
+            "number": "3.4",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 1112,
+            "end_line": 1125,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 1126,
+            "proof_end_line": 1144
+          },
+          {
+            "id": "def:s04-bond-graph",
+            "kind": "definition",
+            "env_name": "definition",
+            "label": "def:s04-bond-graph",
+            "section": "subsec:s04a",
+            "number": "4.1",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 1262,
+            "end_line": 1275,
+            "has_proof": false
+          },
+          {
+            "id": "lem:s04-animal-count",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:s04-animal-count",
+            "section": "subsec:s04a",
+            "number": "4.2",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 1314,
+            "end_line": 1327,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 1328,
+            "proof_end_line": 1347
+          },
+          {
+            "id": "prop:s04-contour-weight",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:s04-contour-weight",
+            "section": "subsec:s04b",
+            "number": "4.3",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 1433,
+            "end_line": 1444,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 1445,
+            "proof_end_line": 1466
+          },
+          {
+            "id": "thm:s04-duality",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:s04-duality",
+            "section": "subsec:s04b",
+            "number": "4.4",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 1511,
+            "end_line": 1524,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 1525,
+            "proof_end_line": 1545
+          },
+          {
+            "id": "def:s05-transfer-op",
+            "kind": "definition",
+            "env_name": "definition",
+            "label": "def:s05-transfer-op",
+            "section": "subsec:s05a",
+            "number": "5.1",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 1651,
+            "end_line": 1663,
+            "has_proof": false
+          },
+          {
+            "id": "lem:s05-hilbert-schmidt",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:s05-hilbert-schmidt",
+            "section": "subsec:s05a",
+            "number": "5.2",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 1700,
+            "end_line": 1712,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 1713,
+            "proof_end_line": 1732
+          },
+          {
+            "id": "prop:s05-entrywise-pos",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:s05-entrywise-pos",
+            "section": "subsec:s05b",
+            "number": "5.3",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 1813,
+            "end_line": 1823,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 1824,
+            "proof_end_line": 1840
+          },
+          {
+            "id": "thm:s05-transfer",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:s05-transfer",
+            "section": "subsec:s05b",
+            "number": "5.4",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 1883,
+            "end_line": 1897,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 1898,
+            "proof_end_line": 1922
+          },
+          {
+            "id": "def:s06-reflection",
+            "kind": "definition",
+            "env_name": "definition",
+            "label": "def:s06-reflection",
+            "section": "subsec:s06a",
+            "number": "6.1",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 2029,
+            "end_line": 2041,
+            "has_proof": false
+          },
+          {
+            "id": "lem:s06-chessboard",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:s06-chessboard",
+            "section": "subsec:s06a",
+            "number": "6.2",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 2079,
+            "end_line": 2094,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 2095,
+            "proof_end_line": 2117
+          },
+          {
+            "id": "prop:s06-spectral",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:s06-spectral",
+            "section": "subsec:s06b",
+            "number": "6.3",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 2195,
+            "end_line": 2209,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 2210,
+            "proof_end_line": 2234
+          },
+          {
+            "id": "thm:s06-infrared",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:s06-infrared",
+            "section": "subsec:s06b",
+            "number": "6.4",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 2277,
+            "end_line": 2286,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 2287,
+            "proof_end_line": 2314
+          },
+          {
+            "id": "def:s07-one-particle",
+            "kind": "definition",
+            "env_name": "definition",
+            "label": "def:s07-one-particle",
+            "section": "subsec:s07a",
+            "number": "7.1",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 2433,
+            "end_line": 2446,
+            "has_proof": false
+          },
+          {
+            "id": "lem:s07-proj-norm",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:s07-proj-norm",
+            "section": "subsec:s07a",
+            "number": "7.2",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 2489,
+            "end_line": 2505,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 2506,
+            "proof_end_line": 2534
+          },
+          {
+            "id": "prop:s07-momentum-diag",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:s07-momentum-diag",
+            "section": "subsec:s07b",
+            "number": "7.3",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 2624,
+            "end_line": 2635,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 2636,
+            "proof_end_line": 2657
+          },
+          {
+            "id": "thm:s07-isolated-branch",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:s07-isolated-branch",
+            "section": "subsec:s07b",
+            "number": "7.4",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 2703,
+            "end_line": 2717,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 2718,
+            "proof_end_line": 2743
+          },
+          {
+            "id": "def:s08-corr-length",
+            "kind": "definition",
+            "env_name": "definition",
+            "label": "def:s08-corr-length",
+            "section": "subsec:s08a",
+            "number": "8.1",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 2855,
+            "end_line": 2868,
+            "has_proof": false
+          },
+          {
+            "id": "lem:s08-slab-rate",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:s08-slab-rate",
+            "section": "subsec:s08a",
+            "number": "8.2",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 2906,
+            "end_line": 2921,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 2922,
+            "proof_end_line": 2941
+          },
+          {
+            "id": "prop:s08-ornstein-zernike",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:s08-ornstein-zernike",
+            "section": "subsec:s08b",
+            "number": "8.3",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 3021,
+            "end_line": 3032,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 3033,
+            "proof_end_line": 3052
+          },
+          {
+            "id": "thm:s08-massgap",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:s08-massgap",
+            "section": "subsec:s08b",
+            "number": "8.4",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 3093,
+            "end_line": 3101,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 3102,
+            "proof_end_line": 3135
+          },
+          {
+            "id": "def:s09-torus-defect",
+            "kind": "definition",
+            "env_name": "definition",
+            "label": "def:s09-torus-defect",
+            "section": "subsec:s09a",
+            "number": "9.1",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 3243,
+            "end_line": 3256,
+            "has_proof": false
+          },
+          {
+            "id": "lem:s09-seam-bound",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:s09-seam-bound",
+            "section": "subsec:s09a",
+            "number": "9.2",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 3294,
+            "end_line": 3310,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 3311,
+            "proof_end_line": 3334
+          },
+          {
+            "id": "prop:s09-ground-conv",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:s09-ground-conv",
+            "section": "subsec:s09b",
+            "number": "9.3",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 3415,
+            "end_line": 3427,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 3428,
+            "proof_end_line": 3451
+          },
+          {
+            "id": "thm:s09-gap-limit",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:s09-gap-limit",
+            "section": "subsec:s09b",
+            "number": "9.4",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 3494,
+            "end_line": 3505,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 3506,
+            "proof_end_line": 3532
+          },
+          {
+            "id": "def:s10-mixing",
+            "kind": "definition",
+            "env_name": "definition",
+            "label": "def:s10-mixing",
+            "section": "subsec:s10a",
+            "number": "10.1",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 3647,
+            "end_line": 3659,
+            "has_proof": false
+          },
+          {
+            "id": "lem:s10-dobrushin-bridge",
+            "kind": "lemma",
+            "env_name": "lemma",
+            "label": "lem:s10-dobrushin-bridge",
+            "section": "subsec:s10a",
+            "number": "10.2",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 3698,
+            "end_line": 3711,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 3712,
+            "proof_end_line": 3738
+          },
+          {
+            "id": "prop:s10-stability",
+            "kind": "proposition",
+            "env_name": "proposition",
+            "label": "prop:s10-stability",
+            "section": "subsec:s10b",
+            "number": "10.3",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 3826,
+            "end_line": 3840,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 3841,
+            "proof_end_line": 3865
+          },
+          {
+            "id": "thm:s10-main",
+            "kind": "theorem",
+            "env_name": "theorem",
+            "label": "thm:s10-main",
+            "section": "subsec:s10b",
+            "number": "10.4",
+            "number_status": "confirmed",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 3907,
+            "end_line": 3928,
+            "has_proof": true,
+            "proof_file": "p/eval-10-long-monograph.tex",
+            "proof_start_line": 3929,
+            "proof_end_line": 3963
+          }
+        ],
+        "equations": [
+          {
+            "label": "eq:s01-slice-card",
+            "enclosing_node": "lem:s01-slice-count",
+            "number": "1",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 179,
+            "end_line": 182
+          },
+          {
+            "label": "eq:s02-fe-lipschitz",
+            "enclosing_node": "lem:s02-free-energy",
+            "number": "2",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 562,
+            "end_line": 565
+          },
+          {
+            "label": "eq:s03-cluster-est",
+            "enclosing_node": "lem:s03-cluster",
+            "number": "3",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 927,
+            "end_line": 930
+          },
+          {
+            "label": "eq:s04-animal-bound",
+            "enclosing_node": "lem:s04-animal-count",
+            "number": "4",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 1320,
+            "end_line": 1323
+          },
+          {
+            "label": "eq:s05-trace-id",
+            "enclosing_node": "lem:s05-hilbert-schmidt",
+            "number": "5",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 1706,
+            "end_line": 1709
+          },
+          {
+            "label": "eq:s06-chessboard-ineq",
+            "enclosing_node": "lem:s06-chessboard",
+            "number": "6",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 2087,
+            "end_line": 2090
+          },
+          {
+            "label": "eq:s07-schur-op",
+            "enclosing_node": "lem:s07-proj-norm",
+            "number": "7",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 2496,
+            "end_line": 2499
+          },
+          {
+            "label": "eq:s08-slab-decay",
+            "enclosing_node": "lem:s08-slab-rate",
+            "number": "8",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 2913,
+            "end_line": 2916
+          },
+          {
+            "label": "eq:s09-seam-decay",
+            "enclosing_node": "lem:s09-seam-bound",
+            "number": "9",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 3302,
+            "end_line": 3305
+          },
+          {
+            "label": "eq:s10-mixing-bound",
+            "enclosing_node": "lem:s10-dobrushin-bridge",
+            "number": "10",
+            "file": "p/eval-10-long-monograph.tex",
+            "start_line": 3705,
+            "end_line": 3708
+          }
+        ],
+        "uses_edges": [
+          {
+            "from": "def:s01-lattice",
+            "to": "thm:s05-transfer",
+            "role": "statement",
+            "connection": "statement_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-10-long-monograph.tex",
+              "line": 1887
+            },
+            "right": true
+          },
+          {
+            "from": "lem:s03-cluster",
+            "to": "thm:s08-massgap",
+            "role": "proof",
+            "connection": "proof_use",
+            "confidence": "explicit",
+            "rule": "lifted",
+            "direct_from": "eq:s03-cluster-est",
+            "site": {
+              "file": "p/eval-10-long-monograph.tex",
+              "line": 3127
+            },
+            "right": true
+          },
+          {
+            "from": "prop:s06-spectral",
+            "to": "thm:s10-main",
+            "role": "proof",
+            "connection": "proof_use",
+            "confidence": "explicit",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-10-long-monograph.tex",
+              "line": 3952
+            },
+            "right": true
+          },
+          {
+            "from": "thm:s05-transfer",
+            "to": "thm:s10-main",
+            "role": "proof",
+            "connection": "heuristic_mention",
+            "confidence": "heuristic",
+            "rule": "text_mention",
+            "printed_mention": "Theorem 5.4",
+            "site": {
+              "file": "p/eval-10-long-monograph.tex",
+              "line": 3947
+            },
+            "right": true
+          }
+        ],
+        "prose_refs": [
+          {
+            "from": "prop:s06-spectral",
+            "to": "subsec:s06b",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-10-long-monograph.tex",
+              "line": 2316
+            }
+          },
+          {
+            "from": "thm:s06-infrared",
+            "to": "subsec:s06b",
+            "rule": "ref",
+            "site": {
+              "file": "p/eval-10-long-monograph.tex",
+              "line": 2317
+            }
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set P evaluation case: long generated original monograph (3,996 lines, 34,687 words, 86 pages in 11pt article pdflatex) with 10 sections, 20 subsections, 40 theorem-like statements, 10 inner labelled equations, and 4 sampled long-range cross-section uses (statement_use, lifted proof_use, proof_use, heuristic_mention)."
     }
   ]
 }
