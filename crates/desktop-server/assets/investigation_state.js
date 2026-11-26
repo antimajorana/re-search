@@ -34,17 +34,18 @@ export function paperViewState(inv, session, nowMs = Date.now()) {
   const answers = Array.isArray(data.answers) ? data.answers : [];
   const hasAnswers = answers.length > 0;
   const hasPaper = Boolean(data.source_id);
+  const hasSkeleton = Boolean(data.skeleton_seq || data.skeleton);
   const hasMap = Boolean(data.map);
   const running = Boolean(sess.running);
   const events = Array.isArray(sess.events) ? sess.events : [];
   const mappingRequested = typeof data.mapping_requested === 'boolean'
     ? data.mapping_requested
-    : (!hasAnswers && Boolean(
+    : (!hasAnswers && !hasSkeleton && Boolean(
       data.source_id || data.map || data.summary || data.mapping_status || data.mapping_error || data.conventions_requested,
     ));
 
-  const showSetup = !hasMap && !running && !hasAnswers;
-  const refillQuestion = !hasMap && !hasAnswers;
+  const showSetup = !hasMap && !hasSkeleton && !running && !hasAnswers;
+  const refillQuestion = !hasMap && !hasSkeleton && !hasAnswers;
   const showSummary = mappingRequested || hasMap || Boolean(data.summary);
   const showConventions = Boolean(data.conventions || data.conventions_requested || data.map_seq != null);
   const showMapUnavailable = mappingRequested && !hasMap;
@@ -108,6 +109,7 @@ export function paperViewState(inv, session, nowMs = Date.now()) {
     answers,
     hasAnswers,
     hasPaper,
+    hasSkeleton,
     hasMap,
     mappingRequested,
     showSetup,

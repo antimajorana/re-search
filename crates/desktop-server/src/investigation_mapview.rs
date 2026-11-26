@@ -1,0 +1,402 @@
+//! Investigate mode mapview projection and hash-checked node text extraction (package V3).
+//!
+//! Projects a deterministic [`PaperSkeleton`] into the shared `GraphView` JSON shape
+//! (`00-overview.md` §2.6) plus Investigate metadata without embedding node body prose
+//! (`investigate.md` §5.2), and reads exact physical source spans on demand from the
+//! hash-pinned `source.ingested` ledger receipt.
+
+use ledger::Event;
+use research_tools::sandbox::WorkspaceSandbox;
+use research_tools::skeleton::{
+    load_ingested_tex_source, EdgeConfidence, PaperSkeleton, SkEdge, SkEdgeKind, SkNode,
+    SkNodeKind, SkeletonBuilder, SkeletonQuality, Span,
+};
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+/// Mode display name (`00-overview.md` §3.2, §8).
+pub const MODE_DISPLAY_NAME: &str = "Investigate";
+/// Deterministic code-grade badge label (`00-overview.md` §2.10, §3.2 row 20).
+/// User-facing Investigate strings never use the word "verified" or "Verified".
+pub const BADGE_BY_CODE: &str = "By code";
+/// Quality banner prefix for a full TeX skeleton (`00-overview.md` §5.2).
+pub const QUALITY_TEX_FULL: &str = "Structure read from TeX source";
+/// Quality banner prefix for a partial TeX skeleton (`00-overview.md` §5.2).
+pub const QUALITY_TEX_PARTIAL: &str = "Structure read from TeX source (partial)";
+/// Quality banner prefix for a weak TeX skeleton (`00-overview.md` §5.2).
+pub const QUALITY_TEX_WEAK: &str = "Structure read from TeX source (weak)";
+
+const QUALITY_HTML: &str = "Structure read from arXiv HTML";
+const QUALITY_PDF: &str = "Estimated from PDF text; theorem boundaries may be wrong";
+
+/// Formats the header quality line describing how a [`PaperSkeleton`] was constructed
+/// (`00-overview.md` §5.2; `investigate.md` §3).
+pub fn format_quality_line(skeleton: &PaperSkeleton) -> String {
+    let base = match (skeleton.builder, skeleton.quality) {
+        (SkeletonBuilder::Tex1, SkeletonQuality::Full) => QUALITY_TEX_FULL,
+        (SkeletonBuilder::Tex1, SkeletonQuality::Partial) => QUALITY_TEX_PARTIAL,
+        (SkeletonBuilder::Tex1, SkeletonQuality::Weak) => QUALITY_TEX_WEAK,
+        (SkeletonBuilder::Html1, _) => QUALITY_HTML,
+        (SkeletonBuilder::Pdf1, _) => QUALITY_PDF,
+    };
+    let mut out = base.to_string();
+    if let Some(ver) = non_empty(skeleton.version.as_deref()) {
+        out.push_str(", ");
+        out.push_str(ver);
+    }
+    if let Some(reason) = non_empty(skeleton.quality_reason.as_deref()) {
+        out.push_str(" — ");
+        out.push_str(reason);
+    }
+    out
+}
+
+/// Projects a [`PaperSkeleton`] into the shared `GraphView` JSON shape (`00-overview.md` §2.6)
+/// plus Investigate metadata, strictly omitting node body text (`investigate.md` §5.2).
+pub fn build_mapview_json(
+    skeleton: &PaperSkeleton,
+    skeleton_seq: u64,
+    skeleton_blob: &str,
+    ledger_head: &str,
+    fallback_note: Option<&str>,
+) -> Value {
+    let ids: Vec<String> = skeleton.nodes.iter().map(node_id).collect();
+    let labels: Vec<String> = skeleton.nodes.iter().map(format_node_label).collect();
+    let mut id_to_idx: HashMap<String, usize> = HashMap::with_capacity(ids.len());
+    let mut node_tags: HashSet<String> = HashSet::with_capacity(ids.len());
+    for (idx, id) in ids.iter().enumerate() {
+        id_to_idx.entry(id.clone()).or_insert(idx);
+        node_tags.insert(id.clone());
+    }
+
+    // Reverse lookup: target statement tag -> attached Proof node tag.
+    let mut proof_for: HashMap<&str, String> = HashMap::new();
+    for (idx, node) in skeleton.nodes.iter().enumerate() {
+        if node.kind == SkNodeKind::Proof {
+            if let Some(target) = node.proof_of.as_deref() {
+                proof_for.entry(target).or_insert_with(|| ids[idx].clone());
+            }
+        }
+    }
+
+    // Collect sorted unique bibliography citations targeting each node.
+    let mut cites_by_node: HashMap<&str, BTreeMap<String, &SkEdge>> = HashMap::new();
+    for edge in &skeleton.edges {
+        if edge.kind == SkEdgeKind::Cites {
+            cites_by_node
+                .entry(edge.to.as_str())
+                .or_default()
+                .entry(edge.from.clone())
+                .or_insert(edge);
+        }
+    }
+
+    let nodes: Vec<Value> = skeleton
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(idx, node)| {
+            let id = &ids[idx];
+            let group = resolve_node_group(&skeleton.nodes, idx, &labels, &id_to_idx);
+            let flags: Vec<String> = if node.head_cites.is_empty() {
+                Vec::new()
+            } else {
+                vec![format!("cites [{}] in its heading", node.head_cites.join(", "))]
+            };
+            let cites: Vec<Value> = cites_by_node
+                .get(id.as_str())
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, e)| json!({ "key": k, "role": e.role, "rule": e.rule, "site": e.site }))
+                        .collect()
+                })
+                .unwrap_or_default();
+            json!({
+                "id": id, "kind": node.kind, "label": labels[idx],
+                "group": group, "parent": node.parent, "grade": "code",
+                "badges": [{ "text": BADGE_BY_CODE, "icon": "code", "tone": "ok" }],
+                "flags": flags, "stale": false, "dim": false,
+                "order": node.order, "number": node.number, "number_basis": node.number_basis,
+                "env_name": node.env_name, "title": node.title, "tex_label": node.label,
+                "spans": node.spans, "proof_of": node.proof_of,
+                "proof_tag": proof_for.get(id.as_str()).cloned(),
+                "head_cites": node.head_cites, "cites": cites, "intro_refs": node.intro_refs,
+                "fp": node.fp, "words": node.words, "eq_count": node.eq_count,
+                "read_minutes": node.read_minutes, "confidence": node.confidence,
+            })
+        })
+        .collect();
+
+    // Emit only node-to-node edges with live endpoints; Cites live on node.cites & bib.
+    let edges: Vec<Value> = skeleton
+        .edges
+        .iter()
+        .filter(|e| {
+            matches!(e.kind, SkEdgeKind::Uses | SkEdgeKind::Proves | SkEdgeKind::Contains)
+                && node_tags.contains(&e.from)
+                && node_tags.contains(&e.to)
+        })
+        .map(|e| {
+            let basis = match e.confidence {
+                EdgeConfidence::Explicit => "code",
+                EdgeConfidence::Heuristic => "model",
+            };
+            json!({
+                "src": e.from, "dst": e.to, "kind": e.kind, "role": e.role,
+                "basis": basis, "rule": e.rule, "confidence": e.confidence, "site": e.site,
+            })
+        })
+        .collect();
+
+    let legend = json!([
+        { "label": "By code (skeleton)", "icon": "code", "tone": "ok", "dashed": false },
+        { "label": "Heuristic reference (not checked by code)", "icon": "model", "tone": "muted", "dashed": true },
+    ]);
+
+    json!({
+        "etag": ledger_head, "skeleton_seq": skeleton_seq, "skeleton_blob": skeleton_blob,
+        "source_id": skeleton.source_id, "source_seq": skeleton.source_seq,
+        "paper_key": skeleton.paper_key, "version": skeleton.version,
+        "builder": skeleton.builder, "quality": skeleton.quality,
+        "quality_reason": skeleton.quality_reason, "quality_line": format_quality_line(skeleton),
+        "nodes": nodes, "edges": edges, "legend": legend,
+        "stats": skeleton.stats, "bib": skeleton.bib, "macros": skeleton.macros,
+        "skip_plan": Value::Null, "tasks": [], "carry": skeleton.carry,
+        "fallback_note": fallback_note,
+    })
+}
+
+/// Reads the exact hash-checked physical TeX lines for `tag` (and its attached proof, if any)
+/// from the `source.ingested` receipt under `sandbox`.
+pub fn read_verified_node_text(
+    sandbox: &WorkspaceSandbox,
+    session_id: &str,
+    receipt: &Event,
+    skeleton: &PaperSkeleton,
+    tag: &str,
+) -> Result<Value, String> {
+    let ingested = load_ingested_tex_source(sandbox, session_id, receipt)?;
+    let node = skeleton.nodes.iter().find(|n| n.tag.as_deref() == Some(tag))
+        .ok_or_else(|| format!("skeleton node `{tag}` not found"))?;
+    let text = extract_spans_text(&ingested.files, &node.spans)?;
+    let proof_node = skeleton.nodes.iter()
+        .find(|p| p.kind == SkNodeKind::Proof && p.proof_of.as_deref() == Some(tag));
+    let (proof_tag, proof_spans, proof_text) = match proof_node {
+        Some(p) => (p.tag.clone(), Some(p.spans.clone()), Some(extract_spans_text(&ingested.files, &p.spans)?)),
+        None => (None, None, None),
+    };
+    Ok(json!({
+        "tag": tag, "kind": node.kind, "number": node.number, "title": node.title,
+        "spans": node.spans, "text": text,
+        "proof_tag": proof_tag, "proof_spans": proof_spans, "proof_text": proof_text,
+    }))
+}
+
+fn non_empty(s: Option<&str>) -> Option<&str> { s.map(str::trim).filter(|t| !t.is_empty()) }
+
+fn node_id(node: &SkNode) -> String { node.tag.clone().unwrap_or_else(|| format!("ord-{}", node.order)) }
+
+fn kind_display_name(kind: SkNodeKind) -> &'static str {
+    use SkNodeKind::*;
+    match kind {
+        FrontMatter => "Front matter", Section => "Section", Definition => "Definition",
+        Assumption => "Assumption", Theorem => "Theorem", Lemma => "Lemma",
+        Proposition => "Proposition", Corollary => "Corollary", Conjecture => "Conjecture",
+        Claim => "Claim", Proof => "Proof", Example => "Example", Remark => "Remark",
+        Equation => "Equation", Figure => "Figure", Table => "Table",
+        Algorithm => "Algorithm", Bibliography => "Bibliography",
+    }
+}
+
+fn format_node_label(node: &SkNode) -> String {
+    let num = non_empty(node.number.as_deref());
+    let title = non_empty(node.title.as_deref());
+    let head = match (node.kind, num) {
+        (SkNodeKind::Equation, Some(n)) => format!("Eq. ({n})"),
+        (SkNodeKind::Equation, None) => "Equation".to_string(),
+        (SkNodeKind::Proof, _) => match title {
+            Some(t) if t.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("proof")) => t.to_string(),
+            Some(t) => format!("Proof: {t}"),
+            None => "Proof".to_string(),
+        },
+        (k, Some(n)) => format!("{} {n}", kind_display_name(k)),
+        (k, None) => kind_display_name(k).to_string(),
+    };
+    match title {
+        Some(t) if node.kind != SkNodeKind::Proof => format!("{head}: {t}"),
+        _ => head,
+    }
+}
+
+fn resolve_node_group(
+    nodes: &[SkNode], idx: usize, labels: &[String], id_to_idx: &HashMap<String, usize>,
+) -> Option<String> {
+    let mut cur = nodes[idx].parent.as_deref();
+    for _ in 0..nodes.len() {
+        let Some(&p_idx) = cur.and_then(|t| id_to_idx.get(t)) else { break };
+        match nodes[p_idx].kind {
+            SkNodeKind::Section => return Some(labels[p_idx].clone()),
+            SkNodeKind::FrontMatter => return Some("Front matter".to_string()),
+            SkNodeKind::Bibliography => return Some("Back matter".to_string()),
+            _ => cur = nodes[p_idx].parent.as_deref(),
+        }
+    }
+    match nodes[idx].kind {
+        SkNodeKind::Section => Some(labels[idx].clone()),
+        SkNodeKind::FrontMatter => Some("Front matter".to_string()),
+        SkNodeKind::Bibliography => Some("Back matter".to_string()),
+        _ => None,
+    }
+}
+
+fn extract_spans_text(files: &BTreeMap<String, String>, spans: &[Span]) -> Result<String, String> {
+    let mut segments = Vec::with_capacity(spans.len());
+    for span in spans {
+        if span.start_line == 0 || span.end_line < span.start_line {
+            return Err(format!("invalid span {}:{}-{}", span.path, span.start_line, span.end_line));
+        }
+        let content = files.get(&span.path)
+            .ok_or_else(|| format!("source file `{}` not present in ingested receipt", span.path))?;
+        let lines: Vec<&str> = content.lines().map(|l| l.strip_suffix('\r').unwrap_or(l)).collect();
+        let start_idx = span.start_line.saturating_sub(1);
+        if start_idx >= lines.len() {
+            return Err(format!("span {}:{}-{} exceeds file length", span.path, span.start_line, span.end_line));
+        }
+        segments.push(lines[start_idx..span.end_line.min(lines.len())].join("\n"));
+    }
+    Ok(segments.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use research_tools::paper_key::PaperKey;
+    use research_tools::sandbox::SandboxRoot;
+    use research_tools::skeleton::{build_tex_skeleton, TexSkeletonInput};
+
+    fn sample_tex() -> String {
+        concat!(
+            "\\documentclass{article}\n",
+            "\\newtheorem{theorem}{Theorem}[section]\n",
+            "\\newtheorem{lemma}[theorem]{Lemma}\n",
+            "\\begin{document}\n",
+            "\\section{Setup}\n",
+            "\\begin{lemma}[\\cite{Toy98}]\n\\label{lem:base}\nUNIQUE_LEMMA_BODY_SENTINEL.\n\\end{lemma}\n",
+            "\\begin{theorem}[Discrete maximum principle]\n\\label{thm:main}\n",
+            "By \\ref{lem:base}, UNIQUE_THM_BODY_SENTINEL.\n\\end{theorem}\n",
+            "\\begin{proof}\nFollows from Lemma 1.1 and \\cite{Alpha01}, UNIQUE_PROOF_SENTINEL.\n\\end{proof}\n",
+            "\\begin{thebibliography}{9}\n\\bibitem{Toy98} Toy, 1998.\n\\bibitem{Alpha01} Alpha, 2001.\n\\end{thebibliography}\n",
+            "\\end{document}\n",
+        )
+        .to_string()
+    }
+
+    fn build_sample_skeleton() -> PaperSkeleton {
+        let mut files = BTreeMap::new();
+        files.insert("main.tex".to_string(), sample_tex());
+        build_tex_skeleton(&TexSkeletonInput {
+            source_id: "src-1".into(),
+            source_seq: 3,
+            paper_key: PaperKey::from_arxiv("2401.00001").unwrap(),
+            version: Some("v2".into()),
+            files,
+            primary_path: Some("main.tex".into()),
+            files_sha256: None,
+        })
+        .skeleton
+    }
+
+    #[test]
+    fn mapview_shape_edges_flags_and_no_body_or_forbidden_word() {
+        let sk = build_sample_skeleton();
+        let mv = build_mapview_json(&sk, 7, "blob-sha", "head-abc", None);
+        assert_eq!(mv["etag"], "head-abc");
+        assert_eq!(mv["skeleton_seq"], 7);
+        assert_eq!(mv["quality_line"], "Structure read from TeX source, v2");
+        assert!(mv["skip_plan"].is_null());
+        assert_eq!(mv["tasks"], json!([]));
+
+        let serialized = serde_json::to_string(&mv).unwrap();
+        assert!(!serialized.to_ascii_lowercase().contains("verified"));
+        assert!(!serialized.contains("UNIQUE_LEMMA_BODY_SENTINEL"));
+        assert!(!serialized.contains("UNIQUE_THM_BODY_SENTINEL"));
+        assert!(!serialized.contains("UNIQUE_PROOF_SENTINEL"));
+
+        let nodes = mv["nodes"].as_array().unwrap();
+        let lem = nodes.iter().find(|n| n["kind"] == "lemma").unwrap();
+        assert_eq!(lem["grade"], "code");
+        assert_eq!(lem["group"], "Section 1: Setup");
+        assert_eq!(lem["badges"][0]["text"], BADGE_BY_CODE);
+        assert_eq!(lem["flags"], json!(["cites [Toy98] in its heading"]));
+        assert_eq!(lem["cites"][0]["key"], "Toy98");
+
+        let thm = nodes.iter().find(|n| n["kind"] == "theorem").unwrap();
+        assert_eq!(thm["label"], "Theorem 1.2: Discrete maximum principle");
+        assert!(thm["proof_tag"].as_str().is_some());
+        assert_eq!(thm["cites"][0]["key"], "Alpha01");
+
+        let edges = mv["edges"].as_array().unwrap();
+        assert!(edges.iter().all(|e| e["kind"] != "cites"));
+        assert!(edges.iter().any(|e| e["src"] == lem["id"] && e["dst"] == thm["id"] && e["basis"] == "code"));
+        assert!(edges.iter().any(|e| e["src"] == lem["id"] && e["dst"] == thm["id"] && e["basis"] == "model"));
+    }
+
+    #[test]
+    fn format_quality_line_covers_builders_qualities_and_suffixes() {
+        let mut sk = build_sample_skeleton();
+        sk.version = None;
+        sk.quality_reason = None;
+        sk.quality = SkeletonQuality::Full;
+        assert_eq!(format_quality_line(&sk), QUALITY_TEX_FULL);
+
+        sk.quality = SkeletonQuality::Partial;
+        sk.version = Some("v3".into());
+        assert_eq!(format_quality_line(&sk), "Structure read from TeX source (partial), v3");
+
+        sk.quality = SkeletonQuality::Weak;
+        sk.quality_reason = Some("unclosed env".into());
+        assert_eq!(format_quality_line(&sk), "Structure read from TeX source (weak), v3 — unclosed env");
+
+        sk.quality_reason = Some("   ".into());
+        assert_eq!(format_quality_line(&sk), "Structure read from TeX source (weak), v3");
+
+        sk.builder = SkeletonBuilder::Html1;
+        sk.version = None;
+        sk.quality_reason = None;
+        assert_eq!(format_quality_line(&sk), "Structure read from arXiv HTML");
+
+        sk.builder = SkeletonBuilder::Pdf1;
+        assert_eq!(format_quality_line(&sk), "Estimated from PDF text; theorem boundaries may be wrong");
+    }
+
+    #[test]
+    fn read_verified_node_text_reads_statement_and_attached_proof() {
+        let dir = tempfile::tempdir().unwrap();
+        let sandbox = WorkspaceSandbox::new(dir.path().to_path_buf(), None);
+        let tex = sample_tex();
+        let write = sandbox.resolve_for_write(SandboxRoot::Sources, "s1", "main.tex").unwrap();
+        std::fs::write(&write.target_path, &tex).unwrap();
+        let receipt = Event {
+            session: "s1".into(),
+            seq: 3,
+            ts_ms: 0,
+            kind: "source.ingested".into(),
+            schema_version: 1,
+            payload: json!({
+                "source_id": "src-1",
+                "primary_path": "main.tex",
+                "files": ["main.tex"],
+                "files_sha256": { "main.tex": ledger::sha256_hex(tex.as_bytes()) },
+            }),
+            prev_hash: String::new(),
+            event_hash: String::new(),
+        };
+        let sk = build_sample_skeleton();
+        let thm_tag = sk.nodes.iter().find(|n| n.kind == SkNodeKind::Theorem).unwrap().tag.as_deref().unwrap();
+        let out = read_verified_node_text(&sandbox, "s1", &receipt, &sk, thm_tag).unwrap();
+        assert_eq!(out["tag"], thm_tag);
+        assert!(out["text"].as_str().unwrap().contains("UNIQUE_THM_BODY_SENTINEL"));
+        assert!(out["proof_text"].as_str().unwrap().contains("UNIQUE_PROOF_SENTINEL"));
+        assert!(out["proof_tag"].as_str().is_some());
+    }
+}

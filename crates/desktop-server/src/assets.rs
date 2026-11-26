@@ -179,6 +179,26 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_scope.js"),
         }),
+        "/assets/investigation_outline.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_outline.js"),
+        }),
+        "/assets/investigation_results.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_results.js"),
+        }),
+        "/assets/investigation_node.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_node.js"),
+        }),
+        "/assets/investigation_v3_shell.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_v3_shell.js"),
+        }),
+        "/assets/investigation_shell.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_shell.css"),
+        }),
         "/assets/api.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/api.js"),

@@ -380,6 +380,7 @@ export function showInvestigationSession(id, data) {
   selectView(view);
   renderOrigin(data?.investigation?.origin);
   if (data?.mode !== 'investigation') {
+    globalThis.__reSearchInvestigationV3?.syncSession(null, null);
     clearStatusTimer();
     answerCard.reset();
     scopeChip.reset();
@@ -425,6 +426,18 @@ export function showInvestigationSession(id, data) {
   if (!submitting) localStatus = '';
   syncStatus();
   paperMap.update(inv, Boolean(data.running), data.events || []);
+  void globalThis.__reSearchInvestigationV3?.syncSession(id, data, {
+    openSource: callbacks.openSource,
+    openPdf: anchor => {
+      const src = data.sources?.find(s => s.source_id === anchor.source_id && s.format === 'pdf');
+      if (src) openOriginalPdf({ sessionId: id, sourceId: src.source_id, path: anchor.path, startLine: anchor.start_line, label: anchor.label || src.title || src.origin });
+    },
+    isModelConnected: () => {
+      const m = byId('composer-model');
+      return Boolean(m && !m.hidden && m.value && byId('composer-connect')?.hidden);
+    },
+    showStatus,
+  });
 }
 
 function scheduleSummaryRefresh() {
@@ -494,10 +507,17 @@ async function buildMap(event) {
       pageRange.investigation_page_end = end;
     }
   }
-  let options;
-  try { options = callbacks.requestOptions(); }
-  catch (error) { showStatus(error.message); return; }
   const readingQuestion = byId('investigation-question').value.trim();
+  const v3 = globalThis.__reSearchInvestigationV3;
+  const existingSource = session?.sources?.find(item => item.source_id === sourceId);
+  const deterministicTexCandidate = Boolean(
+    v3 && !readingQuestion && (file ? v3.isTexFileName(file.name) : v3.isTexSource(existingSource)),
+  );
+  let options = null;
+  if (!deterministicTexCandidate) {
+    try { options = callbacks.requestOptions(); }
+    catch (error) { showStatus(error.message); return; }
+  }
   const scope = readingQuestion ? 'question' : 'map';
   const button = event.currentTarget.querySelector('button');
   const controls = [...event.currentTarget.querySelectorAll('input, textarea, select')];
@@ -530,6 +550,13 @@ async function buildMap(event) {
     if (session.sources?.some(item => item.source_id === sourceId && item.status === 'empty_text_layer')) {
       throw new Error('This PDF has no readable text layer. Open the original PDF, or choose a searchable PDF or TeX source to build a map.');
     }
+    const chosenSource = session?.sources?.find(item => item.source_id === sourceId);
+    if (deterministicTexCandidate && v3.isTexSource(chosenSource)) {
+      await v3.pinAndOpen(id, sourceId);
+      if (sessionId === id) await refreshInvestigation(id);
+      return;
+    }
+    if (!options) options = callbacks.requestOptions();
     runStartedAt = Date.now();
     await callbacks.send(id, readingQuestion || DEFAULT_PAPER_REQUEST, {
       ...options, ...pageRange, investigation_source_id: sourceId, investigation_scope: scope,

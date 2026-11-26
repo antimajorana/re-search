@@ -17,6 +17,7 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
             .find(|e| e.kind == "source.ingested" && e.payload["source_id"] == p["source_id"])
     });
     let map = latest(events, "investigation.map");
+    let skeleton = latest(events, "investigation.skeleton");
     let mapping = latest(events, "investigation.mapping_requested");
     let summary = latest(events, "investigation.summary");
     let catalog_request =
@@ -152,6 +153,7 @@ pub(crate) fn view(events: &[Event], running: bool) -> Value {
         "mapping_status":finished.map(|e|&e.payload["status"]), "mapping_error":finished.and_then(|e|e.payload.get("error")),
         "scope":scope,
         "page_start":paper.and_then(|p|p.get("page_start")), "page_end":paper.and_then(|p|p.get("page_end")),
+        "skeleton_seq":skeleton.map(|e| e.seq), "skeleton":skeleton.map(|e| &e.payload),
         "map_seq":map.map(|e| e.seq), "map":map.map(|e|research_tools::investigation::expanded_map(events,e)),
         "branches":branch_history(events,running), "corrections":corrections, "activities":activities, "answers":answers})
 }
