@@ -163,3 +163,51 @@ fn auth_guard_protects_sources_endpoints() {
     };
     assert_eq!(auth.authorize_api(&cross_origin).unwrap_err().0, 403);
 }
+
+#[test]
+fn preview_does_not_clobber_or_delete_already_registered_source() {
+    let tmp = TempDir::new().unwrap();
+    let state = make_state(&tmp);
+
+    let folder = tmp.path().join("registered_folder");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(
+        folder.join("2505.00123v1.tex"),
+        "\\title{Synthetic Preview Safety Paper}\n\\author{Ada Route}\n",
+    )
+    .unwrap();
+
+    // Register and accept the source first.
+    let accept_body = serde_json::to_vec(&json!({
+        "kind": "folder",
+        "root": folder.to_string_lossy(),
+        "id": "keep-me",
+        "accept": true,
+    }))
+    .unwrap();
+    let (code, accepted) = handle_sources(&state, "POST", &[], &empty_q(), &accept_body).unwrap();
+    assert_eq!(code, 201);
+    let initial_sync_ms = accepted["source"]["last_sync_ms"].as_i64().unwrap();
+    assert_eq!(accepted["source"]["state"], json!("synced"));
+
+    // Run a dry-run preview (`accept: false`) with the exact same root and id.
+    let preview_body = serde_json::to_vec(&json!({
+        "kind": "folder",
+        "root": folder.to_string_lossy(),
+        "id": "keep-me",
+        "accept": false,
+    }))
+    .unwrap();
+    let (code, preview) = handle_sources(&state, "POST", &[], &empty_q(), &preview_body).unwrap();
+    assert_eq!(code, 200);
+    assert_eq!(preview["accepted"], Value::Bool(false));
+    assert_eq!(preview["report"]["dry_run"], Value::Bool(true));
+
+    // Existing registered source, sync timestamp, and indexed items must remain intact.
+    let (code, detail) =
+        handle_sources(&state, "GET", &["keep-me"], &empty_q(), b"").unwrap();
+    assert_eq!(code, 200);
+    assert_eq!(detail["count"], json!(1));
+    assert_eq!(detail["source"]["state"], json!("synced"));
+    assert_eq!(detail["source"]["last_sync_ms"].as_i64(), Some(initial_sync_ms));
+}
