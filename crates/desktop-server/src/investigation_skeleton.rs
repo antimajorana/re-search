@@ -246,12 +246,15 @@ pub fn handle_with_etag(
                         }
                     }
                 }
+                crate::investigation_legacy_view::embed_legacy_into_mapview(&mut mv, &events, Some(&rec.skeleton));
                 return Ok((200, Some(head), mv));
             }
-            Ok((200, Some(head.clone()), json!({
-                "etag": head, "skeleton_seq": Value::Null, "nodes": [], "edges": [],
+            let mut mv = json!({
+                "etag": head.clone(), "skeleton_seq": Value::Null, "nodes": [], "edges": [],
                 "legend": [], "fallback_note": fallback_note(&events),
-            })))
+            });
+            crate::investigation_legacy_view::embed_legacy_into_mapview(&mut mv, &events, None);
+            Ok((200, Some(head), mv))
         }
         ("GET", "node-text") => {
             let tag = query.get("tag").map(String::as_str).map(str::trim).filter(|s| !s.is_empty())
@@ -388,7 +391,7 @@ fn load_or_repair_skeleton(
     })
 }
 
-fn open_and_read(state: &DesktopState, session_id: &str) -> Result<(Ledger, Vec<Event>), (u16, String)> {
+pub(crate) fn open_and_read(state: &DesktopState, session_id: &str) -> Result<(Ledger, Vec<Event>), (u16, String)> {
     validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
     let ledger = state.open_ledger().map_err(internal)?;
     let events = ledger.read_session(session_id).map_err(storage)?;
@@ -430,7 +433,7 @@ fn etag_matches(if_none_match: Option<&str>, etag: &str) -> bool {
         t == "*" || t.strip_prefix("W/").or_else(|| t.strip_prefix("w/")).unwrap_or(t).trim().trim_matches('"') == etag
     })
 }
-fn fallback_note(events: &[Event]) -> &'static str {
+pub(crate) fn fallback_note(events: &[Event]) -> &'static str {
     let Some(sid) = latest(events, EVENT_INVESTIGATION_PAPER).and_then(|e| e.payload["source_id"].as_str()) else {
         return "No primary paper is pinned to this Investigation yet.";
     };

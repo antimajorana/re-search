@@ -203,6 +203,10 @@ export function getInvestigationMapview(id) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/investigation/mapview`);
 }
 
+export function getInvestigationLegacy(id) {
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/investigation/legacy`);
+}
+
 export function getInvestigationNodeText(id, tag, seq) {
   const qs = new URLSearchParams({ tag: String(tag) });
   if (seq != null) qs.set('seq', String(seq));
