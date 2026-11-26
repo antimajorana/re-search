@@ -5,6 +5,7 @@ import { renderMathTextInto } from './math.js';
 import { renderInvestigationBadges } from './investigation_badges.js';
 import { findLatestNodeTask, renderInvestigationNodeModel } from './investigation_node_model.js';
 import { extractNodeNotes, renderInvestigationNotes } from './investigation_notes_ui.js';
+import { mountInvestigationNodeHandoff } from './investigation_handoff_ui.js';
 
 // Named wording constants (00-overview.md §2.6, §3.2, investigate.md §3).
 export const NODE_BLOCK_A_LABEL = 'From source (by code)';
@@ -338,10 +339,16 @@ export function renderInvestigationNodeCard(host, mapview, tag, opts = {}) {
   }
   blockAContent.appendChild(actionsBar);
 
-  // Reserved hand-off slot for V16 ("Derive in Solve", "Has this been extended?", "Search wider in Explore").
+  // Hand-off slot for V16 ("Derive in Solve", "Has this been extended?", "Search wider in Explore").
   const handoffSlot = document.createElement('div');
   handoffSlot.className = 'inv-node-handoff-slot';
   handoffSlot.setAttribute('data-node-tag', String(node.id));
+  const handoffCtrl = opts.handoff === false
+    ? null
+    : mountInvestigationNodeHandoff(handoffSlot, mapview, node, {
+        badgeRoot: badgesCtrl?.element,
+        ...(opts.handoff && typeof opts.handoff === 'object' ? opts.handoff : { skipLiveFetch: true }),
+      });
   blockAContent.appendChild(handoffSlot);
 
   // 8. V10 reader notes composer & list (plain "you" style, kept intact across re-runs).
@@ -409,5 +416,5 @@ export function renderInvestigationNodeCard(host, mapview, tag, opts = {}) {
   });
 
   if (host) host.replaceChildren(card);
-  return { card, relations, toggleProof, badgesCtrl, modelCtrl, notesCtrl, handoffSlot };
+  return { card, relations, toggleProof, badgesCtrl, modelCtrl, notesCtrl, handoffSlot, handoffCtrl };
 }

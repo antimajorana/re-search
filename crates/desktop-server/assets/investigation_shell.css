@@ -305,6 +305,12 @@
 .inv-v7-gist { margin: 4px 0 0; font-size: 0.85rem; color: var(--ink-secondary, #444746); }
 .inv-v7-orient-runbar { margin-bottom: 6px; }
 .inv-v7-auto-orient-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--ink-secondary, #444746); cursor: pointer; }
+.inv-v16-handoff { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.inv-v16-actions, .inv-v16-status-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.inv-v16-status-chip { padding: 3px 9px; border: 1px solid var(--border-subtle, #dfe4ec); border-radius: var(--radius-pill, 999px); background: var(--bg-subtle, #f1f4f9); color: var(--accent, #0b57d0); font: inherit; font-size: 0.78rem; cursor: pointer; }
+.inv-v16-status-chip:hover { border-color: var(--accent, #0b57d0); background: var(--accent-soft, #e8f0fe); }
+.inv-v16-feedback { font-size: 0.8rem; color: var(--ink-secondary, #444746); }
+.inv-v16-right-active { cursor: pointer; }
 
 @media (max-width: 900px) {
   .inv-shell { grid-template-columns: 1fr; }

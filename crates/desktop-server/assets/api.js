@@ -248,6 +248,10 @@ export function createHandoff(id, payload) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/handoff`, payload);
 }
 
+export function buildInvestigationHandoffPacket(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/handoff-packet`, payload);
+}
+
 export function getHandoffs(id) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/handoffs`);
 }

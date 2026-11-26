@@ -343,11 +343,11 @@ export function createInvestigationV3Controller(deps = {}) {
     const startOpenTag = (tag) => apiMod.startInvestigationTask?.(sessionId, buildTaskPayload(hooks, { task: 'open', tags: [tag] }))?.then(refreshMv)?.catch((err) => hooks?.showStatus?.(err?.message || 'Could not open node.'));
 
     const mountNodeCard = (entry) => {
-      renderInvestigationNodeCard(nodeCardHost, mv, st.selectedTag, {
+      const cardCtrl = renderInvestigationNodeCard(nodeCardHost, mv, st.selectedTag, {
         nodeText: entry ? entry.text : (st.selectedTag ? null : ''),
         proofText: entry?.proof_text || '',
-        hasPdf,
-        modelConnected,
+        hasPdf, modelConnected,
+        handoff: { sessionId, api: apiMod, openSession: hooks?.openSession, refresh: refreshMv, showStatus: hooks?.showStatus },
         onSelectNode: (id) => selectNode(id, true),
         onTogglePin: (node, pin) => {
           void apiMod.saveInvestigationNote?.(sessionId, { tag: node.id, node_fp: node.fp, pin })?.then(refreshMv).catch((err) => hooks?.showStatus?.(err?.message || 'Could not update pin.'));
@@ -392,7 +392,7 @@ export function createInvestigationV3Controller(deps = {}) {
               input.focus?.();
             }
           } else if (actionId === 'derive_solve' || actionId === 'extend_explore') {
-            hooks?.showStatus?.('Cross-mode hand-off buttons from Investigate nodes connect in V16.');
+            void cardCtrl?.handoffCtrl?.trigger(actionId);
           }
         },
       });
