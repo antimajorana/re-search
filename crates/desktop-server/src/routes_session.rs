@@ -138,9 +138,10 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
         let (route, _) = crate::cli_turn::session_route(meta.as_ref(), &events);
         let is_agy = route.as_str() == Some(crate::state::ANTIGRAVITY_ROUTE);
         let stats = summarize_session_events(&events);
+        let mode = crate::session_mode::session_mode(&events);
         sessions.push(json!({
             "id": id,
-            "mode": if crate::investigation::is_investigation(&events) { "investigation" } else { "research" },
+            "mode": crate::session_mode::api_mode_name(mode),
             "title": title,
             "route": route,
             "confinement": is_agy.then_some(cli_route::antigravity::CONFINEMENT),
@@ -166,9 +167,12 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
 
 pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResult {
     let val = parse_json_body(body)?;
-    let mode = val.get("mode").map(|v| v.as_str().unwrap_or("")).unwrap_or("research");
-    if !matches!(mode, "research" | "investigation") { return Err(bad("Choose Research or Investigation.")); }
-    if mode == "investigation" && val.get("prompt").and_then(Value::as_str).is_some_and(|p| !p.trim().is_empty()) {
+    let raw_mode = val.get("mode").map(|v| v.as_str().unwrap_or("")).unwrap_or(crate::session_mode::MODE_API_RESEARCH);
+    let mode = crate::session_mode::parse_requested_mode(raw_mode).map_err(bad)?;
+    crate::session_mode::profile_for_mode(mode).map_err(bad)?;
+    if mode == research_tools::paper_key::Mode::Investigate
+        && val.get("prompt").and_then(Value::as_str).is_some_and(|p| !p.trim().is_empty())
+    {
         return Err(bad("Create the Investigation and upload its primary paper before starting a turn."));
     }
     let id = match val.get("id").and_then(Value::as_str) {
@@ -256,8 +260,11 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
         deleted: false,
     };
     save_new_session(state, &meta, project_id)?;
-    if mode == "investigation" {
-        state.open_ledger().map_err(internal)?.append_new_session(&id, &[("investigation.started", 1, &json!({}))])
+    if let Some(marker) = crate::session_mode::start_marker_for_mode(mode) {
+        state
+            .open_ledger()
+            .map_err(internal)?
+            .append_new_session(&id, &[(marker, 1, &json!({}))])
             .map_err(|e| internal(e.to_string()))?;
     }
 
@@ -277,7 +284,7 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
             "title": title,
             "workspace_root": workspace_root,
             "created_ms": meta.created_ms,
-            "mode": mode,
+            "mode": crate::session_mode::api_mode_name(mode),
             "route": meta.route,
             "project_id": project_id,
         }),
@@ -348,7 +355,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
             "fork_info": fork_info,
             "project_id": project.map(|p| p.id),
             "events": events_json,
-            "mode": if crate::investigation::is_investigation(&events) { "investigation" } else { "research" },
+            "mode": crate::session_mode::api_mode_name(crate::session_mode::session_mode(&events)),
             "investigation": crate::investigation::view(&events, running),
             "messages": messages,
             "traces": traces,
