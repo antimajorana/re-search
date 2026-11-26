@@ -6,6 +6,7 @@ mod investigation;
 mod investigation_cites;
 mod investigation_finish;
 pub mod investigation_mapview;
+pub mod investigation_open;
 mod investigation_question;
 mod investigation_scope;
 pub mod investigation_skeleton;
