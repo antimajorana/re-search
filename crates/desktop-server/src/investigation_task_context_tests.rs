@@ -391,4 +391,3 @@ fn carbon_audit_guards_profile_cli_cites_and_mapview_excerpts() {
     assert!(!dumped.contains("LARGE_EXCERPT_SENTINEL_MUST_BE_STRIPPED"), "mapview must omit raw excerpts");
     assert!(dumped.contains("compact self-adjoint operator"), "mapview must keep matched quote chips");
 }
-

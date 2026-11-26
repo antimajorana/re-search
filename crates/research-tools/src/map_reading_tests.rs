@@ -447,4 +447,3 @@ fn open_edge_destination_must_be_in_item_scope_and_empty_done_requires_limitatio
     assert_eq!(lim_done["status"], "recorded");
     assert!(lim_done["reading_seq"].as_u64().is_some());
 }
-

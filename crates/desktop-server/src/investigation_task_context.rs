@@ -11,7 +11,8 @@ use research_tools::lines_sent::{
 };
 use research_tools::sandbox::WorkspaceSandbox;
 use research_tools::skeleton::{
-    load_ingested_tex_source, PaperSkeleton, SkEdgeKind, SkNode, SkNodeKind, Span,
+    load_ingested_pdf_source, load_ingested_tex_source, PaperSkeleton, SkEdgeKind, SkNode,
+    SkNodeKind, SkeletonBuilder, Span,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -56,11 +57,22 @@ pub fn build_task_context(
     focus: Option<&str>,
     max_chars: usize,
 ) -> Result<BuiltTaskContext, String> {
-    let ingested = load_ingested_tex_source(sandbox, session_id, receipt)?;
-    if ingested.source_id != skeleton.source_id {
+    let (ingested_source_id, ingested_files, ingested_files_sha256) =
+        if skeleton.builder == SkeletonBuilder::Pdf1 {
+            let pdf = load_ingested_pdf_source(sandbox, session_id, receipt)?;
+            (
+                pdf.source_id,
+                BTreeMap::from([(pdf.primary_path, pdf.text)]),
+                pdf.files_sha256,
+            )
+        } else {
+            let tex = load_ingested_tex_source(sandbox, session_id, receipt)?;
+            (tex.source_id, tex.files, tex.files_sha256)
+        };
+    if ingested_source_id != skeleton.source_id {
         return Err(format!(
             "source receipt `{}` does not match skeleton source `{}`",
-            ingested.source_id, skeleton.source_id
+            ingested_source_id, skeleton.source_id
         ));
     }
 
@@ -77,10 +89,10 @@ pub fn build_task_context(
 
     let mut raw_ranges: Vec<SuppliedRange> = Vec::new();
     for block in select_blocks(skeleton, &ordered, task, tags) {
-        let content = ingested.files.get(&block.span.path).ok_or_else(|| {
+        let content = ingested_files.get(&block.span.path).ok_or_else(|| {
             format!("source file `{}` referenced by skeleton is missing from verified receipt", block.span.path)
         })?;
-        let file_sha256 = ingested.files_sha256.get(&block.span.path).ok_or_else(|| {
+        let file_sha256 = ingested_files_sha256.get(&block.span.path).ok_or_else(|| {
             format!("missing SHA-256 digest for source file `{}`", block.span.path)
         })?;
         let lines: Vec<&str> = content.lines().map(|l| l.strip_suffix('\r').unwrap_or(l)).collect();
@@ -91,14 +103,14 @@ pub fn build_task_context(
         let max_end = block.span.end_line.min(lines.len());
         let remaining = max_chars.saturating_sub(instructions.chars().count());
         let Some((rendered, delivered_end)) = render_quoted_block(
-            &block.heading, &ingested.source_id, &block.span.path, file_sha256,
+            &block.heading, &ingested_source_id, &block.span.path, file_sha256,
             &lines, start, max_end, remaining,
         ) else {
             continue;
         };
         instructions.push_str(&rendered);
         raw_ranges.push(SuppliedRange {
-            source_id: ingested.source_id.clone(),
+            source_id: ingested_source_id.clone(),
             path: block.span.path,
             file_sha256: file_sha256.clone(),
             start_line: start,
