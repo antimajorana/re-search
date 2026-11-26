@@ -424,3 +424,59 @@ fn context_supplied_payload_validates_and_round_trips() {
     )
     .is_err());
 }
+
+#[test]
+fn read_map_node_credits_hash_pinned_delivered_lines_only() {
+    let result_ok = json!({
+        "source_id": "src1",
+        "tag": "n-abc1234567",
+        "files": [
+            {
+                "section": "statement",
+                "source_id": "src1",
+                "path": "src1/main.tex",
+                "file_sha256": HASH_A,
+                "start_line": 10,
+                "end_line": 14,
+                "line_truncated": false,
+                "text": "10\tstatement\n"
+            },
+            {
+                "section": "proof",
+                "source_id": "src1",
+                "path": "src1/main.tex",
+                "file_sha256": HASH_A,
+                "start_line": 20,
+                "end_line": 23,
+                "line_truncated": true,
+                "text": "20\tproof\n"
+            },
+            {
+                "section": "statement",
+                "source_id": "src1",
+                "path": "src1/bad.tex",
+                "file_sha256": "not-a-hash",
+                "start_line": 1,
+                "end_line": 5,
+                "line_truncated": false,
+                "text": "1\tbad\n"
+            }
+        ],
+        "truncated": true
+    });
+    let events = [
+        ev(1, "tool.request", json!({ "call_id": "rmn-1", "caller": "agent:anthropic:s1", "tool": READ_MAP_NODE_TOOL })),
+        ev(2, "tool.result", json!({ "call_id": "rmn-1", "ok": true, "result": result_ok })),
+        ev(3, "tool.request", json!({ "call_id": "rmn-2", "caller": "agent:anthropic:s1", "tool": READ_MAP_NODE_TOOL })),
+        ev(4, "tool.result", json!({ "call_id": "rmn-2", "ok": false, "result": result_ok })),
+    ];
+    let sent = lines_sent(&events, None);
+    assert!(sent.covers("agent:anthropic:s1", "src1", "src1/main.tex", HASH_A, 10, 14));
+    // line_truncated=true drops line 23 while keeping 20..=22.
+    assert!(sent.covers("agent:anthropic:s1", "src1", "src1/main.tex", HASH_A, 20, 22));
+    assert!(!sent.covers("agent:anthropic:s1", "src1", "src1/main.tex", HASH_A, 23, 23));
+    // Wrong hash or different caller is rejected.
+    assert!(!sent.covers("agent:anthropic:s1", "src1", "src1/main.tex", HASH_B, 10, 14));
+    assert!(!sent.covers("worker:other", "src1", "src1/main.tex", HASH_A, 10, 14));
+    assert!(!sent.covers("agent:anthropic:s1", "src1", "src1/bad.tex", "not-a-hash", 1, 5));
+}

@@ -450,14 +450,52 @@ fn credit_fs_read(caller: &str, result: &Value, acc: &mut BTreeMap<SentFileKey, 
     }
 }
 
-/// Placeholder for crediting line ranges returned by `read_map_node`.
-///
-/// Investigate package V6 will populate this function once `read_map_node`'s result schema lands.
+/// Credit hash-pinned line ranges returned by `read_map_node` (`files[]` array, package V6 / F4).
 fn credit_read_map_node_result(
-    _caller: &str,
-    _result: &Value,
-    _acc: &mut BTreeMap<SentFileKey, Vec<LineRange>>,
+    caller: &str,
+    result: &Value,
+    acc: &mut BTreeMap<SentFileKey, Vec<LineRange>>,
 ) {
+    let top_source_id = result
+        .get("source_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    let Some(files) = result.get("files").and_then(Value::as_array) else {
+        return;
+    };
+    for block in files {
+        let Some(path) = block.get("path").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let Some(file_sha256) = block
+            .get("file_sha256")
+            .and_then(Value::as_str)
+            .filter(|s| is_sha256_hex(s))
+        else {
+            continue;
+        };
+        let Some(source_id) = block
+            .get("source_id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .or(top_source_id)
+            .or_else(|| path.split_once('/').map(|(id, _)| id).filter(|s| !s.is_empty()))
+        else {
+            continue;
+        };
+        let (Some(start_line), Some(mut end_line)) =
+            (json_usize(block.get("start_line")), json_usize(block.get("end_line")))
+        else {
+            continue;
+        };
+        if block.get("line_truncated").and_then(Value::as_bool) == Some(true) {
+            end_line = end_line.saturating_sub(1);
+        }
+        if start_line == 0 || start_line > end_line {
+            continue;
+        }
+        push_range(acc, caller, source_id, path, file_sha256, start_line, end_line);
+    }
 }
 
 #[cfg(test)]

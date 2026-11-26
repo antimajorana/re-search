@@ -230,9 +230,23 @@ fn build_router() -> Result<Router, String> {
                 Some(name) => name,
                 None => {
                     let events = ledger.read_session(&session).map_err(|e| e.to_string())?;
-                    research_tools::tool_profile::profile_for_session_events(&events)?
-                        .name
-                        .to_string()
+                    // Subscription-CLI callers that do not pass `CORE_TOOL_PROFILE` expect the
+                    // legacy profile list until `cli_turn.rs` passes `CORE_TOOL_PROFILE` explicitly.
+                    let explicit = events
+                        .iter()
+                        .find(|e| e.kind == "session.start")
+                        .and_then(|e| e.payload.get(research_tools::tool_profile::TOOL_PROFILE_FIELD));
+                    if explicit.is_some() {
+                        research_tools::tool_profile::profile_for_session_events(&events)?
+                            .name
+                            .to_string()
+                    } else {
+                        let legacy = research_tools::tool_profile::legacy_profile_name_for_events(&events);
+                        research_tools::tool_profile::lookup(legacy)
+                            .map_err(|e| e.to_string())?
+                            .name
+                            .to_string()
+                    }
                 }
             };
             let policy = cli_route::core_tools::register_core_tools_for_profile(

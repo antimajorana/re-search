@@ -70,10 +70,14 @@ fn research_v1_contains_all_research_tools_plus_host_tools_in_id_order() {
 }
 
 #[test]
-fn investigation_v1_encodes_legacy_may_gain_and_earlier_defs_as_data() {
+fn investigation_v1_and_v2_encode_may_gain_and_earlier_defs_as_data_while_research_v1_stays_frozen() {
+    let r1 = research_v1();
+    assert_eq!(r1.may_gain, LEGACY_MAY_GAIN);
+    assert!(!r1.allows_gain(&read_map_node_def()), "research/1 must never gain read_map_node");
+    assert!(!r1.allows_gain(&record_map_reading_def()), "research/1 must never gain record_map_reading");
+
     let p = investigation_v1();
-    assert_eq!(p.may_gain, LEGACY_MAY_GAIN);
-    assert_eq!(p.may_gain.len(), 7);
+    assert_eq!(p.may_gain.len(), LEGACY_MAY_GAIN.len() + INVESTIGATION_V2_MAY_GAIN.len());
     for id in LEGACY_MAY_GAIN {
         let def = p.def_for(id).unwrap_or_else(|| panic!("missing {id}"));
         assert!(p.allows_gain(def), "{id} should be allowed to gain");
@@ -81,6 +85,25 @@ fn investigation_v1_encodes_legacy_may_gain_and_earlier_defs_as_data() {
         wrong_effect.effect = EffectClass::WriteWorkspace;
         assert!(!p.allows_gain(&wrong_effect), "WriteWorkspace must never be gained");
     }
+    assert!(p.allows_gain(&read_map_node_def()), "investigation/1 must allow gaining read_map_node");
+    assert!(p.allows_gain(&record_map_reading_def()), "investigation/1 must allow gaining record_map_reading");
+    let mut bad_v6 = read_map_node_def();
+    bad_v6.effect = EffectClass::WriteWorkspace;
+    assert!(!p.allows_gain(&bad_v6), "WriteWorkspace V6 tool must never be gained");
+
+    let v2 = investigation_v2();
+    assert_eq!(v2.name, PROFILE_INVESTIGATION_V2);
+    assert_eq!(v2.defs.len(), r1.defs.len() + 2);
+    assert!(v2.def_for(crate::map_defs::READ_MAP_NODE).is_some());
+    assert!(v2.def_for(crate::map_defs::RECORD_MAP_READING).is_some());
+    assert!(v2.def_for(crate::map_defs::RECORD_CONTEXT_CARDS).is_none());
+    assert!(v2.def_for(crate::map_defs::RECORD_PRIOR_WORK_CHECK).is_none());
+    for pair in v2.defs.windows(2) {
+        assert!(pair[0].id < pair[1].id, "investigation/2 not sorted");
+    }
+    // New Investigate session (no session.start yet) resolves to investigation/2.
+    let new_inv = [dummy_event(1, MARKER_INVESTIGATION_STARTED, json!({}))];
+    assert_eq!(profile_for_session_events(&new_inv).unwrap().name, PROFILE_INVESTIGATION_V2);
 
     let map_hashes: Vec<String> = p.earlier_defs_for(RECORD_PAPER_MAP).iter().map(ToolDef::def_hash).collect();
     assert_eq!(map_hashes.len(), 3);

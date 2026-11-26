@@ -112,12 +112,22 @@ fn every_built_profile_def_hash_agrees_with_tool_defs_golden() {
         }
     }
 
-    for name in [PROFILE_RESEARCH_V1, PROFILE_INVESTIGATION_V1] {
+    for name in [PROFILE_RESEARCH_V1, PROFILE_INVESTIGATION_V1, PROFILE_INVESTIGATION_V2] {
         let profile = lookup(name).unwrap();
         for pair in profile.defs.windows(2) {
             assert!(pair[0].id < pair[1].id, "profile `{name}` out of id order");
         }
         for def in &profile.defs {
+            if name == PROFILE_INVESTIGATION_V2
+                && matches!(
+                    def.id.as_str(),
+                    research_tools::map_defs::READ_MAP_NODE
+                        | research_tools::map_defs::RECORD_MAP_READING
+                )
+            {
+                assert_eq!(def.effect, policy::EffectClass::ReadWorkspace);
+                continue;
+            }
             let expected = pinned
                 .get(&def.id)
                 .unwrap_or_else(|| panic!("profile `{name}` tool `{}` missing from tool_defs.txt", def.id));
@@ -135,7 +145,7 @@ fn every_built_profile_def_hash_agrees_with_tool_defs_golden() {
 fn reserved_profiles_return_clear_not_built_yet_error() {
     assert_eq!(
         RESERVED_PROFILE_NAMES,
-        &[PROFILE_INVESTIGATION_V2, PROFILE_EXPLORE_V1, PROFILE_SOLVE_V1]
+        &[PROFILE_EXPLORE_V1, PROFILE_SOLVE_V1]
     );
     for name in RESERVED_PROFILE_NAMES {
         let err = lookup(name).expect_err("reserved profile must return Err");

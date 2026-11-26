@@ -47,9 +47,11 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | Library lane: F13a sources and sync, F16a corrections by code, F15 write-up core | reviewed, wired and merged (`/api/sources` and `/api/lessons` registered) | `paper_sources.rs`, `source_*.rs`, `lessons*.rs`, `export/src/writeup*.rs`; report `reports/lib-f13a-f16a-f15.md` |
 | F13a library sync integrity | reviewed and merged | `library_db_sync*.rs`, `source_sync*.rs`, `tests/source_sync_integrity.rs`; report `reports/f13a-sync-integrity.md` |
 | V17 Investigate PDF skeleton | reviewed, wired and merged; Windows verified | `crates/research-tools/src/skeleton/pdf*.rs`; report `reports/inv-v17-pdf-skeleton.md` |
-| V6 Investigate reader and task lifecycle | Neon launched | `gemini/modes/inv-v6-tasks` |
+| V6 Investigate reader and task lifecycle | reviewed, wired and merged; Windows verified | `investigation_markers.rs`, `map_{defs,node_read,reading*,fold}.rs`, `investigation_{tasks,task_context}.rs`; report `reports/inv-v6-tasks.md` |
 | V11 Investigate cited result without a model | Neon launched | `gemini/modes/inv-v11-cited` |
-| V13 Investigate focused and whole-paper graph views | Neon launched | `gemini/modes/inv-v13-wholemap` |
+| V13 Investigate focused and whole-paper graph views | reviewed, wired and merged; Windows browser verified | `assets/investigation_wholemap{,_model}.{js,css}`; report `reports/inv-v13-wholemap.md` |
+| V7 Orient, V8 Open any node, V10 reader notes | brief published (`agents/inv-v7-v8-v10.md`) | `gemini/modes/inv-v7-v8-v10` |
+| V9 Investigate legacy adapter | brief published (`agents/inv-v9-legacy.md`) | `gemini/modes/inv-v9-legacy` |
 | X3 Explore session and stage machine, X4 model-free first screen | Neon launched | `gemini/modes/exp-x3-x4-shell` |
 | S4 Solve setup and view, S5 first screen and shared approval card | Neon launched | `gemini/modes/solve-s4-s5-setup` |
 | S7 Solve `solve/1` profile freeze and expression store | Neon launched | `gemini/modes/solve-s7-exprs` |

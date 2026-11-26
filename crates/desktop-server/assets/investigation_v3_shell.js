@@ -4,16 +4,12 @@
 // with zero model calls (including when no model provider is connected).
 
 import * as api from '/assets/api.js';
-import { createGraphView } from '/assets/graph_view.js';
 import { renderInvestigationEntry } from '/assets/investigation_entry.js';
 import { renderInvestigationNodeCard } from '/assets/investigation_node.js';
 import { createQualityBanner, renderInvestigationOutline } from '/assets/investigation_outline.js';
-import { RESULT_KINDS, filterResultNodes, renderInvestigationResults } from '/assets/investigation_results.js';
+import { filterResultNodes, renderInvestigationResults } from '/assets/investigation_results.js';
 import { lookupNearestSymbol, renderReadingPlanStrip, renderSymbolPopover } from '/assets/investigation_skip.js';
-
-const GRAPH_STATEMENT_KINDS = new Set([
-  ...RESULT_KINDS, 'definition', 'assumption', 'equation',
-]);
+import { createInvestigateWholeMap, VIEW_MODES } from '/assets/investigation_wholemap.js';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -51,37 +47,6 @@ export function isSkeletonSource(source) {
   return String(source.format || '').toLowerCase() === 'pdf';
 }
 
-function buildFocusedGraphData(mapview, selectedTag, wholeMap) {
-  const allNodes = Array.isArray(mapview?.nodes) ? mapview.nodes : [];
-  const allEdges = Array.isArray(mapview?.edges) ? mapview.edges : [];
-  const keepIds = new Set();
-  if (wholeMap) {
-    for (const n of allNodes) {
-      if (GRAPH_STATEMENT_KINDS.has(String(n.kind || '').toLowerCase())) keepIds.add(n.id);
-    }
-  } else if (selectedTag) {
-    keepIds.add(selectedTag);
-    for (const e of allEdges) {
-      if (e.kind !== 'uses') continue;
-      if (e.dst === selectedTag && e.src) keepIds.add(e.src);
-      if (e.src === selectedTag && e.dst) keepIds.add(e.dst);
-    }
-  }
-  if (keepIds.size === 0) {
-    for (const n of allNodes) {
-      if (RESULT_KINDS.includes(String(n.kind || '').toLowerCase())) keepIds.add(n.id);
-    }
-  }
-  if (keepIds.size === 0) {
-    for (const n of allNodes) {
-      if (GRAPH_STATEMENT_KINDS.has(String(n.kind || '').toLowerCase())) keepIds.add(n.id);
-    }
-  }
-  const nodes = allNodes.filter((n) => keepIds.has(n.id));
-  const edges = allEdges.filter((e) => e.kind === 'uses' && keepIds.has(e.src) && keepIds.has(e.dst));
-  return { nodes, edges, legend: Array.isArray(mapview?.legend) ? mapview.legend : [] };
-}
-
 function pickInitialNodeTag(mapview) {
   const results = filterResultNodes(mapview?.nodes, 'results');
   if (results.length > 0) return results[0].id;
@@ -99,6 +64,14 @@ export function createInvestigationV3Controller(deps = {}) {
   let activeSessionId = null;
   let activeKey = '';
   let loadToken = 0;
+  let activeWholeMap = null;
+
+  function destroyWholeMap() {
+    if (activeWholeMap) {
+      activeWholeMap.destroy?.();
+      activeWholeMap = null;
+    }
+  }
 
   function sessionState(sessionId) {
     if (!bySession.has(sessionId)) {
@@ -108,6 +81,7 @@ export function createInvestigationV3Controller(deps = {}) {
         selectedTag: null,
         trail: [],
         wholeMap: false,
+        graphMode: null,
         filter: 'results',
         nodeTexts: new Map(),
       });
@@ -129,6 +103,7 @@ export function createInvestigationV3Controller(deps = {}) {
   }
 
   function renderShell(host, sessionId, sessionData, hooks) {
+    destroyWholeMap();
     const st = sessionState(sessionId);
     const mv = st.mapview;
     if (!mv || mv.skeleton_seq == null) {
@@ -210,12 +185,22 @@ export function createInvestigationV3Controller(deps = {}) {
       outlineHost.replaceChildren(...[...outlineHost.children].filter((c) => c !== innerBanner));
     }
 
-    const graphData = buildFocusedGraphData(mv, st.selectedTag, st.wholeMap);
-    if (graphData.nodes.length > 0) {
-      const gv = createGraphView(graphHost, graphData, {
-        onSelect: (id) => selectNode(id, true),
+    if (Array.isArray(mv.nodes) && mv.nodes.length > 0) {
+      const initialMode = st.graphMode
+        || (st.wholeMap ? VIEW_MODES.WHOLE : (st.selectedTag ? VIEW_MODES.FOCUSED : VIEW_MODES.RESULTS));
+      activeWholeMap = createInvestigateWholeMap(graphHost, mv, {
+        initialMode,
+        selectedId: st.selectedTag,
+        onSelectNode: (id) => {
+          if (id && id !== st.selectedTag) selectNode(id, true);
+        },
+        onModeChange: (nextMode) => {
+          st.graphMode = nextMode;
+          st.wholeMap = nextMode === VIEW_MODES.WHOLE;
+          focusBtn.setAttribute('aria-pressed', st.wholeMap ? 'false' : 'true');
+          mapBtn.setAttribute('aria-pressed', st.wholeMap ? 'true' : 'false');
+        },
       });
-      if (st.selectedTag) gv.selectNode?.(st.selectedTag);
     } else {
       graphHost.hidden = true;
     }
@@ -312,13 +297,15 @@ export function createInvestigationV3Controller(deps = {}) {
     mountNodeCard(currentEntry);
 
     focusBtn.addEventListener('click', () => {
-      if (!st.wholeMap) return;
+      if (!st.wholeMap && st.graphMode === VIEW_MODES.FOCUSED) return;
       st.wholeMap = false;
+      st.graphMode = VIEW_MODES.FOCUSED;
       renderShell(host, sessionId, sessionData, hooks);
     });
     mapBtn.addEventListener('click', () => {
       if (st.wholeMap) return;
       st.wholeMap = true;
+      st.graphMode = VIEW_MODES.WHOLE;
       renderShell(host, sessionId, sessionData, hooks);
     });
 
@@ -432,6 +419,7 @@ export function createInvestigationV3Controller(deps = {}) {
       if (!host) return false;
       if (!sessionId || sessionData?.mode !== 'investigation') {
         activeKey = '';
+        destroyWholeMap();
         ensureEntryCard(sessionId, false, hooks);
         host.hidden = true;
         host.replaceChildren();
@@ -446,6 +434,7 @@ export function createInvestigationV3Controller(deps = {}) {
       const eligible = inv.skeleton_seq != null || Boolean(inv.skeleton) || isSkeletonSource(pinned);
       if (!eligible) {
         activeKey = '';
+        destroyWholeMap();
         host.hidden = true;
         host.replaceChildren();
         return false;
@@ -461,6 +450,7 @@ export function createInvestigationV3Controller(deps = {}) {
         const mv = await apiMod.getInvestigationMapview(sessionId);
         if (token !== loadToken || activeSessionId !== sessionId) return false;
         if (!mv || mv.skeleton_seq == null) {
+          destroyWholeMap();
           host.hidden = true;
           host.replaceChildren();
           return false;
@@ -475,6 +465,7 @@ export function createInvestigationV3Controller(deps = {}) {
         return true;
       } catch (err) {
         if (token === loadToken) {
+          destroyWholeMap();
           host.hidden = true;
           hooks?.showStatus?.(err?.message || 'Could not load paper structure.');
         }
