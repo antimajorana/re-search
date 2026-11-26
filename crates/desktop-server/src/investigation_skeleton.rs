@@ -18,8 +18,9 @@ use crate::state::DesktopState;
 use ledger::{Event, Ledger};
 use research_tools::paper_key::{split_arxiv_id, PaperKey};
 use research_tools::skeleton::{
-    build_pdf_skeleton_from_ingested, build_tex_skeleton_from_ingested, load_ingested_pdf_source,
-    BuildTiming, PaperSkeleton, SkNodeKind, SkeletonBuilder,
+    build_html_skeleton_from_ingested, build_pdf_skeleton_from_ingested,
+    build_tex_skeleton_from_ingested, is_html_receipt, load_ingested_pdf_source, BuildTiming,
+    PaperSkeleton, SkNodeKind, SkeletonBuilder,
 };
 use research_tools::validate_session_id;
 use serde_json::{json, Value};
@@ -72,9 +73,9 @@ pub fn is_pdf_receipt(receipt: &Event) -> bool {
             || p.get("pdf_pages").is_some_and(Value::is_array))
 }
 
-/// True iff `receipt` supports deterministic skeleton building (`tex-1` or `pdf-1`).
+/// True iff `receipt` supports deterministic skeleton building (`tex-1`, `html-1`, or `pdf-1`).
 pub fn is_skeleton_receipt(receipt: &Event) -> bool {
-    is_tex_receipt(receipt) || is_pdf_receipt(receipt)
+    is_tex_receipt(receipt) || is_html_receipt(receipt) || is_pdf_receipt(receipt)
 }
 
 /// Derives `(PaperKey, version)` from overrides, `arxiv_cover_id`, `origin`, `raw_blob`, or `source_id`.
@@ -301,11 +302,14 @@ pub(crate) fn build_skeleton_from_receipt(
     if is_tex_receipt(receipt) {
         let (out, timing) = build_tex_skeleton_from_ingested(sandbox, session_id, receipt, paper_key, version)?;
         Ok((out.skeleton, timing))
+    } else if is_html_receipt(receipt) {
+        let (out, timing) = build_html_skeleton_from_ingested(sandbox, session_id, receipt, paper_key, version)?;
+        Ok((out.skeleton, timing))
     } else if is_pdf_receipt(receipt) {
         let (out, timing) = build_pdf_skeleton_from_ingested(sandbox, session_id, receipt, paper_key, version)?;
         Ok((out.skeleton, timing))
     } else {
-        Err("source is neither TeX nor PDF with an extracted page map".to_string())
+        Err("source is neither TeX, LaTeXML HTML, nor PDF with an extracted page map".to_string())
     }
 }
 

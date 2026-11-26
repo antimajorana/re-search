@@ -13,6 +13,7 @@ pub mod investigation_mapview_v7;
 mod investigation_mapview_v8;
 pub mod investigation_notes;
 pub mod investigation_open;
+pub mod investigation_open_html;
 mod investigation_question;
 mod investigation_scope;
 pub mod investigation_settings;

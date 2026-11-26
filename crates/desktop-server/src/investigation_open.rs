@@ -31,7 +31,7 @@ use research_tools::library::{Library, LibraryIds, PaperFlags, PaperRecord, Seen
 use research_tools::net_rate::{global_gate, NetRateGate};
 use research_tools::paper_fetch::{
     check_fetch_budget, fetch_with_progress, fetched_sources, parse_paper_input, FetchOutcome,
-    FetchStage, FetchWant, PaperMetadata, DEFAULT_INVESTIGATE_FETCH_LIMIT,
+    FetchWant, PaperMetadata, DEFAULT_INVESTIGATE_FETCH_LIMIT,
 };
 use research_tools::paper_key::{PaperIds, PaperKey, PaperKeyKind, PaperRef};
 use research_tools::skeleton::{PaperSkeleton, SkNodeKind};
@@ -63,7 +63,7 @@ const EVENT_SOURCE_INGESTED: &str = "source.ingested";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenStep {
-    Queued, Metadata, LibraryLookup, EprintTex, PdfFallback,
+    Queued, Metadata, LibraryLookup, EprintTex, HtmlFallback, PdfFallback,
     Ingest, Skeleton, Done, NeedsFile, Failed,
 }
 
@@ -106,23 +106,24 @@ impl OpenJobSnapshot {
         }
     }
 
-    fn advance(&mut self, step: OpenStep, status: &str, msg: impl Into<String>) {
+    pub(crate) fn advance(&mut self, step: OpenStep, status: &str, msg: impl Into<String>) {
         if self.step != step { self.step = step; self.history.push(step); }
         self.status = status.to_string();
         self.message = msg.into();
     }
 }
 
-struct OpenJobSlot { snapshot: Mutex<OpenJobSnapshot>, cv: Condvar }
+pub(crate) struct OpenJobSlot { snapshot: Mutex<OpenJobSnapshot>, cv: Condvar }
 struct JobMap { by_id: HashMap<String, Arc<OpenJobSlot>>, order: VecDeque<String> }
 struct BuiltSkeletonSummary { event_seq: u64, blob_hash: String, timing_us: Option<u64> }
 struct LocalOpenOpts {
     key_override: Option<PaperKey>, version: Option<String>, question: Option<String>,
     title: Option<String>, should_pin: bool, used: usize, limit: usize,
 }
-struct OpenWorkerConfig {
-    data_dir: PathBuf, env: ResearchEnv, session_id: String, paper: PaperRef,
-    question: Option<String>, should_pin: bool, gate: Option<Arc<NetRateGate>>,
+pub(crate) struct OpenWorkerConfig {
+    pub(crate) data_dir: PathBuf, pub(crate) env: ResearchEnv, pub(crate) session_id: String,
+    pub(crate) paper: PaperRef, pub(crate) question: Option<String>, pub(crate) should_pin: bool,
+    pub(crate) gate: Option<Arc<NetRateGate>>,
 }
 
 static JOB_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -148,7 +149,7 @@ fn get_job_slot(session_id: &str, job_id: &str) -> Option<Arc<OpenJobSlot>> {
     let matches = slot.snapshot.lock().unwrap_or_else(|e| e.into_inner()).session_id == session_id;
     matches.then_some(slot)
 }
-fn update_slot(slot: &OpenJobSlot, f: impl FnOnce(&mut OpenJobSnapshot)) {
+pub(crate) fn update_slot(slot: &OpenJobSlot, f: impl FnOnce(&mut OpenJobSnapshot)) {
     f(&mut slot.snapshot.lock().unwrap_or_else(|e| e.into_inner()));
     slot.cv.notify_all();
 }
@@ -376,45 +377,26 @@ fn run_network_open_inner(cfg: &OpenWorkerConfig, slot: &Arc<OpenJobSlot>) -> Re
         metadata = Some(meta);
     }
 
-    // Step 2: source lookup (cache -> arXiv TeX e-print -> arXiv PDF fallback).
-    let slot_cb = Arc::clone(slot);
-    let outcome = fetch_with_progress(&cfg.env, &cfg.paper, FetchWant::Source, gate_ref, &mut |fs| {
-        let next = match fs {
-            FetchStage::CheckingCache => Some((OpenStep::LibraryLookup, "Checking local paper library cache.")),
-            FetchStage::FetchingEprint => Some((OpenStep::EprintTex, "Downloading arXiv TeX source.")),
-            FetchStage::FetchingPdf => Some((OpenStep::PdfFallback, "Falling back to arXiv PDF.")),
-            _ => None,
-        };
-        if let Some((step, msg)) = next { update_slot(&slot_cb, |s| s.advance(step, "running", msg)); }
-    })?;
-
-    let mut fetched = match outcome {
-        FetchOutcome::Source(src) => src,
-        FetchOutcome::NeedsFile { paper, reason } => {
-            let why = if reason.trim().is_empty() { NEEDS_FILE_HINT.to_string() } else { reason };
-            update_slot(slot, |s| {
-                if s.metadata.is_none() { s.paper = Some(paper); }
-                s.needs_file_reason = Some(why.clone());
-                s.advance(OpenStep::NeedsFile, "needs_file", why);
-            });
-            return Ok(());
-        }
-        other => return Err(format!("unexpected fetch outcome: {}", other.status_str())),
+    // Step 2: source lookup (cache -> arXiv TeX e-print -> arXiv HTML fallback -> arXiv PDF fallback).
+    let Some(fetched) = crate::investigation_open_html::fetch_source_with_html_fallback(
+        cfg,
+        gate_ref,
+        metadata.as_ref(),
+        slot,
+    )? else {
+        return Ok(());
     };
-    if fetched.title.is_none() {
-        fetched.title = metadata.as_ref().map(|m| m.title.clone()).filter(|t| !t.trim().is_empty());
-    }
 
     // Step 3: ingest validated bytes into this session's own ledger.
     update_slot(slot, |s| s.advance(OpenStep::Ingest, "running", "Ingesting paper into session."));
     let ledger_mutex = Mutex::new(Ledger::open(&cfg.data_dir).map_err(|e| format!("failed to open ledger: {e}"))?);
-    let ingested = fetched.ingest_into_session(&cfg.env.sandbox(), &ledger_mutex, &cfg.session_id, None)?;
+    let ingested = fetched.ingest_into_session(&cfg.env.sandbox(), &ledger_mutex, &cfg.session_id)?;
     let ledger = ledger_mutex.into_inner().unwrap_or_else(|e| e.into_inner());
     record_investigated_in_library(&cfg.data_dir, &cfg.session_id, &fetched.paper, metadata.as_ref(), fetched.title.as_deref());
 
     let events = ledger.read_session(&cfg.session_id).map_err(|e| format!("failed to read session events: {e}"))?;
     let (budget_used, budget_limit, origin_str) =
-        (fetched_sources(&events), effective_fetch_limit(&events), fetched.origin.as_str().to_string());
+        (fetched_sources(&events), effective_fetch_limit(&events), fetched.source_origin.clone());
     update_slot(slot, |s| {
         s.paper = Some(fetched.paper.clone()); s.source_id = Some(ingested.source_id.clone());
         s.source_origin = Some(origin_str); s.fetch_budget_used = budget_used; s.fetch_budget_limit = budget_limit;
