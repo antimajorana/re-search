@@ -371,6 +371,26 @@ pub(crate) fn dispatch_api(
             &mut stream,
             crate::routes_library::handle_library(state, method, rest, &req.query, &req.body),
         ),
+        (_, ["api", "sources", "export", "bibtex"]) => write_api_res(
+            &mut stream,
+            crate::routes_sources_ext::handle_sources_ext(
+                state,
+                method,
+                &["export", "bibtex"],
+                &req.query,
+                &req.body,
+            ),
+        ),
+        (_, ["api", "sources", "send", "kandinsky"]) => write_api_res(
+            &mut stream,
+            crate::routes_sources_ext::handle_sources_ext(
+                state,
+                method,
+                &["send", "kandinsky"],
+                &req.query,
+                &req.body,
+            ),
+        ),
         (_, ["api", "sources", rest @ ..]) => write_api_res(
             &mut stream,
             crate::routes_sources::handle_sources(state, method, rest, &req.query, &req.body),

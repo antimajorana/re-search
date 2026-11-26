@@ -68,6 +68,8 @@ pub mod source_bibtex;
 mod source_bibtex_parse;
 mod source_bibtex_tex;
 pub mod source_dedupe;
+pub mod source_export;
+mod source_export_bib;
 pub mod source_folder;
 mod source_folder_parse;
 mod source_frontmatter;
