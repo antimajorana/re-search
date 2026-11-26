@@ -25,7 +25,7 @@ const MAX_EDGE_REASON_CHARS: usize = 600;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct InputAnchor {
+pub(crate) struct InputAnchor {
     pub source_id: String,
     #[serde(default)]
     pub path: Option<String>,
@@ -36,7 +36,10 @@ pub(super) struct InputAnchor {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct InputHypothesis { text: String, anchor: InputAnchor }
+pub(crate) struct InputHypothesis {
+    pub text: String,
+    pub anchor: InputAnchor,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,7 +74,7 @@ struct InputModelEdge {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct ReadingAnchorReport {
+pub(crate) struct ReadingAnchorReport {
     pub dropped: Vec<Value>,
     pub corrected: Vec<Value>,
 }
@@ -103,13 +106,23 @@ pub(super) struct ValidatedItem {
     pub temp_id: Option<String>,
 }
 
-struct AnchorErr { owner: String, code: String, message: String, true_text: Option<String> }
+pub(crate) struct AnchorErr {
+    pub owner: String,
+    pub code: String,
+    pub message: String,
+    pub true_text: Option<String>,
+}
 
-fn fault(index: usize, code: impl Into<String>, message: impl Into<String>, true_text: Option<String>) -> IndexedFault {
+pub(crate) fn fault(
+    index: usize,
+    code: impl Into<String>,
+    message: impl Into<String>,
+    true_text: Option<String>,
+) -> IndexedFault {
     IndexedFault { index, code: code.into(), message: message.into(), true_text }
 }
 
-pub(super) fn span_contains_anchor(spans: &[Span], anchor: &VerifiedMapAnchor) -> bool {
+pub(crate) fn span_contains_anchor(spans: &[Span], anchor: &VerifiedMapAnchor) -> bool {
     spans.iter().any(|s| s.path == anchor.path && s.start_line <= anchor.start_line && anchor.end_line <= s.end_line)
 }
 
@@ -168,40 +181,89 @@ fn to_verified_map_anchor(vq: VerifiedQuote, quote: &str) -> VerifiedMapAnchor {
     }
 }
 
-fn verify_one_anchor(
-    ctx: &ValidationCtx<'_>, owner: String, anchor: &InputAnchor, default_path: Option<&str>,
+pub(crate) fn verify_anchor_with_fallback(
+    sandbox: &WorkspaceSandbox,
+    session: &str,
+    events: &[Event],
+    sent: &SentLines,
+    caller: &str,
+    owner: String,
+    anchor: &InputAnchor,
+    fallback_path: Option<&str>,
 ) -> Result<(VerifiedMapAnchor, Option<Value>), AnchorErr> {
-    if anchor.source_id != ctx.source_id {
-        return Err(AnchorErr {
-            owner, code: "non_primary_source".into(),
-            message: format!("Anchor source_id `{}` must match primary paper `{}`.", anchor.source_id, ctx.source_id),
-            true_text: None,
-        });
-    }
-    let path = anchor.path.as_deref().filter(|s| !s.is_empty()).or(default_path).or(ctx.receipt_primary_path)
+    let path = anchor
+        .path
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or(fallback_path)
         .ok_or_else(|| AnchorErr {
-            owner: owner.clone(), code: "missing_path".into(),
+            owner: owner.clone(),
+            code: "missing_path".into(),
             message: "Anchor is missing `path` and no default source file path is available.".into(),
             true_text: None,
         })?;
     match accept_quote_with_sent(
-        &ctx.sandbox, ctx.session, ctx.events, ctx.sent, ctx.caller,
-        &anchor.source_id, path, anchor.start_line, anchor.end_line, &anchor.quote,
+        sandbox,
+        session,
+        events,
+        sent,
+        caller,
+        &anchor.source_id,
+        path,
+        anchor.start_line,
+        anchor.end_line,
+        &anchor.quote,
     ) {
         Ok(vq) => {
-            let corr = vq.cited_range.map(|from| json!({
-                "owner": owner, "lines": [vq.quote_ref.start_line, vq.quote_ref.end_line],
-                "from": from, "basis": vq.range_basis,
-            }));
+            let corr = vq.cited_range.map(|from| {
+                json!({
+                    "owner": owner,
+                    "lines": [vq.quote_ref.start_line, vq.quote_ref.end_line],
+                    "from": from,
+                    "basis": vq.range_basis,
+                })
+            });
             Ok((to_verified_map_anchor(vq, &anchor.quote), corr))
         }
-        Err(QuoteRejection::VerificationFailed(qf)) => {
-            Err(AnchorErr { owner, code: qf.code, message: qf.message, true_text: qf.true_text })
-        }
-        Err(rej @ QuoteRejection::LinesNotSent { .. }) => {
-            Err(AnchorErr { owner, code: "lines_not_sent".into(), message: rej.to_string(), true_text: None })
-        }
+        Err(QuoteRejection::VerificationFailed(qf)) => Err(AnchorErr {
+            owner,
+            code: qf.code,
+            message: qf.message,
+            true_text: qf.true_text,
+        }),
+        Err(rej @ QuoteRejection::LinesNotSent { .. }) => Err(AnchorErr {
+            owner,
+            code: "lines_not_sent".into(),
+            message: rej.to_string(),
+            true_text: None,
+        }),
     }
+}
+
+fn verify_one_anchor(
+    ctx: &ValidationCtx<'_>,
+    owner: String,
+    anchor: &InputAnchor,
+    default_path: Option<&str>,
+) -> Result<(VerifiedMapAnchor, Option<Value>), AnchorErr> {
+    if anchor.source_id != ctx.source_id {
+        return Err(AnchorErr {
+            owner,
+            code: "non_primary_source".into(),
+            message: format!("Anchor source_id `{}` must match primary paper `{}`.", anchor.source_id, ctx.source_id),
+            true_text: None,
+        });
+    }
+    verify_anchor_with_fallback(
+        &ctx.sandbox,
+        ctx.session,
+        ctx.events,
+        ctx.sent,
+        ctx.caller,
+        owner,
+        anchor,
+        default_path.or(ctx.receipt_primary_path),
+    )
 }
 
 fn verify_anchor_list(

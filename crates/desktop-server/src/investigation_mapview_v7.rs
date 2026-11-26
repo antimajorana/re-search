@@ -461,6 +461,7 @@ mod tests {
             anchors: FieldSlot::default(),
             authors_claim: slot,
             notes: vec![],
+            context_cards: vec![],
             pin: None,
             effective_is_main_result: false,
             any_stale: false,
