@@ -8,6 +8,7 @@ use crate::paper_sources::{
     canonicalize_source_root, now_ms, portable_path_string, PaperSourceAdapter, ScanContext,
     ScanWarning, TitleLookupHook, FILE_ROLE_PDF, FILE_ROLE_TEX, SOURCE_STATE_PENDING,
 };
+use crate::source_bibtex::{canonicalize_bibtex_source_root, BibtexAdapter};
 use crate::source_dedupe::{find_duplicates, DuplicateGroup};
 use crate::source_folder::FolderAdapter;
 use crate::source_kandinsky::KandinskyVaultAdapter;
@@ -69,13 +70,16 @@ fn build_candidate_source(
     settings: Value,
     custom_id: Option<String>,
 ) -> Result<SourceRecord, String> {
-    if !matches!(kind, SourceKind::KandinskyVault | SourceKind::Folder) {
-        return Err(format!(
-            "source kind `{}` is not supported in F13a (planned for F13b)",
-            kind.as_str()
-        ));
-    }
-    let canon_root = canonicalize_source_root(root)?;
+    let canon_root = match kind {
+        SourceKind::KandinskyVault | SourceKind::Folder => canonicalize_source_root(root)?,
+        SourceKind::Bibtex => canonicalize_bibtex_source_root(root)?,
+        other => {
+            return Err(format!(
+                "source kind `{}` is not supported yet",
+                other.as_str()
+            ));
+        }
+    };
     let root_str = portable_path_string(&canon_root);
     let id = match custom_id.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
         Some(explicit) => validate_source_id(&explicit)?,
@@ -208,11 +212,14 @@ pub fn commit_source_sync(
     Ok(prepared.report)
 }
 
-/// Sync all registered sources that F13a supports.
+/// Sync all registered sources supported by installed adapters.
 pub fn sync_all_sources(lib: &Library, opts: &SyncOptions) -> Result<Vec<SyncReport>, String> {
     let mut reports = Vec::new();
     for src in lib.list_sources()? {
-        if matches!(src.kind, SourceKind::KandinskyVault | SourceKind::Folder) {
+        if matches!(
+            src.kind,
+            SourceKind::KandinskyVault | SourceKind::Folder | SourceKind::Bibtex
+        ) {
             reports.push(sync_source(lib, &src.id, opts)?);
         }
     }
@@ -232,9 +239,10 @@ fn scan_and_prepare(
     let scan = match source.kind {
         SourceKind::KandinskyVault => KandinskyVaultAdapter.scan(source, &ctx)?,
         SourceKind::Folder => FolderAdapter.scan(source, &ctx)?,
+        SourceKind::Bibtex => BibtexAdapter.scan(source, &ctx)?,
         other => {
             return Err(format!(
-                "source kind `{}` is not supported in F13a (planned for F13b)",
+                "source kind `{}` is not supported yet",
                 other.as_str()
             ));
         }

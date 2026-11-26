@@ -64,6 +64,8 @@ mod solve_model_records;
 mod solve_own_tier;
 pub mod solve_state;
 pub mod solve_status;
+pub mod source_bibtex;
+mod source_bibtex_parse;
 pub mod source_dedupe;
 pub mod source_folder;
 mod source_folder_parse;

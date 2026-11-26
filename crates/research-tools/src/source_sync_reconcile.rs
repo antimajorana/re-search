@@ -87,7 +87,7 @@ pub(crate) fn reconcile_items(
                     venue: None,
                     dirty: false,
                 });
-            } else if same_item_content(&prev, &sc.item) && prev.state != SourceItemState::Missing {
+            } else if same_item_content(&prev, &sc.item) && prev.state == sc.item.state {
                 unchanged += 1;
                 let mut kept = sc.item;
                 kept.updated_ms = prev.updated_ms;
@@ -98,7 +98,15 @@ pub(crate) fn reconcile_items(
                     dirty: false,
                 });
             } else {
-                updated += 1;
+                if sc.item.state == SourceItemState::Missing
+                    && prev.state != SourceItemState::Missing
+                {
+                    missing += 1;
+                } else if detect_same_id_moved_file(&prev, &mut sc.item, roots_checked) {
+                    moved += 1;
+                } else {
+                    updated += 1;
+                }
                 out_entries.push(ReconciledEntry {
                     item: sc.item,
                     abstract_text: sc.abstract_text,
@@ -220,6 +228,35 @@ pub(crate) fn reconcile_items(
         missing,
         unchanged,
     }
+}
+
+fn detect_same_id_moved_file(
+    prev: &SourceItemRecord,
+    next: &mut SourceItemRecord,
+    roots_checked: &[PathBuf],
+) -> bool {
+    let Some((prev_sha, prev_size)) = primary_file_sha_and_size(prev) else {
+        return false;
+    };
+    let Some(prev_path) = prev
+        .files
+        .iter()
+        .find(|f| f.role != FILE_ROLE_NOTE && f.sha256.as_deref() == Some(prev_sha))
+        .map(|f| f.path.as_str())
+    else {
+        return false;
+    };
+    let Some(cand) = next
+        .files
+        .iter_mut()
+        .find(|f| f.role != FILE_ROLE_NOTE && f.path != prev_path && f.size == prev_size)
+    else {
+        return false;
+    };
+    if cand.sha256.is_none() {
+        cand.sha256 = hash_in_any_root(roots_checked, Path::new(&cand.path));
+    }
+    cand.sha256.as_deref() == Some(prev_sha)
 }
 
 fn primary_file_sha_and_size(item: &SourceItemRecord) -> Option<(&str, u64)> {
