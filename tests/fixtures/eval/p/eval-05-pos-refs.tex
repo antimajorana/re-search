@@ -1,0 +1,121 @@
+% Original fixed-tier evaluation fixture for Set P (not a real paper).
+% Tests position-sensitive references and an inner equation used in a deferred proof.
+\documentclass{article}
+\usepackage{amsmath,amssymb,amsthm}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\begin{document}
+
+\section{Introduction}
+\label{sec:intro}
+We study exponential energy decay for linear dissipative evolutions generated
+by coercive symmetric bilinear forms on a real Hilbert space. Our main
+estimate is Theorem~\ref{thm:decay}, which upgrades monotonicity of the
+squared norm to an explicit exponential decay rate.
+
+\section{Coercive forms and energy identity}
+\label{sec:prelim}
+
+\begin{definition}
+\label{def:coercive}
+Let $H$ be a real Hilbert space with inner product $\langle \cdot, \cdot \rangle$
+and norm $\|\cdot\|$. A bounded symmetric bilinear form $a : H \times H \to \mathbb{R}$
+is called \emph{$\alpha$-coercive} (for $\alpha > 0$) if
+$a(u,u) \ge \alpha \|u\|^2$ for all $u \in H$.
+\end{definition}
+
+\begin{lemma}
+\label{lem:energy}
+Let $a : H \times H \to \mathbb{R}$ be a bounded symmetric bilinear form with
+associated bounded self-adjoint operator $A : H \to H$ satisfying
+$\langle A u, v \rangle = a(u,v)$ for all $u,v \in H$. If
+$u \in C^1([0,\infty); H)$ solves $u'(t) + A u(t) = 0$, then for every $t \ge 0$,
+\begin{equation}
+\label{eq:energy-id}
+\frac{d}{dt}\|u(t)\|^2 + 2 a(u(t),u(t)) = 0.
+\end{equation}
+\end{lemma}
+\begin{proof}
+Differentiating $\|u(t)\|^2 = \langle u(t), u(t) \rangle$ and using symmetry
+of the inner product gives
+\[
+\frac{d}{dt}\|u(t)\|^2 = 2 \langle u'(t), u(t) \rangle
+= -2 \langle A u(t), u(t) \rangle = -2 a(u(t), u(t)).
+\]
+Rearranging yields the claimed identity.
+\end{proof}
+
+\section{Main decay results}
+\label{sec:main}
+
+\begin{proposition}
+\label{prop:contraction}
+Suppose $a$ is $\alpha$-coercive in the sense of Definition~\ref{def:coercive}.
+Then every solution $u \in C^1([0,\infty); H)$ of $u'(t) + A u(t) = 0$ satisfies
+$\|u(t)\| \le \|u(0)\|$ for all $t \ge 0$.
+\end{proposition}
+\begin{proof}
+Because $a(u(t), u(t)) \ge \alpha \|u(t)\|^2 \ge 0$, Lemma~\ref{lem:energy}
+implies $\frac{d}{dt}\|u(t)\|^2 = -2 a(u(t), u(t)) \le 0$ for all $t \ge 0$.
+Integrating from $0$ to $t$ yields $\|u(t)\|^2 \le \|u(0)\|^2$, and taking
+square roots concludes the argument.
+\end{proof}
+
+\begin{theorem}
+\label{thm:decay}
+Suppose $a$ is $\alpha$-coercive in the sense of Definition~\ref{def:coercive}
+with $\alpha > 0$. Then every solution $u \in C^1([0,\infty); H)$ of
+$u'(t) + A u(t) = 0$ satisfies
+\[
+\|u(t)\| \le e^{-\alpha t} \|u(0)\| \qquad \text{for all } t \ge 0.
+\]
+\end{theorem}
+
+In contrast to the differential identity of Lemma~\ref{lem:energy}, the global bound requires coercivity.
+
+\begin{remark}
+\label{rem:sharpness}
+The squared-norm decay rate $2\alpha$ is sharp: if $v \in H \setminus \{0\}$
+satisfies $A v = \alpha v$, then $u(t) = e^{-\alpha t} v$ solves
+$u'(t) + A u(t) = 0$ and attains $\|u(t)\|^2 = e^{-2\alpha t}\|u(0)\|^2$ for
+every $t \ge 0$.
+\end{remark}
+
+\begin{corollary}
+\label{cor:uniqueness}
+Under the hypotheses of Theorem~\ref{thm:decay}, any two solutions
+$u_1, u_2 \in C^1([0,\infty); H)$ of $u'(t) + A u(t) = 0$ with
+$u_1(0) = u_2(0)$ coincide for all $t \ge 0$.
+\end{corollary}
+\begin{proof}
+Set $w(t) = u_1(t) - u_2(t)$. By linearity, $w$ solves $w'(t) + A w(t) = 0$
+with $w(0) = 0$. Applying Proposition~\ref{prop:contraction} gives
+$\|w(t)\| \le \|w(0)\| = 0$ for all $t \ge 0$, so $u_1(t) = u_2(t)$.
+\end{proof}
+
+\section{Proof of the decay theorem}
+\label{sec:deferred-proofs}
+
+\begin{proof}[Proof of Theorem~\ref{thm:decay}]
+Set $E(t) = \|u(t)\|^2$. By Proposition~\ref{prop:contraction}, $E$ is
+nonincreasing and remains bounded by $E(0)$ on $[0,\infty)$. Combining the
+coercivity bound $a(u(t), u(t)) \ge \alpha \|u(t)\|^2$ with
+\eqref{eq:energy-id} gives
+\[
+E'(t) + 2\alpha E(t) \le 0 \qquad \text{for all } t \ge 0.
+\]
+Multiplying by the integrating factor $e^{2\alpha t}$ shows that
+$\frac{d}{dt}\bigl(e^{2\alpha t} E(t)\bigr) \le 0$. Integrating on $[0,t]$
+yields $E(t) \le e^{-2\alpha t} E(0)$, and taking square roots completes the
+proof.
+\end{proof}
+
+\end{document}

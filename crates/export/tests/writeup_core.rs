@@ -242,9 +242,9 @@ fn golden_outputs_and_tex_audit_validation() {
     let md = render_writeup_markdown(&doc, &opts).unwrap();
     let bib = render_bibtex(&doc.bibliography);
 
-    assert_eq!(bib, GOLDEN_BIB, "BibTeX writer must match golden output");
-    assert_eq!(md, GOLDEN_MD, "Markdown writer must match golden output");
-    assert_eq!(tex, GOLDEN_TEX, "TeX writer must match golden output");
+    assert_eq!(bib, GOLDEN_BIB.replace("\r\n", "\n"), "BibTeX writer must match golden output");
+    assert_eq!(md, GOLDEN_MD.replace("\r\n", "\n"), "Markdown writer must match golden output");
+    assert_eq!(tex, GOLDEN_TEX.replace("\r\n", "\n"), "TeX writer must match golden output");
 
     // Validate TeX + BibTeX output with existing `tex_audit` checks (including quote matching)!
     fs::write(ws_dir.join("writeup_sample.tex"), &tex).unwrap();
