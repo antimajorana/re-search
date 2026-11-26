@@ -169,7 +169,11 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
     let val = parse_json_body(body)?;
     let raw_mode = val.get("mode").map(|v| v.as_str().unwrap_or("")).unwrap_or(crate::session_mode::MODE_API_RESEARCH);
     let mode = crate::session_mode::parse_requested_mode(raw_mode).map_err(bad)?;
-    crate::session_mode::profile_for_mode(mode).map_err(bad)?;
+    if mode != research_tools::paper_key::Mode::Solve {
+        crate::session_mode::profile_for_mode(mode).map_err(bad)?;
+    } else if val.get("prompt").and_then(Value::as_str).is_some_and(|p| !p.trim().is_empty()) {
+        return Err(bad("Create the Solve session and confirm its setup before starting a run."));
+    }
     if mode == research_tools::paper_key::Mode::Investigate
         && val.get("prompt").and_then(Value::as_str).is_some_and(|p| !p.trim().is_empty())
     {
@@ -357,6 +361,8 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
             "events": events_json,
             "mode": crate::session_mode::api_mode_name(crate::session_mode::session_mode(&events)),
             "investigation": crate::investigation::view(&events, running),
+            "solve": (crate::session_mode::session_mode(&events) == research_tools::paper_key::Mode::Solve)
+                .then(|| crate::solve::session_solve_view(state, session_id, &events, running)),
             "messages": messages,
             "traces": traces,
             "sources": sources,

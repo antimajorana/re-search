@@ -49,6 +49,8 @@ pub mod session_mode;
 mod session_folders;
 mod session_summary;
 mod session_view;
+pub mod solve;
+pub mod solve_view;
 pub mod sse;
 pub mod state;
 pub mod subagents;
