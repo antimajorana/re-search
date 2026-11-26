@@ -42,7 +42,8 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | V2 Investigate dependencies, tags, numbering and bibliography | reviewed and merged | `crates/research-tools/src/skeleton/`; checkpoint `afea25b` |
 | Investigate lane A: V3, V4, V5 in order | in progress | `gemini/modes/inv-a-v2-v5` |
 | F5 mode shell, F7 hand-off packet | brief `agents/f5-f7-mode-shell.md` | `gemini/modes/f5-f7-mode-shell` |
-| Library lane: F13a sources and sync, F16a corrections by code, F15 write-up core | brief `agents/lib-f13a-f16a-f15.md` | `gemini/modes/lib-f13a-f16a-f15` |
+| Library lane: F13a sources and sync, F16a corrections by code, F15 write-up core | F13a checkpoint received; review in progress | `gemini/modes/lib-f13a-f16a-f15` |
+| F13a library sync integrity | brief ready against checkpoint | `agents/f13a-sync-integrity.md` |
 | V17 Investigate PDF skeleton | brief ready; V2 and F14a merged | `agents/inv-v17-pdf-skeleton.md` |
 | V6 Investigate reader and task lifecycle | brief ready; launch after V3 merges (F1, F4, F9 merged) | `agents/inv-v6-tasks.md` |
 | F13b, F13c, F14b, F14c, F16b, mode adapters of F15 | planned, no brief yet | - |
