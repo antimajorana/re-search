@@ -8,15 +8,44 @@ quantum/operator algebra (`commutator`, `anticommutator`, `pauli_decompose`,
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import sympy
 from sympy import Symbol, expand, factor, nsimplify, Rational, simplify, srepr, sympify
 
 _CAS_BUS_DEFAULT = Path("scratch/.cas_bus.json")
+_active_exprs_out: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "active_exprs_out", default=None
+)
+_active_exprs_in: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "active_exprs_in", default=None
+)
+
+
+def _parse_stored_srepr(raw: str) -> Any:
+    """Reconstruct a stored `srepr` string strictly via the restricted AST parser."""
+    from checks.srepr_safe import parse_srepr_safe
+
+    return parse_srepr_safe(raw)
+
+
+@contextlib.contextmanager
+def expr_context(exprs_in: dict[str, str] | None = None) -> Iterator[dict[str, str]]:
+    """Bind protocol 2 staged input expressions and capture `save_expr` outputs in memory."""
+    outbox: dict[str, str] = {}
+    staged = dict(exprs_in) if exprs_in else {}
+    tok_out = _active_exprs_out.set(outbox)
+    tok_in = _active_exprs_in.set(staged)
+    try:
+        yield outbox
+    finally:
+        _active_exprs_in.reset(tok_in)
+        _active_exprs_out.reset(tok_out)
 
 
 def _bus_path(path: str | os.PathLike[str] | None = None) -> Path:
@@ -29,9 +58,19 @@ def _bus_path(path: str | os.PathLike[str] | None = None) -> Path:
 
 
 def save_expr(name: str, expr: Any, bus_path: str | os.PathLike[str] | None = None) -> str:
-    """Persist a SymPy expression as exact `srepr` in `scratch/.cas_bus.json`."""
+    """Persist a SymPy expression as exact `srepr` into the active protocol 2 outbox.
+
+    Inside a worker `evaluate` call, writes only to the in-memory outbox (never to
+    `scratch/.cas_bus.json`). When invoked standalone with no active outbox or an
+    explicit `bus_path`, falls back to the JSON bus file.
+    """
     if not isinstance(name, str) or not name.strip():
         raise ValueError("expression name must be a non-empty string")
+    encoded = srepr(sympify(expr))
+    outbox = _active_exprs_out.get()
+    if outbox is not None and bus_path is None:
+        outbox[name] = encoded
+        return encoded
     target = _bus_path(bus_path)
     target.parent.mkdir(parents=True, exist_ok=True)
     store: dict[str, str] = {}
@@ -42,7 +81,6 @@ def save_expr(name: str, expr: Any, bus_path: str | os.PathLike[str] | None = No
                 store = {str(k): str(v) for k, v in loaded.items()}
         except Exception:
             store = {}
-    encoded = srepr(sympify(expr))
     store[name] = encoded
     tmp = target.with_suffix(".tmp")
     tmp.write_text(json.dumps(store, indent=2, sort_keys=True), encoding="utf-8")
@@ -50,15 +88,34 @@ def save_expr(name: str, expr: Any, bus_path: str | os.PathLike[str] | None = No
     return encoded
 
 
+def expr(name: str) -> Any:
+    """Load a staged protocol 2 expression handle by name via the restricted `srepr` parser."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("expression name must be a non-empty string")
+    outbox = _active_exprs_out.get()
+    if outbox is not None and name in outbox:
+        return _parse_stored_srepr(outbox[name])
+    staged = _active_exprs_in.get()
+    if staged is not None and name in staged:
+        return _parse_stored_srepr(staged[name])
+    raise KeyError(f"expression {name!r} is not staged in exprs_in or saved in this call")
+
+
 def load_expr(name: str, bus_path: str | os.PathLike[str] | None = None) -> Any:
-    """Load and reconstruct an exact SymPy expression from `scratch/.cas_bus.json`."""
+    """Load and reconstruct a SymPy expression safely via the restricted `srepr` parser.
+
+    Inside a protocol 2 worker call (when `bus_path` is omitted), delegates to `expr(name)`
+    and never reads `scratch/.cas_bus.json`.
+    """
+    if bus_path is None and (_active_exprs_in.get() is not None or _active_exprs_out.get() is not None):
+        return expr(name)
     target = _bus_path(bus_path)
     if not target.is_file():
         raise KeyError(f"CAS bus store not found at {target}")
     store = json.loads(target.read_text(encoding="utf-8"))
     if name not in store:
         raise KeyError(f"expression {name!r} not found in {target}")
-    return sympify(store[name])
+    return _parse_stored_srepr(store[name])
 
 
 def assumed_symbol(name: str, **assumptions: Any) -> Symbol:
@@ -207,6 +264,7 @@ __all__ = [
     "bch_expand",
     "check_identity_mpmath",
     "commutator",
+    "expr",
     "load_expr",
     "pade_approximant",
     "pauli_decompose",

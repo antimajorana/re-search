@@ -21,6 +21,16 @@ pub(crate) fn spawn_turn_thread(
     mut req_json: Value,
     prompt: String,
 ) -> Result<(), (u16, String)> {
+    let ledger = state
+        .open_ledger()
+        .map_err(|e| (500, e))?;
+    let pre_events = ledger
+        .read_session(&session_id)
+        .map_err(|e| (500, e.to_string()))?;
+    if let Err(err) = crate::session_mode::profile_for_session(&pre_events) {
+        return Err((400, err));
+    }
+
     let activity = crate::session_lifecycle::reserve_turn(&state, &session_id)?;
     {
         let mut active = state
@@ -257,10 +267,19 @@ fn run_session_turn(
                     .map(|built| (sa, built))
             })
             .collect();
+    let ledger = state.open_ledger()?;
+    let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
+    let mode = crate::session_mode::session_mode(&existing);
+    let profile = crate::session_mode::profile_for_session(&existing)?;
+    let is_investigation = mode == research_tools::paper_key::Mode::Investigate;
     let lean_router = Some(build_lean_router(Arc::clone(state), Arc::clone(&env), session_id)?);
 
-    let (router, containment, contained) =
-        build_desktop_router(Arc::clone(state), Arc::clone(&env), session_id)?;
+    let (router, containment, contained) = crate::routers::build_desktop_router_for_profile(
+        Arc::clone(state),
+        Arc::clone(&env),
+        session_id,
+        profile.name,
+    )?;
 
     let guardrails = GuardrailConfig {
         verification_mode: req
@@ -281,9 +300,6 @@ fn run_session_turn(
             .or(ui.pinned_conventions),
         ..GuardrailConfig::default()
     };
-    let ledger = state.open_ledger()?;
-    let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
-    let is_investigation = crate::investigation::is_investigation(&existing);
     let paper_reading_turn = req.get("_paper_map_request").is_some()
         || req.get("_paper_branch_request").is_some()
         || req.get("_paper_conventions_request").is_some();

@@ -99,6 +99,10 @@ jobs:
           foreach ($name in 'worker.py', 'solver_calc.py', 'symbolic_validation.py', 'numerical_validation.py') {
             Copy-Item -LiteralPath (Join-Path 'python' $name) -Destination $worker.FullName
           }
+          $checks = New-Item -ItemType Directory -Path (Join-Path $worker.FullName 'checks')
+          foreach ($name in '__init__.py', 'srepr_safe.py') {
+            Copy-Item -LiteralPath (Join-Path 'python/checks' $name) -Destination $checks.FullName
+          }
           python packaging/windows/stage_runtime.py --output (Join-Path $stage 'runtime')
           python scripts/generate-third-party-notices.py --target $env:WINDOWS_TARGET --output-dir (Join-Path $stage 'licenses')
           "INSTALLER_STAGE=$stage" >> $env:GITHUB_ENV

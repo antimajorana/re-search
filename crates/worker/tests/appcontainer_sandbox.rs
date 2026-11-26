@@ -5,6 +5,7 @@
 mod support;
 
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::net::{TcpListener, UdpSocket};
@@ -17,7 +18,7 @@ use worker::appcontainer::{delete_session_profile, profile_name_for_session, App
 use worker::sandbox::JobObjectSandbox;
 use worker::stage::grant_icacls_inside;
 use worker::win::{inspect_process_token, process_is_gone, Direction, PipePair};
-use worker::{Worker, WorkerConfig, WorkerError};
+use worker::{Worker, WorkerConfig, WorkerError, WorkerRole};
 
 fn probe_token_and_job(ctrl: &Worker, cont: &Worker, expected_sid: &str) {
     let ctrl_tok = inspect_process_token(ctrl.worker_pid().unwrap()).unwrap();
@@ -433,4 +434,35 @@ fn control_vs_contained_probes() {
         let pkg = PathBuf::from(local).join("Packages").join(profile_name_for_session("s-alpha"));
         assert!(!pkg.exists(), "AppContainer package dir survived cleanup: {}", pkg.display());
     }
+}
+
+#[test]
+fn contained_check_worker_loads_staged_modules_and_reports_its_role() {
+    let Some(python) = python_exe() else {
+        eprintln!("SKIPPED: set RE_SEARCH_PYTHON to run AppContainer probes");
+        return;
+    };
+    let mut fixture = TempSandboxFixture::new("check-worker");
+    let (scratch, pycache) = fixture.prepare_session("s-check-worker");
+    let python = PathBuf::from(python);
+    let script = repo_root().join("python/worker.py");
+    let sandbox = AppContainerSandbox::new(
+        fixture.data_dir.clone(), "s-check-worker", python.clone(), script.clone(),
+        scratch.clone(), pycache.clone(),
+    ).unwrap();
+    assert!(sandbox.staged().root.join("checks/srepr_safe.py").is_file());
+    let config = WorkerConfig { python, script, scratch, pycache, startup_timeout: Duration::from_secs(60) };
+    let mut worker = Worker::new_with_role(config, Box::new(sandbox), WorkerRole::Check);
+    let handles = BTreeMap::from([
+        ("lhs".into(), "Integer(2)".into()),
+        ("rhs".into(), "Integer(2)".into()),
+    ]);
+    let (receipt, _) = worker.run_check("symbolic_zero_smoke", &handles, json!({}), Duration::from_secs(30), None).unwrap();
+    assert_eq!(worker.negotiated_protocol(), Some(2));
+    assert_eq!(worker.hello().unwrap()["role"], "check");
+    assert_eq!(receipt["process"], "check");
+    assert_eq!(receipt["outcome"], "pass");
+    assert_eq!(receipt["evidence"]["residual_srepr"], "Integer(0)");
+    assert!(inspect_process_token(worker.worker_pid().unwrap()).unwrap().is_appcontainer);
+    assert!(matches!(worker.evaluate("1 + 1", Duration::from_secs(5)), Err(WorkerError::Protocol(_))));
 }
