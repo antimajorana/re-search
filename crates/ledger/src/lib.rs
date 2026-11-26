@@ -18,6 +18,8 @@ pub mod fulltext_cache;
 pub mod library_db;
 mod library_db_ext;
 mod library_db_query;
+mod library_db_sync;
+mod library_db_sync_ft;
 mod library_rows;
 pub mod library_schema;
 pub mod verify;

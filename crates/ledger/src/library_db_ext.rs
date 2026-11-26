@@ -152,15 +152,7 @@ impl LibraryDb {
     }
 
     pub fn delete_user_library_fulltext_for_paths(&self, paths: &[String]) -> Result<usize> {
-        let mut removed = 0usize;
-        for path in paths {
-            let n = self.conn.execute(
-                "DELETE FROM fulltext WHERE origin = ?1 AND file_path = ?2",
-                params![ORIGIN_USER_LIBRARY, path],
-            )?;
-            removed += n;
-        }
-        Ok(removed)
+        self.prune_unreferenced_user_fulltext_atomic(paths)
     }
 
     pub fn upsert_paper_text(&self, row: &LibraryPaperTextRow) -> Result<()> {

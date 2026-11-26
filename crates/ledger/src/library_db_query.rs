@@ -260,7 +260,7 @@ fn collect_fts_doc(conn: &Connection, db: &LibraryDb, paper_key: &str) -> Result
     Ok(Some((paper_key.to_string(), title, authors, abstract_text, gists, full_text)))
 }
 
-fn refresh_fts_with_conn(conn: &Connection, db: &LibraryDb, paper_key: &str) -> Result<()> {
+pub(crate) fn refresh_fts_with_conn(conn: &Connection, db: &LibraryDb, paper_key: &str) -> Result<()> {
     conn.execute("DELETE FROM paper_fts WHERE paper_key = ?1", params![paper_key])?;
     if let Some((key, title, authors, abstract_text, gists, full_text)) =
         collect_fts_doc(conn, db, paper_key)?
