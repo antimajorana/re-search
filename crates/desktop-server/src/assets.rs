@@ -175,6 +175,30 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../assets/solve.css"),
         }),
+        "/assets/api_idea.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/api_idea.js"),
+        }),
+        "/assets/idea_state.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/idea_state.js"),
+        }),
+        "/assets/idea_setup.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/idea_setup.js"),
+        }),
+        "/assets/idea_search.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/idea_search.js"),
+        }),
+        "/assets/idea.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/idea.js"),
+        }),
+        "/assets/idea.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/idea.css"),
+        }),
         "/assets/investigation_conventions.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_conventions.js"),

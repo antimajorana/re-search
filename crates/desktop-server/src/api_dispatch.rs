@@ -388,6 +388,12 @@ pub(crate) fn dispatch_api(
             &mut stream,
             crate::routes_lessons::handle_lessons(state, method, rest, &req.query, &req.body),
         ),
+        ("POST", ["api", "idea", "preview"]) => {
+            write_api_res(&mut stream, crate::routes_idea::handle_idea_preview(state, &req.body));
+        }
+        ("POST", ["api", "sessions", id, "idea", op]) => {
+            write_api_res(&mut stream, crate::routes_idea::handle_idea_op(state, id, op, &req.body));
+        }
         _ => write_json(
             &mut stream,
             404,

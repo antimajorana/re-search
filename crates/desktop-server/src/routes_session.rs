@@ -169,6 +169,14 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
     let val = parse_json_body(body)?;
     let raw_mode = val.get("mode").map(|v| v.as_str().unwrap_or("")).unwrap_or(crate::session_mode::MODE_API_RESEARCH);
     let mode = crate::session_mode::parse_requested_mode(raw_mode).map_err(bad)?;
+    if mode == research_tools::paper_key::Mode::Explore {
+        if val.get("text").is_some() {
+            return crate::routes_idea::create_explore_session(state, &val);
+        }
+        return Err(bad(
+            "Explore sessions require an idea `text` at creation; bare Explore sessions (tool profile `explore/1`) are not built yet.",
+        ));
+    }
     if mode != research_tools::paper_key::Mode::Solve {
         crate::session_mode::profile_for_mode(mode).map_err(bad)?;
     } else if val.get("prompt").and_then(Value::as_str).is_some_and(|p| !p.trim().is_empty()) {
@@ -345,36 +353,38 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
         })
         .collect();
 
-    Ok((
-        200,
-        json!({
-            "id": session_id,
-            "title": title,
-            "workspace_root": workspace_root,
-            "route": route,
-            "confinement": is_agy.then_some(cli_route::antigravity::CONFINEMENT),
-            "route_label": is_agy.then_some(crate::antigravity::AGY_LABEL),
-            "provenance": provenance,
-            "meta": meta,
-            "fork_info": fork_info,
-            "project_id": project.map(|p| p.id),
-            "events": events_json,
-            "mode": crate::session_mode::api_mode_name(crate::session_mode::session_mode(&events)),
-            "investigation": crate::investigation::view(&events, running),
-            "solve": (crate::session_mode::session_mode(&events) == research_tools::paper_key::Mode::Solve)
-                .then(|| crate::solve::session_solve_view(state, session_id, &events, running)),
-            "messages": messages,
-            "traces": traces,
-            "sources": sources,
-            "linked_sources": linked_sources,
-            "stats": stats,
-            "archived": meta.as_ref().is_some_and(|m| m.archived),
-            "running": running,
-            "session_grants": list_session_grants(state, session_id),
-            "pending_approvals": pending,
-            "pending_checkpoints": state.hitl.list_pending(session_id),
-        }),
-    ))
+    let mode = crate::session_mode::session_mode(&events);
+    let mut body = json!({
+        "id": session_id,
+        "title": title,
+        "workspace_root": workspace_root,
+        "route": route,
+        "confinement": is_agy.then_some(cli_route::antigravity::CONFINEMENT),
+        "route_label": is_agy.then_some(crate::antigravity::AGY_LABEL),
+        "provenance": provenance,
+        "meta": meta,
+        "fork_info": fork_info,
+        "project_id": project.map(|p| p.id),
+        "events": events_json,
+        "mode": crate::session_mode::api_mode_name(mode),
+        "investigation": crate::investigation::view(&events, running),
+        "solve": (mode == research_tools::paper_key::Mode::Solve)
+            .then(|| crate::solve::session_solve_view(state, session_id, &events, running)),
+        "messages": messages,
+        "traces": traces,
+        "sources": sources,
+        "linked_sources": linked_sources,
+        "stats": stats,
+        "archived": meta.as_ref().is_some_and(|m| m.archived),
+        "running": running,
+        "session_grants": list_session_grants(state, session_id),
+        "pending_approvals": pending,
+        "pending_checkpoints": state.hitl.list_pending(session_id),
+    });
+    if mode == research_tools::paper_key::Mode::Explore {
+        body["idea"] = crate::idea_view::view(&events, running);
+    }
+    Ok((200, body))
 }
 
 pub fn handle_sse_stream(
