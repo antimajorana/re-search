@@ -82,17 +82,9 @@ impl ScriptedAnthropic {
                     }
                 }
                 let mut body = vec![0u8; content_len];
-                if content_len > 0 {
-                    let _ = reader.read_exact(&mut body);
-                }
-                let body_str = String::from_utf8_lossy(&body);
-                let parsed_req_seq = extract_request_seq(&body_str);
-                let mut reply = q_bg
-                    .lock()
-                    .unwrap()
-                    .pop_front()
-                    .unwrap_or_else(|| ant_text("Completed."));
-                if let Some(rseq) = parsed_req_seq {
+                if content_len > 0 { let _ = reader.read_exact(&mut body); }
+                let mut reply = q_bg.lock().unwrap().pop_front().unwrap_or_else(|| ant_text("Completed."));
+                if let Some(rseq) = extract_request_seq(&String::from_utf8_lossy(&body)) {
                     patch_zero_request_seq(&mut reply, rseq);
                 }
                 let bytes = serde_json::to_vec(&reply).unwrap();
@@ -108,18 +100,12 @@ impl ScriptedAnthropic {
         Self { base_url: format!("http://{addr}"), replies: queue }
     }
 
-    fn enqueue(&self, more: Vec<Value>) {
-        self.replies.lock().unwrap().extend(more);
-    }
+    fn enqueue(&self, more: Vec<Value>) { self.replies.lock().unwrap().extend(more); }
 }
 
 fn extract_request_seq(body: &str) -> Option<u64> {
     let idx = body.rfind("request_seq=")?;
-    let digits: String = body[idx + "request_seq=".len()..]
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    digits.parse().ok()
+    body[idx + "request_seq=".len()..].chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok()
 }
 
 fn patch_zero_request_seq(val: &mut Value, seq: u64) {
@@ -128,14 +114,10 @@ fn patch_zero_request_seq(val: &mut Value, seq: u64) {
             if map.get("request_seq").and_then(Value::as_u64) == Some(0) {
                 map.insert("request_seq".into(), json!(seq));
             }
-            for child in map.values_mut() {
-                patch_zero_request_seq(child, seq);
-            }
+            for child in map.values_mut() { patch_zero_request_seq(child, seq); }
         }
         Value::Array(items) => {
-            for child in items {
-                patch_zero_request_seq(child, seq);
-            }
+            for child in items { patch_zero_request_seq(child, seq); }
         }
         _ => {}
     }
@@ -169,25 +151,16 @@ fn wait_task_finish(srv: &RunningDesktopServer, sid: &str, min_finished: usize) 
     loop {
         let (st, sv, raw) = req(srv, "GET", &format!("/api/sessions/{sid}"), None);
         assert_eq!(st, 200, "GET session failed: {raw}");
-        let count = sv["events"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|e| e["kind"] == MARKER_TASK_FINISHED)
-            .count();
-        if sv["running"] == json!(false) && count >= min_finished {
-            return sv;
-        }
+        let count = sv["events"].as_array().into_iter().flatten()
+            .filter(|e| e["kind"] == MARKER_TASK_FINISHED).count();
+        if sv["running"] == json!(false) && count >= min_finished { return sv; }
         assert!(Instant::now() < deadline, "timed out waiting for {min_finished} finished tasks: {sv}");
         std::thread::sleep(Duration::from_millis(25));
     }
 }
 
 fn line_of(needle: &str) -> usize {
-    std::str::from_utf8(SYNTHETIC_PAPER_TEX)
-        .unwrap()
-        .lines()
-        .enumerate()
+    std::str::from_utf8(SYNTHETIC_PAPER_TEX).unwrap().lines().enumerate()
         .find_map(|(i, l)| l.contains(needle).then_some(i + 1))
         .unwrap_or_else(|| panic!("missing line containing `{needle}`"))
 }
@@ -213,10 +186,8 @@ fn boot_investigate_session(id: &str) -> Setup {
     let srv = start_desktop_server(test_cfg(dir.path(), None, Some(provider.base_url.clone()), None)).unwrap();
 
     let (st, _, raw) = req(&srv, "PUT", "/api/settings/providers", Some(&json!({
-        "default_provider": "anthropic",
-        "default_model": "claude-haiku-4-5",
-        "auto_approve_tools": true,
-        "keys": { "anthropic": "fixture-key" }
+        "default_provider": "anthropic", "default_model": "claude-haiku-4-5",
+        "auto_approve_tools": true, "keys": { "anthropic": "fixture-key" }
     })));
     assert_eq!(st, 200, "{raw}");
 
@@ -227,13 +198,9 @@ fn boot_investigate_session(id: &str) -> Setup {
     let env = ResearchEnv::new(dir.path());
     let ledger_m = Mutex::new(Ledger::open(dir.path()).unwrap());
     let ing = ingest_bytes(&env.sandbox(), &ledger_m, &IngestRequest {
-        session_id: &sid,
-        file_name: "toy_decay.tex",
-        origin: "https://arxiv.org/e-print/2407.00123v1",
-        raw_bytes: SYNTHETIC_PAPER_TEX,
-        source_id_hint: None,
-        section_filter: None,
-        title: Some("Toy decay bound"),
+        session_id: &sid, file_name: "toy_decay.tex",
+        origin: "https://arxiv.org/e-print/2407.00123v1", raw_bytes: SYNTHETIC_PAPER_TEX,
+        source_id_hint: None, section_filter: None, title: Some("Toy decay bound"),
     }).unwrap();
     drop(ledger_m);
 
@@ -252,18 +219,9 @@ fn boot_investigate_session(id: &str) -> Setup {
     let (unused_tag, _) = find_lbl("lem:unused");
 
     Setup {
-        _dir: dir,
-        provider,
-        srv,
-        sid,
-        source_id: ing.source_id,
-        primary_path: ing.primary_path.unwrap(),
-        thm_tag,
-        thm_fp,
-        lem_tag,
-        lem_fp,
-        unused_tag,
-        def_line: line_of("define the discrete energy"),
+        _dir: dir, provider, srv, sid, source_id: ing.source_id,
+        primary_path: ing.primary_path.unwrap(), thm_tag, thm_fp, lem_tag, lem_fp,
+        unused_tag, def_line: line_of("define the discrete energy"),
     }
 }
 
