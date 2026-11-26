@@ -2,7 +2,8 @@
 //! `"raw_blob"` ledger provenance.
 
 use crate::archive::{extract_gzip_or_tar_gz, extract_zip_bytes, ArchiveEntry, ArchivePayload};
-use crate::pdf::{extract_pdf_bytes, PdfExtractStatus};
+use crate::pdf::PdfExtractStatus;
+use crate::pdf_pages::{extract_pdf_pages, PageRecord, PdfDocumentPages, PdfExtractOptions};
 use crate::sandbox::{sanitize_rel_components, validate_session_id, SandboxRoot, WorkspaceSandbox};
 pub use crate::tex_bundle::{assemble_tex_bundle, filter_tex_sections, score_tex_entrypoint, TexBundle};
 use crate::tex_bundle::{clean_document_title, extract_document_title};
@@ -162,6 +163,7 @@ pub fn ingest_path(
     )
 }
 
+#[derive(Default)]
 struct PreparedIngestion {
     format: String,
     status: String,
@@ -171,6 +173,8 @@ struct PreparedIngestion {
     skipped_binary: Vec<String>,
     page_count: Option<usize>,
     page_lines: Vec<(usize, usize, usize)>,
+    pdf_extractor: Option<String>,
+    pdf_pages: Vec<PageRecord>,
     warning: Option<String>,
     excerpt: String,
 }
@@ -207,6 +211,29 @@ pub fn ingest_bytes(
 ) -> Result<IngestedSource, String> {
     validate_session_id(req.session_id).map_err(|e| e.to_string())?;
     let prepared = prepare_ingestion(req.file_name, req.raw_bytes, req.section_filter)?;
+    finalize_ingestion(sandbox, ledger, req, prepared)
+}
+
+/// Pin an already-extracted [`PdfDocumentPages`] (for example from a background
+/// [`crate::pdf_pages::PdfExtractJob`]) into `sessions/<session_id>/sources/` without
+/// re-running PDF extraction.
+pub fn ingest_pdf_pages(
+    sandbox: &WorkspaceSandbox,
+    ledger: &Mutex<Ledger>,
+    req: &IngestRequest<'_>,
+    extracted: PdfDocumentPages,
+) -> Result<IngestedSource, String> {
+    validate_session_id(req.session_id).map_err(|e| e.to_string())?;
+    let prepared = prepared_from_pdf_pages(req.file_name, extracted);
+    finalize_ingestion(sandbox, ledger, req, prepared)
+}
+
+fn finalize_ingestion(
+    sandbox: &WorkspaceSandbox,
+    ledger: &Mutex<Ledger>,
+    req: &IngestRequest<'_>,
+    prepared: PreparedIngestion,
+) -> Result<IngestedSource, String> {
     let materialized_hashes: BTreeMap<_, _> = prepared
         .materialized
         .iter()
@@ -250,28 +277,28 @@ pub fn ingest_bytes(
         let blob_hash = guard
             .put_blob(req.raw_bytes)
             .map_err(|e| format!("source.ingested put_blob failed: {e}"))?;
+        let mut payload = json!({
+            "source_id": source_id,
+            "origin": req.origin,
+            "title": title,
+            "format": prepared.format,
+            "status": prepared.status,
+            "bytes": req.raw_bytes.len(),
+            "raw_blob": blob_hash,
+            "primary_path": primary_path,
+            "assembled_path": assembled_path,
+            "files": written_files,
+            "files_sha256": files_sha256,
+            "page_count": prepared.page_count,
+            "pdf_page_lines": prepared.page_lines,
+            "arxiv_cover_id": arxiv_id,
+        });
+        if let Some(ext) = &prepared.pdf_extractor {
+            payload["pdf_extractor"] = json!(ext);
+            payload["pdf_pages"] = json!(prepared.pdf_pages);
+        }
         let seq = guard
-            .append(
-                req.session_id,
-                "source.ingested",
-                EVENT_SCHEMA_VERSION,
-                &json!({
-                    "source_id": source_id,
-                    "origin": req.origin,
-                    "title": title,
-                    "format": prepared.format,
-                    "status": prepared.status,
-                    "bytes": req.raw_bytes.len(),
-                    "raw_blob": blob_hash,
-                    "primary_path": primary_path,
-                    "assembled_path": assembled_path,
-                    "files": written_files,
-                    "files_sha256": files_sha256,
-                    "page_count": prepared.page_count,
-                    "pdf_page_lines": prepared.page_lines,
-                    "arxiv_cover_id": arxiv_id,
-                }),
-            )
+            .append(req.session_id, "source.ingested", EVENT_SCHEMA_VERSION, &payload)
             .map_err(|e| format!("source.ingested append failed: {e}"))?;
         (blob_hash, seq)
     };
@@ -385,11 +412,8 @@ fn prepare_ingestion(
                 materialized,
                 primary_rel: Some(leaf),
                 assembled_rel: section_filter.filter(|_| ext == "tex").map(|_| "__filtered__.tex".into()),
-                skipped_binary: Vec::new(),
-                page_count: None,
-                page_lines: Vec::new(),
-                warning: None,
                 excerpt: take_chars(&display_text, MAX_EXCERPT_CHARS),
+                ..PreparedIngestion::default()
             })
         }
         DetectedFormat::Pdf => prepare_pdf_ingestion(file_name, raw_bytes),
@@ -436,11 +460,8 @@ fn prepare_ingestion(
                         materialized,
                         primary_rel: Some(suggested_name),
                         assembled_rel,
-                        skipped_binary: Vec::new(),
-                        page_count: None,
-                        page_lines: Vec::new(),
-                        warning: None,
                         excerpt: take_chars(&display, MAX_EXCERPT_CHARS),
+                        ..PreparedIngestion::default()
                     })
                 }
             }
@@ -449,7 +470,11 @@ fn prepare_ingestion(
 }
 
 fn prepare_pdf_ingestion(file_name: &str, pdf_bytes: &[u8]) -> Result<PreparedIngestion, String> {
-    let extracted = extract_pdf_bytes(pdf_bytes).map_err(|e| e.to_string())?;
+    let extracted = extract_pdf_pages(pdf_bytes, &PdfExtractOptions::default()).map_err(|e| e.to_string())?;
+    Ok(prepared_from_pdf_pages(file_name, extracted))
+}
+
+fn prepared_from_pdf_pages(file_name: &str, extracted: PdfDocumentPages) -> PreparedIngestion {
     let leaf = format!("{}.extracted.txt", sanitize_leaf_name(file_name, "pdf"));
     let mut materialized = BTreeMap::new();
     let content = if extracted.status == PdfExtractStatus::EmptyTextLayer {
@@ -458,18 +483,20 @@ fn prepare_pdf_ingestion(file_name: &str, pdf_bytes: &[u8]) -> Result<PreparedIn
         extracted.text.clone()
     };
     materialized.insert(leaf.clone(), content);
-    Ok(PreparedIngestion {
+    let page_lines = extracted.page_map.page_lines();
+    PreparedIngestion {
         format: "pdf".into(),
         status: extracted.status.as_str().into(),
         materialized,
         primary_rel: Some(leaf),
-        assembled_rel: None,
-        skipped_binary: Vec::new(),
         page_count: Some(extracted.page_count),
-        page_lines: extracted.page_lines,
+        page_lines,
+        pdf_extractor: Some(extracted.extractor_id),
+        pdf_pages: extracted.page_map.pages,
         warning: extracted.warning,
         excerpt: take_chars(&extracted.text, MAX_EXCERPT_CHARS),
-    })
+        ..PreparedIngestion::default()
+    }
 }
 
 fn prepare_archive_files(
@@ -546,10 +573,8 @@ fn prepare_archive_files(
         primary_rel,
         assembled_rel,
         skipped_binary,
-        page_count: None,
-        page_lines: Vec::new(),
-        warning: None,
         excerpt: take_chars(&excerpt_src, MAX_EXCERPT_CHARS),
+        ..PreparedIngestion::default()
     })
 }
 
