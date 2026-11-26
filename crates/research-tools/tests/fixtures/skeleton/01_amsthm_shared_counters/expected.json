@@ -61,9 +61,21 @@
     }
   ],
   "macros": [
-    { "name": "\\R", "arity": 0, "body": "\\mathbb{R}" },
-    { "name": "\\Lap", "arity": 1, "body": "\\Delta_{#1}" },
-    { "name": "\\Deg", "arity": 0, "body": "\\operatorname{deg}" }
+    {
+      "name": "\\R",
+      "arity": 0,
+      "body": "\\mathbb{R}"
+    },
+    {
+      "name": "\\Lap",
+      "arity": 1,
+      "body": "\\Delta_{#1}"
+    },
+    {
+      "name": "\\Deg",
+      "arity": 0,
+      "body": "\\operatorname{deg}"
+    }
   ],
   "nodes": [
     {
@@ -72,7 +84,13 @@
       "title": "Abstract",
       "label": null,
       "parent_order": null,
-      "spans": [{ "path": "main.tex", "start_line": 18, "end_line": 20 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 18,
+          "end_line": 20
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
       "number": null,
@@ -86,11 +104,17 @@
       "title": "Graph Laplacian and harmonicity",
       "label": "sec:setup",
       "parent_order": null,
-      "spans": [{ "path": "main.tex", "start_line": 21, "end_line": 38 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 21,
+          "end_line": 38
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_heading",
       "proof_hint": null
     },
@@ -100,11 +124,17 @@
       "title": "Weighted Laplacian",
       "label": "def:lap",
       "parent_order": 1,
-      "spans": [{ "path": "main.tex", "start_line": 23, "end_line": 29 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 23,
+          "end_line": 29
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1.1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -114,11 +144,17 @@
       "title": null,
       "label": "eq:lap",
       "parent_order": 2,
-      "spans": [{ "path": "main.tex", "start_line": 25, "end_line": 27 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 25,
+          "end_line": 27
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -128,11 +164,19 @@
       "title": "Dirichlet form identity \\cite[Proposition 2.1]{keller2020}",
       "label": "lem:dirichlet",
       "parent_order": 1,
-      "spans": [{ "path": "main.tex", "start_line": 30, "end_line": 35 }],
-      "head_cites": ["keller2020"],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 30,
+          "end_line": 35
+        }
+      ],
+      "head_cites": [
+        "keller2020"
+      ],
       "eq_count": 1,
-      "number": null,
-      "number_basis": null,
+      "number": "1.2",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -142,13 +186,22 @@
       "title": null,
       "label": null,
       "parent_order": 1,
-      "spans": [{ "path": "main.tex", "start_line": 36, "end_line": 38 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 36,
+          "end_line": 38
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
       "number": null,
       "number_basis": null,
       "confidence": "tex_env",
-      "proof_hint": { "kind": "adjacent", "target_order": 4 }
+      "proof_hint": {
+        "kind": "adjacent",
+        "target_order": 4
+      }
     },
     {
       "kind": "section",
@@ -156,11 +209,17 @@
       "title": "Maximum principle and uniqueness",
       "label": "sec:max",
       "parent_order": null,
-      "spans": [{ "path": "main.tex", "start_line": 39, "end_line": 54 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 39,
+          "end_line": 54
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "2",
+      "number_basis": "computed",
       "confidence": "tex_heading",
       "proof_hint": null
     },
@@ -170,11 +229,17 @@
       "title": "Discrete maximum principle",
       "label": "thm:max",
       "parent_order": 6,
-      "spans": [{ "path": "main.tex", "start_line": 40, "end_line": 45 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 40,
+          "end_line": 45
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "2.1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -184,11 +249,17 @@
       "title": null,
       "label": "eq:max-bound",
       "parent_order": 7,
-      "spans": [{ "path": "main.tex", "start_line": 42, "end_line": 44 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 42,
+          "end_line": 44
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "2",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -198,13 +269,22 @@
       "title": null,
       "label": null,
       "parent_order": 6,
-      "spans": [{ "path": "main.tex", "start_line": 46, "end_line": 48 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 46,
+          "end_line": 48
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
       "number": null,
       "number_basis": null,
       "confidence": "tex_env",
-      "proof_hint": { "kind": "adjacent", "target_order": 7 }
+      "proof_hint": {
+        "kind": "adjacent",
+        "target_order": 7
+      }
     },
     {
       "kind": "corollary",
@@ -212,11 +292,17 @@
       "title": "Uniqueness of the Dirichlet problem",
       "label": "cor:unique",
       "parent_order": 6,
-      "spans": [{ "path": "main.tex", "start_line": 49, "end_line": 51 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 49,
+          "end_line": 51
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "2.2",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -226,7 +312,13 @@
       "title": null,
       "label": null,
       "parent_order": 6,
-      "spans": [{ "path": "main.tex", "start_line": 52, "end_line": 54 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 52,
+          "end_line": 54
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
       "number": null,
