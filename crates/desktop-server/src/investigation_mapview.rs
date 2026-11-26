@@ -8,9 +8,10 @@
 use ledger::Event;
 use research_tools::sandbox::WorkspaceSandbox;
 use research_tools::skeleton::{
-    load_ingested_pdf_source, load_ingested_tex_source, node_page_basis, page_range_for_node,
-    render_formulas_as_math, EdgeConfidence, IngestedPdfSource, PaperSkeleton, SkEdge, SkEdgeKind,
-    SkNode, SkNodeKind, SkeletonBuilder, SkeletonQuality, Span, PDF_QUALITY_REASON_BASE,
+    load_ingested_html_source, load_ingested_pdf_source, load_ingested_tex_source,
+    node_page_basis, page_range_for_node, render_formulas_as_math, EdgeConfidence,
+    IngestedPdfSource, PaperSkeleton, SkEdge, SkEdgeKind, SkNode, SkNodeKind, SkeletonBuilder,
+    SkeletonQuality, Span, PDF_QUALITY_REASON_BASE,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -340,10 +341,15 @@ pub fn read_verified_node_text(
             "proof_tag": proof_tag, "proof_spans": proof_spans, "proof_text": proof_text,
         }));
     }
-    let ingested = load_ingested_tex_source(sandbox, session_id, receipt)?;
-    let text = extract_spans_text(&ingested.files, &node.spans)?;
+    let files = if skeleton.builder == SkeletonBuilder::Html1 {
+        let html = load_ingested_html_source(sandbox, session_id, receipt)?;
+        BTreeMap::from([(html.primary_path, html.html)])
+    } else {
+        load_ingested_tex_source(sandbox, session_id, receipt)?.files
+    };
+    let text = extract_spans_text(&files, &node.spans)?;
     let (proof_tag, proof_spans, proof_text) = match proof_node {
-        Some(p) => (p.tag.clone(), Some(p.spans.clone()), Some(extract_spans_text(&ingested.files, &p.spans)?)),
+        Some(p) => (p.tag.clone(), Some(p.spans.clone()), Some(extract_spans_text(&files, &p.spans)?)),
         None => (None, None, None),
     };
     Ok(json!({

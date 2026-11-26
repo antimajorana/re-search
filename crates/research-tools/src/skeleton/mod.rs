@@ -11,6 +11,7 @@ pub mod flatten;
 pub mod html;
 mod html_bib;
 mod html_classify;
+pub mod html_confirm;
 mod html_edges;
 mod html_entities;
 mod html_finalize;
@@ -48,6 +49,7 @@ pub use html::{
     is_html_receipt, is_latexml_html_document, load_ingested_html_source, HtmlSkeletonInput,
     HtmlSkeletonOutput, IngestedHtmlSource,
 };
+pub use html_confirm::{confirm_tex_numbers_with_html, ConfirmReport, NumberDisagreement};
 pub use html_lex::MAX_HTML_BYTES;
 pub use locate::{
     detect_tex_counter_drift, format_candidate_label, format_version_caveat, locate_in_skeleton,
