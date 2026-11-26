@@ -1,0 +1,111 @@
+"""Verify mounted Solve setup (`solve_setup.js`), Explore shell (`idea.js`), and library send-back (`library_send_back.js`) in real headless Chromium."""
+
+from pathlib import Path
+import tempfile
+
+from playwright.sync_api import expect
+from recovery_example_browser import open_install
+
+
+def check_mode_stages(browser, binary):
+    with tempfile.TemporaryDirectory(prefix="re-search-mode-stages-") as directory:
+        root = Path(directory)
+        (root / "paper").mkdir()
+
+        def mock_no_models(page):
+            page.route("**/api/models*", lambda r: r.fulfill(json={"providers": []}))
+            page.add_init_script("window.localStorage.setItem('re-search-explore-enabled', '1');")
+
+        with open_install(browser, binary, root, before_navigate=mock_no_models) as page:
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+
+            # 1. Left-rail Solve and Explore buttons remain disabled with "not built yet" (F5).
+            expect(page.locator("#new-solve-btn")).to_be_disabled()
+            expect(page.locator("#new-solve-btn")).to_contain_text("not built yet")
+            expect(page.locator("#new-explore-btn")).to_be_disabled()
+            expect(page.locator("#new-explore-btn")).to_contain_text("not built yet")
+
+            # 2. Home Explore card (`new_menu.js` + `idea_setup.js`) renders when flag enabled
+            #    and submitting opens `#explore-session-stage` (`idea.js`) immediately!
+            home_explore = page.locator("#home-explore-card")
+            expect(home_explore).to_be_visible()
+            home_explore.locator("#idea-setup-text").fill(
+                "Explore spectral gap scaling in coupled harmonic chains"
+            )
+            home_explore.locator("#idea-setup-offline").check()
+            home_explore.locator("#idea-setup-submit").click()
+
+            explore_stage = page.locator("#explore-session-stage")
+            expect(explore_stage).to_be_visible()
+            expect(home_explore).to_be_hidden()
+            expect(explore_stage.locator('[data-idea-shell="true"]')).to_be_visible()
+            expect(explore_stage.locator('[data-idea-section="stage-rail"]')).to_contain_text("Idea")
+            expect(explore_stage.locator('[data-idea-section="stage-rail"]')).to_contain_text("Directions")
+            expect(explore_stage.locator('[data-idea-section="idea-card"]')).to_contain_text(
+                "Explore spectral gap scaling in coupled harmonic chains"
+            )
+
+            # 3. Create a Solve session via authenticated API and select it from the left rail ->
+            #    `mode_stages.js` mounts `solve_setup.js` in `#solve-session-stage`!
+            page.evaluate("""async () => {
+                const api = await import('/assets/api.js');
+                await api.createSession({ id: 's-browser-solve', mode: 'solve' });
+            }""")
+            page.reload()
+            page.locator("#session-list .session-item").filter(
+                has=page.locator('[data-mode-tag="solve"]')
+            ).click()
+
+            solve_stage = page.locator("#solve-session-stage")
+            expect(solve_stage).to_be_visible()
+            expect(explore_stage).to_be_hidden()
+            expect(solve_stage.locator('[data-testid="solve-setup-card"]')).to_be_visible()
+            expect(solve_stage.locator('[data-testid="solve-approval-host"]')).to_contain_text(
+                "Approvals for this Solve run"
+            )
+            expect(solve_stage).to_contain_text("Numerically checked")
+            assert "Checked numerically" not in solve_stage.inner_text()
+
+            stmt = solve_stage.locator('[data-testid="solve-statement-input"]')
+            stmt.fill(r"Compute $V_1(\phi)$ for $\lambda > 0$.")
+            expect(solve_stage.locator('[data-testid="solve-katex-preview"] .katex').first).to_be_visible()
+            solve_stage.locator('[data-testid="solve-conventions-input"]').fill("Euclidean signature, hbar = 1")
+            solve_stage.locator('[data-testid="solve-run-btn"]').click()
+
+            expect(solve_stage.locator('[data-testid="solve-collapsed-bar"]')).to_be_visible()
+            expect(solve_stage.locator('[data-testid="solve-given-steps"]')).to_contain_text("Given")
+            expect(solve_stage.locator('[data-testid="solve-given-steps"]')).to_contain_text("Euclidean signature")
+
+            # Switch back to the Explore session in the rail -> swaps cleanly to `#explore-session-stage`!
+            page.locator("#session-list .session-item").filter(
+                has=page.locator('[data-mode-tag="explore"]')
+            ).click()
+            expect(explore_stage).to_be_visible()
+            expect(solve_stage).to_be_hidden()
+
+            # 4. Open Projects -> Sources tab -> add a paper -> verify `library_send_back.js` mounts!
+            page.locator("#projects-open-btn").click()
+            page.get_by_role("button", name="New project", exact=True).click()
+            page.get_by_label("Project name").fill("Mode Stages Library Check")
+            page.get_by_role("button", name="Save project").click()
+            page.get_by_role("tab", name="Sources").click()
+            page.locator("[data-add-paper]").click()
+            form = page.locator(".project-library-form")
+            form.locator('input[name="title"]').fill("Synthetic Damping Bound")
+            form.locator('input[name="reference"]').fill("arXiv:2405.01234v1")
+            form.locator('textarea[name="bibtex"]').fill(
+                "@article{synth2024,\n  title={Synthetic Damping Bound}\n}"
+            )
+            form.locator('button[type="submit"]').click()
+
+            send_back = page.locator(".project-paper-send-back .library-send-back-slot")
+            expect(send_back).to_be_visible()
+            expect(send_back.locator(".send-back-export-btn")).to_have_text("Export BibTeX")
+            expect(send_back.locator(".send-back-kandinsky-btn")).to_have_text("Send to Kandinsky")
+            expect(send_back).to_contain_text("synth2024")
+            send_back.locator(".send-back-export-btn").click()
+            expect(send_back.locator(".send-back-dialog")).to_be_visible()
+
+            assert not errors, errors
+    print("Mode stages (Solve setup, Explore shell, and Library send-back) browser check passed")

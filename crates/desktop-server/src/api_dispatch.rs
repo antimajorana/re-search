@@ -294,6 +294,9 @@ pub(crate) fn dispatch_api(
         ("POST", ["api", "sessions", id, "investigation", "notes"]) => {
             write_api_res(&mut stream, crate::investigation_notes::handle(state, id, &req.body));
         }
+        ("POST", ["api", "sessions", id, "investigation", "cited"]) => {
+            write_api_res(&mut stream, crate::investigation_cited::handle(state, id, &req.body));
+        }
         ("POST", ["api", "sessions", id, "investigation", operation]) => {
             write_api_res(&mut stream, crate::investigation::handle(state, id, operation, &req.body));
         }
@@ -305,6 +308,9 @@ pub(crate) fn dispatch_api(
         }
         ("GET", ["api", "sessions", id, "handoffs"]) => {
             write_api_res(&mut stream, crate::handoff::handle_get_handoffs(state, id));
+        }
+        (method, ["api", "sessions", id, "solve", rest @ ..]) => {
+            write_api_res(&mut stream, crate::solve::handle_solve(state, method, id, rest, &req.body));
         }
         ("GET", ["api", "sessions", id, "diff", other_id]) => {
             write_api_res(&mut stream, handle_diff(state, id, other_id));
@@ -383,6 +389,26 @@ pub(crate) fn dispatch_api(
             &mut stream,
             crate::routes_library::handle_library(state, method, rest, &req.query, &req.body),
         ),
+        (_, ["api", "sources", "export", "bibtex"]) => write_api_res(
+            &mut stream,
+            crate::routes_sources_ext::handle_sources_ext(
+                state,
+                method,
+                &["export", "bibtex"],
+                &req.query,
+                &req.body,
+            ),
+        ),
+        (_, ["api", "sources", "send", "kandinsky"]) => write_api_res(
+            &mut stream,
+            crate::routes_sources_ext::handle_sources_ext(
+                state,
+                method,
+                &["send", "kandinsky"],
+                &req.query,
+                &req.body,
+            ),
+        ),
         (_, ["api", "sources", rest @ ..]) => write_api_res(
             &mut stream,
             crate::routes_sources::handle_sources(state, method, rest, &req.query, &req.body),
@@ -391,6 +417,12 @@ pub(crate) fn dispatch_api(
             &mut stream,
             crate::routes_lessons::handle_lessons(state, method, rest, &req.query, &req.body),
         ),
+        ("POST", ["api", "idea", "preview"]) => {
+            write_api_res(&mut stream, crate::routes_idea::handle_idea_preview(state, &req.body));
+        }
+        ("POST", ["api", "sessions", id, "idea", op]) => {
+            write_api_res(&mut stream, crate::routes_idea::handle_idea_op(state, id, op, &req.body));
+        }
         _ => write_json(
             &mut stream,
             404,

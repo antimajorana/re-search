@@ -3,7 +3,8 @@
 use crate::approver::UiApprover;
 use crate::state::DesktopState;
 use research_tools::tool_profile::{
-    lookup as lookup_profile, profile_for_session_events, register_profile, ProfileHostTools,
+    active_profile_for_session_events, lookup as lookup_profile, register_profile,
+    ProfileHostTools,
 };
 use research_tools::{register_lean_tool, research_policy, ResearchEnv};
 use serde_json::Value;
@@ -76,7 +77,7 @@ pub(crate) fn build_desktop_router(
 ) -> Result<(Router, String, bool), String> {
     let ledger = state.open_ledger()?;
     let existing = ledger.read_session(session).map_err(|e| e.to_string())?;
-    let profile = profile_for_session_events(&existing)?;
+    let profile = active_profile_for_session_events(&existing)?;
     build_desktop_router_for_profile(state, env, session, profile.name)
 }
 
@@ -126,6 +127,7 @@ pub(crate) fn build_desktop_router_for_profile(
             sympy_epoch,
             sympy_handler,
             session_title_handler: None,
+            solve_check: None,
         },
     )?;
 

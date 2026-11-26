@@ -10,7 +10,9 @@ use crate::resume::{
 };
 use ledger::{Event, Ledger};
 use research_tools::tool_profile::{
-    defs_match_exact, legacy_profile_name_for_events, lookup, ToolProfile, TOOL_PROFILE_FIELD,
+    defs_match_exact, investigation_v2, legacy_profile_name_for_events, lookup,
+    profile_for_session_events, ToolProfile, PROFILE_INVESTIGATION_V1, PROFILE_INVESTIGATION_V2,
+    TOOL_PROFILE_FIELD,
 };
 use serde_json::{json, Value};
 use tools::{Router, ToolDef};
@@ -54,7 +56,7 @@ pub fn resolve_session_profile(
             )
         })?;
 
-    let (profile, explicit) = match start_ev.payload.get(TOOL_PROFILE_FIELD) {
+    let (mut profile, explicit) = match start_ev.payload.get(TOOL_PROFILE_FIELD) {
         Some(Value::String(name)) => {
             let p = lookup(name)
                 .map_err(|e| drift(format!("cannot resume session `{session}`: {e}")))?;
@@ -73,7 +75,10 @@ pub fn resolve_session_profile(
         }
     };
 
-    // Rule R2: replay resume cannot switch tool profiles mid-session.
+    // Rule R2: replay resume cannot switch tool profiles mid-session, except the single
+    // forward compatibility upgrade `investigation/1 -> investigation/2` (`00-overview.md` 2.2,
+    // `investigate.md` §8.2). Downgrades (`investigation/2 -> investigation/1`) and cross-mode
+    // changes remain `Drift`.
     for ev in events.iter().filter(|e| e.kind == "session.resume") {
         if let Some(val) = ev.payload.get(TOOL_PROFILE_FIELD) {
             let Some(res_name) = val.as_str() else {
@@ -82,7 +87,10 @@ pub fn resolve_session_profile(
                     ev.seq
                 )));
             };
-            if res_name != profile.name {
+            if profile.name == PROFILE_INVESTIGATION_V1 && res_name == PROFILE_INVESTIGATION_V2 {
+                profile = lookup(PROFILE_INVESTIGATION_V2)
+                    .map_err(|e| drift(format!("cannot resume session `{session}`: {e}")))?;
+            } else if res_name != profile.name {
                 return Err(drift(format!(
                     "cannot resume session `{session}`: `{TOOL_PROFILE_FIELD}` changed from `{}` to `{res_name}` at seq {}",
                     profile.name, ev.seq
@@ -149,10 +157,12 @@ pub(crate) fn verify_profile_policy_and_defs(
     expected_defs: &[ToolDef],
     active_router_profile: Option<&str>,
 ) -> Result<ResolvedSessionProfile, ResumeReject> {
-    let resolved = resolve_session_profile(session, events)?;
+    let mut resolved = resolve_session_profile(session, events)?;
+    let upgrading_to_v2 = resolved.profile.name == PROFILE_INVESTIGATION_V1
+        && active_router_profile == Some(PROFILE_INVESTIGATION_V2);
 
     if let Some(active) = active_router_profile {
-        if active != resolved.profile.name {
+        if active != resolved.profile.name && !upgrading_to_v2 {
             return Err(drift(format!(
                 "cannot resume session `{session}`: active router profile `{active}` differs from session profile `{}`",
                 resolved.profile.name
@@ -198,7 +208,22 @@ pub(crate) fn verify_profile_policy_and_defs(
         }
     }
 
-    let check_defs: &[ToolDef] = if resolved.explicit {
+    let v2_profile;
+    let check_defs: &[ToolDef] = if upgrading_to_v2 {
+        v2_profile = investigation_v2();
+        let actual_refs: Vec<&ToolDef> = expected_defs.iter().collect();
+        if !defs_match_exact(&actual_refs, &v2_profile.defs) {
+            return Err(drift(format!(
+                "cannot resume session `{session}`: active router tools do not match profile `{}`",
+                v2_profile.name
+            )));
+        }
+        expected_defs
+    } else if active_router_profile.is_none()
+        && resolved.profile.name == PROFILE_INVESTIGATION_V1
+    {
+        expected_defs
+    } else if resolved.explicit {
         let actual_refs: Vec<&ToolDef> = expected_defs.iter().collect();
         if !defs_match_exact(&actual_refs, &resolved.profile.defs) {
             return Err(drift(format!(
@@ -218,6 +243,10 @@ pub(crate) fn verify_profile_policy_and_defs(
         .find(|event| event.kind == "session.resume" && event.payload["tool_defs"].is_array())
     {
         check_tool_defs_drift_for_profile(session, &resume.payload, check_defs, &resolved.profile)?;
+    }
+
+    if upgrading_to_v2 {
+        resolved.profile = investigation_v2();
     }
 
     Ok(resolved)
@@ -279,20 +308,21 @@ pub(crate) fn effective_router_profile(router: &Router, events: &[Event]) -> Opt
     if let Some(name) = router.tool_profile() {
         return Some(name.to_string());
     }
-    let candidate = events
-        .iter()
-        .find(|e| e.kind == "session.start")
-        .and_then(|e| e.payload.get(TOOL_PROFILE_FIELD))
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| legacy_profile_name_for_events(events));
-    let profile = lookup(candidate).ok()?;
+    let profile = profile_for_session_events(events).ok()?;
     if router.policy().version == profile.policy.version
         && defs_match_exact(&router.registry().defs(), &profile.defs)
     {
-        Some(profile.name.to_string())
-    } else {
-        None
+        return Some(profile.name.to_string());
     }
+    if profile.name == PROFILE_INVESTIGATION_V1 {
+        let v2 = investigation_v2();
+        if router.policy().version == v2.policy.version
+            && defs_match_exact(&router.registry().defs(), &v2.defs)
+        {
+            return Some(v2.name.to_string());
+        }
+    }
+    None
 }
 
 /// Insert `"tool_profile": "<name>"` into a `session.start` / `session.resume` JSON payload

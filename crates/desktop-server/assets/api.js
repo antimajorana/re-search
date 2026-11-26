@@ -218,6 +218,10 @@ export function getInvestigationOpenStatus(id, jobId) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/investigation/open-status?${qs}`);
 }
 
+export function investigationCited(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/cited`, payload);
+}
+
 export function listLibraryPapers(params = {}) {
   const qs = new URLSearchParams(params);
   const suffix = qs.toString() ? `?${qs}` : '';

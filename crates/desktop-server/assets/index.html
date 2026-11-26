@@ -22,6 +22,7 @@
   <link rel="stylesheet" href="/assets/investigation.css">
   <link rel="stylesheet" href="/assets/investigation_shell.css">
   <link rel="stylesheet" href="/assets/investigation_wholemap.css">
+  <link rel="stylesheet" href="/assets/solve.css">
 </head>
 <body>
   <div id="app-shell" data-rail-open="true" data-canvas-open="false">
@@ -229,6 +230,9 @@
       </div>
 
       <!-- INCLUDE:index_investigation.html -->
+      <div id="home-explore-card" hidden></div>
+      <div id="explore-session-stage" hidden></div>
+      <div id="solve-session-stage" hidden></div>
       <section id="message-stream" aria-live="polite" aria-label="Research conversation stream"></section>
 
       <div class="composer-dock">
@@ -548,6 +552,7 @@
   <script src="/vendor/katex/auto-render.min.js"></script>
   <script type="module" src="/assets/new_menu.js"></script>
   <script type="module" src="/assets/investigation_v3_shell.js"></script>
+  <script type="module" src="/assets/mode_stages.js"></script>
   <script type="module" src="/assets/app.js"></script>
 </body>
 </html>

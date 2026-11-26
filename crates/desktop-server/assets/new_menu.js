@@ -1,6 +1,9 @@
-// Left-rail New session mode menu (package F5; overview 5.1, 5.2, 5.3, 8.2 decisions 6 & 7).
-// Explore and Solve are listed but disabled with "not built yet" until their profiles exist;
+// Left-rail New session mode menu (package F5; overview 5.1, 5.2, 5.3, 8.2 decisions 6 & 7)
+// and visibility-flagged Explore setup card mount (package X4).
+// Explore and Solve are listed but disabled with "not built yet" until enabled;
 // nothing is faked, and "New research" sits under "More" until Solve and Explore ship.
+import { renderIdeaSetupCard } from './idea_setup.js';
+import { EXPLORE_VISIBILITY_STORAGE_KEY } from './idea_state.js';
 
 // Single-place named constants for owner-accepted wording (overview 5.2, 5.3, 8.2 decision 7).
 export const NOT_BUILT_YET_LABEL = 'not built yet';
@@ -148,7 +151,67 @@ export function bindNewMenu(rootEl, opts = {}) {
   }
 }
 
+/**
+ * Determine whether the Explore home card is visible (`explore.md` 3, `00-overview.md` 5.1).
+ * Hidden behind a visibility/settings flag until Explore is enabled — never shown greyed out.
+ */
+export function isExploreCardVisible(opts = {}) {
+  if (typeof opts.exploreEnabled === 'boolean') return opts.exploreEnabled;
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage) {
+      return localStorage.getItem(EXPLORE_VISIBILITY_STORAGE_KEY) === '1';
+    }
+  } catch {
+    // Storage unavailable; stay hidden by default.
+  }
+  return false;
+}
+
+function ensureIdeaStylesheet() {
+  if (typeof document === 'undefined' || !document.head || typeof document.querySelector !== 'function') {
+    return;
+  }
+  if (document.querySelector('link[href="/assets/idea.css"]')) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/assets/idea.css';
+  document.head.appendChild(link);
+}
+
+function defaultFocusInvestigate() {
+  if (typeof document === 'undefined' || typeof document.getElementById !== 'function') return;
+  const target =
+    document.getElementById('investigation-v4-entry-input') ||
+    document.getElementById('new-investigation-btn');
+  if (target && typeof target.focus === 'function') target.focus();
+}
+
+/**
+ * Mount the Explore setup card (`idea_setup.js`) into `containerEl` ONLY when the visibility
+ * flag is enabled; otherwise hide and clear `containerEl` so it is never shown greyed out.
+ */
+export function mountExploreCard(containerEl, opts = {}) {
+  if (!containerEl) return null;
+  if (!isExploreCardVisible(opts)) {
+    containerEl.hidden = true;
+    containerEl.replaceChildren();
+    return null;
+  }
+  ensureIdeaStylesheet();
+  containerEl.hidden = false;
+  const onCreated = typeof opts.onCreated === 'function'
+    ? opts.onCreated
+    : (res) => globalThis.__reSearchModeStages?.openExploreCreated?.(res);
+  return renderIdeaSetupCard(containerEl, {
+    onFocusInvestigate: defaultFocusInvestigate,
+    ...opts,
+    onCreated,
+  });
+}
+
 if (typeof document !== 'undefined' && typeof document.getElementById === 'function') {
   const mount = document.getElementById('rail-new-menu');
   if (mount) bindNewMenu(mount);
+  const exploreHost = document.getElementById('home-explore-card');
+  if (exploreHost) mountExploreCard(exploreHost);
 }

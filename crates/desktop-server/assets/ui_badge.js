@@ -4,9 +4,9 @@
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 // Named constants for owner-accepted decisions (overview 0.1, 3.2, 8.1-8.3).
-// Decision 8.1 & 8.3 #11: "Verified" is reserved for Solve exact symbolic checks; numeric is "Checked numerically".
+// Decision 8.1, 8.3 #11 & 2.10 clarification (2026-11-26): "Verified" is reserved for Solve exact symbolic checks; numeric is "Numerically checked".
 export const SOLVE_EXACT_WORD = 'Verified';
-export const SOLVE_NUMERIC_WORD = 'Checked numerically';
+export const SOLVE_NUMERIC_WORD = 'Numerically checked';
 // Decision 8.1 & 3.2 row 20: quotes are always "matched", never "verified".
 export const QUOTE_MATCHED_WORD = 'matched';
 // Decision 8.3 #3 & overview 2.10: OCR / scanned-page tag.

@@ -166,7 +166,7 @@ fn build_router_inner(
                 Some(name) => research_tools::tool_profile::lookup(name).map_err(|e| e.to_string())?,
                 None => {
                     let existing = router_ledger.read_session(session).map_err(|e| e.to_string())?;
-                    research_tools::tool_profile::profile_for_session_events(&existing)?
+                    research_tools::tool_profile::active_profile_for_session_events(&existing)?
                 }
             };
             approver = approver.with_research_env(data_dir.to_path_buf(), ro.workspace_root.clone())?;
@@ -184,6 +184,7 @@ fn build_router_inner(
                     sympy_epoch,
                     sympy_handler,
                     session_title_handler: None,
+                    solve_check: None,
                 },
             )?;
             (policy, Some(profile.name))

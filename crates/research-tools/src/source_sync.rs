@@ -8,12 +8,14 @@ use crate::paper_sources::{
     canonicalize_source_root, now_ms, portable_path_string, PaperSourceAdapter, ScanContext,
     ScanWarning, TitleLookupHook, FILE_ROLE_PDF, FILE_ROLE_TEX, SOURCE_STATE_PENDING,
 };
+use crate::source_bibtex::{canonicalize_bibtex_source_root, BibtexAdapter};
 use crate::source_dedupe::{find_duplicates, DuplicateGroup};
 use crate::source_folder::FolderAdapter;
 use crate::source_kandinsky::KandinskyVaultAdapter;
 use crate::source_sync_reconcile::{
     build_source_sync_batch, derive_source_id, reconcile_items, validate_source_id, ExactMergeSpec,
 };
+use crate::source_zotero::{canonicalize_zotero_source_root, ZoteroAdapter};
 use ledger::library_db::SourceSyncBatch;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -69,13 +71,11 @@ fn build_candidate_source(
     settings: Value,
     custom_id: Option<String>,
 ) -> Result<SourceRecord, String> {
-    if !matches!(kind, SourceKind::KandinskyVault | SourceKind::Folder) {
-        return Err(format!(
-            "source kind `{}` is not supported in F13a (planned for F13b)",
-            kind.as_str()
-        ));
-    }
-    let canon_root = canonicalize_source_root(root)?;
+    let canon_root = match kind {
+        SourceKind::KandinskyVault | SourceKind::Folder => canonicalize_source_root(root)?,
+        SourceKind::Bibtex => canonicalize_bibtex_source_root(root)?,
+        SourceKind::Zotero => canonicalize_zotero_source_root(root)?,
+    };
     let root_str = portable_path_string(&canon_root);
     let id = match custom_id.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
         Some(explicit) => validate_source_id(&explicit)?,
@@ -208,13 +208,11 @@ pub fn commit_source_sync(
     Ok(prepared.report)
 }
 
-/// Sync all registered sources that F13a supports.
+/// Sync all registered sources supported by installed adapters.
 pub fn sync_all_sources(lib: &Library, opts: &SyncOptions) -> Result<Vec<SyncReport>, String> {
     let mut reports = Vec::new();
     for src in lib.list_sources()? {
-        if matches!(src.kind, SourceKind::KandinskyVault | SourceKind::Folder) {
-            reports.push(sync_source(lib, &src.id, opts)?);
-        }
+        reports.push(sync_source(lib, &src.id, opts)?);
     }
     Ok(reports)
 }
@@ -232,12 +230,8 @@ fn scan_and_prepare(
     let scan = match source.kind {
         SourceKind::KandinskyVault => KandinskyVaultAdapter.scan(source, &ctx)?,
         SourceKind::Folder => FolderAdapter.scan(source, &ctx)?,
-        other => {
-            return Err(format!(
-                "source kind `{}` is not supported in F13a (planned for F13b)",
-                other.as_str()
-            ));
-        }
+        SourceKind::Bibtex => BibtexAdapter.scan(source, &ctx)?,
+        SourceKind::Zotero => ZoteroAdapter.scan(source, &ctx)?,
     };
 
     let reconciled = reconcile_items(previous, scan.items, &scan.roots_checked, ts);
@@ -324,6 +318,25 @@ fn scan_and_prepare(
         }
     }
 
+    // If exact/possible dedupe restored an item to exact equality with `previous`, treat it as
+    // unchanged (zero index writes on an idempotent second sync).
+    let mut updated_count = reconciled.updated;
+    let mut unchanged_count = reconciled.unchanged;
+    for entry in &mut final_entries {
+        if entry.pass1_updated {
+            if let Some(prev) = previous.iter().find(|p| p.external_id == entry.item.external_id) {
+                if crate::source_sync_reconcile::same_item_content(prev, &entry.item)
+                    && prev.state == entry.item.state
+                {
+                    entry.item.updated_ms = prev.updated_ms;
+                    entry.dirty = false;
+                    updated_count = updated_count.saturating_sub(1);
+                    unchanged_count += 1;
+                }
+            }
+        }
+    }
+
     let batch = build_source_sync_batch(source, previous, &final_entries, &exact_merges, ts)?;
 
     let items_out: Vec<SourceItemRecord> = final_entries.into_iter().map(|e| e.item).collect();
@@ -351,10 +364,10 @@ fn scan_and_prepare(
         with_pdf,
         with_tex,
         added: reconciled.added,
-        updated: reconciled.updated,
+        updated: updated_count,
         moved: reconciled.moved,
         missing: reconciled.missing,
-        unchanged: reconciled.unchanged,
+        unchanged: unchanged_count,
         exact_duplicates: dedupe.exact_groups.len(),
         possible_duplicates: dedupe.possible_groups.len(),
         unreadable,

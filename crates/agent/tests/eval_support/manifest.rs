@@ -286,14 +286,14 @@ fn validate_case(set: Set, tier: Tier, case: &Case) -> Vec<String> {
 
 fn validate_input(set: Set, tier: Tier, input: &Input) -> Vec<String> {
     let mut errs = Vec::new();
-    let allowed = match (set, input) {
-        (Set::P | Set::P2 | Set::P3 | Set::P4 | Set::P5, Input::Arxiv { .. } | Input::Doi { .. } | Input::Fixture { .. }) => true,
-        (Set::I, Input::Idea { .. }) => true,
-        (Set::Q, Input::Problem { .. }) => true,
-        (Set::C, Input::Chain { .. }) => true,
-        (Set::R, Input::Ledger { .. }) => true,
-        _ => false,
-    };
+    let allowed = matches!(
+        (set, input),
+        (Set::P | Set::P2 | Set::P3 | Set::P4 | Set::P5, Input::Arxiv { .. } | Input::Doi { .. } | Input::Fixture { .. })
+            | (Set::I, Input::Idea { .. })
+            | (Set::Q, Input::Problem { .. })
+            | (Set::C, Input::Chain { .. })
+            | (Set::R, Input::Ledger { .. })
+    );
     if !allowed {
         errs.push(format!("this kind of input is not allowed in set {}", set.letter()));
         return errs;

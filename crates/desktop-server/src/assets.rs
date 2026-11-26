@@ -159,6 +159,46 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/quote_chip.js"),
         }),
+        "/assets/approval_card.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/approval_card.js"),
+        }),
+        "/assets/solve_state.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_state.js"),
+        }),
+        "/assets/solve_setup.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_setup.js"),
+        }),
+        "/assets/solve.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/solve.css"),
+        }),
+        "/assets/api_idea.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/api_idea.js"),
+        }),
+        "/assets/idea_state.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/idea_state.js"),
+        }),
+        "/assets/idea_setup.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/idea_setup.js"),
+        }),
+        "/assets/idea_search.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/idea_search.js"),
+        }),
+        "/assets/idea.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/idea.js"),
+        }),
+        "/assets/idea.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/idea.css"),
+        }),
         "/assets/investigation_conventions.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_conventions.js"),
@@ -195,6 +235,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_v3_shell.js"),
         }),
+        "/assets/mode_stages.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/mode_stages.js"),
+        }),
         "/assets/investigation_shell.css" => Some(StaticAsset {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_shell.css"),
@@ -222,6 +266,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
         "/assets/investigation_badges.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_badges.js"),
+        }),
+        "/assets/investigation_context.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_context.js"),
         }),
         "/assets/api.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
@@ -326,6 +374,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
         "/assets/canvas_sources.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/canvas_sources.js"),
+        }),
+        "/assets/library_send_back.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/library_send_back.js"),
         }),
         "/assets/projects.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",

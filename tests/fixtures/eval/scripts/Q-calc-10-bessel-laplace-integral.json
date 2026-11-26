@@ -47,7 +47,7 @@
     "content": [
       {
         "type": "text",
-        "text": "Term-by-term integration of the J_0(a*t) power series yields the binomial series (1/s)*sum_{k=0}^{infty} binomial(-1/2, k)*(a^2/s^2)^k = 1/sqrt(s^2 + a^2) on the restricted disc |a| < s, matching the exact Taylor expansion to O(a^14). At |a| = s absolute convergence (and term-by-term Fubini-Tonelli justification) fails and for |a| > s the power series diverges, so confirmation on the full real domain s > 0, a in R (covering |a| < s, |a| = s, and |a| > s) is performed by 50-digit numerical quadrature at 12 points (all residuals < 1e-50), earning Checked numerically for the full-domain result:\n\n1/sqrt(s^2 + a^2)"
+        "text": "Term-by-term integration of the J_0(a*t) power series yields the binomial series (1/s)*sum_{k=0}^{infty} binomial(-1/2, k)*(a^2/s^2)^k = 1/sqrt(s^2 + a^2) on the restricted disc |a| < s, matching the exact Taylor expansion to O(a^14). At |a| = s absolute convergence (and term-by-term Fubini-Tonelli justification) fails and for |a| > s the power series diverges, so confirmation on the full real domain s > 0, a in R (covering |a| < s, |a| = s, and |a| > s) is performed by 50-digit numerical quadrature at 12 points (all residuals < 1e-50), earning Numerically checked for the full-domain result:\n\n1/sqrt(s^2 + a^2)"
       }
     ]
   }

@@ -316,7 +316,29 @@ fn carbon_audit_guards_profile_cli_cites_and_mapview_excerpts() {
         .iter().filter(|e| e.kind == MARKER_TASK_REQUESTED).count();
     assert_eq!(after_cli, before_cli, "CLI rejection must not write task_requested");
 
-    // C1: Older `investigation/1` session without v2 map tools is rejected 400 before writing marker.
+    // C1a: Frozen `research/1` session without v2 map tools is rejected 400 before writing marker.
+    let res1_sid = "inv-res1-frozen";
+    let ledger = fx.state.open_ledger().unwrap();
+    ledger.append(res1_sid, EVENT_INVESTIGATION_STARTED, 1, &json!({})).unwrap();
+    ledger.append(res1_sid, "session.start", 1, &json!({ "tool_profile": "research/1" })).unwrap();
+    let ledger_m = Mutex::new(ledger);
+    let ing_r1 = ingest_bytes(
+        &fx.env.sandbox(), &ledger_m,
+        &IngestRequest {
+            session_id: res1_sid, file_name: "paper.tex", origin: "https://arxiv.org/e-print/2401.09998v1",
+            raw_bytes: FIXTURE_TEX, source_id_hint: None, section_filter: None, title: Some("Research Frozen"),
+        },
+    ).unwrap();
+    drop(ledger_m);
+    let _ = pin_source_and_build_skeleton(&fx.state, res1_sid, &ing_r1.source_id, None, None, None).unwrap();
+    let res1_err = investigation_tasks::handle(&fx.state, res1_sid, br#"{"task":"orient"}"#).unwrap_err();
+    assert_eq!(res1_err.0, 400);
+    assert!(res1_err.1.contains("research/1"), "{}", res1_err.1);
+    assert!(!fx.state.open_ledger().unwrap().read_session(res1_sid).unwrap()
+        .iter().any(|e| e.kind == MARKER_TASK_REQUESTED));
+
+    // C1b: Older `investigation/1` session upgrades to `investigation/2` on resume (`00-overview.md` §2.2,
+    // `investigate.md` §8.2) and accepts V6 tasks with HTTP 202 (also auto-building missing skeleton per §8.4).
     let v1_sid = "inv-v1-legacy";
     let ledger = fx.state.open_ledger().unwrap();
     ledger.append(v1_sid, EVENT_INVESTIGATION_STARTED, 1, &json!({})).unwrap();
@@ -330,12 +352,16 @@ fn carbon_audit_guards_profile_cli_cites_and_mapview_excerpts() {
         },
     ).unwrap();
     drop(ledger_m);
-    let _ = pin_source_and_build_skeleton(&fx.state, v1_sid, &ing.source_id, None, None, None).unwrap();
-    let v1_err = investigation_tasks::handle(&fx.state, v1_sid, br#"{"task":"orient"}"#).unwrap_err();
-    assert_eq!(v1_err.0, 400);
-    assert!(v1_err.1.contains("investigation/1"));
-    assert!(!fx.state.open_ledger().unwrap().read_session(v1_sid).unwrap()
-        .iter().any(|e| e.kind == MARKER_TASK_REQUESTED));
+    fx.state.open_ledger().unwrap().append(v1_sid, "investigation.paper", 1, &json!({ "source_id": ing.source_id })).unwrap();
+    let (v1_st, v1_body) = investigation_tasks::handle(&fx.state, v1_sid, br#"{"task":"orient"}"#).unwrap();
+    assert_eq!(v1_st, 202);
+    assert_eq!(v1_body["status"], "running");
+    for _ in 0..100 {
+        if fx.state.open_ledger().unwrap().read_session(v1_sid).unwrap().iter().any(|e| e.kind == MARKER_TASK_FINISHED) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 
     // C3: `collect_received_ranges_with_sha` credits matching sha/run_id, rejects wrong sha,
     // and never leaks `context.supplied` or `read_map_node` from a later turn after a marker.

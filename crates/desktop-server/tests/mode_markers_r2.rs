@@ -62,7 +62,9 @@ fn tool_emitted_event_kinds() -> BTreeMap<&'static str, &'static [&'static str]>
     BTreeMap::from([
         ("arxiv_search", &["literature.fetched"][..]),
         ("check_expression_sanity", &[][..]),
+        ("check_run", &[][..]),
         ("doc_ingest", &["source.ingested"][..]),
+        ("expr_show", &[][..]),
         ("fs_list", &[][..]),
         ("fs_read", &[][..]),
         ("fs_write", &["workspace.backup"][..]),
@@ -85,6 +87,8 @@ fn tool_emitted_event_kinds() -> BTreeMap<&'static str, &'static [&'static str]>
         ("search_formal_library", &[][..]),
         ("search_paper_passages", &[][..]),
         ("set_session_title", &[tools::builtin::SESSION_TITLE_EVENT][..]),
+        ("solve_finish", &[][..]),
+        ("step_record", &[][..]),
         ("sympy_eval", &[][..]),
         ("tex_audit", &[][..]),
     ])
@@ -114,6 +118,7 @@ fn collect_all_registered_tool_ids() -> BTreeSet<String> {
                 sympy_epoch: Arc::new(NoWorkerEpoch),
                 sympy_handler: noop_handler,
                 session_title_handler: Some(noop_title),
+                solve_check: None,
             },
         )
         .unwrap();
@@ -188,6 +193,7 @@ fn locally_executed_tool_handlers_emit_no_host_mode_markers() {
             sympy_epoch: Arc::new(NoWorkerEpoch),
             sympy_handler: noop_sympy,
             session_title_handler: None,
+            solve_check: None,
         },
     )
     .unwrap();
@@ -398,6 +404,9 @@ fn tool_handler_sources_do_not_append_host_mode_markers() {
         "crates/research-tools/src/proof_dag.rs",
         "crates/research-tools/src/sanity.rs",
         "crates/research-tools/src/lean_check.rs",
+        "crates/research-tools/src/solve_defs.rs",
+        "crates/research-tools/src/solve_exprs.rs",
+        "crates/research-tools/src/solve_exprs_show.rs",
     ];
 
     for rel in tool_files {

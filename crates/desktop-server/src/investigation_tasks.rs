@@ -77,11 +77,13 @@ pub fn handle(state: &Arc<DesktopState>, session_id: &str, body: &[u8]) -> ApiRe
     }
     require_map_tools_profile(&events)?;
 
-    // Rule 6.1 (deterministic first): refuse any task until a pinned skeleton exists.
-    let (source_id, skeleton_seq, skeleton) = load_pinned_skeleton(&ledger, &events, None)?;
+    // Rule 6.1 (deterministic first): refuse any task until a pinned skeleton exists
+    // (auto-building from hash-verified ingested source on older pinned Investigation sessions per §8.4).
+    let (source_id, skeleton_seq, skeleton) =
+        load_pinned_skeleton(state, session_id, &ledger, &events, None)?;
     let tags = parse_and_validate_tags(req_json.get("tags"), task, &skeleton)?;
     let cap = clamp_cap(req_json.get("max_turns").and_then(Value::as_u64), task_cap_for(task));
-    let prev_last_seq = events.last().map_or(0, |e| e.seq);
+    let prev_last_seq = events.last().map_or(0, |e| e.seq).max(skeleton_seq);
 
     strip_internal_task_fields(&mut req_json);
     req_json[TASK_SPEC_FIELD] = json!({
@@ -141,7 +143,7 @@ pub(crate) fn prepare_task(
     }
     require_map_tools_profile(&events)?;
     let (source_id, skeleton_seq, skeleton) =
-        load_pinned_skeleton(&ledger, &events, Some(expected_skel_seq))?;
+        load_pinned_skeleton(state, session_id, &ledger, &events, Some(expected_skel_seq))?;
     if source_id != expected_source {
         return Err(conflict("The pinned paper changed before the Investigate task started."));
     }
@@ -416,7 +418,11 @@ fn suggest_nearby_tags<'a>(needle: &str, valid: &[&'a str]) -> Vec<&'a str> {
 }
 
 fn load_pinned_skeleton(
-    ledger: &Ledger, events: &[Event], required_seq: Option<u64>,
+    state: &DesktopState,
+    session_id: &str,
+    ledger: &Ledger,
+    events: &[Event],
+    required_seq: Option<u64>,
 ) -> Result<(String, u64, PaperSkeleton), (u16, String)> {
     const NEED_SKEL: &str = "Build or pin the deterministic paper skeleton before starting an Investigate task.";
     let source_id = latest(events, EVENT_INVESTIGATION_PAPER)
@@ -427,9 +433,20 @@ fn load_pinned_skeleton(
         Some(seq) => events.iter().find(|e| {
             e.seq == seq && e.kind == EVENT_INVESTIGATION_SKELETON && e.payload["source_id"].as_str() == Some(source_id.as_str())
         }).ok_or_else(|| conflict(format!("Pinned skeleton seq {seq} is no longer available.")))?,
-        None => events.iter().rev().find(|e| {
-            e.kind == EVENT_INVESTIGATION_SKELETON && e.payload["source_id"].as_str() == Some(source_id.as_str())
-        }).ok_or_else(|| bad(NEED_SKEL))?,
+        None => {
+            if let Some(ev) = events.iter().rev().find(|e| {
+                e.kind == EVENT_INVESTIGATION_SKELETON && e.payload["source_id"].as_str() == Some(source_id.as_str())
+            }) {
+                ev
+            } else {
+                // Older Investigation sessions (`investigate.md` §8.4) may have `investigation.paper`
+                // and hash-verified `source.ingested` files without an `investigation.skeleton` event yet.
+                let built = crate::investigation_skeleton::ensure_skeleton_on_open(state, session_id)?
+                    .filter(|rec| rec.skeleton.source_id == source_id)
+                    .ok_or_else(|| bad(NEED_SKEL))?;
+                return Ok((source_id, built.event_seq, built.skeleton));
+            }
+        }
     };
 
     let blob_hash = skel_ev.payload["blob"].as_str()

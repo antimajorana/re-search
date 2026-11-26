@@ -5,6 +5,7 @@
 
 import * as api from '/assets/api.js';
 import { renderInvestigationEntry } from '/assets/investigation_entry.js';
+import { createInvestigationContextDrawer } from '/assets/investigation_context.js';
 import { renderInvestigationNodeCard } from '/assets/investigation_node.js';
 import { createQualityBanner, renderInvestigationOutline } from '/assets/investigation_outline.js';
 import { filterResultNodes, renderInvestigationResults } from '/assets/investigation_results.js';
@@ -173,7 +174,6 @@ export function createInvestigationV3Controller(deps = {}) {
         if (st.trail.length > 24) st.trail.shift();
       }
       renderShell(host, sessionId, sessionData, hooks);
-      void ensureSelectedText(tag);
     };
 
     const outlineCtrl = renderInvestigationOutline(outlineHost, mv, {
@@ -252,19 +252,98 @@ export function createInvestigationV3Controller(deps = {}) {
       ? st.nodeTexts.get(`${mv.skeleton_seq}:${st.selectedTag}`) || null
       : null;
 
+    const nodeCardHost = el('div', 'inv-node-card-host');
+    const contextHost = el('div', 'inv-context-host');
+    rightCol.append(nodeCardHost, contextHost);
+
+    const serverBudget = sessionData?.investigation?.fetch_budget || mv?.fetch_budget || null;
+    if (serverBudget && !st.fetchBudget) st.fetchBudget = serverBudget;
+    st.liveHooks = hooks;
+    st.liveSelectNode = selectNode;
+
+    const postCited = (payload) => apiMod.investigationCited?.(sessionId, payload);
+    if (!st.contextDrawer) {
+      st.contextDrawer = createInvestigationContextDrawer(null, {
+        fetchBudget: st.fetchBudget,
+        modelConnected,
+        onLookup: async (req) => {
+          const res = await postCited(req);
+          if (activeSessionId !== sessionId) return null;
+          if (res?.fetch_budget) st.fetchBudget = res.fetch_budget;
+          st.citedResult = res;
+          return res;
+        },
+        onPick: async (req) => {
+          const res = await postCited(req);
+          if (activeSessionId !== sessionId) return null;
+          if (res?.fetch_budget) st.fetchBudget = res.fetch_budget;
+          st.citedResult = res;
+          return res;
+        },
+        onRaiseBudget: async (req) => {
+          const res = await postCited(req);
+          if (activeSessionId !== sessionId) return null;
+          if (res?.fetch_budget) st.fetchBudget = res.fetch_budget;
+          return res;
+        },
+        onInspectNode: async (req) => {
+          const res = await postCited(req);
+          return activeSessionId === sessionId ? res : null;
+        },
+        onReturnToClaim: (ref) => {
+          if (!ref?.id) return;
+          if (ref.session && ref.session !== sessionId) return;
+          if (ref.id !== st.selectedTag) st.liveSelectNode?.(ref.id, false);
+        },
+        onOpenSource: (target) => {
+          if (target?.source_id && target?.path) {
+            st.liveHooks?.openSource?.(sessionId, {
+              source_id: target.source_id,
+              path: target.path,
+              start_line: target.start_line,
+              end_line: target.end_line,
+            });
+          }
+        },
+        onOpenPdf: (target) => {
+          if (target?.source_id) st.liveHooks?.openPdf?.(target);
+        },
+        onAttachFile: () => {
+          document.getElementById('investigation-file')?.click?.();
+        },
+        onOpenNewSession: hooks?.openPaperInNewSession
+          ? (res) => st.liveHooks?.openPaperInNewSession?.(res)
+          : undefined,
+      });
+      if (st.pendingSections) {
+        for (const [secId, secEl] of st.pendingSections.entries()) {
+          st.contextDrawer.mountContextSection(secId, secEl);
+        }
+        st.pendingSections.clear();
+      }
+      if (st.citedResult) st.contextDrawer.renderResult(st.citedResult);
+    } else if (st.fetchBudget) {
+      st.contextDrawer.setFetchBudget(st.fetchBudget);
+    }
+    const contextDrawer = st.contextDrawer;
+    contextHost.replaceChildren(contextDrawer.element);
+
     const mountNodeCard = (entry) => {
-      renderInvestigationNodeCard(rightCol, mv, st.selectedTag, {
+      renderInvestigationNodeCard(nodeCardHost, mv, st.selectedTag, {
         nodeText: entry ? entry.text : (st.selectedTag ? null : ''),
         proofText: entry?.proof_text || '',
         hasPdf,
         modelConnected,
         onSelectNode: (id) => selectNode(id, true),
         onSelectCitation: (cite) => {
-          hooks?.showStatus?.(
-            cite.arxiv_id
-              ? `Citation [${cite.key}] → arXiv:${cite.arxiv_id} (cited-paper lookup arrives in V11).`
-              : `Citation [${cite.key}]${cite.title ? ': ' + cite.title : ''}.`,
-          );
+          const locator = Array.isArray(cite.locators) && cite.locators.length
+            ? cite.locators[0]
+            : (cite.locator || '');
+          void contextDrawer.openCitedLookup({
+            tag: st.selectedTag,
+            bibKey: cite.key,
+            locator,
+          });
         },
         onAction: (actionId, node) => {
           const span = Array.isArray(node?.spans) ? node.spans[0] : null;
@@ -400,6 +479,19 @@ export function createInvestigationV3Controller(deps = {}) {
     isTexSource,
     isSkeletonFileName,
     isSkeletonSource,
+    getContextDrawer(sessionId) {
+      return bySession.get(sessionId)?.contextDrawer || null;
+    },
+    mountContextSection(sessionId, id, element) {
+      const st = sessionState(sessionId);
+      if (st.contextDrawer) return st.contextDrawer.mountContextSection(id, element);
+      if (!st.pendingSections) st.pendingSections = new Map();
+      const key = String(id ?? '').trim();
+      if (!key) return false;
+      if (element == null) return st.pendingSections.delete(key);
+      st.pendingSections.set(key, element);
+      return true;
+    },
     async pinAndOpen(sessionId, sourceId, question) {
       const res = await apiMod.pinInvestigationSkeleton(sessionId, {
         source_id: sourceId,

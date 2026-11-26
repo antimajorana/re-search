@@ -329,23 +329,34 @@ fn resolve_session_profile_handles_explicit_legacy_unbuilt_and_r2_drift() {
     assert!(r_v2.explicit);
 
     // Reserved / unbuilt profiles fail closed with Drift ("profile not built yet").
-    for name in [PROFILE_EXPLORE_V1, PROFILE_SOLVE_V1] {
-        let evs = [dummy_event(1, "session.start", json!({ "tool_profile": name }))];
-        let err = resolve_session_profile("s-res", &evs).unwrap_err();
-        assert_eq!(err.kind, ResumeRejectKind::Drift);
-        assert!(err.message.contains("profile not built yet"), "{}", err.message);
-    }
+    let evs = [dummy_event(1, "session.start", json!({ "tool_profile": PROFILE_EXPLORE_V1 }))];
+    let err = resolve_session_profile("s-res", &evs).unwrap_err();
+    assert_eq!(err.kind, ResumeRejectKind::Drift);
+    assert!(err.message.contains("profile not built yet"), "{}", err.message);
+
+    // Explicit `solve/1` and `solve.started` now resolve to built profile `solve/1` (`v0.5-solve`).
+    let solve_explicit = [dummy_event(1, "session.start", json!({ "tool_profile": PROFILE_SOLVE_V1 }))];
+    let r = resolve_session_profile("s-solve-exp", &solve_explicit).unwrap();
+    assert_eq!(r.profile.name, PROFILE_SOLVE_V1);
+    assert_eq!(r.profile.policy.version, research_tools::SOLVE_POLICY_VERSION);
+    assert!(r.explicit);
+
+    let solve_marker = [
+        dummy_event(1, MARKER_SOLVE_STARTED, json!({})),
+        dummy_event(2, "session.start", json!({})),
+    ];
+    let r = resolve_session_profile("s-solve-m", &solve_marker).unwrap();
+    assert_eq!(r.profile.name, PROFILE_SOLVE_V1);
+    assert!(!r.explicit);
 
     // Legacy markers for unbuilt modes also fail closed.
-    for marker in [MARKER_IDEA_STARTED, MARKER_SOLVE_STARTED] {
-        let evs = [
-            dummy_event(1, marker, json!({})),
-            dummy_event(2, "session.start", json!({})),
-        ];
-        let err = resolve_session_profile("s-m", &evs).unwrap_err();
-        assert_eq!(err.kind, ResumeRejectKind::Drift);
-        assert!(err.message.contains("profile not built yet"), "{}", err.message);
-    }
+    let evs = [
+        dummy_event(1, MARKER_IDEA_STARTED, json!({})),
+        dummy_event(2, "session.start", json!({})),
+    ];
+    let err = resolve_session_profile("s-m", &evs).unwrap_err();
+    assert_eq!(err.kind, ResumeRejectKind::Drift);
+    assert!(err.message.contains("profile not built yet"), "{}", err.message);
 
     // Non-string tool_profile fails closed.
     let evs = [dummy_event(1, "session.start", json!({ "tool_profile": null }))];
@@ -452,4 +463,35 @@ fn policy_belongs_to_profile_and_is_enforced_on_resume() {
         &custom,
     )
     .is_ok());
+
+    // `solve/1` binds its own `v0.5-solve` policy and 16 frozen tool defs on resume.
+    let s1 = research_tools::tool_profile::solve_v1();
+    let s1_defs: Vec<Value> = s1.defs.iter().map(|d| json!({ "id": d.id, "def_hash": d.def_hash() })).collect();
+    ledger
+        .append_with_hash(
+            "s-solve-ok",
+            "session.start",
+            1,
+            &json!({
+                "route": "api",
+                "provider": "anthropic-messages",
+                "model": "claude-haiku-4-5",
+                "prompt": "solve",
+                "policy_version": s1.policy.version,
+                "tool_profile": PROFILE_SOLVE_V1,
+                "tool_defs": s1_defs,
+            }),
+        )
+        .unwrap();
+    let (insp, resolved) = inspect_session_with_profile(&ledger, "s-solve-ok").unwrap();
+    assert_eq!(resolved.profile.name, PROFILE_SOLVE_V1);
+    assert_eq!(insp.tool_profile, PROFILE_SOLVE_V1);
+    let err = crate::resume::inspect_session_for_resume(
+        &ledger,
+        "s-solve-ok",
+        research_tools::RESEARCH_POLICY_VERSION,
+        &s1.defs,
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ResumeRejectKind::Drift);
 }

@@ -108,8 +108,8 @@ fn q_measures_match_s2_badge_wording_and_retire_computed() {
 
 #[test]
 fn q_gate_enforces_failed_and_blocks_verified_or_checked_numerically_planted_errors() {
-    // Full passing Q sample: 100% planted errors Failed, 0 Verified, 0 Checked numerically,
-    // and separate step shares for Verified, Checked numerically, Model agreed, Unchecked.
+    // Full passing Q sample: 100% planted errors Failed, 0 Verified, 0 Numerically checked,
+    // and separate step shares for Verified, Numerically checked, Model agreed, Unchecked.
     let mut values = all_passing_rules();
     SolveQCounts {
         planted_total: 3,
@@ -140,7 +140,7 @@ fn q_gate_enforces_failed_and_blocks_verified_or_checked_numerically_planted_err
         assert_eq!(report.outcome_of(id), Some(Outcome::RecordedOnly), "{id}");
     }
 
-    // Planted error ending Verified, Checked numerically, or Unchecked all fail the gate.
+    // Planted error ending Verified, Numerically checked, or Unchecked all fail the gate.
     for (counts, expected_fail) in [
         (
             SolveQCounts { planted_total: 3, planted_failed: 2, planted_verified: 1, ..Default::default() },
@@ -173,7 +173,7 @@ fn q_gate_enforces_failed_and_blocks_verified_or_checked_numerically_planted_err
         assert_eq!(rep.ids_with(Outcome::Fail), expected_fail);
     }
 
-    // Even in isolation, any planted error ending Verified or Checked numerically fails;
+    // Even in isolation, any planted error ending Verified or Numerically checked fails;
     // leaving either count unmeasured keeps the gate INCOMPLETE.
     for id in [
         solve_wording::ID_PLANTED_ERROR_ENDS_VERIFIED,

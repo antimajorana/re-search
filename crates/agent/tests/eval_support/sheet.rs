@@ -99,7 +99,7 @@ pub fn validate_sheet(sheet: &Sheet) -> Vec<String> {
         Some(c) if (7..=40).contains(&c.len()) && c.bytes().all(|b| b.is_ascii_hexdigit()) => {}
         _ => errs.push("build.git_commit must be the commit hash of the build (7 to 40 hex digits)".into()),
     }
-    if sheet.build.crate_version.as_deref().map_or(true, |v| v.trim().is_empty()) {
+    if sheet.build.crate_version.as_deref().is_none_or(|v| v.trim().is_empty()) {
         errs.push("build.crate_version is missing".into());
     }
     if sheet.wall_time_s.is_some_and(|t| !t.is_finite() || t < 0.0) {

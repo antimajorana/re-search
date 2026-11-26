@@ -65,12 +65,22 @@ pub mod search_coverage;
 pub mod session_activity;
 pub mod skeleton;
 mod solve_badge;
+pub mod solve_defs;
+pub mod solve_exprs;
+mod solve_exprs_show;
 pub mod solve_model;
 mod solve_model_records;
 mod solve_own_tier;
+pub mod solve_setup;
+mod solve_setup_prefill;
 pub mod solve_state;
 pub mod solve_status;
+pub mod source_bibtex;
+mod source_bibtex_parse;
+mod source_bibtex_tex;
 pub mod source_dedupe;
+pub mod source_export;
+mod source_export_bib;
 pub mod source_folder;
 mod source_folder_parse;
 mod source_frontmatter;
@@ -78,6 +88,8 @@ pub mod source_kandinsky;
 mod source_kandinsky_resolve;
 pub mod source_sync;
 mod source_sync_reconcile;
+pub mod source_zotero;
+mod source_zotero_parse;
 pub mod status_badge;
 pub mod tex_audit;
 mod tex_audit_sources;
@@ -112,7 +124,9 @@ pub use literature::{
     literature_search_def, run_literature_search, LiteratureHit, LiteratureRequest,
     LITERATURE_SEARCH,
 };
-pub use policy_preset::{research_policy, RESEARCH_POLICY_VERSION};
+pub use policy_preset::{
+    research_policy, solve_policy, RESEARCH_POLICY_VERSION, SOLVE_POLICY_VERSION,
+};
 pub use proof_dag::{
     effective_verification_verdict, ledger_append_def, ledger_query_def, ledger_supersede_def, read_proof_dag, ProofDag,
     ProofEntry, ProofStatus, LEDGER_APPEND, LEDGER_QUERY, LEDGER_SUPERSEDE,
