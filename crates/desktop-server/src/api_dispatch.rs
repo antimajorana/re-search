@@ -291,6 +291,9 @@ pub(crate) fn dispatch_api(
         ("POST", ["api", "sessions", id, "investigation", "tasks"]) => {
             write_api_res(&mut stream, crate::investigation_tasks::handle(state, id, &req.body));
         }
+        ("POST", ["api", "sessions", id, "investigation", "notes"]) => {
+            write_api_res(&mut stream, crate::investigation_notes::handle(state, id, &req.body));
+        }
         ("POST", ["api", "sessions", id, "investigation", operation]) => {
             write_api_res(&mut stream, crate::investigation::handle(state, id, operation, &req.body));
         }
@@ -333,6 +336,12 @@ pub(crate) fn dispatch_api(
         }
         ("PUT", ["api", "settings", "providers"]) => {
             write_api_res(&mut stream, handle_put_settings(state, &req.body));
+        }
+        ("GET", ["api", "settings", "investigate"]) => {
+            write_api_res(&mut stream, crate::investigation_settings::handle_get(state));
+        }
+        ("PUT", ["api", "settings", "investigate"]) => {
+            write_api_res(&mut stream, crate::investigation_settings::handle_put(state, &req.body));
         }
         ("GET", ["api", "connections"]) => {
             write_api_res(&mut stream, crate::connections::handle_connections(state, &req.query));

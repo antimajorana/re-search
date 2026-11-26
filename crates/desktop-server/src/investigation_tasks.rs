@@ -475,17 +475,7 @@ pub(crate) fn strip_internal_task_fields(req: &mut Value) {
 }
 
 fn build_task_prompt(task: InvestigationTaskKind, tags: &[String], focus: Option<&str>) -> String {
-    let mut prompt = match task {
-        InvestigationTaskKind::Orient => "Run Investigate orient task on pinned paper.".to_string(),
-        InvestigationTaskKind::Open => format!("Open Investigate node(s): {}.", tags.join(", ")),
-        InvestigationTaskKind::Context => format!("Gather context for Investigate node(s): {}.", tags.join(", ")),
-        InvestigationTaskKind::PriorWork => "Check prior work on pinned paper.".to_string(),
-    };
-    if let Some(f) = focus {
-        prompt.push_str("\nFocus: ");
-        prompt.push_str(f);
-    }
-    prompt
+    crate::investigation_task_prompts::build_user_task_prompt(task, tags, focus)
 }
 
 fn is_interruption_error(err: &str) -> bool {
