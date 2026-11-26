@@ -23,7 +23,8 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | F8 Solve fixed case set Q | Neon launched | `gemini/modes/eval-q-cases` |
 | F8 Investigate fixed case set P | Neon launched | `gemini/modes/eval-p-cases` |
 | F1/F4/F14a integration review | Carbon launched | `gemini/modes/audit-mode-foundations` |
-| Later lane briefs | Neon planning brief ready | `agents/draft-next-lanes.md` |
+| Later lane briefs | Neon planning launched | `gemini/modes/draft-next-lanes` |
+| F8 Solve evaluation gate and badge names | brief ready | `agents/eval-solve-badges.md` |
 | F3 network gate and paper fetch | done, reviewed and merged | `net_rate.rs`, `paper_fetch*.rs`, `ledger/src/fulltext_cache.rs`; report `reports/f3-net-gate.md` |
 | F4 quote core, F9 run budget | done, reviewed and merged | `quote_core.rs`, `lines_sent.rs`, `run_budget.rs`; report `reports/f4-f9-quote-budget.md` |
 | V1 skeleton core for TeX | done, reviewed and merged | `crates/research-tools/src/skeleton/`; report `reports/v1-skeleton.md` |
