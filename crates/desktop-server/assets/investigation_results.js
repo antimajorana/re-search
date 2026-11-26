@@ -180,6 +180,8 @@ export function renderInvestigationResults(host, mapview, opts = {}) {
     }
   };
 
+  const nodeByTag = new Map(allNodes.map((n) => [String(n.id ?? n.tag ?? ''), n]));
+
   const mountPreview = (card, tag, text) => {
     const trimmed = String(text ?? '').trim();
     let previewEl = previewEls.get(tag);
@@ -192,7 +194,8 @@ export function renderInvestigationResults(host, mapview, opts = {}) {
       previewEls.set(tag, previewEl);
       card.appendChild(previewEl);
     }
-    renderMathTextInto(previewEl, trimmed, { katex: opts.katex });
+    if (nodeByTag.get(tag)?.render_math === false) previewEl.textContent = trimmed;
+    else renderMathTextInto(previewEl, trimmed, { katex: opts.katex });
   };
 
   const buildCard = (node) => {

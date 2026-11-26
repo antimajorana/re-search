@@ -282,11 +282,23 @@ pub(crate) fn dispatch_api(
                 Err((st, msg)) => write_json(&mut stream, st, json!({ "error": msg }), &[]),
             }
         }
+        (method, ["api", "sessions", id, "investigation", op @ ("open" | "open-status")]) => {
+            write_api_res(
+                &mut stream,
+                crate::investigation_open::handle(state, method, id, op, &req.query, &req.body),
+            );
+        }
         ("POST", ["api", "sessions", id, "investigation", operation]) => {
             write_api_res(&mut stream, crate::investigation::handle(state, id, operation, &req.body));
         }
         ("POST", ["api", "sessions", id, "fork"]) => {
             write_api_res(&mut stream, handle_fork(state, id, &req.body));
+        }
+        ("POST", ["api", "sessions", id, "handoff"]) => {
+            write_api_res(&mut stream, crate::handoff::handle_create_handoff(state, id, &req.body));
+        }
+        ("GET", ["api", "sessions", id, "handoffs"]) => {
+            write_api_res(&mut stream, crate::handoff::handle_get_handoffs(state, id));
         }
         ("GET", ["api", "sessions", id, "diff", other_id]) => {
             write_api_res(&mut stream, handle_diff(state, id, other_id));

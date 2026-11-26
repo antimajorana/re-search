@@ -228,12 +228,16 @@ export function renderInvestigationNodeCard(host, mapview, tag, opts = {}) {
   const blockAContent = document.createElement('div');
   blockAContent.className = 'inv-node-code-body';
 
-  // 1. Verbatim statement rendered safely via renderMathTextInto.
+  const allowMath = node.render_math !== false && opts.renderMath !== false;
+
+  // 1. Verbatim statement rendered safely via renderMathTextInto (plain text on OCR per Rule 6.21).
   const statementEl = document.createElement('div');
   statementEl.className = 'inv-node-statement';
   if (opts.nodeText == null) {
     statementEl.classList.add('inv-node-statement--loading');
     statementEl.textContent = LOADING_STATEMENT_TEXT;
+  } else if (!allowMath) {
+    statementEl.textContent = String(opts.nodeText);
   } else {
     renderMathTextInto(statementEl, opts.nodeText, { katex: opts.katex });
   }
@@ -259,7 +263,8 @@ export function renderInvestigationNodeCard(host, mapview, tag, opts = {}) {
     }));
     const proofBody = document.createElement('div');
     proofBody.className = 'inv-node-proof-body';
-    renderMathTextInto(proofBody, opts.proofText, { katex: opts.katex });
+    if (!allowMath || proofNode?.render_math === false) proofBody.textContent = String(opts.proofText);
+    else renderMathTextInto(proofBody, opts.proofText, { katex: opts.katex });
     proofSection.append(proofHeader, proofBody);
     blockAContent.appendChild(proofSection);
   }

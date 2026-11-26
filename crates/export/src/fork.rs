@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 pub const MAX_MODIFIED_ASSUMPTION_CHARS: usize = 4_000;
 const EVENT_SCHEMA_VERSION: u32 = 1;
 
-fn generate_session_id() -> Result<String, String> {
+pub(crate) fn generate_session_id() -> Result<String, String> {
     let mut buf = [0u8; 8];
     getrandom::getrandom(&mut buf).map_err(|e| format!("failed to generate session id: {e}"))?;
     let hex: String = buf.iter().map(|b| format!("{b:02x}")).collect();
@@ -198,9 +198,9 @@ fn next_entry_id(events: &[Event]) -> Result<String, String> {
         .ok_or_else(|| "no available proof entry ID for the counterfactual assumption".to_string())
 }
 
-struct StagedSources {
+pub(crate) struct StagedSources {
     child_dir: PathBuf,
-    committed: bool,
+    pub(crate) committed: bool,
 }
 
 impl Drop for StagedSources {
@@ -211,7 +211,7 @@ impl Drop for StagedSources {
     }
 }
 
-fn copy_session_sources(
+pub(crate) fn copy_session_sources(
     data_dir: &Path,
     parent: &str,
     child: &str,

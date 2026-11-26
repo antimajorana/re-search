@@ -10,7 +10,16 @@ pub mod edges;
 pub mod flatten;
 pub mod model;
 pub mod number;
+pub mod pdf;
+mod pdf_bib;
+mod pdf_edges;
+mod pdf_honesty;
+mod pdf_patterns;
+mod pdf_scan;
+mod pdf_sections;
+pub mod skip;
 pub mod stats;
+pub mod symbols;
 pub mod tags;
 pub mod tex_env;
 mod tex_env_cmds;
@@ -32,7 +41,25 @@ pub use model::{
     NODE_FP_HEX_CHARS, SKELETON_SCHEMA_VERSION,
 };
 pub use number::assign_numbers;
+pub use pdf::{
+    build_pdf_skeleton, build_pdf_skeleton_from_ingested, build_pdf_skeleton_timed,
+    load_ingested_pdf_source, match_pdf_quote_for_display, node_page_basis, page_range_for_node,
+    page_range_for_span, render_formulas_as_math, IngestedPdfSource, PdfPageAvailability,
+    PdfQuoteDisplay, PdfSkeletonInput, PdfSkeletonOutput, PdfTextOrigin,
+    PDF_MODEL_TRANSCRIPTION_LABEL, PDF_OCR_QUOTE_LABEL, PDF_QUALITY_REASON_BASE,
+    PDF_QUALITY_SCAN_TAG,
+};
+pub use skip::{
+    compute_skip_plan, ExtraUseEdge, SectionNeed, SkipBasis, SkipPlan, SkipSectionEntry,
+    SKIP_BASIS_EXPLICIT, SKIP_BASIS_WITH_MODEL, SKIP_LABEL_PROOF, SKIP_LABEL_STATEMENT,
+    SKIP_LABEL_UNREFERENCED,
+};
 pub use stats::{compute_stats, count_tex_words, estimate_read_minutes, EQ_READ_MINUTES, MATH_READ_WORDS_PER_MIN};
+pub use symbols::{
+    extract_lhs_symbol, extract_symbols, lookup_nearest_symbol, normalize_symbol,
+    symbol_lookup_keys, SymbolLookupResult, MAX_SKELETON_SYMBOLS, SYMBOL_FOUND_LABEL,
+    SYMBOL_NOT_FOUND_LABEL,
+};
 pub use tags::{assign_tags, kind_class, KIND_CLASS_TABLE};
 pub use tex_env::{scan_tex_stream, ProofHint, TexScanOutput};
 pub use tex_theorems::{map_theorem_kind, TheoremDef, TheoremLookup, TheoremTable};
@@ -147,6 +174,7 @@ pub fn build_tex_skeleton_timed(input: &TexSkeletonInput) -> (TexSkeletonOutput,
         &mut quality_notes,
     );
     let stats = compute_stats(&mut nodes, &parent_orders, &flattened);
+    let symbols = extract_symbols(&nodes, &parent_orders, &scan.macros, &flattened);
 
     let mut skeleton = PaperSkeleton {
         schema: SKELETON_SCHEMA_VERSION,
@@ -161,7 +189,7 @@ pub fn build_tex_skeleton_timed(input: &TexSkeletonInput) -> (TexSkeletonOutput,
         nodes,
         edges,
         bib,
-        symbols: Vec::new(),
+        symbols,
         macros: scan.macros,
         stats,
         carry: None,
@@ -193,6 +221,11 @@ pub fn build_tex_skeleton_timed(input: &TexSkeletonInput) -> (TexSkeletonOutput,
                 live_tags.contains(&e.to)
                     && (e.kind == SkEdgeKind::Cites || live_tags.contains(&e.from))
             });
+            for sym in &mut skeleton.symbols {
+                if sym.in_node.as_ref().is_some_and(|t| !live_tags.contains(t)) {
+                    sym.in_node = None;
+                }
+            }
             skeleton.stats = compute_stats(&mut skeleton.nodes, &parent_orders, &flattened);
             skeleton.quality = quality;
             skeleton.quality_reason = join_quality_notes(&quality_notes);

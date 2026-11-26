@@ -436,7 +436,7 @@ export function showInvestigationSession(id, data) {
       const m = byId('composer-model');
       return Boolean(m && !m.hidden && m.value && byId('composer-connect')?.hidden);
     },
-    showStatus,
+    refresh: refreshInvestigation, showStatus,
   });
 }
 
@@ -510,11 +510,11 @@ async function buildMap(event) {
   const readingQuestion = byId('investigation-question').value.trim();
   const v3 = globalThis.__reSearchInvestigationV3;
   const existingSource = session?.sources?.find(item => item.source_id === sourceId);
-  const deterministicTexCandidate = Boolean(
-    v3 && !readingQuestion && (file ? v3.isTexFileName(file.name) : v3.isTexSource(existingSource)),
+  const deterministicCandidate = Boolean(
+    v3 && !readingQuestion && !pageRange.investigation_page_start && (file ? v3.isSkeletonFileName(file.name) : v3.isSkeletonSource(existingSource)),
   );
   let options = null;
-  if (!deterministicTexCandidate) {
+  if (!deterministicCandidate) {
     try { options = callbacks.requestOptions(); }
     catch (error) { showStatus(error.message); return; }
   }
@@ -551,7 +551,7 @@ async function buildMap(event) {
       throw new Error('This PDF has no readable text layer. Open the original PDF, or choose a searchable PDF or TeX source to build a map.');
     }
     const chosenSource = session?.sources?.find(item => item.source_id === sourceId);
-    if (deterministicTexCandidate && v3.isTexSource(chosenSource)) {
+    if (deterministicCandidate && v3.isSkeletonSource(chosenSource)) {
       await v3.pinAndOpen(id, sourceId);
       if (sessionId === id) await refreshInvestigation(id);
       return;

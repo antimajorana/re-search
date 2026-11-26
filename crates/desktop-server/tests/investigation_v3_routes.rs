@@ -229,3 +229,171 @@ fn v3_skeleton_routes_enforce_auth_pin_etag_old_session_open_and_zero_model_call
 
     srv.shutdown();
 }
+
+fn minimal_two_page_pdf() -> Vec<u8> {
+    let p1 = b"BT /F1 11 Tf 40 720 Td (1. Setup) Tj 0 -24 Td (Lemma 1.1. Bounded energy holds.) Tj ET";
+    let p2 = b"0 0 1 rg 0 0 100 100 re f";
+    let objects: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", p1.len()).as_bytes(), p1, b"\nendstream"].concat(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 7 0 R >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", p2.len()).as_bytes(), p2, b"\nendstream"].concat(),
+    ];
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = vec![0usize];
+    for (idx, obj) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", idx + 1).as_bytes());
+        out.extend_from_slice(obj);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len()).as_bytes());
+    for off in &offsets[1..] {
+        out.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len())
+            .as_bytes(),
+    );
+    out
+}
+
+#[test]
+fn v4_open_routes_and_v17_pdf_skeleton_work_over_http_with_zero_model_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = start_desktop_server(test_cfg(dir.path(), None, None, None)).unwrap();
+    let port = srv.info.port;
+    let tok = srv.info.token.clone();
+    let tok_hdr = ("X-ReSearch-Token", tok.as_str());
+
+    let (st, _, created) = raw_http(
+        port,
+        "POST",
+        "/api/sessions",
+        &[tok_hdr, ("Content-Type", "application/json")],
+        br#"{"mode":"investigate","title":"V4/V17 PDF check"}"#,
+    );
+    assert_eq!(st, 200);
+    let sid = serde_json::from_slice::<Value>(&created).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Auth guard covers /investigation/open and /investigation/open-status.
+    let (unauth_open, _, _) = raw_http(
+        port,
+        "POST",
+        &format!("/api/sessions/{sid}/investigation/open"),
+        &[],
+        br#"{"source_id":"s1"}"#,
+    );
+    assert_eq!(unauth_open, 401);
+    let (unauth_status, _, _) = raw_http(
+        port,
+        "GET",
+        &format!("/api/sessions/{sid}/investigation/open-status?job_id=j1"),
+        &[],
+        b"",
+    );
+    assert_eq!(unauth_status, 401);
+    let (bad_origin, _, _) = raw_http(
+        port,
+        "POST",
+        &format!("/api/sessions/{sid}/investigation/open"),
+        &[tok_hdr, ("Origin", "https://evil.example"), ("Content-Type", "application/json")],
+        br#"{"source_id":"s1"}"#,
+    );
+    assert_eq!(bad_origin, 403);
+
+    // Ingest a 2-page PDF (page 1 text layer, page 2 image-only) and open via POST .../investigation/open.
+    let pdf_bytes = minimal_two_page_pdf();
+    let env = ResearchEnv::new(dir.path().to_path_buf());
+    let ledger = Mutex::new(Ledger::open(dir.path()).unwrap());
+    let ingested = ingest_bytes(
+        &env.sandbox(),
+        &ledger,
+        &IngestRequest {
+            session_id: &sid,
+            file_name: "hybrid.pdf",
+            origin: "upload",
+            raw_bytes: &pdf_bytes,
+            source_id_hint: None,
+            section_filter: None,
+            title: Some("Hybrid PDF"),
+        },
+    )
+    .unwrap();
+    drop(ledger);
+
+    let open_body = serde_json::to_vec(&json!({ "source_id": ingested.source_id })).unwrap();
+    let (open_st, _, open_raw) = raw_http(
+        port,
+        "POST",
+        &format!("/api/sessions/{sid}/investigation/open"),
+        &[tok_hdr, ("Content-Type", "application/json")],
+        &open_body,
+    );
+    assert_eq!(open_st, 200, "open failed: {}", String::from_utf8_lossy(&open_raw));
+    let open_val: Value = serde_json::from_slice(&open_raw).unwrap();
+    let job_id = open_val["job_id"].as_str().unwrap();
+    assert_eq!(open_val["job"]["status"], "done");
+    assert!(open_val["job"]["skeleton_seq"].as_u64().is_some());
+
+    let (st_status, _, raw_status) = raw_http(
+        port,
+        "GET",
+        &format!("/api/sessions/{sid}/investigation/open-status?job_id={job_id}"),
+        &[tok_hdr],
+        b"",
+    );
+    assert_eq!(st_status, 200);
+    let status_val: Value = serde_json::from_slice(&raw_status).unwrap();
+    assert_eq!(status_val["job"]["status"], "done");
+
+    let (mv_st, _, mv_raw) = raw_http(
+        port,
+        "GET",
+        &format!("/api/sessions/{sid}/investigation/mapview"),
+        &[tok_hdr],
+        b"",
+    );
+    assert_eq!(mv_st, 200);
+    let mv: Value = serde_json::from_slice(&mv_raw).unwrap();
+    assert_eq!(mv["builder"], "pdf-1");
+    assert_ne!(mv["quality"], "full");
+    let qline = mv["quality_line"].as_str().unwrap();
+    assert!(qline.starts_with("Estimated from PDF text; theorem boundaries may be wrong"));
+    assert_eq!(
+        qline.matches("theorem boundaries may be wrong").count(),
+        1,
+        "quality_line must not duplicate PDF base reason: {qline}"
+    );
+    assert_eq!(mv["image_only_pages"], json!([2]));
+
+    let nodes = mv["nodes"].as_array().unwrap();
+    assert!(!nodes.is_empty());
+    let first_tag = nodes[0]["id"].as_str().unwrap();
+    assert_eq!(nodes[0]["page_range"], json!([1, 1]));
+    assert_eq!(nodes[0]["render_math"], json!(true));
+
+    let (nt_st, _, nt_raw) = raw_http(
+        port,
+        "GET",
+        &format!("/api/sessions/{sid}/investigation/node-text?tag={first_tag}"),
+        &[tok_hdr],
+        b"",
+    );
+    assert_eq!(nt_st, 200);
+    let nt: Value = serde_json::from_slice(&nt_raw).unwrap();
+    assert_eq!(nt["page_range"], json!([1, 1]));
+    assert!(!nt["text"].as_str().unwrap().is_empty());
+
+    let events = Ledger::open(dir.path()).unwrap().read_session(&sid).unwrap();
+    assert!(!events.iter().any(|e| e.kind == "model.request"));
+
+    srv.shutdown();
+}

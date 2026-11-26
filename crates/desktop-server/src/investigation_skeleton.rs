@@ -12,13 +12,14 @@
 //! ```
 
 use crate::investigation::{is_investigation, latest};
-use crate::investigation_mapview::{build_mapview_json, read_verified_node_text};
+use crate::investigation_mapview::{attach_pdf_page_metadata, build_mapview_json, read_verified_node_text};
 use crate::routes_session::{bad, conflict, internal, not_found, parse_json_body, ApiResult};
 use crate::state::DesktopState;
 use ledger::{Event, Ledger};
 use research_tools::paper_key::{split_arxiv_id, PaperKey};
 use research_tools::skeleton::{
-    build_tex_skeleton_from_ingested, BuildTiming, PaperSkeleton, SkNodeKind,
+    build_pdf_skeleton_from_ingested, build_tex_skeleton_from_ingested, load_ingested_pdf_source,
+    BuildTiming, PaperSkeleton, SkNodeKind, SkeletonBuilder,
 };
 use research_tools::validate_session_id;
 use serde_json::{json, Value};
@@ -55,6 +56,25 @@ pub fn is_tex_receipt(receipt: &Event) -> bool {
             lower.ends_with(".tex") || lower.ends_with(".ltx")
         })
     })
+}
+
+/// True iff `receipt` is a PDF `source.ingested` receipt eligible for V17 `pdf-1` skeleton extraction.
+pub fn is_pdf_receipt(receipt: &Event) -> bool {
+    if is_tex_receipt(receipt) {
+        return false;
+    }
+    let p = &receipt.payload;
+    let status = p["status"].as_str().unwrap_or("");
+    matches!(status, "ok" | "pdf_only" | "empty_text_layer")
+        && (p["format"].as_str() == Some("pdf")
+            || status == "pdf_only"
+            || p.get("pdf_extractor").is_some_and(Value::is_string)
+            || p.get("pdf_pages").is_some_and(Value::is_array))
+}
+
+/// True iff `receipt` supports deterministic skeleton building (`tex-1` or `pdf-1`).
+pub fn is_skeleton_receipt(receipt: &Event) -> bool {
+    is_tex_receipt(receipt) || is_pdf_receipt(receipt)
 }
 
 /// Derives `(PaperKey, version)` from overrides, `arxiv_cover_id`, `origin`, `raw_blob`, or `source_id`.
@@ -133,7 +153,7 @@ pub fn ensure_skeleton_on_open(
     let Some(source_id) =
         latest(&events, EVENT_INVESTIGATION_PAPER).and_then(|e| e.payload["source_id"].as_str())
     else { return Ok(None); };
-    let Some(receipt) = find_source_receipt(&events, source_id, None).filter(|r| is_tex_receipt(r))
+    let Some(receipt) = find_source_receipt(&events, source_id, None).filter(|r| is_skeleton_receipt(r))
     else { return Ok(None); };
     if let Some(ev) = latest_skeleton_for_source(&events, source_id, receipt.seq) {
         return load_or_repair_skeleton(state, &ledger, session_id, ev, Some(receipt)).map(Some);
@@ -192,7 +212,19 @@ pub fn handle_with_etag(
             let head = events.last().map_or_else(String::new, |e| e.event_hash.clone());
             if etag_matches(if_none_match, &head) { return Ok((304, Some(head), Value::Null)); }
             if let Some(rec) = rec {
-                return Ok((200, Some(head.clone()), build_mapview_json(&rec.skeleton, rec.event_seq, &rec.blob_hash, &head, None)));
+                let mut mv = build_mapview_json(&rec.skeleton, rec.event_seq, &rec.blob_hash, &head, None);
+                if rec.skeleton.builder == SkeletonBuilder::Pdf1 {
+                    if let Some(receipt) = find_source_receipt(&events, &rec.skeleton.source_id, Some(rec.skeleton.source_seq))
+                        .or_else(|| find_source_receipt(&events, &rec.skeleton.source_id, None))
+                    {
+                        if let Ok(env) = state.research_env_for_session(session_id) {
+                            if let Ok(pdf) = load_ingested_pdf_source(&env.sandbox(), session_id, receipt) {
+                                attach_pdf_page_metadata(&mut mv, &rec.skeleton, &pdf);
+                            }
+                        }
+                    }
+                }
+                return Ok((200, Some(head), mv));
             }
             Ok((200, Some(head.clone()), json!({
                 "etag": head, "skeleton_seq": Value::Null, "nodes": [], "edges": [],
@@ -238,22 +270,39 @@ fn load_skeleton_for_query(
     }
 }
 
+pub(crate) fn build_skeleton_from_receipt(
+    sandbox: &research_tools::sandbox::WorkspaceSandbox,
+    session_id: &str,
+    receipt: &Event,
+    paper_key: PaperKey,
+    version: Option<String>,
+) -> Result<(PaperSkeleton, BuildTiming), String> {
+    if is_tex_receipt(receipt) {
+        let (out, timing) = build_tex_skeleton_from_ingested(sandbox, session_id, receipt, paper_key, version)?;
+        Ok((out.skeleton, timing))
+    } else if is_pdf_receipt(receipt) {
+        let (out, timing) = build_pdf_skeleton_from_ingested(sandbox, session_id, receipt, paper_key, version)?;
+        Ok((out.skeleton, timing))
+    } else {
+        Err("source is neither TeX nor PDF with an extracted page map".to_string())
+    }
+}
+
 fn build_and_append_new(
     state: &DesktopState, ledger: &Ledger, session_id: &str, receipt: &Event,
     key_override: Option<PaperKey>, version_override: Option<String>, swallow_source_err: bool,
 ) -> Result<Option<SkeletonRecord>, (u16, String)> {
-    if !is_tex_receipt(receipt) {
-        return Err((422, "source is not TeX; PDF skeleton awaits V17".to_string()));
+    if !is_skeleton_receipt(receipt) {
+        return Err((422, "source is neither TeX nor a page-mapped PDF".to_string()));
     }
     let (paper_key, version) = derive_paper_identity(receipt, key_override, version_override).map_err(bad)?;
     let env = state.research_env_for_session(session_id).map_err(internal)?;
-    let (output, timing) =
-        match build_tex_skeleton_from_ingested(&env.sandbox(), session_id, receipt, paper_key, version) {
+    let (skel, timing) =
+        match build_skeleton_from_receipt(&env.sandbox(), session_id, receipt, paper_key, version) {
             Ok(pair) => pair,
             Err(_) if swallow_source_err => return Ok(None),
             Err(err) => return Err(internal(err)),
         };
-    let skel = output.skeleton;
     let json_bytes = serde_json::to_vec(&skel).map_err(storage)?;
     let blob_hash = ledger.put_blob(&json_bytes).map_err(storage)?;
     let sections = skel.nodes.iter().filter(|n| n.kind == SkNodeKind::Section).count();
@@ -295,10 +344,10 @@ fn load_or_repair_skeleton(
         None => derive_paper_identity(receipt, None, None).map_err(internal)?,
     };
     let env = state.research_env_for_session(session_id).map_err(internal)?;
-    let (output, timing) =
-        build_tex_skeleton_from_ingested(&env.sandbox(), session_id, receipt, paper_key, version)
+    let (rebuilt_skel, timing) =
+        build_skeleton_from_receipt(&env.sandbox(), session_id, receipt, paper_key, version)
             .map_err(|e| internal(format!("skeleton blob mismatch and rebuild failed: {e}")))?;
-    let rebuilt_bytes = serde_json::to_vec(&output.skeleton).map_err(storage)?;
+    let rebuilt_bytes = serde_json::to_vec(&rebuilt_skel).map_err(storage)?;
     if ledger::sha256_hex(&rebuilt_bytes) != blob_hash {
         return Err(internal(
             "skeleton blob mismatch: rebuild from hash-pinned source produced a different digest",
@@ -310,7 +359,7 @@ fn load_or_repair_skeleton(
     ledger.put_blob(&rebuilt_bytes).map_err(storage)?;
     Ok(SkeletonRecord {
         event_seq: ev.seq, blob_hash: blob_hash.to_string(),
-        skeleton: output.skeleton, timing: Some(timing), rebuilt: true,
+        skeleton: rebuilt_skel, timing: Some(timing), rebuilt: true,
     })
 }
 
@@ -362,8 +411,8 @@ fn fallback_note(events: &[Event]) -> &'static str {
     };
     match find_source_receipt(events, sid, None) {
         None => "Pinned source receipt is missing; showing the earlier view.",
-        Some(r) if !is_tex_receipt(r) => "Pinned source is not TeX (PDF skeleton awaits V17); showing the earlier view.",
-        Some(_) => "Ingested TeX source files changed or are missing on disk; showing the earlier view.",
+        Some(r) if !is_skeleton_receipt(r) => "Pinned source is plain text or lacks a PDF page map; showing the earlier view.",
+        Some(_) => "Ingested source files changed or are missing on disk; showing the earlier view.",
     }
 }
 
