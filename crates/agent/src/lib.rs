@@ -71,7 +71,8 @@ pub use provider_config::{
 };
 pub use responses::{BearerSource, ChatGptConfig, ChatGptTransport, TOOL_NAMESPACE};
 pub use resume::{
-    inspect_session_for_resume, resume_agent_loop, ResumeConfig, ResumeInspection, ResumeReject, ResumeRejectKind,
+    inspect_session_for_resume, inspect_session_for_resume_with_profile, resume_agent_loop,
+    ResumeConfig, ResumeInspection, ResumeReject, ResumeRejectKind,
 };
 pub use resume_profile::{
     check_tool_defs_drift_for_profile, inspect_session_with_profile, resolve_session_profile,

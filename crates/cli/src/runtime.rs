@@ -99,7 +99,6 @@ pub(crate) fn build_research_router(
     build_router_inner(data_dir, session, worker_setup, eval_timeout_s, Some((research_opts, None)))
 }
 
-#[allow(dead_code)]
 pub(crate) fn build_router_for_profile(
     data_dir: &Path,
     session: &str,

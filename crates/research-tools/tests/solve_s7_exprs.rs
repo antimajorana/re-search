@@ -31,45 +31,75 @@ use tools::{
     WorkerEpoch,
 };
 
-fn resolve_sympy_python() -> Option<(String, Vec<&'static str>)> {
-    for var in ["RE_SEARCH_PYTHON", "RESEARCH_CORE_PYTHON"] {
-        if let Ok(p) = std::env::var(var) {
-            if !p.trim().is_empty() {
-                return Some((p, Vec::new()));
-            }
+const SYMPY_INSTALL_HINT: &str =
+    "Install `pip install sympy mpmath numpy` or set `RE_SEARCH_PYTHON` to a Python with SymPy.";
+
+fn check_sympy_python(prog: &str, prefix: &[&'static str]) -> Result<(String, Vec<&'static str>), String> {
+    let out = Command::new(prog)
+        .args(prefix)
+        .args(["-c", "import sympy"])
+        .env("PYTHONNOUSERSITE", "1")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("{prog}: {e}"))?;
+    if out.status.success() {
+        return Ok((prog.to_string(), prefix.to_vec()));
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let cmd = if prefix.is_empty() { prog.to_string() } else { format!("{prog} {}", prefix.join(" ")) };
+    Err(format!("{cmd} exited {}: {}", out.status, stderr.trim()))
+}
+
+fn resolve_sympy_python_from(
+    re_search_py: Option<&str>,
+    research_core_py: Option<&str>,
+    candidates: &[(&str, &[&'static str])],
+) -> Result<(String, Vec<&'static str>), String> {
+    for (var, val) in [("RE_SEARCH_PYTHON", re_search_py), ("RESEARCH_CORE_PYTHON", research_core_py)] {
+        if let Some(p) = val.map(str::trim).filter(|s| !s.is_empty()) {
+            return check_sympy_python(p, &[]).map_err(|err| {
+                format!("{var}=`{p}` cannot import `sympy` ({err}). {SYMPY_INSTALL_HINT}")
+            });
         }
     }
-    let candidates: &[(&str, &[&str])] = if cfg!(windows) {
-        &[("py", &["-3"])]
-    } else {
-        &[("python3", &[])]
-    };
+    let mut errs = Vec::new();
     for &(prog, prefix) in candidates {
-        let ok = Command::new(prog)
-            .args(prefix)
-            .args(["-c", "import sympy"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success());
-        if ok {
-            return Some((prog.to_string(), prefix.to_vec()));
+        match check_sympy_python(prog, prefix) {
+            Ok(py) => return Ok(py),
+            Err(err) => errs.push(err),
         }
     }
-    None
+    Err(format!(
+        "No Python with SymPy found for cross-process S7 tests (tried: {}). {SYMPY_INSTALL_HINT}",
+        errs.join("; ")
+    ))
+}
+
+fn require_sympy_python() -> (String, Vec<&'static str>) {
+    let candidates: &[(&str, &[&'static str])] =
+        if cfg!(windows) { &[("python", &[]), ("py", &["-3"])] } else { &[("python3", &[]), ("python", &[])] };
+    resolve_sympy_python_from(
+        std::env::var("RE_SEARCH_PYTHON").ok().as_deref(),
+        std::env::var("RESEARCH_CORE_PYTHON").ok().as_deref(),
+        candidates,
+    )
+    .unwrap_or_else(|e| panic!("{e}"))
+}
+
+fn temp_dirs() -> (TempDir, PathBuf, PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let (data_dir, scratch) = (tmp.path().join("data"), tmp.path().join("scratch"));
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::create_dir_all(&scratch).unwrap();
+    (tmp, data_dir, scratch)
 }
 
 fn worker_script_path() -> PathBuf {
-    if let Ok(s) = std::env::var("RE_SEARCH_WORKER_SCRIPT") {
-        if !s.trim().is_empty() {
-            return PathBuf::from(s);
-        }
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("python")
-        .join("worker.py")
+    std::env::var("RE_SEARCH_WORKER_SCRIPT")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join("python/worker.py"))
 }
 
 /// Real separate OS child running `python/worker.py --stdio --role solver|check`.
@@ -166,49 +196,28 @@ struct FixedEpoch {
     epoch: AtomicU64,
     contained: bool,
 }
-
 impl FixedEpoch {
-    fn new(ep: u64, contained: bool) -> Self {
-        Self { epoch: AtomicU64::new(ep), contained }
-    }
+    fn new(ep: u64, contained: bool) -> Self { Self { epoch: AtomicU64::new(ep), contained } }
 }
-
 impl WorkerEpoch for FixedEpoch {
     fn live_epoch(&self) -> Option<u64> {
-        match self.epoch.load(Ordering::Acquire) {
-            0 => None,
-            n => Some(n),
-        }
+        match self.epoch.load(Ordering::Acquire) { 0 => None, n => Some(n) }
     }
-
-    fn is_contained(&self) -> bool {
-        self.contained
-    }
+    fn is_contained(&self) -> bool { self.contained }
 }
 
 struct CountingApprover {
     approve: bool,
     prompts: AtomicUsize,
 }
-
 impl CountingApprover {
-    fn new(approve: bool) -> Self {
-        Self { approve, prompts: AtomicUsize::new(0) }
-    }
-
-    fn count(&self) -> usize {
-        self.prompts.load(Ordering::SeqCst)
-    }
+    fn new(approve: bool) -> Self { Self { approve, prompts: AtomicUsize::new(0) } }
+    fn count(&self) -> usize { self.prompts.load(Ordering::SeqCst) }
 }
-
 impl Approver for CountingApprover {
     fn decide(&self, req: &ApprovalRequest) -> ApprovalReply {
         self.prompts.fetch_add(1, Ordering::SeqCst);
-        ApprovalReply {
-            approved: self.approve,
-            digest: req.digest.clone(),
-            by: "s7-test".into(),
-        }
+        ApprovalReply { approved: self.approve, digest: req.digest.clone(), by: "s7-test".into() }
     }
 }
 
@@ -220,32 +229,16 @@ fn build_solve_router(
     check_epoch: Arc<dyn WorkerEpoch>,
     approver: Arc<dyn Approver>,
 ) -> Router {
-    let profile = solve_v1();
-    let env = Arc::new(ResearchEnv::new(data_dir));
     let mut reg = Registry::new();
-    let policy = register_profile(
-        &profile,
-        &mut reg,
-        env,
-        ProfileHostTools::new(sympy_epoch, sympy_handler)
-            .with_solve_check(SolveCheckHost::new(check_epoch)),
-    )
-    .unwrap();
-    let ledger = Ledger::open(data_dir).unwrap();
-    Router::new(reg, policy, ledger, session, approver).with_tool_profile(PROFILE_SOLVE_V1)
+    let host = ProfileHostTools::new(sympy_epoch, sympy_handler).with_solve_check(SolveCheckHost::new(check_epoch));
+    let policy = register_profile(&solve_v1(), &mut reg, Arc::new(ResearchEnv::new(data_dir)), host).unwrap();
+    Router::new(reg, policy, Ledger::open(data_dir).unwrap(), session, approver).with_tool_profile(PROFILE_SOLVE_V1)
 }
 
 #[test]
 fn cross_process_r5_solver_monkey_patch_latex_cannot_alter_solve_expr_latex() {
-    let Some(py) = resolve_sympy_python() else {
-        eprintln!("SKIPPED: set RE_SEARCH_PYTHON (Python with SymPy) to run cross-process S7 worker test");
-        return;
-    };
-    let tmp = TempDir::new().unwrap();
-    let data_dir = tmp.path().join("data");
-    let scratch = tmp.path().join("scratch");
-    std::fs::create_dir_all(&data_dir).unwrap();
-    std::fs::create_dir_all(&scratch).unwrap();
+    let py = require_sympy_python();
+    let (_tmp, data_dir, scratch) = temp_dirs();
 
     let mut solver = StdioWorkerProcess::spawn(&py, "solver", &scratch);
     let checker = RealCheckProcessCanonicalizer(Mutex::new(StdioWorkerProcess::spawn(&py, "check", &scratch)));
@@ -320,15 +313,8 @@ expr_val
 
 #[test]
 fn cross_process_r6_non_allowlisted_lambda_and_hostile_srepr_mark_non_portable() {
-    let Some(py) = resolve_sympy_python() else {
-        eprintln!("SKIPPED: set RE_SEARCH_PYTHON (Python with SymPy) to run cross-process S7 worker test");
-        return;
-    };
-    let tmp = TempDir::new().unwrap();
-    let data_dir = tmp.path().join("data");
-    let scratch = tmp.path().join("scratch");
-    std::fs::create_dir_all(&data_dir).unwrap();
-    std::fs::create_dir_all(&scratch).unwrap();
+    let py = require_sympy_python();
+    let (_tmp, data_dir, scratch) = temp_dirs();
 
     let mut solver = StdioWorkerProcess::spawn(&py, "solver", &scratch);
     let checker = RealCheckProcessCanonicalizer(Mutex::new(StdioWorkerProcess::spawn(&py, "check", &scratch)));
@@ -395,15 +381,8 @@ save_expr("good_poly", x**3 - 1)
 
 #[test]
 fn cross_process_worker_restart_restages_exprs_in_from_ledger_blobs_without_cas_bus() {
-    let Some(py) = resolve_sympy_python() else {
-        eprintln!("SKIPPED: set RE_SEARCH_PYTHON (Python with SymPy) to run cross-process S7 worker test");
-        return;
-    };
-    let tmp = TempDir::new().unwrap();
-    let data_dir = tmp.path().join("data");
-    let scratch = tmp.path().join("scratch");
-    std::fs::create_dir_all(&data_dir).unwrap();
-    std::fs::create_dir_all(&scratch).unwrap();
+    let py = require_sympy_python();
+    let (_tmp, data_dir, scratch) = temp_dirs();
 
     let checker = RealCheckProcessCanonicalizer(Mutex::new(StdioWorkerProcess::spawn(&py, "check", &scratch)));
     let ledger = Ledger::open(&data_dir).unwrap();
@@ -590,4 +569,17 @@ fn solve_v1_router_enforces_r18_policy_per_caller_worker_session_and_fail_closed
         .unwrap();
     assert!(matches!(denied, CallOutcome::Denied(_)), "expected Denied without grant: {denied:?}");
     assert_eq!(denying.count(), 1);
+}
+
+#[test]
+fn missing_sympy_python_fails_loudly_with_install_hint_never_skips() {
+    let err1 = resolve_sympy_python_from(Some("nonexistent_re_search_py_123"), None, &[]).unwrap_err();
+    assert!(err1.contains("RE_SEARCH_PYTHON") && err1.contains("pip install sympy mpmath numpy") && !err1.contains("SKIPPED"), "{err1}");
+    let err2 = resolve_sympy_python_from(Some("  "), Some("nonexistent_core_py_123"), &[]).unwrap_err();
+    assert!(err2.contains("RESEARCH_CORE_PYTHON") && err2.contains("pip install sympy mpmath numpy"), "{err2}");
+    let panic_res = std::panic::catch_unwind(|| {
+        resolve_sympy_python_from(None, None, &[("nonexistent_probe_py_123", &[])]).unwrap_or_else(|e| panic!("{e}"))
+    });
+    let msg = panic_res.unwrap_err().downcast::<String>().map(|b| *b).unwrap_or_default();
+    assert!(msg.contains("pip install sympy mpmath numpy") && msg.contains("RE_SEARCH_PYTHON"), "{msg}");
 }
