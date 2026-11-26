@@ -10,6 +10,13 @@ pub mod edges;
 pub mod flatten;
 pub mod model;
 pub mod number;
+pub mod pdf;
+mod pdf_bib;
+mod pdf_edges;
+mod pdf_honesty;
+mod pdf_patterns;
+mod pdf_scan;
+mod pdf_sections;
 pub mod stats;
 pub mod tags;
 pub mod tex_env;
@@ -32,6 +39,14 @@ pub use model::{
     NODE_FP_HEX_CHARS, SKELETON_SCHEMA_VERSION,
 };
 pub use number::assign_numbers;
+pub use pdf::{
+    build_pdf_skeleton, build_pdf_skeleton_from_ingested, build_pdf_skeleton_timed,
+    load_ingested_pdf_source, match_pdf_quote_for_display, node_page_basis, page_range_for_node,
+    page_range_for_span, render_formulas_as_math, IngestedPdfSource, PdfPageAvailability,
+    PdfQuoteDisplay, PdfSkeletonInput, PdfSkeletonOutput, PdfTextOrigin,
+    PDF_MODEL_TRANSCRIPTION_LABEL, PDF_OCR_QUOTE_LABEL, PDF_QUALITY_REASON_BASE,
+    PDF_QUALITY_SCAN_TAG,
+};
 pub use stats::{compute_stats, count_tex_words, estimate_read_minutes, EQ_READ_MINUTES, MATH_READ_WORDS_PER_MIN};
 pub use tags::{assign_tags, kind_class, KIND_CLASS_TABLE};
 pub use tex_env::{scan_tex_stream, ProofHint, TexScanOutput};
