@@ -1,7 +1,7 @@
 //! Multi-threaded HTTP/1.1 loopback parser, auth dispatcher, and route table.
 
 use crate::api_dispatch::dispatch_api;
-use crate::assets::{lookup_asset, INDEX_HTML};
+use crate::assets::{lookup_asset, render_index_html};
 use crate::auth::ApiCredentials;
 use crate::routes_session::handle_health;
 use crate::routes_tools::MAX_UPLOAD_BODY_BYTES;
@@ -103,10 +103,11 @@ fn handle_connection(mut stream: TcpStream, state: Arc<DesktopState>, shutdown: 
         // or redeeming the single-use launch nonce. A reload carries just the stream cookie and
         // gets the page without the token (the UI keeps it in per-origin sessionStorage), so
         // the cookie can never be traded for it.
+        let rendered = render_index_html();
         let html = if valid_header || valid_nonce {
-            state.auth.inject_csrf_meta(INDEX_HTML)
+            state.auth.inject_csrf_meta(&rendered)
         } else {
-            INDEX_HTML.to_string()
+            rendered
         };
         let set_cookie = state.auth.set_cookie_header();
         write_bytes(

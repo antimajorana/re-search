@@ -221,42 +221,7 @@
         </div>
       </div>
 
-      <div id="investigation-nav" class="investigation-nav" hidden>
-        <div class="segmented-group" role="group" aria-label="Investigation view">
-          <button id="show-paper-map" type="button" class="seg-btn" aria-controls="investigation-panel" aria-pressed="true">Paper</button>
-          <button id="show-investigation-chat" type="button" class="seg-btn" aria-controls="message-stream" aria-pressed="false">Conversation</button>
-        </div>
-      </div>
-      <div id="investigation-origin" class="investigation-origin" hidden></div>
-      <section id="investigation-panel" aria-label="Paper investigation" hidden>
-        <div class="investigation-inner">
-          <form id="investigation-setup" class="investigation-setup">
-            <h2>Investigate a paper</h2>
-            <p>Add one paper and ask about it. Answers cite line numbers in the paper.</p>
-            <label for="investigation-question">Your question <span>(optional)</span></label>
-            <textarea id="investigation-question" class="text-input" rows="2" placeholder="e.g. Help me understand section V.D.4"></textarea>
-            <label for="investigation-file">Primary paper</label>
-            <input id="investigation-file" type="file" accept=".tex,.pdf,.md,.txt,.zip,.tgz,.gz" aria-describedby="investigation-formats">
-            <small id="investigation-formats">PDF, TeX, Markdown, plain text or a TeX archive. Up to 10 MiB.</small>
-            <div id="investigation-existing-wrap" hidden>
-              <label for="investigation-existing">Or choose a paper already in this session</label>
-              <select id="investigation-existing" class="compact-select"></select>
-            </div>
-            <fieldset id="investigation-pages" hidden>
-              <legend>Paper pages <span>(optional)</span></legend>
-              <small>Leave both blank for the whole PDF. Use the page numbers in the PDF viewer.</small>
-              <div><label>First page <input id="investigation-page-start" type="number" min="1" step="1" class="text-input"></label>
-              <label>Last page <input id="investigation-page-end" type="number" min="1" step="1" class="text-input"></label></div>
-            </fieldset>
-            <button type="submit" class="pill-btn primary">Find main results</button>
-          </form>
-          <button id="investigation-original" type="button" class="pill-btn sm" hidden>Open original PDF</button>
-          <div id="investigation-status" role="status" hidden></div>
-          <section id="investigation-summary" aria-labelledby="investigation-summary-title" hidden></section>
-          <details id="investigation-conventions" hidden><summary>Conventions</summary></details>
-          <div id="investigation-map"></div>
-        </div>
-      </section>
+      <!-- INCLUDE:index_investigation.html -->
       <section id="message-stream" aria-live="polite" aria-label="Research conversation stream"></section>
 
       <div class="composer-dock">
@@ -397,58 +362,12 @@
               </div>
             </div>
           </div>
-          <p id="latex-file-note" class="latex-file-note" role="status" hidden>This preview is truncated. Open the full file in your workspace to edit or audit it.</p>
-          <button id="latex-start-manuscript" type="button" class="pill-btn">Start a manuscript</button>
-          <form id="latex-bind-draft" class="panel-toolbar" hidden>
-            <label for="latex-bind-path">Destination in this workspace</label>
-            <input id="latex-bind-path" class="text-input" type="text" required>
-            <button type="submit" class="pill-btn sm">Use in this workspace</button>
-          </form>
-          <div id="latex-recovery" class="panel-toolbar" hidden>
-            <label for="latex-recovery-list">Recover unsaved edits</label>
-            <select id="latex-recovery-list" class="compact-select"></select>
-            <button id="latex-restore-draft" type="button" class="pill-btn sm primary">Restore draft</button>
-            <button id="latex-discard-draft" type="button" class="pill-btn sm">Discard draft</button>
-          </div>
-          <div class="latex-split">
-            <div class="tex-pane tex-pane-editor">
-              <div class="pane-caption"><span>Manuscript Editor</span><span id="latex-recovery-status"></span><span id="latex-line-count">0 lines</span></div>
-              <textarea id="latex-editor" aria-label="Manuscript editor" spellcheck="false" placeholder="Select a workspace .tex/.bib file or write LaTeX here..."></textarea>
-            </div>
-            <div class="tex-pane tex-pane-preview">
-              <div class="pane-caption"><span>Live KaTeX Preview</span></div>
-              <div id="latex-preview" class="rich-prose"></div>
-            </div>
-          </div>
-          <div id="tex-audit-results" class="audit-drawer" hidden></div>
+          <!-- INCLUDE:index_latex_body.html -->
         </section>
 
         <!-- Tab 2: Proof Graph & Ledger Canvas -->
         <section id="panel-dag" class="canvas-panel" role="tabpanel" aria-labelledby="tab-dag">
-          <div class="panel-toolbar">
-            <button id="dag-verify-btn" type="button" class="pill-btn sm" title="Check the fingerprints of the saved events and files">Check record integrity</button>
-            <button id="dag-fork-btn" type="button" class="pill-btn sm" title="Branch this session at a proof step with a modified assumption">Fork Branch</button>
-            <button id="dag-narrate-btn" type="button" class="pill-btn sm" title="Synthesize a clean prose derivation sheet from accepted DAG steps">Narrate Proof</button>
-            <span id="dag-verify-badge" class="badge" hidden></span>
-          </div>
-          <div class="dag-layout">
-            <div id="dag-fork-bar" class="dag-detail-card" hidden>
-              <div id="fork-assumption-impact" class="assumption-impact" hidden></div>
-              <div class="form-row">
-                <label for="fork-assumption-input">Counterfactual assumption (forking at seq <span id="fork-seq-label">latest</span>)</label>
-                <input id="fork-assumption-input" class="text-input" type="text" placeholder="Optional modified assumption (e.g. set \mu \neq 0 or open boundary conditions)...">
-              </div>
-              <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end;">
-                <button id="fork-cancel-btn" type="button" class="pill-btn sm">Cancel</button>
-                <button id="fork-confirm-btn" type="button" class="pill-btn sm primary">Create fork</button>
-              </div>
-            </div>
-            <div id="dag-views" class="dag-views" role="group" aria-label="Proof view" hidden>
-              <button id="dag-view-graph" class="pill-btn sm" type="button" aria-pressed="true" aria-controls="dag-map">Graph</button>
-              <button id="dag-view-list" class="pill-btn sm" type="button" aria-pressed="false" aria-controls="dag-reading-list">Steps in order</button>
-            </div>
-            <p id="dag-direction" class="dag-direction" hidden>Arrows point from a prerequisite to the step it supports.</p>
-            <ol id="dag-reading-list" class="dag-reading-list" aria-label="Proof steps in dependency order" hidden></ol>
+          <!-- INCLUDE:index_dag_top.html -->
             <div class="dag-viewport-wrap" id="dag-map">
               <div class="dag-zoom-controls" role="toolbar" aria-label="Proof DAG zoom controls">
                 <button id="dag-zoom-out" type="button" class="dag-zoom-btn" title="Zoom out (−)" aria-label="Zoom out">−</button>
@@ -465,68 +384,7 @@
           </div>
         </section>
 
-        <!-- Tab 3: Literature & Sources Canvas -->
-        <section id="panel-sources" class="canvas-panel" role="tabpanel" aria-labelledby="tab-sources">
-          <div class="sources-layout">
-            <h3 class="rail-section-label" style="margin:0;padding:2px 0;">Sources Used</h3>
-            <div id="used-sources-list" style="display:flex;flex-direction:column;gap:8px;"></div>
-            <details class="dag-detail-card formal-library">
-              <summary>Formal library</summary>
-              <form id="formal-library-form" autocomplete="off">
-                <label for="formal-library-query">Lean declaration</label>
-                <div class="formal-library-controls">
-                  <input id="formal-library-query" class="text-input" type="search" maxlength="160" placeholder="Name or keywords" required disabled>
-                  <button type="submit" class="pill-btn sm primary" disabled>Search Physlib</button>
-                </div>
-              </form>
-              <div id="formal-library-status" role="status"></div>
-              <div id="formal-library-results"></div>
-            </details>
-            <form id="literature-search-form" class="dag-detail-card" autocomplete="off">
-              <div style="display:flex;gap:6px;margin-bottom:8px;">
-                <select id="lit-source-select" class="compact-select" aria-label="Literature database">
-                  <option value="arxiv">arXiv</option>
-                  <option value="inspire">INSPIRE-HEP</option>
-                  <option value="crossref">Crossref</option>
-                  <option value="semantic_scholar">Semantic Scholar</option>
-                </select>
-                <input id="lit-query-input" class="text-input" type="search" aria-label="Search for papers" placeholder="Title, author, or identifier" required>
-                <button id="lit-search-btn" type="submit" class="pill-btn sm primary">Search</button>
-              </div>
-              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;">
-                <select id="lit-field-select" class="compact-select" aria-label="arXiv search field">
-                  <option value="all">Field: All</option>
-                  <option value="title">Title</option>
-                  <option value="author">Author</option>
-                  <option value="abstract">Abstract</option>
-                  <option value="id">arXiv ID</option>
-                </select>
-                <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
-                  <input id="lit-include-source" type="checkbox"> Save TeX source
-                </label>
-                <input id="lit-section-filter" class="text-input" type="text" aria-label="Filter paper sections" placeholder="Filter sections" style="width:128px;height:28px;">
-              </div>
-            </form>
-            <div id="literature-results" style="display:flex;flex-direction:column;gap:8px;"></div>
-            <details id="session-literature" class="dag-detail-card" hidden>
-              <summary>Search History</summary>
-              <div id="session-literature-list" style="display:flex;flex-direction:column;gap:8px;margin-top:8px;"></div>
-            </details>
-            <div class="dag-detail-card paper-passage-search">
-              <form id="paper-passage-form" autocomplete="off">
-                <label for="paper-passage-query">Search ingested paper passages</label>
-                <div class="paper-passage-controls">
-                  <input id="paper-passage-query" class="text-input" type="search" maxlength="512" placeholder="Claim or distinctive terms" required>
-                  <button type="submit" class="pill-btn sm primary">Find passages</button>
-                </div>
-              </form>
-              <div id="paper-passage-status" role="status"></div>
-              <div id="paper-passage-results"></div>
-            </div>
-            <h3 class="rail-section-label" style="margin:0;padding:2px 0;">Saved files</h3>
-            <div id="sources-list" style="display:flex;flex-direction:column;gap:8px;"></div>
-          </div>
-        </section>
+        <!-- INCLUDE:index_sources.html -->
 
         <!-- Tab 4: Isolated Explain Canvas -->
         <section id="panel-sidetalk" class="canvas-panel" role="tabpanel" aria-labelledby="tab-sidetalk">
@@ -673,92 +531,10 @@
 
   <!-- In-App Source Reader Modal -->
   <dialog id="source-reader-dialog" aria-labelledby="source-reader-title">
-    <div class="modal-card modal-wide">
-      <div class="modal-header">
-        <h2 id="source-reader-title">Source Reader</h2>
-        <button id="source-reader-close" type="button" class="icon-btn" aria-label="Close Source Reader">✕</button>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-          <select id="source-reader-file" class="compact-select" aria-label="Source file"></select>
-          <div class="segmented-group" role="group" aria-label="Source view mode">
-            <button id="source-reader-mode-rendered" type="button" class="seg-btn is-active" aria-pressed="true">Rendered</button>
-            <button id="source-reader-mode-raw" type="button" class="seg-btn" aria-pressed="false">Raw</button>
-          </div>
-        </div>
-        <div id="source-reader-ext-links" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
-      </div>
-      <p id="source-reader-status" role="status"></p>
-      <div id="source-reader-body" tabindex="0" aria-label="Source contents"></div>
-    </div>
+    <!-- INCLUDE:index_source_reader.html -->
   </dialog>
 
-  <!-- Workspace Attach Modal (fallback when native OS picker is unavailable) -->
-  <dialog id="workspace-dialog" class="workbench-dialog" aria-labelledby="workspace-modal-title">
-    <div class="modal-card" style="width:min(440px, 94vw);">
-      <div class="modal-header">
-        <h2 id="workspace-modal-title">Attach Workspace Directory</h2>
-        <button id="workspace-close-btn" type="button" class="icon-btn" aria-label="Close workspace dialog">✕</button>
-      </div>
-      <form id="workspace-form" class="form-grid" autocomplete="off">
-        <div class="form-row">
-          <label for="workspace-path-input">Local directory path</label>
-          <input id="workspace-path-input" class="text-input" type="text" placeholder="C:\path\to\paper-workspace" autofocus>
-        </div>
-        <div style="display:flex;justify-content:flex-end;gap:8px;">
-          <button id="workspace-cancel-btn" type="button" class="pill-btn">Cancel</button>
-          <button id="workspace-confirm-btn" type="submit" class="pill-btn primary">Attach</button>
-        </div>
-      </form>
-    </div>
-  </dialog>
-
-  <dialog id="session-folder-dialog" class="workbench-dialog" aria-labelledby="folder-dialog-heading">
-    <div class="modal-card">
-      <div class="modal-header"><h2 id="folder-dialog-heading">Session folders</h2>
-        <form method="dialog"><button class="icon-btn" aria-label="Close session folders">✕</button></form>
-      </div>
-      <form id="edit-session-folder" class="form-grid">
-        <label class="form-row">Folder to edit<select id="session-folder-choice" class="compact-select"></select></label>
-        <label class="form-row">Folder name<input id="session-folder-name" class="text-input" maxlength="80" required></label>
-        <div><button id="save-session-folder" type="submit" class="pill-btn primary">Create folder</button>
-          <button id="remove-session-folder" type="button" class="pill-btn" hidden>Remove folder</button></div>
-      </form>
-      <form id="file-session-form" class="form-grid" hidden>
-        <label class="form-row">Destination folder<select id="file-session-destination" class="compact-select"></select></label>
-        <button type="submit" class="pill-btn primary">Move session</button>
-      </form>
-      <p id="folder-dialog-status" role="status"></p>
-    </div>
-  </dialog>
-
-  <dialog id="worked-example" class="workbench-dialog" aria-labelledby="example-heading">
-    <div class="modal-card">
-      <div class="modal-header">
-        <h2 id="example-heading">Check a two-site equilibrium</h2>
-        <form method="dialog"><button class="icon-btn" aria-label="Close worked example">✕</button></form>
-      </div>
-      <p>Two sites are coupled by identical unit springs between fixed walls. A unit force acts on site 1. Their displacements satisfy \(2x-y=1\) and \(-x+2y=0\).</p>
-      <p>A proposed solution is \(x=2/3,\ y=-1/3\). Does it balance the forces?</p>
-      <fieldset class="example-actions">
-        <legend>Predict the outcome</legend>
-        <button type="button" class="pill-btn" data-prediction="yes">Both equations hold</button>
-        <button type="button" class="pill-btn" data-prediction="no">The proposal fails</button>
-      </fieldset>
-      <p id="example-feedback" role="status"></p>
-      <button type="button" id="example-check" class="pill-btn primary">Run the calculation</button>
-      <section id="example-result" hidden>
-        <h3 tabindex="-1">Substitution check</h3>
-        <p id="example-values"></p>
-        <p>The second equation gives \(y=x/2\). Substituting into the first gives \(3x/2=1\), hence \(x=2/3,\ y=1/3\).</p>
-        <details><summary>Inspect the calculation</summary>
-          <p>Keep both displacements in thirds. For numerators \(a,b\), the net force has numerators \(2a-b,-a+2b\). The target is \((3,0)\).</p>
-          <pre><code id="example-calculation"></code></pre>
-        </details>
-        <button type="button" class="pill-btn" id="example-again">Try again</button>
-      </section>
-    </div>
-  </dialog>
+  <!-- INCLUDE:index_dialogs.html -->
 
   <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
   <script src="/vendor/katex/katex.min.js"></script>
