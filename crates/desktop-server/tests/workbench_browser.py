@@ -28,6 +28,8 @@ def check_workbench(browser, binary, width, height):
         server = subprocess.Popen(
             [str(binary), "ui", "--data-dir", str(root / "data"), "--workspace", str(workspace),
              "--port", "0", "--no-open", "true", "--print-url-json", "true",
+             "--agy", str(root / "unavailable-agy.exe"),
+             "--claude", str(root / "unavailable-claude.exe"),
              "--api-base", "http://127.0.0.1:9"],
             stdout=subprocess.PIPE, text=True,
         )
