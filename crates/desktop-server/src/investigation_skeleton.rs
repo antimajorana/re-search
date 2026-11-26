@@ -226,6 +226,13 @@ pub fn handle_with_etag(
                     None,
                     Some(&folded),
                 );
+                let orient_auto_start = crate::investigation_settings::orient_auto_start_enabled(state);
+                crate::investigation_mapview_v7::enrich_mapview_with_v7(
+                    &mut mv,
+                    &rec.skeleton,
+                    &folded,
+                    orient_auto_start,
+                );
                 if rec.skeleton.builder == SkeletonBuilder::Pdf1 {
                     if let Some(receipt) = find_source_receipt(&events, &rec.skeleton.source_id, Some(rec.skeleton.source_seq))
                         .or_else(|| find_source_receipt(&events, &rec.skeleton.source_id, None))
@@ -233,6 +240,7 @@ pub fn handle_with_etag(
                         if let Ok(env) = state.research_env_for_session(session_id) {
                             if let Ok(pdf) = load_ingested_pdf_source(&env.sandbox(), session_id, receipt) {
                                 attach_pdf_page_metadata(&mut mv, &rec.skeleton, &pdf);
+                                crate::investigation_mapview_v7::attach_v7_pdf_quote_pages(&mut mv, &pdf);
                             }
                         }
                     }

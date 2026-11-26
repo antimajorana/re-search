@@ -2,10 +2,11 @@
 
 use crate::investigation::anchor::bounded;
 use crate::lines_sent::SentLines;
+use crate::map_authors_claim::{validate_authors_claim, ClaimAnchorFault, InputAuthorsClaim};
 use crate::map_defs::{
-    AuthorsClaimLabel, AuthorsClaimRecord, HypothesisRecord, IndexedFault, ModelEdgeBasis,
-    ModelEdgeRecord, ModelEdgeRole, ReadingItemRecord, ReadingRole, VerifiedMapAnchor,
-    MAX_GIST_CHARS, MAX_PURPOSE_CHARS, MAX_READING_ANCHORS, MAX_READING_HYPOTHESES,
+    HypothesisRecord, IndexedFault, ModelEdgeBasis, ModelEdgeRecord, ModelEdgeRole,
+    ReadingItemRecord, ReadingRole, VerifiedMapAnchor, MAX_GIST_CHARS, MAX_PURPOSE_CHARS,
+    MAX_READING_ANCHORS, MAX_READING_HYPOTHESES,
 };
 use crate::quote_core::{accept_quote_with_sent, QuoteRejection, VerifiedQuote};
 use crate::skeleton::{PaperSkeleton, SkNode, SkNodeKind, Span};
@@ -16,10 +17,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_HYPOTHESIS_CHARS: usize = 400;
-const MAX_RELATION_NOTE_CHARS: usize = 600;
 const MAX_EDGE_REASON_CHARS: usize = 600;
-const MAX_ATTRIBUTED_TO: usize = 16;
-const MAX_BIB_KEY_CHARS: usize = 128;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,15 +33,6 @@ pub(super) struct InputAnchor {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InputHypothesis { text: String, anchor: InputAnchor }
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct InputAuthorsClaim {
-    label: AuthorsClaimLabel,
-    #[serde(default)] relation_note: Option<String>,
-    #[serde(default)] attributed_to: Vec<String>,
-    #[serde(default)] anchors: Vec<InputAnchor>,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -63,7 +52,7 @@ struct InputReadingItem {
     #[serde(default)] purpose: Option<String>,
     #[serde(default)] hypotheses: Vec<InputHypothesis>,
     #[serde(default)] anchors: Vec<InputAnchor>,
-    #[serde(default)] authors_claim: Option<InputAuthorsClaim>,
+    #[serde(default)] authors_claim: Option<InputAuthorsClaim<InputAnchor>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,43 +247,45 @@ pub(super) fn validate_item(
         verified_hyps.push(HypothesisRecord { text: hyp.text.trim().to_string(), anchor: va });
     }
 
-    let mut item_anchor_faults = anchor_faults;
-    let authors_claim = if let Some(ac) = item.authors_claim {
-        if ac.relation_note.as_deref().is_some_and(|s| !bounded(s, MAX_RELATION_NOTE_CHARS))
-            || ac.attributed_to.len() > MAX_ATTRIBUTED_TO
-            || ac.attributed_to.iter().any(|k| !bounded(k, MAX_BIB_KEY_CHARS))
-            || ac.anchors.len() > MAX_READING_ANCHORS
-        {
-            return Err(fault(index, "invalid_item", "Invalid `authors_claim` field bounds.", None));
-        }
-        for key in &ac.attributed_to {
-            if !ctx.bib_keys.contains(key.as_str()) {
-                return Err(fault(index, "unknown_bib_key", format!("Bibliography key `{key}` not in skeleton."), None));
-            }
-        }
-        let (mut ac_kept, ac_faults) = verify_anchor_list(
-            ctx, &format!("items[{index}].authors_claim.anchors"), &ac.anchors, default_path, &mut pending_corrected,
-        );
-        if !ac.anchors.is_empty() && ac_kept.is_empty() {
-            return Err(match ac_faults.into_iter().next() {
-                Some(first) => fault(index, first.code, first.message, first.true_text),
-                None => fault(index, "missing_authors_claim_anchor", "No authors_claim anchor matched.", None),
-            });
-        }
-        pending_dropped.extend(ac_faults.iter().map(|e| json!({ "owner": e.owner, "code": e.code })));
-        if ac.label != AuthorsClaimLabel::NotStated && ac_kept.is_empty() {
-            if !kept_anchors.is_empty() {
-                ac_kept = kept_anchors.clone();
-            } else if let Some(first) = item_anchor_faults.drain(..).next() {
-                return Err(fault(index, first.code, first.message, first.true_text));
-            } else {
-                return Err(fault(index, "missing_authors_claim_anchor", "Non-`not_stated` authors_claim needs a matched primary-paper anchor.", None));
-            }
-        }
-        Some(AuthorsClaimRecord {
-            label: ac.label, relation_note: ac.relation_note.map(|s| s.trim().to_string()),
-            attributed_to: ac.attributed_to, anchors: ac_kept, cues: Vec::new(),
+    let mut item_anchor_faults: Vec<ClaimAnchorFault> = anchor_faults
+        .into_iter()
+        .map(|e| ClaimAnchorFault {
+            owner: e.owner,
+            code: e.code,
+            message: e.message,
+            true_text: e.true_text,
         })
+        .collect();
+    let authors_claim = if let Some(ac) = item.authors_claim {
+        let claim = validate_authors_claim(
+            index,
+            ac,
+            ctx.source_id,
+            &ctx.bib_keys,
+            &kept_anchors,
+            &mut item_anchor_faults,
+            &mut pending_dropped,
+            |raw_anchors| {
+                let (kept, faults) = verify_anchor_list(
+                    ctx,
+                    &format!("items[{index}].authors_claim.anchors"),
+                    raw_anchors,
+                    default_path,
+                    &mut pending_corrected,
+                );
+                let mapped = faults
+                    .into_iter()
+                    .map(|e| ClaimAnchorFault {
+                        owner: e.owner,
+                        code: e.code,
+                        message: e.message,
+                        true_text: e.true_text,
+                    })
+                    .collect();
+                (kept, mapped)
+            },
+        )?;
+        Some(claim)
     } else {
         None
     };

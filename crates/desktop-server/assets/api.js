@@ -222,6 +222,22 @@ export function investigationCited(id, payload) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/cited`, payload);
 }
 
+export function startInvestigationTask(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/tasks`, payload);
+}
+
+export function saveInvestigationNote(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/notes`, payload);
+}
+
+export function getInvestigateSettings() {
+  return rawJson('GET', '/api/settings/investigate');
+}
+
+export function putInvestigateSettings(payload) {
+  return rawJson('PUT', '/api/settings/investigate', payload);
+}
+
 export function listLibraryPapers(params = {}) {
   const qs = new URLSearchParams(params);
   const suffix = qs.toString() ? `?${qs}` : '';

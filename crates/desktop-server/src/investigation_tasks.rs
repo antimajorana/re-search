@@ -67,6 +67,11 @@ pub fn handle(state: &Arc<DesktopState>, session_id: &str, body: &[u8]) -> ApiRe
     }
 
     let task = parse_task_kind(req_json.get("task").and_then(Value::as_str))?;
+    if let Some(p) = req_json.get("provider").and_then(Value::as_str).map(str::trim) {
+        if matches!(p, crate::state::CLAUDE_CLI_ROUTE | crate::state::ANTIGRAVITY_ROUTE | "claude-code-cli") {
+            return Err(bad("Background Investigate tasks require an in-core API or ChatGPT provider (subscription CLI routes are not supported)."));
+        }
+    }
     let depth = parse_optional_text(req_json.get("depth"), "depth", MAX_DEPTH_CHARS)?;
     let focus = parse_optional_text(req_json.get("focus"), "focus", MAX_FOCUS_CHARS)?;
 
@@ -86,6 +91,7 @@ pub fn handle(state: &Arc<DesktopState>, session_id: &str, body: &[u8]) -> ApiRe
     let prev_last_seq = events.last().map_or(0, |e| e.seq).max(skeleton_seq);
 
     strip_internal_task_fields(&mut req_json);
+    fill_connected_task_provider(state, session_id, &mut req_json);
     req_json[TASK_SPEC_FIELD] = json!({
         "task": task.as_str(), "tags": tags, "depth": depth, "focus": focus,
         "source_id": source_id, "skeleton_seq": skeleton_seq, "cap": cap,
@@ -492,17 +498,41 @@ pub(crate) fn strip_internal_task_fields(req: &mut Value) {
 }
 
 fn build_task_prompt(task: InvestigationTaskKind, tags: &[String], focus: Option<&str>) -> String {
-    let mut prompt = match task {
-        InvestigationTaskKind::Orient => "Run Investigate orient task on pinned paper.".to_string(),
-        InvestigationTaskKind::Open => format!("Open Investigate node(s): {}.", tags.join(", ")),
-        InvestigationTaskKind::Context => format!("Gather context for Investigate node(s): {}.", tags.join(", ")),
-        InvestigationTaskKind::PriorWork => "Check prior work on pinned paper.".to_string(),
-    };
-    if let Some(f) = focus {
-        prompt.push_str("\nFocus: ");
-        prompt.push_str(f);
+    crate::investigation_task_prompts::build_user_task_prompt(task, tags, focus)
+}
+
+fn fill_connected_task_provider(state: &DesktopState, session_id: &str, req: &mut Value) {
+    let has_req_p = req.get("provider").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty());
+    let meta = state.load_meta(session_id);
+    let has_meta_p = meta.as_ref().and_then(|m| m.default_provider.as_deref()).is_some_and(|s| !s.trim().is_empty());
+    let ui = state.load_ui_settings();
+    let has_am_orch = ui
+        .agent_models
+        .get("orchestrator")
+        .is_some_and(|s| agent::ProviderKind::parse(&s.provider).is_ok());
+    let has_ui_p = ui.default_provider.as_deref().is_some_and(|s| !s.trim().is_empty());
+    if has_req_p || has_meta_p || has_am_orch || has_ui_p {
+        return;
     }
-    prompt
+    let store = agent::ProviderKeyStore::load_from_data_dir(&state.cfg.data_dir).unwrap_or_default();
+    let has_key = |pk: agent::ProviderKind| {
+        crate::connections::credential(state, pk, &store)
+            .ok()
+            .is_some_and(|c| c.key.is_some())
+    };
+    if has_key(agent::ProviderKind::Anthropic) {
+        return;
+    }
+    let fallback = if state.chatgpt.ready() {
+        Some(agent::ProviderKind::ChatGpt)
+    } else {
+        [agent::ProviderKind::OpenAi, agent::ProviderKind::Gemini, agent::ProviderKind::Ollama]
+            .into_iter()
+            .find(|&p| has_key(p))
+    };
+    if let Some(pk) = fallback {
+        req["provider"] = json!(pk.cli_name());
+    }
 }
 
 fn is_interruption_error(err: &str) -> bool {

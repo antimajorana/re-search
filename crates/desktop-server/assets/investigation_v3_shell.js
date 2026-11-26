@@ -11,6 +11,7 @@ import { createQualityBanner, renderInvestigationOutline } from '/assets/investi
 import { filterResultNodes, renderInvestigationResults } from '/assets/investigation_results.js';
 import { lookupNearestSymbol, renderReadingPlanStrip, renderSymbolPopover } from '/assets/investigation_skip.js';
 import { createInvestigateWholeMap, VIEW_MODES } from '/assets/investigation_wholemap.js';
+import { mountOrientControls } from '/assets/investigation_orient_ui.js';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -66,8 +67,13 @@ export function createInvestigationV3Controller(deps = {}) {
   let activeKey = '';
   let loadToken = 0;
   let activeWholeMap = null;
+  let stopModelWatch = null;
 
   function destroyWholeMap() {
+    if (stopModelWatch) {
+      stopModelWatch();
+      stopModelWatch = null;
+    }
     if (activeWholeMap) {
       activeWholeMap.destroy?.();
       activeWholeMap = null;
@@ -118,6 +124,8 @@ export function createInvestigationV3Controller(deps = {}) {
     }
 
     host.hidden = false;
+    const modelConnected = Boolean(hooks?.isModelConnected?.());
+    const refreshMv = () => { st.etag = ''; activeKey = ''; return hooks?.refresh?.(sessionId); };
     const banner = createQualityBanner(mv);
     const leftCol = el('div', 'inv-col inv-col--outline');
     const centerCol = el('div', 'inv-col inv-col--center');
@@ -130,7 +138,12 @@ export function createInvestigationV3Controller(deps = {}) {
     const mapBtn = el('button', 'inv-node-action-btn', 'Whole paper graph');
     mapBtn.type = 'button';
     mapBtn.setAttribute('aria-pressed', st.wholeMap ? 'true' : 'false');
-    toolbar.append(focusBtn, mapBtn);
+    const orientBtn = el('button', 'inv-node-action-btn', 'Orient paper');
+    orientBtn.type = 'button';
+    orientBtn.setAttribute('data-action', 'orient');
+    toolbar.append(focusBtn, mapBtn, orientBtn);
+    const orientStatusHost = el('div', 'inv-v7-orient-runbar');
+    stopModelWatch = mountOrientControls({ toolbar, statusHost: orientStatusHost, orientBtn, apiMod, sessionId, mv, st, hooks, onRefresh: refreshMv }).stopWatch;
 
     if (st.trail.length > 1) {
       const backBtn = el('button', 'inv-node-action-btn', '← Previous statement');
@@ -155,7 +168,7 @@ export function createInvestigationV3Controller(deps = {}) {
     const symHost = el('div', 'inv-symbol-stage');
     const graphHost = el('div', 'inv-graph-stage');
     const resultsHost = el('div', 'inv-results-stage');
-    centerCol.append(toolbar, symHost, skipHost, graphHost, resultsHost);
+    centerCol.append(toolbar, orientStatusHost, symHost, skipHost, graphHost, resultsHost);
 
     const outlineHost = el('div', 'inv-outline-stage');
     leftCol.appendChild(outlineHost);
@@ -244,7 +257,6 @@ export function createInvestigationV3Controller(deps = {}) {
       if (ev.key === 'Enter') { ev.preventDefault(); runSymbolLookup(); }
     });
 
-    const modelConnected = Boolean(hooks?.isModelConnected?.());
     const hasPdf = Boolean(
       sessionData?.sources?.some((s) => s.source_id === mv.source_id && s.format === 'pdf'),
     );
@@ -335,6 +347,11 @@ export function createInvestigationV3Controller(deps = {}) {
         hasPdf,
         modelConnected,
         onSelectNode: (id) => selectNode(id, true),
+        onTogglePin: (node, pin) => {
+          void apiMod.saveInvestigationNote?.(sessionId, { tag: node.id, node_fp: node.fp, pin })?.then(refreshMv).catch((err) => hooks?.showStatus?.(err?.message || 'Could not update pin.'));
+        },
+        onOpenQuote: (t) => { if (t?.source_id && t?.path) hooks?.openSource?.(sessionId, t); },
+        onOpenPageImage: (t) => { if (t?.source_id) hooks?.openPdf?.(t); },
         onSelectCitation: (cite) => {
           const locator = Array.isArray(cite.locators) && cite.locators.length
             ? cite.locators[0]
@@ -532,7 +549,9 @@ export function createInvestigationV3Controller(deps = {}) {
         return false;
       }
       const st = sessionState(sessionId);
-      const nextKey = `${sessionId}:${inv.skeleton_seq ?? 'auto'}:${inv.source_id ?? ''}`;
+      const evs = Array.isArray(sessionData.events) ? sessionData.events : [];
+      const tailSeq = evs.length ? (evs[evs.length - 1]?.seq ?? evs.length) : 0;
+      const nextKey = `${sessionId}:${inv.skeleton_seq ?? 'auto'}:${inv.source_id ?? ''}:${tailSeq}`;
       if (st.mapview && activeKey === nextKey) {
         renderShell(host, sessionId, sessionData, hooks);
         return true;
@@ -549,7 +568,7 @@ export function createInvestigationV3Controller(deps = {}) {
         }
         st.mapview = mv;
         st.etag = mv.etag || '';
-        activeKey = `${sessionId}:${mv.skeleton_seq}:${mv.source_id ?? ''}`;
+        activeKey = nextKey;
         const setupEl = document.getElementById('investigation-setup');
         if (setupEl) setupEl.hidden = true;
         ensureEntryCard(sessionId, false, hooks);
