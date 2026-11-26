@@ -180,7 +180,9 @@ impl FulltextCache {
                 .query_row(
                     "SELECT paper_key, version, raw_blob, format, bytes, origin, fetched_ms
                      FROM fulltext WHERE paper_key = ?1
-                     ORDER BY (CASE WHEN format = 'pdf' THEN 1 ELSE 0 END) ASC, fetched_ms DESC, version DESC
+                     ORDER BY (CASE WHEN raw_blob = '' THEN 1 ELSE 0 END) ASC,
+                              (CASE WHEN format = 'pdf' THEN 1 ELSE 0 END) ASC,
+                              fetched_ms DESC, version DESC
                      LIMIT 1",
                     params![paper_key],
                     row_to_entry,
@@ -192,9 +194,10 @@ impl FulltextCache {
 
     /// Look up cached bytes for `(paper_key, version)`, verifying the SHA-256 digest.
     ///
-    /// Checks `<data_dir>/blobs/` first and `<data_dir>/library/blobs/` second. Missing or
-    /// digest-mismatched files are treated as a cache miss (`Ok(None)`) because this cache
-    /// is rebuildable and never trusted without hash verification.
+    /// Checks `<data_dir>/blobs/` first and `<data_dir>/library/blobs/` second. Missing,
+    /// unhashed (`user_library` with empty `raw_blob`), or digest-mismatched files are
+    /// treated as a cache miss (`Ok(None)`) because this cache is rebuildable and never
+    /// trusted without hash verification.
     pub fn get_bytes(
         &self,
         paper_key: &str,
@@ -203,6 +206,9 @@ impl FulltextCache {
         let Some(entry) = self.get_entry(paper_key, version)? else {
             return Ok(None);
         };
+        if entry.raw_blob.is_empty() {
+            return Ok(None);
+        }
         if let Some(bytes) = read_verified_blob(&self.ledger_blob_dir, &entry.raw_blob)? {
             return Ok(Some((entry, bytes)));
         }
@@ -253,14 +259,14 @@ fn row_to_entry(r: &rusqlite::Row<'_>) -> rusqlite::Result<FulltextEntry> {
     })
 }
 
-fn content_blob_path(blob_dir: &Path, hash: &str) -> Result<PathBuf> {
+pub(crate) fn content_blob_path(blob_dir: &Path, hash: &str) -> Result<PathBuf> {
     if !is_sha256_hex(hash) {
         return Err(Error::BadHash(hash.to_string()));
     }
     Ok(blob_dir.join(&hash[..2]).join(hash))
 }
 
-fn read_verified_blob(blob_dir: &Path, hash: &str) -> Result<Option<Vec<u8>>> {
+pub(crate) fn read_verified_blob(blob_dir: &Path, hash: &str) -> Result<Option<Vec<u8>>> {
     let path = content_blob_path(blob_dir, hash)?;
     let bytes = match std::fs::read(&path) {
         Ok(b) => b,
@@ -273,7 +279,7 @@ fn read_verified_blob(blob_dir: &Path, hash: &str) -> Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
-fn write_blob_atomic(blob_dir: &Path, hash: &str, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_blob_atomic(blob_dir: &Path, hash: &str, bytes: &[u8]) -> Result<()> {
     let path = content_blob_path(blob_dir, hash)?;
     if path.is_file() {
         return Ok(());

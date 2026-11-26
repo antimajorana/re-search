@@ -32,6 +32,7 @@ mod original_pdf;
 pub mod paper_reader;
 mod projects;
 mod routers;
+pub mod routes_library;
 pub mod routes_session;
 pub mod routes_subagents;
 pub mod routes_tools;
