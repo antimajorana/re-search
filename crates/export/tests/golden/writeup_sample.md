@@ -12,7 +12,7 @@ User-supplied lattice conventions for the finite chain.
 >
 > -- [@voss2024lattice, p. 2, line 4] (OCR)
 
-**e-2** [Cited]: Boundary sum lemma from the cited lattice note.
+**e-2** [Found]: Boundary sum lemma from the cited lattice note.
 
 ## Derivation
 
@@ -30,16 +30,16 @@ $$
 \left|\sum_{k=1}^{64} k^{-2} - \frac{\pi^2}{6}\right| < 0.016
 $$
 
-**e-4** [Checked numerically]: Partial sum matches the analytic limit at 12 points.
+**e-4** [Numerically checked]: Partial sum matches the analytic limit at 12 points.
 
 ## How each statement was checked
 
 | Step / Claim | How checked | Rests on |
 |---|---|---|
 | e-1 | Given | - |
-| e-2 | Cited | - (OCR source) |
+| e-2 | Found | - (OCR source) |
 | e-3 | Verified | e-1 |
-| e-4 | Checked numerically | e-1, e-3 |
+| e-4 | Numerically checked | e-1, e-3 |
 
 ## References
 

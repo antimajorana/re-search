@@ -3,11 +3,12 @@
 
 mod common;
 
-use common::test_cfg;
+use common::{raw_http, test_cfg};
 use desktop_server::auth::{ApiCredentials, AuthGuard};
 use desktop_server::chatgpt::ChatGptHub;
 use desktop_server::routes_sources::handle_sources;
 use desktop_server::sse::SseHub;
+use desktop_server::start_desktop_server;
 use desktop_server::state::DesktopState;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -210,4 +211,31 @@ fn preview_does_not_clobber_or_delete_already_registered_source() {
     assert_eq!(detail["count"], json!(1));
     assert_eq!(detail["source"]["state"], json!("synced"));
     assert_eq!(detail["source"]["last_sync_ms"].as_i64(), Some(initial_sync_ms));
+}
+
+#[test]
+fn sources_and_lessons_routes_are_dispatched_behind_live_http_auth() {
+    let dir = TempDir::new().unwrap();
+    let srv = start_desktop_server(test_cfg(dir.path(), None, None, None)).unwrap();
+    let port = srv.info.port;
+    let tok = srv.info.token.clone();
+    let tok_hdr = ("X-ReSearch-Token", tok.as_str());
+
+    for path in ["/api/sources", "/api/lessons"] {
+        let (st_unauth, _, _) = raw_http(port, "GET", path, &[], b"");
+        assert_eq!(st_unauth, 401, "expected 401 without token on {path}");
+        let (st_ok, _, raw_ok) = raw_http(port, "GET", path, &[tok_hdr], b"");
+        assert_eq!(st_ok, 200, "expected 200 with token on {path}: {}", String::from_utf8_lossy(&raw_ok));
+    }
+
+    let (st_bad_origin, _, _) = raw_http(
+        port,
+        "POST",
+        "/api/sources",
+        &[tok_hdr, ("Origin", "https://evil.example"), ("Content-Type", "application/json")],
+        br#"{"kind":"folder","root":"."}"#,
+    );
+    assert_eq!(st_bad_origin, 403);
+
+    srv.shutdown();
 }
