@@ -24,13 +24,15 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | F4 quote core, F9 run budget | done, reviewed and merged | `quote_core.rs`, `lines_sent.rs`, `run_budget.rs`; report `reports/f4-f9-quote-budget.md` |
 | V1 skeleton core for TeX | done, reviewed and merged | `crates/research-tools/src/skeleton/`; report `reports/v1-skeleton.md` |
 | S2 Solve model, state fold, badge function | done, reviewed and merged | `solve_model*.rs`, `solve_state.rs`, `solve_status.rs`, `solve_badge.rs`, `solve_own_tier.rs`, `proof_closure.rs`; report `reports/s2-solve-model.md` |
-| F1 tool profiles | brief `agents/f1-tool-profiles.md` | `gemini/modes/f1-tool-profiles` |
-| F6 graph view and shared UI parts | brief `agents/f6-graph-ui.md` | `gemini/modes/f6-graph-ui` |
-| F14a PDF text core | brief `agents/f14a-pdf-core.md` | `gemini/modes/f14a-pdf-core` |
-| F10 library | brief `agents/f10-library.md` | `gemini/modes/f10-library` |
+| F1 tool profiles | done, reviewed and merged | `tool_profile.rs`, `resume_profile.rs`; report `reports/f1-tool-profiles.md`. Sessions started after this do not resume in older builds |
+| F6 graph view and shared UI parts | done, reviewed and merged | `assets/graph_layout.js`, `graph_view.js`, `ui_badge.js`, `run_bar.js`, `quote_chip.js`; report `reports/f6-graph-ui.md` |
+| F14a PDF text core | done, reviewed and merged | `pdf_pages*.rs`, `pdf_firstpage*.rs`, `pdf_match.rs`; report `reports/f14a-pdf-core.md`. Not measured on real journal PDFs or scans |
+| F10 library | done, reviewed and merged; the `/api/library` routes are not registered yet (F5 does it) | `library*.rs`, `ledger/src/library_*.rs`, `routes_library.rs`; report `reports/f10-library.md` |
 | F11, X1, S3, S6 in one agent with subagents | brief `agents/q-f11-x1-s3-s6.md` | `gemini/modes/q-f11-x1-s3-s6` |
-| Investigate lane A: V2, V3, V4, V5 in order | brief `agents/inv-a-v2-v5.md`, starts when V1 is merged | `gemini/modes/inv-a-v2-v5` |
-| F13 paper sources and sync, F14 PDF and old papers, F15 write-up, F16 corrections and lessons | planned, no brief yet (overview 2.11 to 2.14; F14a in week 4, F13a in week 6) | - |
+| Investigate lane A: V2, V3, V4, V5 in order | brief `agents/inv-a-v2-v5.md` | `gemini/modes/inv-a-v2-v5` |
+| F5 mode shell, F7 hand-off packet | brief `agents/f5-f7-mode-shell.md` | `gemini/modes/f5-f7-mode-shell` |
+| Library lane: F13a sources and sync, F16a corrections by code, F15 write-up core | brief `agents/lib-f13a-f16a-f15.md` | `gemini/modes/lib-f13a-f16a-f15` |
+| F13b, F13c, F14b, F14c, F16b, V17, mode adapters of F15 | planned, no brief yet | - |
 | S16 formal tier (Lean) | cut | - |
 | S22 engine manager (Cadabra2, FORM), V14 prior work in Investigate, version tracking (half of V10) | deferred | - |
 
