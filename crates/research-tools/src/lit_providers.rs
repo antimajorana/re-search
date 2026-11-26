@@ -372,13 +372,8 @@ pub fn run_query_with_gate(
     }
 
     if resp.status != 200 {
-        let snippet = String::from_utf8_lossy(&resp.body);
-        let trimmed = snippet.trim();
-        let detail = if trimmed.is_empty() {
-            format!("HTTP {} from `{}`", resp.status, query.provider)
-        } else {
-            format!("HTTP {} from `{}`: {trimmed}", resp.status, query.provider)
-        };
+        // Provider error bodies can reflect request headers, including API keys.
+        let detail = format!("HTTP {} from `{}`", resp.status, query.provider);
         let mut out =
             LitQueryResult::status_only(query.provider, query.offset, QueryStatus::Failed, detail);
         out.http_status = Some(resp.status);

@@ -14,7 +14,9 @@ pub(crate) fn extract_literature_papers(
     let blob_hash = ev.payload["raw_blob"].as_str().unwrap_or("").trim();
     let mut out = Vec::new();
 
-    if !blob_hash.is_empty() {
+    // Citation response blobs are not search responses. The recorded hits also pin
+    // the requested page, even when the provider returns an entire reference list.
+    if !blob_hash.is_empty() && ev.payload.get("relation").is_none() {
         if let Ok(raw) = ledger.get_blob(blob_hash) {
             if provider == "arxiv" {
                 if let Ok(papers) = parse_atom_feed(&raw) {

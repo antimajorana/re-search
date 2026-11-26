@@ -50,11 +50,17 @@
       "title": "Statements of results",
       "label": "sec:statements",
       "parent_order": null,
-      "spans": [{ "path": "main.tex", "start_line": 8, "end_line": 17 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 8,
+          "end_line": 17
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1",
+      "number_basis": "computed",
       "confidence": "tex_heading",
       "proof_hint": null
     },
@@ -64,11 +70,17 @@
       "title": "Strict positivity preservation",
       "label": "lem:pos",
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 9, "end_line": 11 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 9,
+          "end_line": 11
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1.1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -78,11 +90,17 @@
       "title": "Spectral gap for positive stochastic matrices",
       "label": "thm:gap",
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 12, "end_line": 14 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 12,
+          "end_line": 14
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1.2",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -92,11 +110,17 @@
       "title": "Exponential mixing",
       "label": "cor:mix",
       "parent_order": 0,
-      "spans": [{ "path": "main.tex", "start_line": 15, "end_line": 17 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 15,
+          "end_line": 17
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "1.3",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -106,11 +130,17 @@
       "title": "Proofs",
       "label": "sec:proofs",
       "parent_order": null,
-      "spans": [{ "path": "main.tex", "start_line": 18, "end_line": 27 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 18,
+          "end_line": 27
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "2",
+      "number_basis": "computed",
       "confidence": "tex_heading",
       "proof_hint": null
     },
@@ -120,7 +150,13 @@
       "title": "Proof of Lemma~\\ref{lem:pos}",
       "label": null,
       "parent_order": 4,
-      "spans": [{ "path": "main.tex", "start_line": 19, "end_line": 21 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 19,
+          "end_line": 21
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
       "number": null,
@@ -138,7 +174,13 @@
       "title": "Proof of Theorem 1.2",
       "label": null,
       "parent_order": 4,
-      "spans": [{ "path": "main.tex", "start_line": 22, "end_line": 24 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 22,
+          "end_line": 24
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
       "number": null,
@@ -157,8 +199,16 @@
       "title": "Proof of Corollary~\\ref{cor:mix} \\cite{seneta2006}",
       "label": null,
       "parent_order": 4,
-      "spans": [{ "path": "main.tex", "start_line": 25, "end_line": 27 }],
-      "head_cites": ["seneta2006"],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 25,
+          "end_line": 27
+        }
+      ],
+      "head_cites": [
+        "seneta2006"
+      ],
       "eq_count": 0,
       "number": null,
       "number_basis": null,
@@ -175,11 +225,17 @@
       "title": "A short remark with attached proof",
       "label": "sec:attached",
       "parent_order": null,
-      "spans": [{ "path": "main.tex", "start_line": 28, "end_line": 34 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 28,
+          "end_line": 34
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "3",
+      "number_basis": "computed",
       "confidence": "tex_heading",
       "proof_hint": null
     },
@@ -189,11 +245,17 @@
       "title": "Row sum invariance",
       "label": "prop:rowsum",
       "parent_order": 8,
-      "spans": [{ "path": "main.tex", "start_line": 29, "end_line": 31 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 29,
+          "end_line": 31
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
-      "number": null,
-      "number_basis": null,
+      "number": "3.1",
+      "number_basis": "computed",
       "confidence": "tex_env",
       "proof_hint": null
     },
@@ -203,13 +265,22 @@
       "title": null,
       "label": null,
       "parent_order": 8,
-      "spans": [{ "path": "main.tex", "start_line": 32, "end_line": 34 }],
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 32,
+          "end_line": 34
+        }
+      ],
       "head_cites": [],
       "eq_count": 0,
       "number": null,
       "number_basis": null,
       "confidence": "tex_env",
-      "proof_hint": { "kind": "adjacent", "target_order": 9 }
+      "proof_hint": {
+        "kind": "adjacent",
+        "target_order": 9
+      }
     }
   ]
 }

@@ -455,9 +455,11 @@ fn handles_429_retry_after_variants_5xx_malformed_xxe_and_timeout() {
 fn s2_api_key_sent_only_to_s2_and_stripped_on_cross_origin_redirect() {
     let srv_b = MockServer::spawn(1, |_| MockReply::ok("application/json", S2_SEARCH_JSON));
     let redirect_target = format!("{}/graph/v1/paper/search?redirected=1", srv_b.base_url);
-    let srv_a = MockServer::spawn(3, move |req| {
+    let srv_a = MockServer::spawn(4, move |req| {
         if req.path.contains("doredirect") {
             MockReply::status("302 Found", vec![("Location", &redirect_target)], "")
+        } else if req.path.contains("echoerror") {
+            MockReply::status("400 Bad Request", vec![], "invalid key: fake-test-s2-key-0001")
         } else if req.path.starts_with("/graph/v1/") {
             MockReply::ok("application/json", S2_SEARCH_JSON)
         } else {
@@ -483,6 +485,11 @@ fn s2_api_key_sent_only_to_s2_and_stripped_on_cross_origin_redirect() {
     let r_redir = run_query_with_gate(&ep_with_b, &LitQuery::search(LitProvider::SemanticScholar, "doredirect"), &cfg, &gate);
     assert_eq!(r_redir.status, QueryStatus::Ok);
 
+    let error = run_query_with_gate(&ep_with_b, &LitQuery::search(LitProvider::SemanticScholar, "echoerror"), &cfg, &gate);
+    assert_eq!(error.http_status, Some(400));
+    assert!(error.error.as_deref().unwrap().contains("HTTP 400"));
+    assert!(!error.error.as_deref().unwrap().contains("fake-test-s2-key-0001"));
+
     let a_reqs = srv_a.captured();
     assert_eq!(a_reqs[0].headers.get("x-api-key").map(String::as_str), Some("fake-test-s2-key-0001"));
     assert!(!a_reqs[1].headers.contains_key("x-api-key"));
@@ -493,13 +500,15 @@ fn s2_api_key_sent_only_to_s2_and_stripped_on_cross_origin_redirect() {
 
 #[test]
 fn literature_fetched_records_qid_run_id_verifies_ledger_and_rebuilds_library() {
-    let srv = MockServer::spawn(4, |req| {
+    let srv = MockServer::spawn(5, |req| {
         if req.path.starts_with("/api/query") {
             MockReply::ok("application/atom+xml", ARXIV_FEED_XML)
         } else if req.path.starts_with("/api/literature") {
             MockReply::ok("application/json", INSPIRE_SEARCH_JSON)
         } else if req.path.starts_with("/graph/v1/paper/search") {
             MockReply::ok("application/json", S2_SEARCH_JSON)
+        } else if req.path.contains("/references") {
+            MockReply::ok("application/json", r#"{"data":[{"citedPaper":{"paperId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","title":"Cited Ref"}}]}"#)
         } else {
             MockReply::ok("application/json", CROSSREF_SEARCH_JSON)
         }
@@ -531,10 +540,16 @@ fn literature_fetched_records_qid_run_id_verifies_ledger_and_rebuilds_library() 
         assert!(locate_abstract_quote(res.papers[0].abstract_text.as_deref().unwrap(), quote_snippet, false).is_err());
     }
 
+    let citation = LitQuery::citation_relation(LitProvider::SemanticScholar, QueryRelation::Cites {
+        key: PaperKey::parse("arxiv:2502.00202").unwrap(),
+    });
+    let cited = run_query_and_record_with_gate(&ep, &ledger, session, &citation, &cfg, &gate).unwrap();
+    assert_eq!(cited.status, QueryStatus::Ok);
+
     ledger.verify_session(session).expect("ledger hash chain valid");
     let events = ledger.read_session(session).unwrap();
     let lit_events: Vec<_> = events.iter().filter(|e| e.kind == LITERATURE_FETCHED_EVENT).collect();
-    assert_eq!(lit_events.len(), 4);
+    assert_eq!(lit_events.len(), 5);
     assert_eq!(lit_events[0].payload["qid"], "q-1");
     assert_eq!(lit_events[0].payload["run_id"], "run-f11-1");
     assert!(lit_events[0].payload["papers"].is_array());
@@ -552,6 +567,7 @@ fn literature_fetched_records_qid_run_id_verifies_ledger_and_rebuilds_library() 
         "arxiv:2406.00101",
         "arxiv:2502.00202",
         "doi:10.9999/crossref.2023.5",
+        "s2:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     ] {
         let key = PaperKey::parse(key_str).unwrap();
         assert!(lib.get_paper(&key).unwrap().is_some(), "library missing rebuilt paper {key_str}");
