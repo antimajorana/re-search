@@ -127,30 +127,35 @@ export function createApprovalCard(host, options = {}) {
   async function dispatchSingleAllow(idx) {
     const grant = grants[idx];
     if (!grant || grant.granted) return { id: grant?.id, approved: Boolean(grant?.granted) };
+    const grantId = grant.id;
+    const resolveLive = () => grants.find((g) => g.id === grantId) || grant;
     if (!opts.onAllowGrant) {
-      grant.status = 'pending';
-      grant.error = 'Awaiting active approver prompt.';
-      return { id: grant.id, approved: false };
+      const live = resolveLive();
+      live.status = 'pending';
+      live.error = 'Awaiting active approver prompt.';
+      return { id: grantId, approved: false };
     }
     try {
       // Dispatch strictly one grant descriptor at a time — never a bulk/wildcard scope.
       const res = await opts.onAllowGrant({ ...grant }, idx);
+      const live = resolveLive();
       const approved = res === true || (res && typeof res === 'object' && res.approved === true);
       if (approved) {
-        grant.granted = true;
-        grant.status = 'granted';
-        grant.error = '';
+        live.granted = true;
+        live.status = 'granted';
+        live.error = '';
       } else {
-        grant.granted = false;
-        grant.status = res && typeof res === 'object' && res.pending ? 'pending' : 'denied';
-        grant.error = res && typeof res === 'object' && res.reason ? String(res.reason) : '';
+        live.granted = false;
+        live.status = res && typeof res === 'object' && res.pending ? 'pending' : 'denied';
+        live.error = res && typeof res === 'object' && res.reason ? String(res.reason) : '';
       }
-      return { id: grant.id, approved };
+      return { id: grantId, approved };
     } catch (err) {
-      grant.granted = false;
-      grant.status = 'error';
-      grant.error = String(err?.message || err || 'Approval request failed');
-      return { id: grant.id, approved: false, error: grant.error };
+      const live = resolveLive();
+      live.granted = false;
+      live.status = 'error';
+      live.error = String(err?.message || err || 'Approval request failed');
+      return { id: grantId, approved: false, error: live.error };
     }
   }
 
@@ -177,11 +182,14 @@ export function createApprovalCard(host, options = {}) {
     statusMessage = '';
     render();
     const results = [];
+    // Snapshot IDs before awaiting so a mid-loop update() cannot skip or duplicate grants.
+    const targetIds = grants.filter((g) => !g.granted).map((g) => g.id);
     try {
-      for (let i = 0; i < grants.length; i += 1) {
-        if (grants[i].granted) continue;
+      for (const id of targetIds) {
+        const idx = grants.findIndex((g) => g.id === id);
+        if (idx < 0 || grants[idx].granted) continue;
         // Sequential per-grant dispatch through the existing approver (solve.md D5).
-        const outcome = await dispatchSingleAllow(i);
+        const outcome = await dispatchSingleAllow(idx);
         results.push(outcome);
       }
       const grantedCount = results.filter((r) => r.approved).length;
@@ -311,7 +319,7 @@ export function createApprovalCard(host, options = {}) {
       if (typeof nextOpts.preTurnSupported === 'boolean') {
         opts.preTurnSupported = nextOpts.preTurnSupported;
       }
-      statusMessage = '';
+      if (!busy) statusMessage = '';
       render();
     },
   };

@@ -157,7 +157,14 @@ fn solve_prefill_is_deterministic_fast_zero_model_and_has_linux_toolbox_fallback
     assert!(grants.iter().any(|g| g["kind"] == "worker_session" && g["caller"] == "verifier:solve"));
     assert!(grants.iter().any(|g| g["kind"] == "session_capability" && g["effect"] == "network-read"));
     assert_eq!(v["approval_grants"]["worker_restart_note"], WORKER_RESTART_NOTE);
-    assert_eq!(v["approval_grants"]["pre_turn_approver_supported"], true);
+    assert_eq!(v["approval_grants"]["pre_turn_session_capability_supported"], true);
+    assert_eq!(v["approval_grants"]["pre_turn_worker_session_supported"], false);
+    assert_eq!(v["approval_grants"]["pre_turn_approver_supported"], false);
+
+    // Oversized prefill statement is rejected with 400.
+    let huge_req = serde_json::to_vec(&json!({ "statement": "x".repeat(MAX_STATEMENT_CHARS + 1) })).unwrap();
+    let (st, _, _) = raw_http(port, "POST", "/api/sessions/s-solve-pre/solve/prefill", &auth, &huge_req);
+    assert_eq!(st, 400);
 
     // Prove task prefill includes explicit D21 notice.
     let prove_req = serde_json::to_vec(&json!({
@@ -403,6 +410,12 @@ fn solve_ui_approver_prompts_and_records_session_grant_outside_turn() {
         std::thread::sleep(Duration::from_millis(15));
     };
     assert!(!is_turn_running(&state, sid));
+    // While approval is pending, solve_view reports `Waiting for you` (`waiting`).
+    let events_while_pending = ledger.read_session(sid).unwrap();
+    let pending_view = session_solve_view(&state, sid, &events_while_pending, false);
+    assert_eq!(pending_view["run_state"]["state"], "waiting");
+    assert_eq!(pending_view["run_state"]["label"], "Waiting for you");
+
     let (st, list) = handle_pending_approvals(&state, sid).unwrap();
     assert_eq!(st, 200);
     assert_eq!(list["pending"].as_array().unwrap().len(), 1);
@@ -421,11 +434,130 @@ fn solve_ui_approver_prompts_and_records_session_grant_outside_turn() {
 
     let events = ledger.read_session(sid).unwrap();
     let view = session_solve_view(&state, sid, &events, false);
-    assert_eq!(view["approval_grants"]["pre_turn_approver_supported"], true);
+    assert_eq!(view["approval_grants"]["pre_turn_session_capability_supported"], true);
+    assert_eq!(view["approval_grants"]["pre_turn_worker_session_supported"], false);
+    assert_eq!(view["approval_grants"]["pre_turn_approver_supported"], false);
     assert!(view["approval_grants"]["active_session_grants"]
         .as_array()
         .unwrap()
         .iter()
         .any(|g| g == "write-workspace"));
 }
+
+#[test]
+fn solve_view_handles_interrupted_done_open_items_and_stale_graph_legend() {
+    use desktop_server::solve_view::build_solve_view;
+    use research_tools::solve_model::{
+        compute_claim_sha256, compute_entry_sha256, compute_math_sha256, event_kinds, Claim,
+        ClaimForm, ClaimRelation, HandleRef,
+    };
+
+    let tmp = TempDir::new().unwrap();
+    let ledger = Ledger::open(tmp.path()).unwrap();
+    let sid = "s-solve-audit-view";
+    let setup_hash = compute_math_sha256(&[], &Default::default(), &[], "real x");
+    let h1 = HandleRef::new("expr_a", 1).unwrap();
+    let h2 = HandleRef::new("expr_b", 1).unwrap();
+    let claim1 = Claim { form: ClaimForm::Equation, lhs: h1.clone(), rhs: h1.clone(), relation: ClaimRelation::Eq, order: None, domain: None, how: None };
+    let claim2 = Claim { form: ClaimForm::Equation, lhs: h2.clone(), rhs: h2.clone(), relation: ClaimRelation::Eq, order: None, domain: None, how: None };
+    let c1_sha = compute_claim_sha256(std::slice::from_ref(&claim1), |_| Some("sha-a")).unwrap();
+    let c2_sha = compute_claim_sha256(std::slice::from_ref(&claim2), |_| Some("sha-b")).unwrap();
+    let e1_sha = compute_entry_sha256(Some(&c1_sha), "Step 1", "Compute x^2");
+    let e2_sha = compute_entry_sha256(Some(&c2_sha), "Step 2", "Compute x^3");
+
+    let mk_expr = |name: &str, sha: &str| {
+        json!({
+            "name": name, "version": 1, "srepr_blob": "b1", "srepr_sha256": sha,
+            "latex": "x", "str_preview": "x", "free_symbols": [],
+            "produced_by": { "call_id": "call-1", "result_seq": 4 }, "portable": true
+        })
+    };
+    let mk_chk = |cid: &str, eid: &str, csha: &str, msha: &str| {
+        json!({
+            "check_id": cid, "claim_sha256": csha, "claim_index": 0, "entry_id": eid,
+            "math_sha256": msha, "name": "equal_zero", "registry_sha256": "reg1",
+            "params": {}, "outcome": "pass", "asked_by": "host",
+            "receipt": { "call_id": "call-1", "result_seq": 4 },
+            "evidence": { "symbolic_zero": true }, "evidence_sha256": "ev1"
+        })
+    };
+
+    ledger
+        .append_new_session(
+            sid,
+            &[
+                (event_kinds::SOLVE_STARTED, 1, &json!({})),
+                (
+                    event_kinds::SOLVE_SETUP,
+                    1,
+                    &json!({
+                        "revision": 1, "statement": "Compute $x^2$", "task_kind": "calculate",
+                        "target": { "description": "expr", "form": "closed_form" },
+                        "done": [{ "id": "final_result_tier", "kind": "final_tier_at_least", "params": { "tier": "verified" } }],
+                        "conventions": "real x", "symbols": [], "dimensions": {}, "assumptions": [],
+                        "roles": { "solver": { "provider": "", "model": "" }, "verifier": { "provider": "", "model": "" } },
+                        "budgets": { "max_model_calls": 60, "max_wall_minutes": 30, "max_model_calls_per_leg": 48, "max_review_loops": 6, "max_gate_bounces": 3 },
+                        "review": "prose_only", "tool_profile": "solve/1", "math_sha256": setup_hash
+                    }),
+                ),
+                (event_kinds::SESSION_RESUME, 1, &json!({})),
+                (event_kinds::TOOL_RESULT, 1, &json!({ "call_id": "call-1", "tool": "check_run", "ok": true, "process": "check" })),
+                (event_kinds::SOLVE_EXPR, 1, &mk_expr("expr_a", "sha-a")),
+                (event_kinds::SOLVE_EXPR, 1, &mk_expr("expr_b", "sha-b")),
+                (
+                    event_kinds::PROOF_ENTRY,
+                    1,
+                    &json!({
+                        "entry_id": "e-1", "entry_type": "step", "summary": "Step 1", "details": "Compute x^2",
+                        "depends_on": [], "claims": [claim1], "claim_sha256": c1_sha, "entry_sha256": e1_sha
+                    }),
+                ),
+                (event_kinds::SOLVE_CHECK, 1, &mk_chk("c-1", "e-1", &c1_sha, &setup_hash)),
+                (
+                    event_kinds::PROOF_ENTRY,
+                    1,
+                    &json!({
+                        "entry_id": "e-2", "entry_type": "step", "summary": "Step 2", "details": "Compute x^3",
+                        "depends_on": [], "claims": [claim2], "claim_sha256": c2_sha, "entry_sha256": e2_sha
+                    }),
+                ),
+                (event_kinds::SOLVE_CHECK, 1, &mk_chk("c-2", "e-2", &c2_sha, "outdated-setup-hash")),
+                (event_kinds::PROOF_SUPERSEDE, 1, &json!({ "entry_id": "e-1", "replaced_by": "e-2", "reason": "revised" })),
+            ],
+        )
+        .unwrap();
+
+    let events = ledger.read_session(sid).unwrap();
+    let view = build_solve_view(&events, false, json!({}), json!({}), false);
+    assert_eq!(view["run_state"]["state"], "interrupted");
+
+    // Superseded e-1 is excluded from Verified legend, and stale e-2 emits "Needs re-check" without Verified legend.
+    let legend = view["graph"]["legend"].as_array().unwrap();
+    assert!(!legend.iter().any(|item| item["label"] == "Verified"), "unexpected Verified legend: {legend:?}");
+    let nodes = view["graph"]["nodes"].as_array().unwrap();
+    let e2 = nodes.iter().find(|n| n["id"] == "e-2").unwrap();
+    assert_eq!(e2["stale"], true);
+    assert_eq!(e2["badges"][0]["text"], "Needs re-check");
+
+    // Append solve.done (finished_open_items) and verify run_state surfaces open_items from state.done.
+    ledger
+        .append_with_hash(
+            sid,
+            event_kinds::SOLVE_DONE,
+            1,
+            &json!({
+                "final_entry_id": "e-2", "own_tier": "stale", "effective_tier": "stale",
+                "criteria": [{ "id": "final_result_tier", "met": false, "evidence": {} }],
+                "rests_on": { "given": [], "cited": [], "assumed_by_model": ["e-2"], "weakest": [] },
+                "status": "finished_open_items",
+                "model_calls": { "solver": 1, "verifier": 0, "workers": 0 }
+            }),
+        )
+        .unwrap();
+    let done_events = ledger.read_session(sid).unwrap();
+    let done_view = build_solve_view(&done_events, false, json!({}), json!({}), false);
+    assert_eq!(done_view["run_state"]["state"], "done_open_items");
+    assert_eq!(done_view["run_state"]["open_items"].as_array().unwrap().len(), 2);
+}
+
 

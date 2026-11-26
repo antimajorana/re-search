@@ -273,6 +273,13 @@ fn validate_done_criterion(c: &DoneCriterion) -> Result<(), String> {
             if !ALLOWED_CRITERION_TIERS.contains(&tier) {
                 return Err(format!("criterion `{id}` has unsupported tier `{tier}`"));
             }
+            if let Some(v) = c.params.get("require_different_model") {
+                if !v.is_boolean() {
+                    return Err(format!(
+                        "criterion `{id}` `params.require_different_model` must be a boolean"
+                    ));
+                }
+            }
         }
         DoneCriterionKind::NamedCheckPassed => {
             let check = c
@@ -364,9 +371,9 @@ pub fn validate_and_build_setup(
     let symbols = validate_symbols(&input.symbols)?;
     let dimensions = validate_dimensions(&input.dimensions)?;
     let assumptions = validate_assumptions(&input.assumptions)?;
-    validate_done_list(&input.done)?;
+    let done = validate_done_list(&input.done)?;
     validate_budgets(input.budgets)?;
-    validate_sources(input.given_source.as_ref(), &input.sources)?;
+    let (given_source, sources) = validate_sources(input.given_source.as_ref(), &input.sources)?;
 
     let roles = SolveRoles {
         solver: validate_role("solver", &input.roles.solver)?,
@@ -391,13 +398,13 @@ pub fn validate_and_build_setup(
             order: input.target.order.clone(),
             digits: input.target.digits,
         },
-        done: input.done.clone(),
+        done,
         conventions,
         symbols,
         dimensions,
         assumptions,
-        given_source: input.given_source.clone(),
-        sources: input.sources.clone(),
+        given_source,
+        sources,
         roles,
         budgets: input.budgets,
         review: input.review,
@@ -444,6 +451,9 @@ fn validate_dimensions(
     for (sym, dims) in raw {
         let sym_name = sym.trim();
         validate_expr_name(sym_name)?;
+        if out.contains_key(sym_name) {
+            return Err(format!("duplicate dimension symbol `{sym_name}`"));
+        }
         if dims.is_empty() || dims.len() > 16 {
             return Err(format!("dimensions for `{sym_name}` must have 1..=16 base units"));
         }
@@ -456,6 +466,9 @@ fn validate_dimensions(
                 || !b.bytes().all(|ch| ch.is_ascii_alphanumeric() || ch == b'_')
             {
                 return Err(format!("invalid dimension base `{b}` for `{sym_name}`"));
+            }
+            if clean_bases.contains_key(b) {
+                return Err(format!("duplicate dimension base `{b}` for `{sym_name}`"));
             }
             validate_dimension_power(power)?;
             clean_bases.insert(b.to_string(), power.clone());
@@ -488,18 +501,21 @@ fn validate_assumptions(raw: &[SetupAssumption]) -> Result<Vec<SetupAssumption>,
     Ok(out)
 }
 
-fn validate_done_list(raw: &[DoneCriterion]) -> Result<(), String> {
+fn validate_done_list(raw: &[DoneCriterion]) -> Result<Vec<DoneCriterion>, String> {
     if raw.len() > MAX_DONE_CRITERIA {
         return Err(format!("too many done criteria (max {MAX_DONE_CRITERIA})"));
     }
     let mut seen = BTreeSet::new();
+    let mut out = Vec::with_capacity(raw.len());
     for c in raw {
         validate_done_criterion(c)?;
-        if !seen.insert(c.id.trim().to_string()) {
-            return Err(format!("duplicate done criterion id `{}`", c.id.trim()));
+        let clean_id = c.id.trim().to_string();
+        if !seen.insert(clean_id.clone()) {
+            return Err(format!("duplicate done criterion id `{clean_id}`"));
         }
+        out.push(DoneCriterion { id: clean_id, kind: c.kind, params: c.params.clone() });
     }
-    Ok(())
+    Ok(out)
 }
 
 fn validate_budgets(b: SolveBudgets) -> Result<(), String> {
@@ -521,24 +537,34 @@ fn validate_budgets(b: SolveBudgets) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_sources(given: Option<&GivenSource>, sources: &[String]) -> Result<(), String> {
-    if let Some(gs) = given {
-        if gs.source_id.trim().is_empty() || gs.source_id.len() > 128 {
+fn validate_sources(
+    given: Option<&GivenSource>,
+    sources: &[String],
+) -> Result<(Option<GivenSource>, Vec<String>), String> {
+    let clean_given = if let Some(gs) = given {
+        let sid = gs.source_id.trim();
+        if sid.is_empty() || sid.len() > 128 || has_disallowed_control(sid) {
             return Err("given_source.source_id is invalid".into());
         }
         if !is_sha256_hex(&gs.file_sha256) {
             return Err("given_source.file_sha256 must be a 64-character hex digest".into());
         }
-    }
+        Some(GivenSource { source_id: sid.to_string(), file_sha256: gs.file_sha256.clone() })
+    } else {
+        None
+    };
     if sources.len() > MAX_SOURCES {
         return Err(format!("too many sources (max {MAX_SOURCES})"));
     }
+    let mut clean_sources = Vec::with_capacity(sources.len());
     for src in sources {
-        if src.trim().is_empty() || src.len() > 128 || has_disallowed_control(src) {
+        let trimmed = src.trim();
+        if trimmed.is_empty() || trimmed.len() > 128 || has_disallowed_control(trimmed) {
             return Err(format!("invalid source id `{src}`"));
         }
+        clean_sources.push(trimmed.to_string());
     }
-    Ok(())
+    Ok((clean_given, clean_sources))
 }
 
 #[cfg(test)]

@@ -72,7 +72,7 @@ pub fn guess_task_kind(statement: &str) -> TaskKind {
 /// Detect `"show <expr> = 0 at order <var>^<n>"` / `"show ... vanishes to order <var>^<n>"` cues.
 pub fn detect_show_vanishes_cue(statement: &str) -> Option<VanishesCue> {
     let lower = statement.to_ascii_lowercase();
-    let show_idx = lower.find("show ")?;
+    let show_idx = find_word_cue(&lower, "show ")?;
     let tail = statement[show_idx + 5..].trim();
     let tail_lower = tail.to_ascii_lowercase();
     let order_pos = tail_lower
@@ -88,13 +88,24 @@ pub fn detect_show_vanishes_cue(statement: &str) -> Option<VanishesCue> {
     if !is_zero_claim {
         return None;
     }
-    let expr = before_order
+    let expr_raw = before_order
         .split("= 0")
         .next()
         .unwrap_or(before_order)
         .split("=0")
         .next()
-        .unwrap_or(before_order)
+        .unwrap_or(before_order);
+    let expr_no_that = if expr_raw.trim().len() >= 5
+        && expr_raw.trim()[..5].eq_ignore_ascii_case("that ")
+    {
+        &expr_raw.trim()[5..]
+    } else {
+        expr_raw.trim()
+    };
+    let expr = expr_no_that
+        .strip_suffix("vanishes")
+        .or_else(|| expr_no_that.strip_suffix("vanish"))
+        .unwrap_or(expr_no_that)
         .trim_end_matches(|c: char| c.is_whitespace() || c == ',')
         .trim()
         .to_string();
@@ -102,19 +113,38 @@ pub fn detect_show_vanishes_cue(statement: &str) -> Option<VanishesCue> {
         return None;
     }
 
-    let order_tok = after_order
-        .split(|c: char| c.is_whitespace() || matches!(c, '.' | ',' | ';' | ')'))
+    let order_raw = after_order
+        .split(|c: char| c.is_whitespace() || matches!(c, '.' | ',' | ';'))
         .find(|s| !s.is_empty())?
-        .trim_start_matches('\\')
         .trim_matches('$');
-    let (var_raw, pow_raw) = if let Some((v, p)) = order_tok.split_once('^') {
+    let unwrapped = order_raw
+        .strip_prefix("O(")
+        .or_else(|| order_raw.strip_prefix("\\mathcal{O}("))
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(order_raw.trim_end_matches(')'))
+        .trim_start_matches('\\');
+    let (var_raw, pow_raw) = if let Some((v, p)) = unwrapped.split_once('^') {
         (v.trim_matches(['{', '}']), p.trim_matches(['{', '}']))
     } else {
-        (order_tok.trim_matches(['{', '}']), "1")
+        (unwrapped.trim_matches(['{', '}']), "1")
     };
     let var = normalize_symbol_token(var_raw)?;
     let power: i32 = pow_raw.parse().ok()?;
     Some(VanishesCue { expression: expr, order_variable: var, order_power: power })
+}
+
+fn find_word_cue(lower: &str, needle: &str) -> Option<usize> {
+    let mut offset = 0;
+    while let Some(pos) = lower[offset..].find(needle) {
+        let abs = offset + pos;
+        let boundary_ok = abs == 0
+            || !lower.as_bytes()[abs - 1].is_ascii_alphanumeric();
+        if boundary_ok {
+            return Some(abs);
+        }
+        offset = abs + 1;
+    }
+    None
 }
 
 fn normalize_symbol_token(raw: &str) -> Option<String> {
@@ -209,8 +239,20 @@ pub fn scan_statement_symbols(statement: &str, defaults: Option<&SetupDefaults>)
 }
 
 fn is_math_context_single_letter(s: &str, start: usize, end: usize) -> bool {
-    let before = s[..start].trim_end();
-    let after = s[end..].trim_start();
+    let raw_before = &s[..start];
+    let raw_after = &s[end..];
+    // Reject English hyphenated words like "n-th", "x-ray", and list labels "(a)", "(b)".
+    if raw_after.starts_with('-') && raw_after.as_bytes().get(1).is_some_and(u8::is_ascii_alphabetic) {
+        return false;
+    }
+    if raw_before.ends_with('(') && raw_after.starts_with(')') {
+        let prev2 = raw_before[..raw_before.len() - 1].chars().last();
+        if prev2.is_none_or(|c| c.is_whitespace()) {
+            return false;
+        }
+    }
+    let before = raw_before.trim_end();
+    let after = raw_after.trim_start();
     let next_ch = after.chars().next();
     let prev_ch = before.chars().last();
     matches!(next_ch, Some('=' | '^' | '_' | '+' | '-' | '*' | '/' | '<' | '>' | '('))
@@ -313,29 +355,45 @@ pub fn default_done_criteria(
             }
             list
         }
-        TaskKind::Prove => vec![
-            DoneCriterion {
-                id: "final_different_model_review".into(),
-                kind: DoneCriterionKind::FinalTierAtLeast,
-                params: json!({
-                    "tier": CRITERION_TIER_MODEL_AGREED,
-                    "require_different_model": true,
-                }),
-            },
-            DoneCriterion {
-                id: "closure_model_agreed".into(),
-                kind: DoneCriterionKind::ClosureTierAtLeast,
-                params: json!({
-                    "tier": CRITERION_TIER_MODEL_AGREED,
-                    "require_different_model": true,
-                }),
-            },
-            DoneCriterion {
-                id: "no_open_flags".into(),
-                kind: DoneCriterionKind::NoOpenFlags,
-                params: json!({}),
-            },
-        ],
+        TaskKind::Prove => {
+            let mut list = vec![
+                DoneCriterion {
+                    id: "final_different_model_review".into(),
+                    kind: DoneCriterionKind::FinalTierAtLeast,
+                    params: json!({
+                        "tier": CRITERION_TIER_MODEL_AGREED,
+                        "require_different_model": true,
+                    }),
+                },
+                DoneCriterion {
+                    id: "closure_model_agreed".into(),
+                    kind: DoneCriterionKind::ClosureTierAtLeast,
+                    params: json!({
+                        "tier": CRITERION_TIER_MODEL_AGREED,
+                        "require_different_model": true,
+                    }),
+                },
+                DoneCriterion {
+                    id: "no_open_flags".into(),
+                    kind: DoneCriterionKind::NoOpenFlags,
+                    params: json!({}),
+                },
+            ];
+            if let Some(cue) = vanishes_cue {
+                list.push(DoneCriterion {
+                    id: "show_vanishes_to_order".into(),
+                    kind: DoneCriterionKind::NamedCheckPassed,
+                    params: json!({
+                        "check": "vanishes_to_order",
+                        "on": "final",
+                        "expression": cue.expression,
+                        "order_variable": cue.order_variable,
+                        "order_power": cue.order_power,
+                    }),
+                });
+            }
+            list
+        }
         TaskKind::CheckDerivation => vec![
             DoneCriterion {
                 id: "closure_checked".into(),

@@ -82,8 +82,12 @@ fn handle_view(state: &DesktopState, session_id: &str, events: &[Event]) -> ApiR
 }
 
 fn handle_prefill(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiResult {
+    use research_tools::solve_model::{MAX_CONVENTIONS_CHARS, MAX_STATEMENT_CHARS};
     let val = parse_json_body(body)?;
     let statement = val.get("statement").and_then(Value::as_str).unwrap_or("").to_string();
+    if statement.chars().count() > MAX_STATEMENT_CHARS {
+        return Err(bad(format!("statement exceeds {MAX_STATEMENT_CHARS} characters")));
+    }
     let meta = state.load_meta(session_id);
     let ui = state.load_ui_settings();
 
@@ -94,19 +98,19 @@ fn handle_prefill(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRes
         .or_else(|| meta.as_ref().and_then(|m| m.pinned_conventions.clone()))
         .or(ui.pinned_conventions.clone())
         .unwrap_or_default();
+    if pinned_conventions.chars().count() > MAX_CONVENTIONS_CHARS {
+        return Err(bad(format!("conventions exceeds {MAX_CONVENTIONS_CHARS} characters")));
+    }
 
     let solver = parse_optional_role(val.get("solver")).or_else(|| {
         let p = meta.as_ref().and_then(|m| m.default_provider.clone()).or(ui.default_provider.clone());
         let m = meta.as_ref().and_then(|m| m.default_model.clone()).or(ui.default_model.clone());
-        match (p, m) {
-            (Some(provider), Some(model)) => Some(RoleModel { provider, model }),
-            _ => None,
-        }
+        p.zip(m).map(|(provider, model)| RoleModel { provider, model })
     });
     let verifier = parse_optional_role(val.get("verifier")).or_else(|| {
-        ui.agent_models.get("verifier").map(|spec| RoleModel {
-            provider: spec.provider.clone(),
-            model: spec.model.clone(),
+        ui.agent_models.get("verifier").map(|s| RoleModel {
+            provider: s.provider.clone(),
+            model: s.model.clone(),
         })
     });
     let task_kind_override = val
@@ -138,10 +142,7 @@ fn handle_prefill(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRes
         200,
         json!({
             "prefill": prefill,
-            "roles": {
-                "solver": solver,
-                "verifier": verifier,
-            },
+            "roles": { "solver": solver, "verifier": verifier },
             "toolbox": probe_toolbox(state),
             "approval_grants": build_solve_approval_grants(state, session_id),
             "model_connected": has_connected_model(state),
@@ -156,10 +157,7 @@ fn handle_setup(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiResul
         agent::validate_pinned_conventions(input.conventions.trim()).map_err(bad)?;
     }
 
-    let _guard = state
-        .ledger_write_lock
-        .lock()
-        .map_err(|_| internal("ledger write lock poisoned"))?;
+    let _guard = state.ledger_write_lock.lock().map_err(|_| internal("ledger write lock poisoned"))?;
     let ledger = state.open_ledger().map_err(internal)?;
     let existing = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
     if session_mode(&existing) != Mode::Solve {
@@ -182,14 +180,9 @@ fn handle_setup(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiResul
     let updated_events = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
     drop(_guard);
 
-    state.sse.emit(
-        session_id,
-        "solve_updated",
-        json!({ "session": session_id, "revision": setup.revision }),
-    );
+    state.sse.emit(session_id, "solve_updated", json!({ "session": session_id, "revision": setup.revision }));
 
-    let running = is_turn_running(state, session_id);
-    let view = session_solve_view(state, session_id, &updated_events, running);
+    let view = session_solve_view(state, session_id, &updated_events, is_turn_running(state, session_id));
     Ok((
         200,
         json!({
@@ -224,54 +217,54 @@ fn sync_setup_given_steps(
         .unwrap_or(0);
 
     let mut kept_ids = Vec::new();
-    let mut new_entries: Vec<(String, String, String)> = Vec::new();
+    let mut new_entries = Vec::new();
+    let mut replacement_by_summary: BTreeMap<String, String> = BTreeMap::new();
     for (summary, details) in &desired {
         if let Some(eid) = existing_setup.get(&(summary.clone(), details.clone())) {
             kept_ids.push(eid.clone());
+            replacement_by_summary.insert(summary.clone(), eid.clone());
         } else {
             next_num += 1;
             let eid = format!("e-{next_num}");
             kept_ids.push(eid.clone());
+            replacement_by_summary.insert(summary.clone(), eid.clone());
             new_entries.push((eid, summary.clone(), details.clone()));
         }
     }
 
-    let replacement_anchor = kept_ids.first().cloned().unwrap_or_else(|| "setup-revision".into());
-    for ((summary, details), old_id) in &existing_setup {
-        if !desired.iter().any(|(s, d)| s == summary && d == details) {
-            ledger
-                .append_with_hash(
-                    session_id,
-                    event_kinds::PROOF_SUPERSEDE,
-                    1,
-                    &json!({
-                        "entry_id": old_id,
-                        "replaced_by": replacement_anchor,
-                        "reason": format!("Setup updated to revision {}", setup.revision),
-                    }),
-                )
-                .map_err(|e| internal(format!("failed to supersede old setup step: {e}")))?;
-        }
-    }
-
+    // Write new `Given` entries before superseding replaced ones so `replaced_by` always points at an existing `e-N`.
     for (eid, summary, details) in new_entries {
         let entry_sha256 = compute_entry_sha256(None, &summary, &details);
+        let payload = json!({
+            "entry_id": eid,
+            "entry_type": StepEntryType::Assumption.as_str(),
+            "summary": summary,
+            "details": details,
+            "depends_on": [],
+            "origin": StepOrigin::Setup,
+            "entry_sha256": entry_sha256,
+        });
         ledger
-            .append_with_hash(
-                session_id,
-                event_kinds::PROOF_ENTRY,
-                1,
-                &json!({
-                    "entry_id": eid,
-                    "entry_type": StepEntryType::Assumption.as_str(),
-                    "summary": summary,
-                    "details": details,
-                    "depends_on": [],
-                    "origin": StepOrigin::Setup,
-                    "entry_sha256": entry_sha256,
-                }),
-            )
+            .append_with_hash(session_id, event_kinds::PROOF_ENTRY, 1, &payload)
             .map_err(|e| internal(format!("failed to write Given proof.entry: {e}")))?;
+    }
+
+    let fallback_anchor = kept_ids.first().cloned().unwrap_or_default();
+    for ((summary, details), old_id) in &existing_setup {
+        if !desired.iter().any(|(s, d)| s == summary && d == details) {
+            let replaced_by = replacement_by_summary
+                .get(summary)
+                .cloned()
+                .unwrap_or_else(|| fallback_anchor.clone());
+            let payload = json!({
+                "entry_id": old_id,
+                "replaced_by": replaced_by,
+                "reason": format!("Setup updated to revision {}", setup.revision),
+            });
+            ledger
+                .append_with_hash(session_id, event_kinds::PROOF_SUPERSEDE, 1, &payload)
+                .map_err(|e| internal(format!("failed to supersede old setup step: {e}")))?;
+        }
     }
 
     Ok(kept_ids)
@@ -317,24 +310,19 @@ fn parse_optional_role(val: Option<&Value>) -> Option<RoleModel> {
     let obj = val?.as_object()?;
     let provider = obj.get("provider")?.as_str()?.trim().to_string();
     let model = obj.get("model")?.as_str()?.trim().to_string();
-    if provider.is_empty() && model.is_empty() {
-        return None;
-    }
-    Some(RoleModel { provider, model })
+    if provider.is_empty() && model.is_empty() { None } else { Some(RoleModel { provider, model }) }
 }
 
 fn has_connected_model(state: &DesktopState) -> bool {
+    if state.chatgpt.ready() {
+        return true;
+    }
     let store = ProviderKeyStore::load_from_data_dir(&state.cfg.data_dir).unwrap_or_default();
-    for provider in API_PROVIDERS {
-        if let Ok(cred) = credential(state, provider, &store) {
-            if cred.key.is_some() {
-                return true;
-            }
-        }
+    if API_PROVIDERS.iter().any(|p| credential(state, *p, &store).ok().is_some_and(|c| c.key.is_some())) {
+        return true;
     }
     let ui = state.load_ui_settings();
-    ui.default_provider
-        .as_deref()
-        .is_some_and(|p| !p.trim().is_empty())
-        && ui.default_model.as_deref().is_some_and(|m| !m.trim().is_empty())
+    ui.antigravity_ack.is_some()
+        || (ui.default_provider.as_deref().is_some_and(|p| !p.trim().is_empty())
+            && ui.default_model.as_deref().is_some_and(|m| !m.trim().is_empty()))
 }

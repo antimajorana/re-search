@@ -81,29 +81,70 @@ fn run_state_key(state: RunState) -> &'static str {
     }
 }
 
-fn build_run_state_json(state: &SolveState, events: &[Event], running: bool) -> Value {
+fn has_leg_activity(events: &[Event]) -> bool {
+    events.iter().any(|ev| {
+        matches!(
+            ev.kind.as_str(),
+            "session.start" | "session.resume" | "model.request" | "tool.request"
+        )
+    })
+}
+
+fn done_open_items(state: &SolveState) -> Value {
+    let Some(done) = &state.done else {
+        return json!([]);
+    };
+    let mut items = Vec::new();
+    for c in &done.criteria {
+        if !c.met {
+            items.push(json!({ "kind": "unmet_criterion", "id": c.id }));
+        }
+    }
+    for eid in &done.rests_on.assumed_by_model {
+        items.push(json!({ "kind": "unacknowledged_assumption", "entry_id": eid }));
+    }
+    Value::Array(items)
+}
+
+fn build_run_state_json(
+    state: &SolveState,
+    events: &[Event],
+    running: bool,
+    pending_approvals_count: usize,
+) -> Value {
     let model_calls_used = count_model_calls(events, RunScope::All);
     let model_calls_max = state.setup.as_ref().map(|s| s.budgets.max_model_calls).unwrap_or(60);
 
-    // A freshly created Solve session has `solve.started` (which folds `run_status = Running` in S2)
-    // even before any setup or model turn starts. Reflect true live state honestly.
-    let (state_key, label, reason, open_items) = if running {
-        (run_state_key(RunState::Running), RunState::Running.label(), None, Value::Array(vec![]))
+    let (state_key, label, reason, open_items) = if pending_approvals_count > 0 {
+        (
+            run_state_key(RunState::WaitingForYou),
+            RunState::WaitingForYou.label(),
+            Some("approval_needed".to_string()),
+            json!([]),
+        )
+    } else if running {
+        (run_state_key(RunState::Running), RunState::Running.label(), None, json!([]))
     } else {
         match state.run_status {
-            SolveRunStatus::Done(_) | SolveRunStatus::Paused(_) => {
+            SolveRunStatus::Done(_) => {
+                let mapped = state.run_status.to_run_state().unwrap_or(RunState::Done);
+                (run_state_key(mapped), mapped.label(), None, done_open_items(state))
+            }
+            SolveRunStatus::Paused(r) => {
                 let mapped = state.run_status.to_run_state().unwrap_or(RunState::Paused);
-                let reason = match state.run_status {
-                    SolveRunStatus::Paused(r) => Some(r.as_str().to_string()),
-                    _ => None,
-                };
                 let open_items = state
                     .last_paused
                     .as_ref()
                     .map(|p| json!(p.open_items))
                     .unwrap_or_else(|| json!([]));
-                (run_state_key(mapped), mapped.label(), reason, open_items)
+                (run_state_key(mapped), mapped.label(), Some(r.as_str().to_string()), open_items)
             }
+            SolveRunStatus::Running if has_leg_activity(events) => (
+                run_state_key(RunState::Interrupted),
+                RunState::Interrupted.label(),
+                Some("interrupted".to_string()),
+                json!([]),
+            ),
             SolveRunStatus::Idle | SolveRunStatus::Running => {
                 (RUN_STATE_READY, RUN_STATE_READY_LABEL, None, json!([]))
             }
@@ -219,10 +260,10 @@ fn build_graph_view(
             let badge = badges.get(&entry.entry_id);
             let effective = badge.map(|b| b.effective).unwrap_or(Tier::Unchecked);
             let own = badge.map(|b| b.own).unwrap_or(Tier::Unchecked);
-            if own == Tier::Verified {
+            let stale = badge.is_some_and(|b| b.stale);
+            if entry.superseded_by.is_none() && !stale && own == Tier::Verified {
                 has_any_verified = true;
             }
-            let stale = badge.is_some_and(|b| b.stale);
             let grade_enum = badge.map(|b| b.grade).unwrap_or(DisplayGrade::ModelStatement);
             let border = badge.map(|b| b.border).unwrap_or(BorderStyle::Dashed);
             let label_text = badge
@@ -230,8 +271,15 @@ fn build_graph_view(
                 .unwrap_or_else(|| wording::BADGE_UNCHECKED.to_string());
             let (icon, tone) = badge_icon_and_tone(effective, stale);
 
+            // `graph_view.js` automatically appends a `Stale` badge whenever `node.stale` is true;
+            // avoid duplicating `"Stale"` while keeping `steps[].badge.label` exact from S2.
+            let primary_text = if stale && label_text == wording::BADGE_STALE {
+                "Needs re-check".to_string()
+            } else {
+                label_text
+            };
             let mut node_badges = vec![json!({
-                "text": label_text,
+                "text": primary_text,
                 "icon": icon,
                 "tone": tone,
                 "border": border_str(border),
@@ -274,9 +322,8 @@ fn build_graph_view(
     let mut edges: Vec<Value> = Vec::new();
     for entry in ordered_entries {
         let mut seen_src: BTreeSet<&str> = BTreeSet::new();
-        // Derived handle/receipt dependencies are established by host code (`basis: "code"`).
         for dep in &entry.derived_depends_on {
-            if live_ids.contains(dep.as_str()) && seen_src.insert(dep.as_str()) {
+            if dep != &entry.entry_id && live_ids.contains(dep.as_str()) && seen_src.insert(dep.as_str()) {
                 edges.push(json!({
                     "src": dep,
                     "dst": entry.entry_id,
@@ -286,13 +333,12 @@ fn build_graph_view(
                 }));
             }
         }
-        // Declared dependencies: solid for setup/given/user origins, dashed (`model`) for solver-declared.
         let declared_basis = match entry.origin {
             Some(StepOrigin::Setup | StepOrigin::Given | StepOrigin::User) => "code",
             _ => "model",
         };
         for dep in &entry.depends_on {
-            if live_ids.contains(dep.as_str()) && seen_src.insert(dep.as_str()) {
+            if dep != &entry.entry_id && live_ids.contains(dep.as_str()) && seen_src.insert(dep.as_str()) {
                 edges.push(json!({
                     "src": dep,
                     "dst": entry.entry_id,
@@ -426,9 +472,14 @@ pub fn build_solve_view(
         None => Value::Null,
     };
 
+    let pending_count = approval_grants
+        .get("pending_approvals")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+
     json!({
         "setup": setup_json,
-        "run_state": build_run_state_json(&state, events, running),
+        "run_state": build_run_state_json(&state, events, running, pending_count),
         "steps": steps,
         "graph": graph,
         "handles": handles,
@@ -478,6 +529,13 @@ pub fn probe_toolbox(state: &crate::state::DesktopState) -> Value {
 }
 
 /// Describe all grants a Solve run needs (`solve.md` D5, `00-overview.md` 1 & 3.1 row 13).
+///
+/// Honest pre-turn capability report:
+/// - `pre_turn_session_capability_supported: true` (`UiApprover` prompts & binds session capabilities
+///   outside a running model turn, verified in `mode_shell.rs` and `solve_setup_routes.rs`).
+/// - `pre_turn_worker_session_supported: false` (`WorkerSession` grants in `router.rs` bind per
+///   caller/tool/def_hash/policy/live `WorkerEpoch` and require `contained == true`, so they are
+///   prompted when the first turn starts a contained worker; zero auto-approve).
 pub fn build_solve_approval_grants(state: &crate::state::DesktopState, session_id: &str) -> Value {
     let active_session_grants = crate::session_lifecycle::list_session_grants(state, session_id);
     let pending = state.pending_for_session(session_id);
@@ -510,7 +568,9 @@ pub fn build_solve_approval_grants(state: &crate::state::DesktopState, session_i
         }),
     ];
     json!({
-        "pre_turn_approver_supported": true,
+        "pre_turn_approver_supported": false,
+        "pre_turn_session_capability_supported": true,
+        "pre_turn_worker_session_supported": false,
         "worker_restart_note": WORKER_RESTART_NOTE,
         "active_session_grants": active_session_grants,
         "pending_approvals": pending,

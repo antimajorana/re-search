@@ -386,3 +386,102 @@ test('assets.rs registers approval_card.js, solve_state.js, solve_setup.js, and 
     assert.ok(assetsRs.includes(`"${asset}"`), `assets.rs must register ${asset}`);
   }
 });
+
+test('D2 acceptSameModel downgrades model_agreed tier, revision hydration preserves roles/budgets/target.order, and prefillSeq drops stale responses', async () => {
+  const dom = makeFakeDom();
+  try {
+    const host = dom.makeEl('div');
+    const submitted = [];
+    const resolvers = [];
+    const view = createSolveSetupView(host, {
+      onPrefill: () => new Promise((resolve) => { resolvers.push(resolve); }),
+      onSubmitSetup: async (payload) => {
+        submitted.push(payload);
+        return { setup: { ...payload, revision: submitted.length }, view: { setup: { ...payload, revision: submitted.length }, steps: [] } };
+      },
+      initial: {
+        statement: 'Prove $f(x) > 0$',
+        taskKind: 'prove',
+        target: { description: 'Order expansion', form: 'series_to_order', order: 'eps^2', digits: 12 },
+        solver: { provider: 'openai', model: 'gpt-5' },
+        verifier: { provider: 'openai', model: 'gpt-5' },
+        budgets: { max_model_calls: 42, max_wall_minutes: 15, max_model_calls_per_leg: 24, max_review_loops: 4, max_gate_bounces: 2 },
+        review: 'every_step',
+        everyStepVerified: true,
+      },
+    });
+
+    // Trigger two overlapping prefills; resolve the newer one first, then the older one.
+    const p1 = view.triggerPrefill();
+    const p2 = view.triggerPrefill();
+    assert.equal(resolvers.length, 2);
+    resolvers[1]({ prefill: { task_kind: 'prove', conventions: 'newer-prefill' } });
+    await p2;
+    assert.equal(view.getState().conventions, 'newer-prefill');
+    resolvers[0]({ prefill: { task_kind: 'calculate', conventions: 'stale-prefill' } });
+    await p1;
+    assert.equal(view.getState().conventions, 'newer-prefill', 'stale prefill response must be ignored');
+
+    // Accept same-model review (D2) -> submitted criteria use model_agreed_same_model.
+    const acceptBox = host.querySelector('[data-testid="solve-accept-same-model"]');
+    assert.ok(acceptBox);
+    acceptBox.checked = true;
+    acceptBox.dispatch('change');
+
+    await view.submitSetup();
+    assert.equal(submitted.length, 1);
+    const rev1 = submitted[0];
+    assert.equal(rev1.target.order, 'eps^2');
+    assert.equal(rev1.target.digits, 12);
+    assert.equal(rev1.budgets.max_model_calls, 42);
+    assert.equal(rev1.review, 'every_step');
+    const finalCrit = rev1.done.find((c) => c.kind === 'final_tier_at_least');
+    assert.equal(finalCrit.params.tier, 'model_agreed_same_model');
+    assert.equal(finalCrit.params.require_different_model, false);
+
+    // Hydrate from server view, enter revision edit, and re-submit without losing roles/budgets/target.order.
+    view.applyView({ setup: { ...rev1, revision: 1 }, steps: [] });
+    host.querySelector('[data-action="edit-setup"]').dispatch('click');
+    await view.submitSetup();
+    assert.equal(submitted.length, 2);
+    assert.equal(submitted[1].roles.solver.model, 'gpt-5');
+    assert.equal(submitted[1].budgets.max_model_calls, 42);
+    assert.equal(submitted[1].target.order, 'eps^2');
+    assert.equal(submitted[1].review, 'every_step');
+  } finally {
+    dom.restore();
+  }
+});
+
+test('approval_card.js allowListed remains safe when update() replaces grants mid-flight', async () => {
+  const dom = makeFakeDom();
+  try {
+    const host = dom.makeEl('div');
+    const seen = [];
+    let card;
+    card = createApprovalCard(host, {
+      grants: [
+        { id: 'g1', kind: GRANT_KIND_WORKER_SESSION, label: 'First' },
+        { id: 'g2', kind: GRANT_KIND_SESSION_CAPABILITY, effect: 'network-read', label: 'Second' },
+      ],
+      onAllowGrant: async (grant) => {
+        seen.push(grant.id);
+        if (grant.id === 'g1') {
+          // Simulate an SSE refresh reordering grants mid-loop.
+          card.update([
+            { id: 'g2', kind: GRANT_KIND_SESSION_CAPABILITY, effect: 'network-read', label: 'Second' },
+            { id: 'g1', kind: GRANT_KIND_WORKER_SESSION, label: 'First' },
+          ]);
+        }
+        return { approved: true };
+      },
+    });
+    const results = await card.allowListed();
+    assert.deepEqual(seen, ['g1', 'g2']);
+    assert.equal(results.length, 2);
+    assert.ok(card.getGrants().every((g) => g.granted === true));
+  } finally {
+    dom.restore();
+  }
+});
+

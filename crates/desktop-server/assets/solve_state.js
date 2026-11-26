@@ -54,6 +54,16 @@ export function isSameModelSelection(solver, verifier) {
   return sp === vp && sm === vm;
 }
 
+export function defaultTargetForKind(taskKind) {
+  if (taskKind === 'prove') {
+    return { description: 'Proof of the statement', form: 'proof' };
+  }
+  if (taskKind === 'check_derivation') {
+    return { description: 'Per-step verdict for the supplied derivation', form: 'per_step_verdict' };
+  }
+  return { description: 'Final calculated expression', form: 'closed_form' };
+}
+
 export function defaultCriteriaForKind(taskKind, allowNumericTarget = false) {
   const tier = allowNumericTarget ? 'checked_numerically' : 'verified';
   if (taskKind === 'prove') {
@@ -123,7 +133,7 @@ export function createInitialSolveState(initial = {}) {
     phase: initial.setup ? 'collapsed' : 'setup',
     statement: String(initial.statement || ''),
     taskKind,
-    target: initial.target || { description: 'Final calculated expression', form: 'closed_form' },
+    target: initial.target ? { ...initial.target } : defaultTargetForKind(taskKind),
     symbols: Array.isArray(initial.symbols) ? initial.symbols.map((s) => ({
       name: String(s.name || ''),
       assumptions: Array.isArray(s.assumptions) ? [...s.assumptions] : [],
@@ -139,7 +149,7 @@ export function createInitialSolveState(initial = {}) {
       : defaultCriteriaForKind(taskKind, Boolean(initial.allowNumericTarget)),
     allowNumericTarget: Boolean(initial.allowNumericTarget),
     acceptSameModel: Boolean(initial.acceptSameModel),
-    everyStepVerified: false,
+    everyStepVerified: Boolean(initial.everyStepVerified),
     solver: { provider: String(solver.provider || ''), model: String(solver.model || '') },
     verifier: { provider: String(verifier.provider || ''), model: String(verifier.model || '') },
     sameModel,
@@ -149,7 +159,7 @@ export function createInitialSolveState(initial = {}) {
     review: initial.review || 'prose_only',
     askBeforeRunning: Boolean(initial.askBeforeRunning),
     toolbox: initial.toolbox || { available: false, line: 'Toolbox: checking…' },
-    approvalGrants: initial.approvalGrants || { pre_turn_approver_supported: true, grants: [] },
+    approvalGrants: initial.approvalGrants || { pre_turn_approver_supported: false, grants: [] },
     modelConnected: initial.modelConnected !== undefined ? Boolean(initial.modelConnected) : false,
     connectedModels: Array.isArray(initial.connectedModels) ? initial.connectedModels : [],
     setup: initial.setup || null,
@@ -194,14 +204,14 @@ export function applyPrefillToState(state, resp) {
   const next = {
     ...state,
     taskKind,
-    target: p.target || state.target,
+    target: p.target ? { ...p.target } : state.target,
     symbols: Array.isArray(p.symbols)
       ? p.symbols.map((s) => ({ name: String(s.name || ''), assumptions: [...(s.assumptions || [])] }))
       : state.symbols,
     conventions: typeof p.conventions === 'string' ? p.conventions : state.conventions,
     dimensions: p.dimensions ? dimensionsObjectToRows(p.dimensions) : state.dimensions,
     done: Array.isArray(p.done)
-      ? p.done.map((c) => ({ ...c, enabled: true }))
+      ? p.done.map((c) => ({ ...c, params: c.params ? { ...c.params } : {}, enabled: true }))
       : state.done,
     budgets: p.budgets ? { ...DEFAULT_SOLVE_BUDGETS, ...p.budgets } : state.budgets,
     review: p.review || state.review,
@@ -209,6 +219,7 @@ export function applyPrefillToState(state, resp) {
     toolbox: resp.toolbox || state.toolbox,
     approvalGrants: resp.approval_grants || state.approvalGrants,
     modelConnected: typeof resp.model_connected === 'boolean' ? resp.model_connected : state.modelConnected,
+    error: '',
   };
   if (resp.roles?.solver) next.solver = { ...resp.roles.solver };
   if (resp.roles?.verifier) next.verifier = { ...resp.roles.verifier };
@@ -234,19 +245,50 @@ export function applySolveViewToState(state, view) {
     next.phase = 'collapsed';
     next.statement = String(setup.statement || '');
     next.taskKind = setup.task_kind || 'calculate';
+    next.target = setup.target ? { ...setup.target } : defaultTargetForKind(next.taskKind);
     next.conventions = String(setup.conventions || '');
-    next.symbols = Array.isArray(setup.symbols) ? setup.symbols : [];
+    next.symbols = Array.isArray(setup.symbols)
+      ? setup.symbols.map((s) => ({ name: String(s.name || ''), assumptions: [...(s.assumptions || [])] }))
+      : [];
     next.dimensions = dimensionsObjectToRows(setup.dimensions);
-    next.assumptions = Array.isArray(setup.assumptions) ? setup.assumptions : [];
-    next.done = Array.isArray(setup.done) ? setup.done.map((c) => ({ ...c, enabled: true })) : [];
+    next.assumptions = Array.isArray(setup.assumptions)
+      ? setup.assumptions.map((a) => ({ id: String(a.id || ''), text: String(a.text || '') }))
+      : [];
+    next.done = Array.isArray(setup.done)
+      ? setup.done.map((c) => ({ ...c, params: c.params ? { ...c.params } : {}, enabled: true }))
+      : [];
+    if (setup.roles?.solver) {
+      next.solver = {
+        provider: String(setup.roles.solver.provider || ''),
+        model: String(setup.roles.solver.model || ''),
+      };
+    }
+    if (setup.roles?.verifier) {
+      next.verifier = {
+        provider: String(setup.roles.verifier.provider || ''),
+        model: String(setup.roles.verifier.model || ''),
+      };
+    }
+    next.sameModel = isSameModelSelection(next.solver, next.verifier);
+    next.sameModelWarning = next.sameModel ? SAME_MODEL_WARNING : null;
+    next.budgets = setup.budgets ? { ...DEFAULT_SOLVE_BUDGETS, ...setup.budgets } : next.budgets;
+    next.review = setup.review || next.review;
     next.askBeforeRunning = Boolean(setup.ask_before_running);
+    next.allowNumericTarget = next.done.some(
+      (c) => (c.id === 'final_result_tier' || c.id === 'closure_checked') && c.params?.tier === 'checked_numerically',
+    );
+    next.everyStepVerified = next.done.some((c) => c.id === 'every_step_verified');
+    next.acceptSameModel = next.sameModel && next.done.some(
+      (c) => (c.kind === 'final_tier_at_least' || c.kind === 'closure_tier_at_least')
+        && c.params?.tier === 'model_agreed_same_model',
+    );
     next.proveNotice = next.taskKind === 'prove' ? PROVE_PROSE_NOTICE : null;
   }
   return next;
 }
 
 export function buildSetupSubmission(state) {
-  const enabledDone = (Array.isArray(state.done) ? state.done : [])
+  let enabledDone = (Array.isArray(state.done) ? state.done : [])
     .filter((c) => c && c.enabled !== false)
     .map(({ id, kind, params }) => ({
       id: String(id || ''),
@@ -254,28 +296,48 @@ export function buildSetupSubmission(state) {
       params: params && typeof params === 'object' ? { ...params } : {},
     }));
 
-  if (state.everyStepVerified && !enabledDone.some((c) => c.id === 'every_step_verified')) {
-    enabledDone.push({
-      id: 'every_step_verified',
-      kind: 'closure_tier_at_least',
-      params: { tier: 'verified' },
-    });
+  if (state.everyStepVerified) {
+    if (!enabledDone.some((c) => c.id === 'every_step_verified')) {
+      enabledDone.push({
+        id: 'every_step_verified',
+        kind: 'closure_tier_at_least',
+        params: { tier: 'verified' },
+      });
+    }
+  } else {
+    enabledDone = enabledDone.filter((c) => c.id !== 'every_step_verified');
   }
+
   if (state.sameModel && state.acceptSameModel) {
     for (const c of enabledDone) {
       if (c.params && c.params.require_different_model) {
         c.params.require_different_model = false;
       }
+      if (
+        (c.kind === 'final_tier_at_least' || c.kind === 'closure_tier_at_least')
+        && c.params?.tier === 'model_agreed'
+      ) {
+        c.params.tier = 'model_agreed_same_model';
+      }
     }
+  }
+
+  const fallbackTarget = defaultTargetForKind(state.taskKind);
+  const target = {
+    description: String(state.target?.description || fallbackTarget.description),
+    form: state.target?.form || fallbackTarget.form,
+  };
+  if (state.target?.order != null && String(state.target.order).trim() !== '') {
+    target.order = String(state.target.order);
+  }
+  if (state.target?.digits != null) {
+    target.digits = Number(state.target.digits);
   }
 
   return {
     statement: String(state.statement || '').trim(),
     task_kind: state.taskKind || 'calculate',
-    target: {
-      description: String(state.target?.description || 'Final result'),
-      form: state.target?.form || (state.taskKind === 'prove' ? 'proof' : state.taskKind === 'check_derivation' ? 'per_step_verdict' : 'closed_form'),
-    },
+    target,
     done: enabledDone,
     conventions: String(state.conventions || '').trim(),
     symbols: (Array.isArray(state.symbols) ? state.symbols : [])

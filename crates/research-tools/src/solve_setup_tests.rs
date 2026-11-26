@@ -260,4 +260,49 @@ fn validation_enforces_size_symbol_dimension_budget_and_profile_limits() {
         compute: None,
     };
     assert!(validate_and_build_setup(&no_model, 0).is_ok());
+
+    // Non-boolean require_different_model rejected.
+    let mut bad_rdm = base_valid_input();
+    bad_rdm.done[0].params = json!({ "tier": "verified", "require_different_model": "yes" });
+    assert!(validate_and_build_setup(&bad_rdm, 0).unwrap_err().contains("boolean"));
+
+    // Duplicate trimmed dimension key rejected.
+    let mut dup_dim = base_valid_input();
+    dup_dim.dimensions.insert("phi".into(), BTreeMap::from([("mass".into(), json!(1))]));
+    dup_dim.dimensions.insert(" phi ".into(), BTreeMap::from([("mass".into(), json!(2))]));
+    assert!(validate_and_build_setup(&dup_dim, 0).unwrap_err().contains("duplicate"));
 }
+
+#[test]
+fn prefill_avoids_false_positives_and_unwraps_big_o_vanishes_cue() {
+    let cue_none = prefill_solve_setup(&PrefillRequest {
+        statement: "Compute the overshow term to order eps^2.".into(),
+        ..Default::default()
+    });
+    assert!(
+        !cue_none.done.iter().any(|c| c.kind == DoneCriterionKind::NamedCheckPassed),
+        "substring 'overshow ' must not trigger show-vanishes cue"
+    );
+
+    let cue_big_o = prefill_solve_setup(&PrefillRequest {
+        statement: r"Show that $R_2(\lambda)$ vanishes to order $\mathcal{O}(\lambda^2)$.".into(),
+        ..Default::default()
+    });
+    let named = cue_big_o
+        .done
+        .iter()
+        .find(|c| c.kind == DoneCriterionKind::NamedCheckPassed)
+        .expect("expected vanishes_to_order criterion");
+    assert_eq!(named.params["check"], "vanishes_to_order");
+    assert_eq!(named.params["order_variable"], "lambda");
+    assert_eq!(named.params["order_power"], 2);
+    assert!(!named.params["expression"].as_str().unwrap().contains("vanishes"));
+
+    let scanned = scan_statement_symbols("Take the n-th x-ray peak in part (b) for $k > 0$.", None);
+    let names: Vec<&str> = scanned.iter().map(|s| s.name.as_str()).collect();
+    assert!(names.contains(&"k"));
+    assert!(!names.contains(&"n"), "n-th should not be scanned as symbol n");
+    assert!(!names.contains(&"x"), "x-ray should not be scanned as symbol x");
+    assert!(!names.contains(&"b"), "(b) should not be scanned as symbol b");
+}
+

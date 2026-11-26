@@ -19,6 +19,7 @@ import {
   buildSetupSubmission,
   createInitialSolveState,
   defaultCriteriaForKind,
+  defaultTargetForKind,
   formatCriterionLabel,
   isSameModelSelection,
   summarizeCollapsedSetup,
@@ -52,11 +53,7 @@ function checkboxRow(labelText, checked, testId, onChange) {
   return row;
 }
 
-/**
- * Render live statement math preview into `container` with ZERO `innerHTML` writes.
- * Uses KaTeX's DOM-building `katex.render(tex, span, opts)` when available, and pure
- * `textContent` for all surrounding prose and fallbacks so XSS payloads can never execute.
- */
+// Live statement math preview with zero innerHTML (uses katex.render + textContent only).
 export function renderSafeMathPreview(container, rawText, katexImpl = globalThis.window?.katex) {
   if (!container) return;
   const text = String(rawText ?? '');
@@ -125,9 +122,6 @@ function parseModelKey(val) {
   return { provider: s.slice(0, idx), model: s.slice(idx + 2) };
 }
 
-/**
- * Mount the centre-stage Solve setup card and first screen inside `host`.
- */
 export function createSolveSetupView(host, options = {}) {
   if (!host) throw new Error('createSolveSetupView requires a host element');
 
@@ -141,6 +135,7 @@ export function createSolveSetupView(host, options = {}) {
 
   let approvalCardApi = null;
   let prefillTimer = null;
+  let prefillSeq = 0;
   const root = el('section', 'solve-stage');
   root.setAttribute('data-component', 'solve-setup-stage');
 
@@ -151,6 +146,7 @@ export function createSolveSetupView(host, options = {}) {
 
   async function triggerPrefill() {
     if (!onPrefill) return;
+    const seq = ++prefillSeq;
     try {
       const resp = await onPrefill({
         statement: state.statement,
@@ -160,11 +156,13 @@ export function createSolveSetupView(host, options = {}) {
         verifier: state.verifier,
         allow_numeric_target: state.allowNumericTarget,
       });
+      if (seq !== prefillSeq) return;
       if (resp) {
         state = applyPrefillToState(state, resp);
         render();
       }
     } catch (err) {
+      if (seq !== prefillSeq) return;
       state.error = String(err?.message || err || 'Prefill failed');
       render();
     }
@@ -246,8 +244,9 @@ export function createSolveSetupView(host, options = {}) {
 
     const givenWrap = el('div', 'solve-given-list');
     givenWrap.setAttribute('data-testid', 'solve-given-steps');
-    givenWrap.append(el('h3', 'solve-section-title', 'Given steps'));
     const steps = state.steps.filter((s) => !s.superseded_by);
+    const allGiven = steps.length === 0 || steps.every((s) => (s.badge?.label || 'Given') === 'Given');
+    givenWrap.append(el('h3', 'solve-section-title', allGiven ? 'Given steps' : 'Steps'));
     if (steps.length === 0) {
       givenWrap.append(el('p', 'solve-muted', 'No setup conventions or assumptions recorded.'));
     } else {
@@ -258,7 +257,11 @@ export function createSolveSetupView(host, options = {}) {
         head.append(el('span', 'solve-step-id', String(step.entry_id || '')));
         head.append(el('strong', 'solve-step-summary', String(step.summary || '')));
         const badgeLabel = step.badge?.label || 'Given';
-        head.append(createBadge({ text: badgeLabel, icon: 'user', tone: 'neutral' }));
+        head.append(createBadge({
+          text: badgeLabel,
+          icon: step.badge?.icon || 'user',
+          tone: step.badge?.tone || 'neutral',
+        }));
         if (step.badge?.provenance_tag) {
           head.append(el('span', 'mini-pill solve-tag-you', String(step.badge.provenance_tag)));
         }
@@ -422,6 +425,7 @@ export function createSolveSetupView(host, options = {}) {
       btn.addEventListener('click', () => {
         if (state.taskKind === kind.id) return;
         state.taskKind = kind.id;
+        state.target = defaultTargetForKind(kind.id);
         state.proveNotice = kind.id === 'prove' ? PROVE_PROSE_NOTICE : null;
         state.done = defaultCriteriaForKind(kind.id, state.allowNumericTarget);
         render();
@@ -476,30 +480,24 @@ export function createSolveSetupView(host, options = {}) {
 
     // Solver / Verifier model selectors + D2 same-model warning.
     const modelSec = el('div', 'solve-models-grid');
-    const solverWrap = el('div', 'solve-field');
-    solverWrap.append(el('label', 'solve-label', 'Solver model'));
-    const solverSel = el('select', 'compact-select');
-    solverSel.setAttribute('data-testid', 'solve-solver-select');
-    buildModelOptions(solverSel, state.connectedModels, state.solver);
-    solverSel.addEventListener('change', (ev) => {
-      state.solver = parseModelKey(ev.target.value);
-      updateSameModelFlags();
-      render();
-    });
-    solverWrap.append(solverSel);
-
-    const verWrap = el('div', 'solve-field');
-    verWrap.append(el('label', 'solve-label', 'Verifier model'));
-    const verSel = el('select', 'compact-select');
-    verSel.setAttribute('data-testid', 'solve-verifier-select');
-    buildModelOptions(verSel, state.connectedModels, state.verifier);
-    verSel.addEventListener('change', (ev) => {
-      state.verifier = parseModelKey(ev.target.value);
-      updateSameModelFlags();
-      render();
-    });
-    verWrap.append(verSel);
-    modelSec.append(solverWrap, verWrap);
+    const modelField = (label, testId, current, assign) => {
+      const wrap = el('div', 'solve-field');
+      wrap.append(el('label', 'solve-label', label));
+      const sel = el('select', 'compact-select');
+      sel.setAttribute('data-testid', testId);
+      buildModelOptions(sel, state.connectedModels, current);
+      sel.addEventListener('change', (ev) => {
+        assign(parseModelKey(ev.target.value));
+        updateSameModelFlags();
+        render();
+      });
+      wrap.append(sel);
+      return wrap;
+    };
+    modelSec.append(
+      modelField('Solver model', 'solve-solver-select', state.solver, (v) => { state.solver = v; }),
+      modelField('Verifier model', 'solve-verifier-select', state.verifier, (v) => { state.verifier = v; }),
+    );
     card.append(modelSec);
 
     if (state.sameModel) {
@@ -523,6 +521,9 @@ export function createSolveSetupView(host, options = {}) {
       preTurnSupported: state.approvalGrants?.pre_turn_approver_supported !== false,
       onAllowGrant,
       onDenyGrant,
+      onChange: (nextGrants) => {
+        state.approvalGrants = { ...(state.approvalGrants || {}), grants: nextGrants };
+      },
     });
     card.append(approvalHost);
 
