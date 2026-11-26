@@ -260,7 +260,7 @@ fn collect_fts_doc(conn: &Connection, db: &LibraryDb, paper_key: &str) -> Result
     Ok(Some((paper_key.to_string(), title, authors, abstract_text, gists, full_text)))
 }
 
-fn refresh_fts_with_conn(conn: &Connection, db: &LibraryDb, paper_key: &str) -> Result<()> {
+pub(crate) fn refresh_fts_with_conn(conn: &Connection, db: &LibraryDb, paper_key: &str) -> Result<()> {
     conn.execute("DELETE FROM paper_fts WHERE paper_key = ?1", params![paper_key])?;
     if let Some((key, title, authors, abstract_text, gists, full_text)) =
         collect_fts_doc(conn, db, paper_key)?
@@ -271,6 +271,49 @@ fn refresh_fts_with_conn(conn: &Connection, db: &LibraryDb, paper_key: &str) -> 
             params![key, title, authors, abstract_text, gists, full_text],
         )?;
     }
+    Ok(())
+}
+
+/// Update `paper_fts` metadata columns (`title`, `authors`, `abstract`) purely inside SQLite
+/// without reading any `paper_text` blobs from disk while holding a write transaction.
+pub(crate) fn refresh_fts_metadata_in_tx(conn: &Connection, paper_key: &str) -> Result<()> {
+    let paper = conn
+        .query_row(
+            "SELECT title, authors_json, abstract FROM paper WHERE paper_key = ?1",
+            params![paper_key],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+        )
+        .optional()?;
+    let existing = conn
+        .query_row(
+            "SELECT gists, full_text FROM paper_fts WHERE paper_key = ?1 LIMIT 1",
+            params![paper_key],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    conn.execute("DELETE FROM paper_fts WHERE paper_key = ?1", params![paper_key])?;
+    let Some((title, authors_json, abstract_text)) = paper else {
+        return Ok(());
+    };
+    let authors = serde_json::from_str::<Vec<String>>(&authors_json)
+        .unwrap_or_default()
+        .join(" ");
+    let (gists, full_text) = match existing {
+        Some((g, ft)) => (g, ft),
+        None => {
+            let mut stmt = conn.prepare(
+                "SELECT gist FROM finding WHERE paper_key = ?1 AND gist <> '' ORDER BY recorded_ms ASC, evidence_seq ASC",
+            )?;
+            let rows = stmt.query_map(params![paper_key], |r| r.get::<_, String>(0))?;
+            let gists = rows.collect::<std::result::Result<Vec<_>, _>>()?.join("\n");
+            (gists, String::new())
+        }
+    };
+    conn.execute(
+        "INSERT INTO paper_fts (paper_key, title, authors, abstract, gists, full_text)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![paper_key, title, authors, abstract_text, gists, full_text],
+    )?;
     Ok(())
 }
 

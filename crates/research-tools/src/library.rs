@@ -18,7 +18,7 @@ use crate::library_rebuild::rebuild_from_ledger;
 pub use crate::library_schema::*;
 use crate::paper_key::PaperKey;
 use crate::sandbox::WorkspaceSandbox;
-use ledger::library_db::{LibraryDb, LibrarySearchParams};
+use ledger::library_db::{LibraryDb, LibrarySearchParams, SourceSyncBatch};
 use ledger::Ledger;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -356,6 +356,66 @@ impl Library {
             .into_iter()
             .map(SourceItemRecord::from_row)
             .collect()
+    }
+
+    pub fn list_all_source_items(&self) -> Result<Vec<SourceItemRecord>, String> {
+        self.db
+            .list_all_source_items()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(SourceItemRecord::from_row)
+            .collect()
+    }
+
+    pub fn delete_source_item(&self, source_id: &str, external_id: &str) -> Result<bool, String> {
+        self.db
+            .delete_source_item(source_id, external_id)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn delete_user_library_fulltext_for_paths(&self, paths: &[String]) -> Result<usize, String> {
+        self.db
+            .delete_user_library_fulltext_for_paths(paths)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn register_source_atomic(
+        &self,
+        record: &SourceRecord,
+    ) -> Result<(SourceRecord, bool), String> {
+        let row = record.to_row()?;
+        let (stored, created) = self
+            .db
+            .register_source_atomic(&row)
+            .map_err(|e| e.to_string())?;
+        Ok((SourceRecord::from_row(stored)?, created))
+    }
+
+    pub fn apply_source_sync_batch(&self, batch: &SourceSyncBatch) -> Result<i64, String> {
+        self.db
+            .apply_source_sync_batch(batch)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn unregister_source(&self, source_id: &str) -> Result<bool, String> {
+        self.db
+            .unregister_source_atomic(source_id)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn upsert_user_library_fulltext(&self, record: &FulltextRecord) -> Result<(), String> {
+        self.db
+            .upsert_user_library_fulltext_preserve_other_origins(&record.to_row())
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn has_seen(&self, key: &PaperKey) -> Result<bool, String> {
+        let canonical = self.resolve_key(key)?.unwrap_or_else(|| key.clone());
+        let rows = self
+            .db
+            .list_seen_for_paper(canonical.as_str())
+            .map_err(|e| e.to_string())?;
+        Ok(!rows.is_empty())
     }
 
     pub fn upsert_search_cache(&self, record: &SearchCacheRecord) -> Result<(), String> {
