@@ -450,31 +450,39 @@ pub fn resume_with_research(opts: &ApiResumeOpts, res: &ResearchOpts) -> Result<
         Err(e) => return Err(e.to_string()),
     };
 
-    let _activity = research_tools::session_activity::start_turn(&opts.data_dir, &opts.session).map_err(|e| e.to_string())?;
-    let dir = opts.data_dir.join("sessions").join(&opts.session);
-    let (scratch, pycache) = ensure_session_dirs(&dir)?;
-    let _session_guard = acquire_session_lock(&dir, &opts.session)?;
-    #[cfg(windows)]
-    worker::appcontainer::sweep_stale_profiles(&opts.data_dir);
-
-    let setup = worker_setup(&opts.python, &opts.worker_script, scratch, pycache);
-    let built = crate::runtime::build_research_router(
-        &opts.data_dir,
-        &opts.session,
-        setup,
-        opts.eval_timeout_s,
-        crate::runtime::ResearchRouterOpts {
-            workspace_root: res.workspace_root.clone(),
-            literature_endpoints: res.literature_endpoints.clone(),
-        },
-    )?;
-    let defs: Vec<tools::ToolDef> = built.router.registry().defs().into_iter().cloned().collect();
+    let (_, pre_events) = match ledger.read_verified_session(&opts.session) {
+        Ok(v) => v,
+        Err(e @ ledger::Error::LegacyUnchainedSchema) => {
+            eprintln!("re-search resume: cannot resume session `{}`: {e}", opts.session);
+            return Ok(4);
+        }
+        Err(e) => {
+            eprintln!("re-search resume: cannot resume session `{}`: {e}", opts.session);
+            return Ok(1);
+        }
+    };
+    let target_profile = match research_tools::tool_profile::active_profile_for_session_events(&pre_events) {
+        Ok(p) => p,
+        Err(msg) => {
+            if let Some(start) = pre_events.iter().find(|e| e.kind == "session.start") {
+                let route = start.payload.get("route").and_then(Value::as_str);
+                if route != Some("api") {
+                    let label = route.unwrap_or("unknown");
+                    return Err(format!(
+                        "cannot resume session `{}`: route `{label}` has partial provenance; only `--route api` sessions can be resumed",
+                        opts.session
+                    ));
+                }
+            }
+            return Err(format!("cannot resume session `{}`: {msg}", opts.session));
+        }
+    };
     let inspection = match inspect_session_for_resume_with_profile(
         &ledger,
         &opts.session,
-        built.router.policy().version.as_str(),
-        &defs,
-        built.router.tool_profile(),
+        target_profile.policy.version.as_str(),
+        &target_profile.defs,
+        Some(target_profile.name),
     ) {
         Ok(info) => info,
         Err(r) => match r.kind {
@@ -503,7 +511,28 @@ pub fn resume_with_research(opts: &ApiResumeOpts, res: &ResearchOpts) -> Result<
         .api_base_override
         .clone()
         .unwrap_or_else(|| provider.default_base_url().to_string());
+    // Validate API key and endpoint BEFORE creating directories or `.active.lock`.
     let transport = build_transport(provider, &api_base, &model)?;
+
+    let _activity = research_tools::session_activity::start_turn(&opts.data_dir, &opts.session).map_err(|e| e.to_string())?;
+    let dir = opts.data_dir.join("sessions").join(&opts.session);
+    let (scratch, pycache) = ensure_session_dirs(&dir)?;
+    let _session_guard = acquire_session_lock(&dir, &opts.session)?;
+    #[cfg(windows)]
+    worker::appcontainer::sweep_stale_profiles(&opts.data_dir);
+
+    let setup = worker_setup(&opts.python, &opts.worker_script, scratch, pycache);
+    let built = crate::runtime::build_router_for_profile(
+        &opts.data_dir,
+        &opts.session,
+        setup,
+        opts.eval_timeout_s,
+        crate::runtime::ResearchRouterOpts {
+            workspace_root: res.workspace_root.clone(),
+            literature_endpoints: res.literature_endpoints.clone(),
+        },
+        target_profile.name,
+    )?;
     let rec = Recorder { ledger, session: opts.session.clone() };
     let mut sink = CliSink { rec: &rec };
 
