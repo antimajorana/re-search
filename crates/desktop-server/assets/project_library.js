@@ -1,4 +1,5 @@
 import * as api from '/assets/api.js';
+import { mountPaperSendBackActions } from '/assets/library_send_back.js';
 import { escapeHtml, mathTextToHtml, renderRichInto } from '/assets/math.js';
 import { reconcileEdits, showSavedValues } from '/assets/project_edits.js';
 import {
@@ -159,11 +160,49 @@ function renderPapers() {
   if (!ui.export.hidden) ui.export.href = `/api/projects/${encodeURIComponent(project.id)}/export?format=bib`;
 }
 
+function sendBackPaperFromSource(source, links) {
+  let rawArxiv = '';
+  for (const candidate of [source?.url, ...(links || []).map((lk) => lk?.url)]) {
+    const safe = safeSourceUrl(candidate);
+    if (!safe) continue;
+    try {
+      const parsed = new URL(safe);
+      if (['arxiv.org', 'export.arxiv.org'].includes(parsed.hostname)) {
+        rawArxiv = extractArxivId(parsed.pathname) || '';
+        if (rawArxiv) break;
+      }
+    } catch {
+      // Ignore malformed URLs.
+    }
+  }
+  const versionMatch = rawArxiv.match(/(v\d+)$/i);
+  const version = versionMatch ? versionMatch[1].toLowerCase() : '';
+  const baseArxiv = rawArxiv ? rawArxiv.replace(/v\d+$/i, '') : '';
+  const rawDoi = source?.doi
+    ? (normalizeProjectReference(source.doi)?.doi || extractDoi(source.doi) || '')
+    : '';
+  const doi = rawDoi ? rawDoi.toLowerCase() : '';
+  const ids = {};
+  if (baseArxiv) ids.arxiv = baseArxiv;
+  if (doi) ids.doi = doi;
+  const key = baseArxiv ? `arxiv:${baseArxiv}` : (doi ? `doi:${doi}` : '');
+  const bibMatch = String(source?.bibtex || '').match(/^\s*@[A-Za-z]+\s*\{\s*([^,\s{}]+)\s*,/);
+  const citekey = bibMatch ? bibMatch[1] : '';
+  return {
+    key,
+    version: version || undefined,
+    ids,
+    title: String(source?.title || ''),
+    citekey,
+  };
+}
+
 function renderPaper(source) {
   const card = document.createElement('article');
   card.className = 'paper-card project-library-paper';
   card.dataset.sourceId = source.id;
   card.tabIndex = -1;
+  const links = paperLinks(source);
   card.innerHTML = `
     <h3>${mathTextToHtml(source.title)}</h3>
     ${source.url && !safeSourceUrl(source.url) ? `<p class="project-library-locator">${escapeHtml(source.url)}</p>` : ''}
@@ -171,12 +210,18 @@ function renderPaper(source) {
     ${source.quote ? `<blockquote>${mathTextToHtml(source.quote)}</blockquote>` : ''}
     ${source.notes ? '<div class="project-library-notes rich-prose"></div>' : ''}
     <div class="project-library-actions">
-      ${renderSourceLinkChips(paperLinks(source))}
+      ${renderSourceLinkChips(links)}
       ${source.session_id && options.onOpenSession ? '<button type="button" class="pill-btn sm" data-open-source>Open source session</button>' : ''}
       <button type="button" class="pill-btn sm" aria-label="Edit ${escapeHtml(source.title)}" data-edit-paper>Edit</button>
       <button type="button" class="pill-btn sm" aria-label="Remove ${escapeHtml(source.title)}" data-remove-paper>Remove</button>
     </div>
   `;
+  const sendBackSlot = document.createElement('div');
+  sendBackSlot.className = 'project-paper-send-back';
+  mountPaperSendBackActions(sendBackSlot, sendBackPaperFromSource(source, links), {
+    getToken: () => api.getCsrfToken?.() || '',
+  });
+  card.appendChild(sendBackSlot);
   if (source.notes) renderRichInto(card.querySelector('.project-library-notes'), source.notes);
   card.querySelector('[data-open-source]')?.addEventListener('click', () => options.onOpenSession(source.session_id, source.source_id));
   card.querySelector('[data-edit-paper]').addEventListener('click', () => showEditor(source));

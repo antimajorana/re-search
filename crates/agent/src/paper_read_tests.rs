@@ -232,6 +232,7 @@ fn try_call_err_aborts_all_and_fails_turn() {
         let _ = std::fs::set_permissions(&db_path, std::fs::Permissions::from_mode(0o644));
     }
     #[cfg(not(unix))]
+    #[allow(clippy::permissions_set_readonly_false)]
     {
         let mut p2 = std::fs::metadata(&db_path).unwrap().permissions();
         p2.set_readonly(false);

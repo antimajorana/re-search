@@ -87,11 +87,16 @@ Never print, copy or store a credential. Your result goes back by pushing your b
 ## Building and testing
 
 The workspace is Windows-first; `cfg(windows)` code is not compiled on Linux, and CI runs only on
-Windows, so use no Unix-only path or shell-out in code or tests. Run:
+Windows, so use no Unix-only path or shell-out in code or tests. Before pushing, you **must** run
+the full workspace-wide Clippy and test suites as a **non-root** user with `RE_SEARCH_PYTHON`
+**unset** — never run only `-p <crate>`, because changes to shared structs or profile types break
+sibling crates' integration test binaries:
 
 ```bash
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --no-fail-fast
+id                            # must NOT be uid 0 (root breaks read-only file permission tests)
+unset RE_SEARCH_PYTHON
+cargo clippy --workspace --all-targets --locked -- -D warnings -A clippy::manual_unwrap_or
+cargo test --workspace --locked --no-fail-fast
 ```
 
 and, if you touched anything under `crates/desktop-server/assets/`:
@@ -101,11 +106,15 @@ for f in crates/desktop-server/assets/*.js; do node --check "$f"; done
 node --test crates/desktop-server/tests/*.test.mjs
 ```
 
-Some tests need `RE_SEARCH_PYTHON` (set it to `$(command -v python3)`). If your machine lacks a
-tool or package that a test needs, install it on your machine and run the test; a missing package
-is never a reason to leave a test failing or to call it pre-existing. Installing on your machine is
-not a project dependency. If a test or a clippy lint fails on Linux before your change too, prove it
-by running it on the base commit, record it as pre-existing, and move on without "fixing" it.
+Always keep `RE_SEARCH_PYTHON` unset for the workspace-wide `cargo test --workspace --locked` run
+(setting `RE_SEARCH_PYTHON` during `cli` tests causes `cli/tests/desktop_and_ext.rs` to hang on
+Linux). For targeted Python worker checks after the workspace run, you may run
+`RE_SEARCH_PYTHON="$(command -v python3)" cargo test --locked -p worker -p research-tools`. If your
+machine lacks a tool or package that a test needs, install it on your machine and run the test; a
+missing package is never a reason to leave a test failing or to call it pre-existing. Installing on
+your machine is not a project dependency. If a test or a clippy lint fails on Linux before your
+change too, prove it by running it on the base commit, record it as pre-existing, and move on
+without "fixing" it.
 
 Known on the base commit: with Rust 1.97 clippy reports one `manual_unwrap_or` in
 `crates/desktop-server/src/evidence.rs` (line 744). That file is over 600 lines and not yours:

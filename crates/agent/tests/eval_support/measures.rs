@@ -127,7 +127,7 @@ pub mod solve_wording {
     /// Pre-revision Q measure ids retired by the 2026-11-25 scope revision
     /// (`00-overview.md` 0.1, 7.3). An old `Computed` value does not
     /// distinguish exact symbolic checks (`Verified`) from numeric checks
-    /// (`Checked numerically`).
+    /// (`Numerically checked`).
     pub const RETIRED_PLANTED_ERROR_ENDS_COMPUTED: &str = "planted_error_ends_computed";
     pub const RETIRED_STEPS_COMPUTED_SHARE: &str = "steps_computed_share";
 }
@@ -142,7 +142,7 @@ pub struct RetiredMeasure {
 /// Pre-revision measure ids rejected fail-closed by [`evaluate`].
 /// A saved sheet carrying one of these must be re-measured rather than
 /// silently mapped onto a replacement key, because `Computed` conflated exact
-/// symbolic checks (`Verified`) and numeric checks (`Checked numerically`).
+/// symbolic checks (`Verified`) and numeric checks (`Numerically checked`).
 pub const RETIRED_MEASURES: &[RetiredMeasure] = &[
     RetiredMeasure {
         id: solve_wording::RETIRED_PLANTED_ERROR_ENDS_COMPUTED,
@@ -221,7 +221,7 @@ pub const MEASURES: &[MeasureDef] = &[
     m(solve_wording::ID_PLANTED_ERROR_ENDS_FAILED_PCT, solve_wording::LABEL_PLANTED_ERROR_ENDS_FAILED, "percent", &[Set::Q], "Q", Rule::MustEqual(100.0), "Must be 100 percent"),
     m(solve_wording::ID_PLANTED_ERROR_ENDS_VERIFIED, solve_wording::LABEL_PLANTED_ERROR_ENDS_VERIFIED, "count", &[Set::Q], "Q", Rule::MustBeZero, solve_wording::CONSEQUENCE_PLANTED_ERROR_RELEASE_BLOCKER),
     m(solve_wording::ID_PLANTED_ERROR_ENDS_CHECKED_NUMERICALLY, solve_wording::LABEL_PLANTED_ERROR_ENDS_CHECKED_NUMERICALLY, "count", &[Set::Q], "Q", Rule::MustBeZero, solve_wording::CONSEQUENCE_PLANTED_ERROR_RELEASE_BLOCKER),
-    // Share of steps Verified, Checked numerically, Model agreed, Unchecked.
+    // Share of steps Verified, Numerically checked, Model agreed, Unchecked.
     m(solve_wording::ID_STEPS_VERIFIED_SHARE, solve_wording::LABEL_STEPS_VERIFIED_SHARE, "share", &[Set::Q], "Q", Rule::Recorded, solve_wording::CONSEQUENCE_SYMPY_REACH),
     m(solve_wording::ID_STEPS_CHECKED_NUMERICALLY_SHARE, solve_wording::LABEL_STEPS_CHECKED_NUMERICALLY_SHARE, "share", &[Set::Q], "Q", Rule::Recorded, solve_wording::CONSEQUENCE_SYMPY_REACH),
     m(solve_wording::ID_STEPS_MODEL_AGREED_SHARE, solve_wording::LABEL_STEPS_MODEL_AGREED_SHARE, "share", &[Set::Q], "Q", Rule::Recorded, solve_wording::CONSEQUENCE_SYMPY_REACH),
@@ -316,8 +316,8 @@ pub fn count_in(count: u64, sample_size: u64) -> Option<f64> {
 }
 
 /// Counts from a set Q run, mapped onto the accepted Solve measures of
-/// section 7.3 (`Verified`, `Checked numerically`, `Model agreed`, `Unchecked`,
-/// and planted-error `Failed` / `Verified` / `Checked numerically`).
+/// section 7.3 (`Verified`, `Numerically checked`, `Model agreed`, `Unchecked`,
+/// and planted-error `Failed` / `Verified` / `Numerically checked`).
 ///
 /// The four recorded step tiers are mutually exclusive; `steps_total` may also
 /// include steps in other tiers (`Given`, `Cited`, `CheckedByYou`,

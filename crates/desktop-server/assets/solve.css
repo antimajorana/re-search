@@ -1,5 +1,20 @@
 /* Solve mode centre-stage setup card, collapsed summary bar, Given steps, and shared approval card (S5). */
 
+#app-shell[data-project-overview="true"] :is(#home-explore-card, #explore-session-stage, #solve-session-stage),
+#app-shell[data-mode-stage="solve"] :is(#pipeline-bar, #message-stream, .composer-dock),
+#app-shell[data-mode-stage="explore"] :is(#pipeline-bar, #message-stream, .composer-dock) {
+  display: none;
+}
+
+#explore-session-stage:not([hidden]),
+#solve-session-stage:not([hidden]) {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px clamp(14px, 3vw, 40px);
+}
+
 .solve-stage {
   display: flex;
   flex-direction: column;

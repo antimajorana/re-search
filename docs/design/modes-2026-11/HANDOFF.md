@@ -112,7 +112,7 @@ Windows computer, where `agy` is signed in. They run in Google's cloud and hand 
 git branch. You need a terminal on that computer.
 
 1. **One empty folder per agent**, named `modes-<brief>`. The existing ones are under
-   `C:\Users\antimajorana\AppData\Local\Temp\claude\5d097baebc286c8e\f139c356-d538-4779-87ec-f704e702d94d\scratchpad\agy\`;
+   `<scratchpad>/agy/`;
    any stable location works for new ones. Add the folder to `trustedWorkspaces` in
    `~/.gemini/antigravity-cli/settings.json` (keep the existing entries).
 2. **Run interactively in its own terminal tab** (a remote agent does not start otherwise):
