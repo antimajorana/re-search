@@ -83,19 +83,31 @@ fn unbuilt_modes_refuse_session_creation_and_create_nothing() {
     let port = srv.addr.port();
     let auth = [("X-ReSearch-Token", srv.info.token.as_str())];
 
-    for (mode, label) in [("explore", "Explore"), ("solve", "Solve")] {
-        let body = serde_json::to_vec(&json!({ "id": format!("s-{mode}"), "mode": mode })).unwrap();
-        let (st, _, raw) = raw_http(port, "POST", "/api/sessions", &auth, &body);
-        assert_eq!(st, 400, "POST /api/sessions mode={mode} must return 400");
-        let err = serde_json::from_slice::<Value>(&raw).unwrap()["error"]
+    let (mode, label) = ("explore", "Explore");
+    let body = serde_json::to_vec(&json!({ "id": format!("s-{mode}"), "mode": mode })).unwrap();
+    let (st, _, raw) = raw_http(port, "POST", "/api/sessions", &auth, &body);
+    assert_eq!(st, 400, "POST /api/sessions mode={mode} must return 400");
+    let err = serde_json::from_slice::<Value>(&raw).unwrap()["error"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        err.contains(label) && err.contains("not built yet"),
+        "unexpected error for {mode}: {err}"
+    );
+
+    // Solve refuses starting a prompt at creation (must confirm setup first) and creates nothing.
+    let solve_prompt = serde_json::to_vec(&json!({ "id": "s-solve-prompt", "mode": "solve", "prompt": "run now" })).unwrap();
+    let (st, _, raw) = raw_http(port, "POST", "/api/sessions", &auth, &solve_prompt);
+    assert_eq!(st, 400, "POST /api/sessions mode=solve with prompt must return 400");
+    assert!(
+        serde_json::from_slice::<Value>(&raw).unwrap()["error"]
             .as_str()
             .unwrap()
-            .to_string();
-        assert!(
-            err.contains(label) && err.contains("not built yet"),
-            "unexpected error for {mode}: {err}"
-        );
-    }
+            .contains("confirm its setup"),
+        "unexpected error for solve with prompt: {}",
+        String::from_utf8_lossy(&raw)
+    );
 
     // Nothing was created in sessions list or ledger.
     let (st, _, list_raw) = raw_http(port, "GET", "/api/sessions", &auth, b"");

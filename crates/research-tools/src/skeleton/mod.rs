@@ -8,6 +8,8 @@
 pub mod bib;
 pub mod edges;
 pub mod flatten;
+pub mod locate;
+mod locate_parse;
 pub mod model;
 pub mod number;
 pub mod pdf;
@@ -32,6 +34,14 @@ pub use edges::build_edges;
 pub use flatten::{
     flatten_tex_files, load_ingested_tex_source, select_primary_tex, FlattenedLine, FlattenedTex,
     IngestedTexSource, OriginEntry, MAX_FLATTENED_BYTES, MAX_FLATTENED_LINES, MAX_INCLUDE_DEPTH,
+};
+pub use locate::{
+    detect_tex_counter_drift, format_candidate_label, format_version_caveat, locate_in_skeleton,
+    locate_in_skeleton_with_context, parse_locator, LocateCandidate, LocateContext, LocateResult,
+    LocateStatus, ParsedLocator, CITED_STATUS_CANDIDATES, CITED_STATUS_FOUND,
+    CITED_STATUS_LOCATOR_NOT_FOUND, CITED_STATUS_NO_TEX, CITED_STATUS_UNRESOLVED,
+    MAX_LOCATE_CANDIDATES, NO_TEX_REASON_EMPTY_TEXT_LAYER, NO_TEX_REASON_NEEDS_FILE,
+    PROVENANCE_OUTSIDE_PAPER,
 };
 pub use model::{
     compute_body_fp, compute_files_root_sha256, BibLocator, BibRef, Carry, CarryBasis, CarryMatch,

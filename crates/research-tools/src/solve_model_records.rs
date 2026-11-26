@@ -240,7 +240,45 @@ pub enum SolveDoneStatus {
     FinishedOpenItems,
 }
 
-/// Minimal Solve-internal run lifecycle state (mapped to F9's shared `RunState` on merge).
+impl From<PauseReason> for crate::run_budget::SolvePauseReason {
+    fn from(reason: PauseReason) -> Self {
+        match reason {
+            PauseReason::LegCap => Self::LegCap,
+            PauseReason::Budget => Self::Budget,
+            PauseReason::GateBounces => Self::GateBounces,
+            PauseReason::VerificationStuck => Self::VerificationStuck,
+            PauseReason::ApprovalNeeded => Self::ApprovalNeeded,
+            PauseReason::WorkerRestarted => Self::WorkerRestarted,
+            PauseReason::User => Self::User,
+            PauseReason::Interrupted => Self::Interrupted,
+            PauseReason::TransportError => Self::TransportError,
+        }
+    }
+}
+
+impl From<crate::run_budget::SolvePauseReason> for PauseReason {
+    fn from(reason: crate::run_budget::SolvePauseReason) -> Self {
+        match reason {
+            crate::run_budget::SolvePauseReason::LegCap => Self::LegCap,
+            crate::run_budget::SolvePauseReason::Budget => Self::Budget,
+            crate::run_budget::SolvePauseReason::GateBounces => Self::GateBounces,
+            crate::run_budget::SolvePauseReason::VerificationStuck => Self::VerificationStuck,
+            crate::run_budget::SolvePauseReason::ApprovalNeeded => Self::ApprovalNeeded,
+            crate::run_budget::SolvePauseReason::WorkerRestarted => Self::WorkerRestarted,
+            crate::run_budget::SolvePauseReason::User => Self::User,
+            crate::run_budget::SolvePauseReason::Interrupted => Self::Interrupted,
+            crate::run_budget::SolvePauseReason::TransportError => Self::TransportError,
+        }
+    }
+}
+
+impl PauseReason {
+    pub fn as_str(self) -> &'static str {
+        crate::run_budget::SolvePauseReason::from(self).as_str()
+    }
+}
+
+/// Minimal Solve-internal run lifecycle state mapped onto F9's shared `SolveRunState` / `RunState`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SolveRunStatus {
@@ -249,6 +287,27 @@ pub enum SolveRunStatus {
     Running,
     Paused(PauseReason),
     Done(SolveDoneStatus),
+}
+
+impl SolveRunStatus {
+    /// Map an active/paused/done Solve lifecycle status onto F9's [`crate::run_budget::SolveRunState`].
+    /// Returns `None` for [`SolveRunStatus::Idle`] (before a Solve run has started).
+    pub fn to_solve_run_state(self) -> Option<crate::run_budget::SolveRunState> {
+        match self {
+            Self::Idle => None,
+            Self::Running => Some(crate::run_budget::SolveRunState::LegRunning),
+            Self::Paused(reason) => Some(crate::run_budget::SolveRunState::Paused(reason.into())),
+            Self::Done(SolveDoneStatus::Finished) => Some(crate::run_budget::SolveRunState::Finished),
+            Self::Done(SolveDoneStatus::FinishedOpenItems) => {
+                Some(crate::run_budget::SolveRunState::FinishedOpenItems)
+            }
+        }
+    }
+
+    /// Map onto F9's shared 7-state on-screen [`crate::run_budget::RunState`] (`00-overview.md` 3.3).
+    pub fn to_run_state(self) -> Option<crate::run_budget::RunState> {
+        self.to_solve_run_state().map(crate::run_budget::solve_run_state)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

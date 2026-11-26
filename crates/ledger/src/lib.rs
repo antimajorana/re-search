@@ -25,6 +25,9 @@ mod library_db_sync_ft;
 mod library_rows;
 pub mod library_schema;
 pub mod verify;
+#[doc(hidden)]
+pub mod zotero_fixture;
+pub mod zotero_reader;
 
 pub use fulltext_cache::{
     FulltextCache, FulltextEntry, FULLTEXT_TABLE, LIBRARY_DB_NAME, LIBRARY_DIR_NAME,
@@ -35,6 +38,9 @@ pub use library_schema::{
     LIBRARY_SCHEMA_VERSION, ORIGIN_USER_LIBRARY, USER_MARKS_BACKUP_NAME, USER_MARKS_FILE_NAME,
 };
 pub use verify::{SessionVerifyReport, VerifyAllReport};
+pub use zotero_reader::{
+    read_zotero_library, ZoteroAttachmentRow, ZoteroItemRow, ZoteroLibrarySnapshot,
+};
 
 use rusqlite::{
     config::DbConfig, params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,

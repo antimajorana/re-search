@@ -39,6 +39,7 @@ pub fn register_core_tools_for_profile(
             sympy_epoch,
             sympy_handler,
             session_title_handler: Some(cli_title_handler()),
+            solve_check: None,
         },
     )
 }
@@ -181,7 +182,14 @@ mod tests {
         .unwrap();
         assert_eq!(r1.defs, i1.defs);
         assert_eq!(r1.defs, core_tool_set(Some(Arc::clone(&env))).defs);
-        let err = core_tool_set_for_profile(env, research_tools::tool_profile::PROFILE_SOLVE_V1)
+        let s1 = core_tool_set_for_profile(
+            Arc::clone(&env),
+            research_tools::tool_profile::PROFILE_SOLVE_V1,
+        )
+        .unwrap();
+        assert_eq!(s1.defs.len(), 17);
+        assert_eq!(s1.policy_version, research_tools::SOLVE_POLICY_VERSION);
+        let err = core_tool_set_for_profile(env, research_tools::tool_profile::PROFILE_EXPLORE_V1)
             .unwrap_err();
         assert!(err.contains("profile not built yet"), "{err}");
     }

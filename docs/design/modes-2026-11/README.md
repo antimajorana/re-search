@@ -48,14 +48,16 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | F13a library sync integrity | reviewed and merged | `library_db_sync*.rs`, `source_sync*.rs`, `tests/source_sync_integrity.rs`; report `reports/f13a-sync-integrity.md` |
 | V17 Investigate PDF skeleton | reviewed, wired and merged; Windows verified | `crates/research-tools/src/skeleton/pdf*.rs`; report `reports/inv-v17-pdf-skeleton.md` |
 | V6 Investigate reader and task lifecycle | reviewed, wired and merged; Windows verified | `investigation_markers.rs`, `map_{defs,node_read,reading*,fold}.rs`, `investigation_{tasks,task_context}.rs`; report `reports/inv-v6-tasks.md` |
-| V11 Investigate cited result without a model | Neon launched | `gemini/modes/inv-v11-cited` |
+| V11 Investigate cited result without a model | reviewed, wired and merged; Windows browser verified | `skeleton/locate*.rs`, `investigation_cited*.rs`, `assets/investigation_context.js`; report `reports/inv-v11-cited.md` |
 | V13 Investigate focused and whole-paper graph views | reviewed, wired and merged; Windows browser verified | `assets/investigation_wholemap{,_model}.{js,css}`; report `reports/inv-v13-wholemap.md` |
-| V7 Orient, V8 Open any node, V10 reader notes | brief published (`agents/inv-v7-v8-v10.md`) | `gemini/modes/inv-v7-v8-v10` |
-| V9 Investigate legacy adapter | brief published (`agents/inv-v9-legacy.md`) | `gemini/modes/inv-v9-legacy` |
-| X3 Explore session and stage machine, X4 model-free first screen | Neon launched | `gemini/modes/exp-x3-x4-shell` |
-| S4 Solve setup and view, S5 first screen and shared approval card | Neon launched | `gemini/modes/solve-s4-s5-setup` |
-| S7 Solve `solve/1` profile freeze and expression store | Neon launched | `gemini/modes/solve-s7-exprs` |
-| F13b BibTeX/Zotero adapters, F13c opt-in Kandinsky write-back | Neon launched | `gemini/modes/f13bc-sources-ext` |
+| V7 Orient, V8 Open any node, V10 reader notes | Neon launched | `gemini/modes/inv-v7-v8-v10` |
+| V9 Investigate legacy adapter | Neon launched | `gemini/modes/inv-v9-legacy` |
+| X3 Explore session and stage machine, X4 model-free first screen | reviewed, wired and merged; Windows verified | `idea{,_search,_view}.rs`, `routes_idea.rs`, `assets/idea*.{js,css}`; report `reports/exp-x3-x4-shell.md` |
+| X6 Exchange runner & Sharpen, X7 `explore/1` & search plan, X8 Triage | brief published (`agents/exp-x6-x7-x8.md`) | `gemini/modes/exp-x6-x7-x8` |
+| S4 Solve setup and view, S5 first screen and shared approval card | reviewed, wired and merged; Windows verified | `solve_setup*.rs`, `solve{,_view}.rs`, `assets/{approval_card,solve_setup,solve_state}.js`, `assets/solve.css`; report `reports/solve-s4-s5-setup.md` |
+| S7 Solve `solve/1` profile freeze and expression store | reviewed and merged; Windows verified | `solve_defs.rs`, `solve_exprs*.rs`, `policy_preset.rs`, `tool_profile.rs`; report `reports/solve-s7-exprs.md` |
+| S8 Typed steps, S9 Algebra checks, S11 Solve finish gates | brief published (`agents/solve-s8-s9-s11.md`) | `gemini/modes/solve-s8-s9-s11` |
+| F13b BibTeX/Zotero adapters, F13c opt-in Kandinsky write-back | reviewed, wired and merged; Windows verified | `ledger/src/zotero_*.rs`, `source_{bibtex*,zotero*,export*}.rs`, `routes_sources_ext.rs`, `assets/library_send_back.js`; report `reports/f13bc-sources-ext.md` |
 | F14b, F14c, F16b, mode adapters of F15 | gate-aligned draft briefs in `agents/draft-*.md` | `reports/draft-next-lanes.md` |
 | S16 formal tier (Lean) | cut | - |
 | S22 engine manager (Cadabra2, FORM), V14 prior work in Investigate, version tracking (half of V10) | deferred | - |
