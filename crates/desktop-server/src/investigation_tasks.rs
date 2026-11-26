@@ -91,7 +91,7 @@ pub fn handle(state: &Arc<DesktopState>, session_id: &str, body: &[u8]) -> ApiRe
     let prev_last_seq = events.last().map_or(0, |e| e.seq).max(skeleton_seq);
 
     strip_internal_task_fields(&mut req_json);
-    fill_connected_task_provider(state, session_id, &mut req_json);
+    require_task_provider_configured(state, session_id, &req_json)?;
     req_json[TASK_SPEC_FIELD] = json!({
         "task": task.as_str(), "tags": tags, "depth": depth, "focus": focus,
         "source_id": source_id, "skeleton_seq": skeleton_seq, "cap": cap,
@@ -503,38 +503,48 @@ fn build_task_prompt(task: InvestigationTaskKind, tags: &[String], focus: Option
     crate::investigation_task_prompts::build_user_task_prompt(task, tags, focus)
 }
 
-fn fill_connected_task_provider(state: &DesktopState, session_id: &str, req: &mut Value) {
-    let has_req_p = req.get("provider").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty());
+fn require_task_provider_configured(
+    state: &DesktopState,
+    session_id: &str,
+    req: &Value,
+) -> Result<(), (u16, String)> {
+    if let Some(p) = req
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        agent::ProviderKind::parse(p).map_err(bad)?;
+        return Ok(());
+    }
     let meta = state.load_meta(session_id);
-    let has_meta_p = meta.as_ref().and_then(|m| m.default_provider.as_deref()).is_some_and(|s| !s.trim().is_empty());
+    let has_meta_p = meta
+        .as_ref()
+        .and_then(|m| m.default_provider.as_deref())
+        .is_some_and(|s| !s.trim().is_empty());
     let ui = state.load_ui_settings();
     let has_am_orch = ui
         .agent_models
         .get("orchestrator")
         .is_some_and(|s| agent::ProviderKind::parse(&s.provider).is_ok());
-    let has_ui_p = ui.default_provider.as_deref().is_some_and(|s| !s.trim().is_empty());
-    if has_req_p || has_meta_p || has_am_orch || has_ui_p {
-        return;
+    let has_ui_p = ui
+        .default_provider
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty());
+    if has_meta_p || has_am_orch || has_ui_p {
+        return Ok(());
     }
     let store = agent::ProviderKeyStore::load_from_data_dir(&state.cfg.data_dir).unwrap_or_default();
-    let has_key = |pk: agent::ProviderKind| {
-        crate::connections::credential(state, pk, &store)
+    let anthropic_ready =
+        crate::connections::credential(state, agent::ProviderKind::Anthropic, &store)
             .ok()
-            .is_some_and(|c| c.key.is_some())
-    };
-    if has_key(agent::ProviderKind::Anthropic) {
-        return;
+            .is_some_and(|c| c.key.is_some());
+    if anthropic_ready {
+        return Ok(());
     }
-    let fallback = if state.chatgpt.ready() {
-        Some(agent::ProviderKind::ChatGpt)
-    } else {
-        [agent::ProviderKind::OpenAi, agent::ProviderKind::Gemini, agent::ProviderKind::Ollama]
-            .into_iter()
-            .find(|&p| has_key(p))
-    };
-    if let Some(pk) = fallback {
-        req["provider"] = json!(pk.cli_name());
-    }
+    Err(bad(
+        "Choose a provider before starting an Investigate task: pass `provider` in the request, select a model in the toolbar, or set `default_provider` in Settings (re:Search never falls back silently to another provider).",
+    ))
 }
 
 fn is_interruption_error(err: &str) -> bool {

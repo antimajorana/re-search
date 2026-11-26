@@ -389,5 +389,11 @@ test('V7 Orient UI renders RunBar (Paused not Partial), model choices, Auto-orie
   composerModel.dispatch('change');
   assert.equal(taskCalls.length, 2);
   assert.equal(taskCalls[1].id, 's4');
+  // Connected re-render mounts V8 Explain button, which forwards selected { provider, model } to task:'open'.
+  await ctrl.syncSession('s4', { ...sessionData, events: [{ seq: 4 }] }, hooks);
+  const openBtn = shellHost.querySelector('.inv-v8-open-btn');
+  assert.ok(openBtn, 'Open action must render inside V8 model block when connected');
+  openBtn.click();
+  assert.deepEqual(taskCalls[2], { id: 's4', body: { task: 'open', tags: ['n1'], provider: 'openai', model: 'gpt-5.4' } });
   assert.equal(dom.innerHtmlWrites, 0);
 });
