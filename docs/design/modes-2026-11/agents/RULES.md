@@ -80,6 +80,7 @@ Never print, copy or store a credential. Your result goes back by pushing your b
 - Do not edit files under `.github/` or `docs/design/` (except your own report, below).
   The `draft-next-lanes` assignment may also add its own new `agents/draft-*.md` brief drafts.
   The `eval-solve-badges` and `f8-harness-sets` assignments may regenerate `docs/design/eval-2026-11/sheet-template.md` (`EVAL_BLESS=1`) after adding approved §7.2/§7.3 sets or measures; additionally, `f8-harness-sets` is explicitly authorized to extend `crates/agent/tests/eval_support/{manifest,measures}.rs` (plus a sibling `measures_catalog.rs` split if needed for the 600-line rule) and `crates/agent/tests/eval_harness.rs` for Sets `P6`, `B`, `W`, `K` and `P4 -> C` while keeping every existing Set `P`/`Q` test assertion and pass rule strict.
+  Per the owner decisions of 2026-11-26, `exp-x19-openalex` is explicitly authorized to add `"api.openalex.org"` to `ALLOWLISTED_HTTPS_HOSTS` (`crates/research-tools/src/http_client.rs`) and document OpenAlex in `THREAT-MODEL.md` (TheoremSearch remains skipped/unallowlisted).
 - Do not invent facts. A number, a format or a behaviour of an outside service that you did not read
   in this repository or its design documents is marked as an assumption in a comment and in your
   report.
