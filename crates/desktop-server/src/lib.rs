@@ -34,6 +34,7 @@ mod projects;
 mod routers;
 pub mod routes_library;
 pub mod routes_session;
+pub mod routes_sources;
 pub mod routes_subagents;
 pub mod routes_tools;
 pub mod session_lifecycle;
