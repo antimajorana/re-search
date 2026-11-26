@@ -282,6 +282,9 @@ pub(crate) fn dispatch_api(
                 Err((st, msg)) => write_json(&mut stream, st, json!({ "error": msg }), &[]),
             }
         }
+        ("POST", ["api", "sessions", id, "investigation", "tasks"]) => {
+            write_api_res(&mut stream, crate::investigation_tasks::handle(state, id, &req.body));
+        }
         ("POST", ["api", "sessions", id, "investigation", operation]) => {
             write_api_res(&mut stream, crate::investigation::handle(state, id, operation, &req.body));
         }
