@@ -1,10 +1,9 @@
-//! V7/V8/V10 `mapview` enrichment helpers (sibling of `investigation_mapview.rs`, kept <= 600 lines).
+//! V7 `mapview` enrichment helpers (sibling of `investigation_mapview.rs`, kept <= 600 lines).
 //!
 //! Projects folded Layer-2 `role`, `pin`/`pinned`, `gist`, `purpose`, `authors_claim` (computed
 //! via `status_badge::status_badge`), `notes`, additive change history (`changed_since_last`),
 //! and recomputed V5 `skip_plan` + section dimming (Rule 6.14) onto the `mapview` JSON so
-//! V13 (`investigation_wholemap_model.js`), V7 badges, V8 Block B, and V10 notes light up
-//! consistently.
+//! V13 (`investigation_wholemap_model.js`) and V7 badges light up consistently.
 
 use research_tools::map_defs::ModelEdgeRole;
 use research_tools::map_fold::{FoldedMap, FoldedNodeReading, ReaderPin};
@@ -53,12 +52,14 @@ pub fn enrich_mapview_with_v7(
         }
     }
 
-    // Build extra use edges from folded model edges for Rule 6.14 skip-plan honesty.
+    // Build extra use edges from non-stale folded model edges for Rule 6.14 skip-plan honesty.
     let extra_edges: Vec<ExtraUseEdge> = folded
         .edges
         .iter()
         .filter(|e| {
-            sk_by_tag.contains_key(e.from.as_str()) && sk_by_tag.contains_key(e.to.as_str())
+            !e.current.stale
+                && sk_by_tag.contains_key(e.from.as_str())
+                && sk_by_tag.contains_key(e.to.as_str())
         })
         .map(|e| ExtraUseEdge {
             from: e.from.clone(),
@@ -129,20 +130,29 @@ fn enrich_one_skeleton_node(
         }
 
         // Pure authors'-side badge with deterministic cues and heading-cite line (rule 6.6).
-        let ac_current = r.authors_claim.current.as_ref().map(|v| &v.value);
-        let badge = status_badge(ac_current, head_cites);
+        let ac_vv = r.authors_claim.current.as_ref();
+        let ac_stale = ac_vv.is_some_and(|v| v.stale);
+        let badge = status_badge(ac_vv.map(|v| &v.value), head_cites);
         if badge.present {
             let mut ac_val = serde_json::to_value(&badge).unwrap_or(Value::Null);
-            if let Some(prev) = r.authors_claim.history.last() {
-                if let Some(obj) = ac_val.as_object_mut() {
-                    obj.insert("previous_label".into(), json!(prev.value.label));
-                    obj.insert("changed".into(), json!(true));
+            if let Some(obj) = ac_val.as_object_mut() {
+                if ac_stale {
+                    obj.insert("tone".into(), json!("muted"));
+                    obj.insert("stale".into(), json!(true));
+                }
+                if let (Some(cur), Some(prev)) = (ac_vv, r.authors_claim.history.last()) {
+                    if cur.value.label != prev.value.label
+                        || cur.value.relation_note != prev.value.relation_note
+                    {
+                        obj.insert("previous_label".into(), json!(prev.value.label));
+                        obj.insert("changed".into(), json!(true));
+                    }
                 }
             }
             item["authors_claim"] = ac_val;
         }
 
-        // Notes array preserved cleanly for V10 UI, F15 write-up, and V16 hand-off.
+        // Notes array preserved cleanly across re-runs (Rule 6.12).
         if !r.notes.is_empty() {
             item["notes"] = json!(r.notes);
         }
@@ -172,7 +182,7 @@ fn enrich_one_skeleton_node(
                 badges.push(json!({
                     "text": badge.text,
                     "icon": badge.icon,
-                    "tone": badge.tone,
+                    "tone": if ac_stale { "muted" } else { badge.tone.as_str() },
                     "border": badge.border,
                 }));
             }
@@ -263,4 +273,131 @@ pub fn collect_field_changes(r: &FoldedNodeReading) -> Vec<Value> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::investigation_mapview::build_mapview_json_with_fold;
+    use research_tools::map_defs::{AuthorsClaimLabel, AuthorsClaimRecord, ReadingRole};
+    use research_tools::map_fold::{fold_map, FieldSlot, VersionedValue};
+    use research_tools::paper_key::PaperKey;
+    use research_tools::skeleton::{
+        build_tex_skeleton, SkNodeKind, TexSkeletonInput,
+    };
+    use std::collections::BTreeMap;
+
+    fn sample_skeleton() -> PaperSkeleton {
+        let tex = concat!(
+            "\\documentclass{article}\n",
+            "\\newtheorem{theorem}{Theorem}[section]\n",
+            "\\begin{document}\n",
+            "\\section{Main}\\label{sec:m}\n",
+            "\\begin{theorem}[Main]\\label{thm:m}\n",
+            "We prove exponential decay.\n",
+            "\\end{theorem}\n",
+            "\\end{document}\n",
+        );
+        let mut files = BTreeMap::new();
+        files.insert("main.tex".into(), tex.into());
+        build_tex_skeleton(&TexSkeletonInput {
+            source_id: "src-1".into(),
+            source_seq: 1,
+            paper_key: PaperKey::from_arxiv("2403.00001").unwrap(),
+            version: Some("v1".into()),
+            files,
+            primary_path: Some("main.tex".into()),
+            files_sha256: None,
+        })
+        .skeleton
+    }
+
+    #[test]
+    fn authors_claim_rerun_only_marks_changed_on_actual_diff_and_mutes_stale_badges() {
+        let sk = sample_skeleton();
+        let thm = sk.nodes.iter().find(|n| n.kind == SkNodeKind::Theorem).unwrap();
+        let tag = thm.tag.as_deref().unwrap();
+        let mut folded = fold_map(&sk, &[], false);
+
+        let claim_new = AuthorsClaimRecord {
+            label: AuthorsClaimLabel::New,
+            relation_note: Some("new bound".into()),
+            attributed_to: vec![],
+            anchors: vec![],
+            cues: vec!["we prove".into()],
+        };
+        let mut slot = FieldSlot::default();
+        slot.push(VersionedValue {
+            seq: 2,
+            request_seq: 1,
+            skeleton_seq: 1,
+            node_fp: thm.fp.clone(),
+            stale: false,
+            value: claim_new.clone(),
+        });
+        slot.push(VersionedValue {
+            seq: 4,
+            request_seq: 3,
+            skeleton_seq: 1,
+            node_fp: thm.fp.clone(),
+            stale: false,
+            value: claim_new.clone(),
+        });
+
+        let mut reading = FoldedNodeReading {
+            tag: tag.into(),
+            role: FieldSlot::default(),
+            gist: FieldSlot::default(),
+            purpose: FieldSlot::default(),
+            hypotheses: FieldSlot::default(),
+            anchors: FieldSlot::default(),
+            authors_claim: slot,
+            notes: vec![],
+            pin: None,
+            effective_is_main_result: false,
+            any_stale: false,
+        };
+        folded.nodes.insert(tag.into(), reading.clone());
+        let mut mv_same = build_mapview_json_with_fold(&sk, 1, "b", "h", None, Some(&folded));
+        enrich_mapview_with_v7(&mut mv_same, &sk, &folded, true);
+        let node_same = mv_same["nodes"].as_array().unwrap().iter().find(|n| n["id"] == tag).unwrap();
+        assert!(node_same["authors_claim"].get("changed").is_none());
+        assert!(node_same.get("changed_since_last").is_none());
+
+        // Now push a genuinely different authors_claim + stale flag.
+        reading.authors_claim.push(VersionedValue {
+            seq: 6,
+            request_seq: 5,
+            skeleton_seq: 1,
+            node_fp: "oldfp".into(),
+            stale: true,
+            value: AuthorsClaimRecord {
+                label: AuthorsClaimLabel::Restated,
+                relation_note: Some("restated".into()),
+                attributed_to: vec![],
+                anchors: vec![],
+                cues: vec![],
+            },
+        });
+        reading.role.push(VersionedValue {
+            seq: 6,
+            request_seq: 5,
+            skeleton_seq: 1,
+            node_fp: "oldfp".into(),
+            stale: true,
+            value: ReadingRole::MainResult,
+        });
+        reading.any_stale = true;
+        folded.nodes.insert(tag.into(), reading);
+        let mut mv_diff = build_mapview_json_with_fold(&sk, 1, "b", "h", None, Some(&folded));
+        enrich_mapview_with_v7(&mut mv_diff, &sk, &folded, false);
+        let node_diff = mv_diff["nodes"].as_array().unwrap().iter().find(|n| n["id"] == tag).unwrap();
+        assert_eq!(node_diff["authors_claim"]["changed"], json!(true));
+        assert_eq!(node_diff["authors_claim"]["previous_label"], json!("new"));
+        assert_eq!(node_diff["authors_claim"]["tone"], json!("muted"));
+        assert_eq!(node_diff["authors_claim"]["stale"], json!(true));
+        assert!(node_diff.get("role").is_none());
+        assert_eq!(node_diff["effective_is_main_result"], json!(false));
+        assert_eq!(mv_diff["orient_auto_start"], json!(false));
+    }
 }

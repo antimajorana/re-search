@@ -1,5 +1,5 @@
 //! Task-specific prompt and preamble builders for Investigate v2 tasks
-//! (packages V7 Orient and V8 Open, `investigate.md` §3, §5.1–5.3, rule 6.19).
+//! (package V7 Orient and V6 Open/Context tasks, `investigate.md` §3, §5.1–5.3, rule 6.19).
 //!
 //! All injected paper text is wrapped in `<quoted_source_material>` by
 //! `investigation_task_context.rs` and framed strictly as DATA ONLY. Never uses
@@ -31,8 +31,8 @@ pub fn build_user_task_prompt(
                 .to_string()
         }
         InvestigationTaskKind::Open => format!(
-            "Open and explain only the selected node(s): {}. Split the argument or proof into \
-             3 to 7 grounded child steps without expanding unrelated sibling nodes.",
+            "Open and explain only the selected node(s): {}. Record source-anchored gist, \
+             purpose, hypotheses, and dependency edges without modifying unrelated sibling nodes.",
             tags.join(", ")
         ),
         InvestigationTaskKind::Context => {
@@ -117,17 +117,13 @@ pub fn build_task_preamble(
                 out,
                 "Structure your explanation with `record_map_reading` (passing \
                  request_seq={request_seq} and source_id=\"{source_id}\"):\n\
-                 1. On the target node, record `gist` (<= 400 chars), `purpose` (<= 300 chars), \
-                 and a `hypotheses` checklist where each hypothesis carries a verbatim matched \
-                 quote from the numbered lines shown to you.\n\
-                 2. Split the node's proof or derivation into 3 to 7 focused child step nodes \
-                 using `new: {{\"id\": \"step-1\", \"attach_to\": \"<target_tag>\", \
-                 \"kind\": \"proof_step\"}}`, each with a concise `gist` and 1 to 3 matched \
-                 quotes from the proof lines.\n\
-                 3. Record any missing dependency links in `edges` (using `role`: `statement`, \
+                 1. On the target skeleton node (`tag`), record `gist` (<= 400 chars), `purpose` \
+                 (<= 300 chars), and a `hypotheses` checklist where each hypothesis carries a \
+                 verbatim matched quote from the numbered lines shown to you.\n\
+                 2. Record any missing dependency links in `edges` (using `role`: `statement`, \
                  `proof`, or `argument`; `basis`: `explicit` or `inferred`) and any open \
-                 questions in `limitations` or child nodes with `kind: \"open_question\"`.\n\
-                 4. Save early and often; set `done: true` on the final call."
+                 questions or gaps in `limitations`.\n\
+                 3. Save early and often; set `done: true` on the final call."
             );
             let _ = writeln!(
                 out,
@@ -186,9 +182,9 @@ mod tests {
         );
         assert!(open.contains("quoted_source_material"));
         assert!(open.contains("cap 10 model calls"));
-        assert!(open.contains("3 to 7"));
-        assert!(open.contains("attach_to"));
+        assert!(open.contains("hypotheses"));
         assert!(open.contains("n-abcdef1234"));
+        assert!(!open.contains("\"new\""));
         assert!(!open.to_ascii_lowercase().contains("verified"));
         assert!(!open.to_ascii_lowercase().contains("branch"));
 

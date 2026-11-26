@@ -93,7 +93,7 @@ where
     let mut clean_attributed = Vec::with_capacity(ac.attributed_to.len());
     for raw_key in &ac.attributed_to {
         let key = raw_key.trim();
-        if !bib_keys.contains(key) {
+        if key.is_empty() || !bib_keys.contains(key) {
             return Err(fault(
                 index,
                 "unknown_bib_key",

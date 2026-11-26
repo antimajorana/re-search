@@ -67,7 +67,7 @@ export function resolveEffectiveMainResult(node) {
   if (!node || typeof node !== 'object') return false;
   if (node.pin === 'not_main_result' || node.unpinned === true) return false;
   if (node.pinned === true || node.pin === 'main_result') return true;
-  if (node.effective_is_main_result === true) return true;
+  if (typeof node.effective_is_main_result === 'boolean') return node.effective_is_main_result;
   return String(node.role || '').trim().toLowerCase() === 'main_result';
 }
 
@@ -116,7 +116,7 @@ export function renderInvestigationBadges(host, node, opts = {}) {
     pinRow.appendChild(createBadge({
       text: isUserPinned ? MAIN_RESULT_USER_LABEL : MAIN_RESULT_MODEL_LABEL,
       icon: isUserPinned ? 'pin' : 'model',
-      tone: isUserPinned ? 'ok' : 'info',
+      tone: node.stale ? 'muted' : (isUserPinned ? 'ok' : 'info'),
       border: isUserPinned ? BORDER_SOLID : BORDER_DASHED,
     }));
   }
