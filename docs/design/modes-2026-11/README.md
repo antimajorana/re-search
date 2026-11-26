@@ -41,13 +41,16 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | F12 coverage gate and prior-work wording | brief ready | `agents/f12-coverage.md` |
 | V2 Investigate dependencies, tags, numbering and bibliography | reviewed and merged | `crates/research-tools/src/skeleton/`; checkpoint `afea25b` |
 | V3 Investigate skeleton on screen | reviewed, wired and merged; Windows browser verified | `investigation_{skeleton,mapview}.rs`, `assets/investigation_{outline,results,node,v3_shell}.js`; checkpoint `0f7cbdf` |
-| Investigate lane A: V4, V5 in order | V4 checkpoint received; V5 in progress | `gemini/modes/inv-a-v2-v5` |
+| V4 Investigate paper opener, V5 skip plan and symbols | reviewed, wired and merged; Windows verified | `investigation_open.rs`, `skeleton/{skip,symbols}.rs`, `assets/investigation_{entry,skip}.js`; report `reports/inv-a-v2-v5.md` |
 | F5 mode shell and library route registration | reviewed and merged; Windows browser verified | `session_mode.rs`, `api_dispatch.rs`, `assets/new_menu.js`; checkpoint `a5c9b7f` |
-| F7 hand-off packet | in progress | `gemini/modes/f5-f7-mode-shell` |
-| Library lane: F13a sources and sync, F16a corrections by code, F15 write-up core | F13a checkpoint received; review in progress | `gemini/modes/lib-f13a-f16a-f15` |
-| F13a library sync integrity | brief ready against checkpoint | `agents/f13a-sync-integrity.md` |
-| V17 Investigate PDF skeleton | brief ready; V2 and F14a merged | `agents/inv-v17-pdf-skeleton.md` |
-| V6 Investigate reader and task lifecycle | unblocked by V3; launching | `agents/inv-v6-tasks.md` |
+| F7 hand-off packet | reviewed and merged; Windows verified | `crates/export/src/handoff*.rs`, `crates/desktop-server/src/handoff.rs`; report `reports/f5-f7-mode-shell.md` |
+| Library lane: F13a sources and sync, F16a corrections by code, F15 write-up core | F13a/F16a/F15 checkpoints received; review in progress | `gemini/modes/lib-f13a-f16a-f15` |
+| F13a library sync integrity | checkpoint received; review in progress | `gemini/modes/f13a-sync-integrity` |
+| V17 Investigate PDF skeleton | reviewed, wired and merged; Windows verified | `crates/research-tools/src/skeleton/pdf*.rs`; report `reports/inv-v17-pdf-skeleton.md` |
+| V6 Investigate reader and task lifecycle | Neon launched | `gemini/modes/inv-v6-tasks` |
+| V11 Investigate cited result without a model | brief ready; V4, V17, F5 and F10 merged | `agents/inv-v11-cited.md` |
+| V13 Investigate focused and whole-paper graph views | brief ready; V5 and F6 merged | `agents/inv-v13-wholemap.md` |
+| X3 Explore session and stage machine, X4 model-free first screen | brief ready; F5, F11 and X1 merged | `agents/exp-x3-x4-shell.md` |
 | F13b, F13c, F14b, F14c, F16b, mode adapters of F15 | planned, no brief yet | - |
 | S16 formal tier (Lean) | cut | - |
 | S22 engine manager (Cadabra2, FORM), V14 prior work in Investigate, version tracking (half of V10) | deferred | - |
