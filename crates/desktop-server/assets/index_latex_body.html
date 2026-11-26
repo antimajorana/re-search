@@ -1,0 +1,24 @@
+          <p id="latex-file-note" class="latex-file-note" role="status" hidden>This preview is truncated. Open the full file in your workspace to edit or audit it.</p>
+          <button id="latex-start-manuscript" type="button" class="pill-btn">Start a manuscript</button>
+          <form id="latex-bind-draft" class="panel-toolbar" hidden>
+            <label for="latex-bind-path">Destination in this workspace</label>
+            <input id="latex-bind-path" class="text-input" type="text" required>
+            <button type="submit" class="pill-btn sm">Use in this workspace</button>
+          </form>
+          <div id="latex-recovery" class="panel-toolbar" hidden>
+            <label for="latex-recovery-list">Recover unsaved edits</label>
+            <select id="latex-recovery-list" class="compact-select"></select>
+            <button id="latex-restore-draft" type="button" class="pill-btn sm primary">Restore draft</button>
+            <button id="latex-discard-draft" type="button" class="pill-btn sm">Discard draft</button>
+          </div>
+          <div class="latex-split">
+            <div class="tex-pane tex-pane-editor">
+              <div class="pane-caption"><span>Manuscript Editor</span><span id="latex-recovery-status"></span><span id="latex-line-count">0 lines</span></div>
+              <textarea id="latex-editor" aria-label="Manuscript editor" spellcheck="false" placeholder="Select a workspace .tex/.bib file or write LaTeX here..."></textarea>
+            </div>
+            <div class="tex-pane tex-pane-preview">
+              <div class="pane-caption"><span>Live KaTeX Preview</span></div>
+              <div id="latex-preview" class="rich-prose"></div>
+            </div>
+          </div>
+          <div id="tex-audit-results" class="audit-drawer" hidden></div>

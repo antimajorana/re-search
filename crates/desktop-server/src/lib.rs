@@ -2,6 +2,7 @@
 //! embedded Gemini-inspired research UI.
 
 pub mod agent_models;
+mod api_dispatch;
 mod investigation;
 mod investigation_cites;
 mod investigation_finish;
@@ -34,9 +35,11 @@ mod projects;
 mod routers;
 pub mod routes_library;
 pub mod routes_session;
+pub mod routes_settings;
 pub mod routes_subagents;
 pub mod routes_tools;
 pub mod session_lifecycle;
+pub mod session_mode;
 mod session_folders;
 mod session_summary;
 mod session_view;

@@ -7,6 +7,49 @@ pub struct StaticAsset {
 
 pub const INDEX_HTML: &str = include_str!("../assets/index.html");
 
+const INDEX_PARTIALS: &[(&str, &str)] = &[
+    (
+        "      <!-- INCLUDE:index_investigation.html -->\n",
+        include_str!("../assets/index_investigation.html"),
+    ),
+    (
+        "          <!-- INCLUDE:index_latex_body.html -->\n",
+        include_str!("../assets/index_latex_body.html"),
+    ),
+    (
+        "          <!-- INCLUDE:index_dag_top.html -->\n",
+        include_str!("../assets/index_dag_top.html"),
+    ),
+    (
+        "        <!-- INCLUDE:index_sources.html -->\n",
+        include_str!("../assets/index_sources.html"),
+    ),
+    (
+        "    <!-- INCLUDE:index_source_reader.html -->\n",
+        include_str!("../assets/index_source_reader.html"),
+    ),
+    (
+        "  <!-- INCLUDE:index_dialogs.html -->\n",
+        include_str!("../assets/index_dialogs.html"),
+    ),
+];
+
+/// Returns the complete desktop UI document by splicing the extracted HTML partials
+/// into `assets/index.html`.
+pub fn render_index_html() -> String {
+    let mut html = INDEX_HTML.to_string();
+    for (marker, partial) in INDEX_PARTIALS {
+        // Normalize CRLF on Windows checkouts if needed while preserving LF checkouts byte-for-byte.
+        let crlf_marker = marker.replace('\n', "\r\n");
+        if html.contains(marker) {
+            html = html.replacen(marker, partial, 1);
+        } else if html.contains(&crlf_marker) {
+            html = html.replacen(&crlf_marker, partial, 1);
+        }
+    }
+    html
+}
+
 fn pdf_renderer_asset(name: &str) -> Option<StaticAsset> {
     const BUNDLE: &[u8] = include_bytes!("../vendor/pdfjs/renderer.zip");
     let mut assets = zip::ZipArchive::new(std::io::Cursor::new(BUNDLE)).ok()?;
@@ -179,6 +222,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
         "/assets/session_rail.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/session_rail.js"),
+        }),
+        "/assets/new_menu.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/new_menu.js"),
         }),
         "/assets/session_folders.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
@@ -361,5 +408,31 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2"),
         }),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_index_html_expands_all_partials_cleanly() {
+        let html = render_index_html();
+        assert!(!html.contains("<!-- INCLUDE:"), "unexpanded partial marker in rendered index.html");
+        for id in [
+            "investigation-panel",
+            "latex-editor",
+            "dag-fork-bar",
+            "panel-sources",
+            "source-reader-body",
+            "workspace-dialog",
+            "session-folder-dialog",
+            "worked-example",
+        ] {
+            assert!(
+                html.contains(&format!("id=\"{id}\"")),
+                "missing #{id} in rendered index.html"
+            );
+        }
     }
 }
