@@ -17,6 +17,34 @@ fn fixtures_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/skeleton")
 }
 
+#[test]
+fn duplicate_labels_do_not_choose_a_prerequisite() {
+    let source = r"\documentclass{article}
+\newtheorem{lemma}{Lemma}
+\begin{document}
+\begin{lemma}\label{lem:ambiguous}
+The left endpoint is fixed.
+\end{lemma}
+\begin{lemma}\label{lem:ambiguous}
+The right endpoint is free.
+\end{lemma}
+\begin{lemma}\label{lem:dependent}
+The result uses Lemma \ref{lem:ambiguous}.
+\end{lemma}
+\end{document}";
+    let outcome = build_tex_skeleton(&TexSkeletonInput {
+        source_id: "src-ambiguous".into(),
+        source_seq: 1,
+        paper_key: PaperKey::from_file_bytes(source.as_bytes()),
+        version: None,
+        files: BTreeMap::from([("main.tex".into(), source.into())]),
+        primary_path: Some("main.tex".into()),
+        files_sha256: None,
+    });
+    assert_eq!(outcome.skeleton.nodes.iter().filter(|node| node.label.as_deref() == Some("lem:ambiguous")).count(), 2);
+    assert!(!outcome.skeleton.edges.iter().any(|edge| edge.kind == SkEdgeKind::Uses));
+}
+
 fn collect_tex_files(dir: &Path) -> BTreeMap<String, String> {
     let mut files = BTreeMap::new();
     fn rec(base: &Path, cur: &Path, out: &mut BTreeMap<String, String>) {

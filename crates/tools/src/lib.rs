@@ -1,17 +1,21 @@
 //! Tool registry and router.
 //!
-//! Every call goes: record request -> policy -> (approval) -> dispatch ->
-//! record result. If the ledger cannot record a step, the call is refused.
+//! Every call goes: record request -> (gate) -> policy -> (approval) -> dispatch ->
+//! (post-call hook) -> record result. If the ledger cannot record a step, the call is refused.
 
 pub mod approval;
 pub mod builtin;
 pub mod canon;
+pub mod gate;
 pub mod registry;
 pub mod router;
 
 pub use approval::{
     approval_digest, ApprovalOutcome, ApprovalReply, ApprovalRequest, ApprovalScope, ApprovalStore, Approver,
     NetworkReadGrant, SessionGrant, WorkerEpoch, APPROVAL_CHANNEL_VERSION, APPROVAL_SCHEMA_VERSION,
+};
+pub use gate::{
+    Gate, GateChain, GateDecision, GateRefusal, GateRequest, PostCallCtx, GATE_ERROR_PREFIX, GUARDRAIL_BLOCKED_EVENT,
 };
 pub use registry::{CallCtx, Registry, ToolDef, ToolHandler};
 pub use router::{CallOutcome, Router};
