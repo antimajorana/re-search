@@ -36,7 +36,9 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | F6 graph view and shared UI parts | done, reviewed and merged | `assets/graph_layout.js`, `graph_view.js`, `ui_badge.js`, `run_bar.js`, `quote_chip.js`; report `reports/f6-graph-ui.md` |
 | F14a PDF text core | done, reviewed and merged | `pdf_pages*.rs`, `pdf_firstpage*.rs`, `pdf_match.rs`; report `reports/f14a-pdf-core.md`. Not measured on real journal PDFs or scans |
 | F10 library | done, reviewed and merged; the `/api/library` routes are not registered yet (F5 does it) | `library*.rs`, `ledger/src/library_*.rs`, `routes_library.rs`; report `reports/f10-library.md` |
-| F11, X1, S3, S6 in one agent with subagents | brief `agents/q-f11-x1-s3-s6.md` | `gemini/modes/q-f11-x1-s3-s6` |
+| F11 literature services, X1 terms and ranking, S3 router gate | reviewed and merged | `lit_providers.rs`, `lit_abstracts.rs`, `idea_{terms,queries,rank}.rs`, `tools/src/gate.rs` |
+| S6 check worker protocol | cloud checkpoint received; Windows verification pending | `gemini/modes/q-f11-x1-s3-s6` |
+| F12 coverage gate and prior-work wording | brief ready | `agents/f12-coverage.md` |
 | Investigate lane A: V2, V3, V4, V5 in order | brief `agents/inv-a-v2-v5.md` | `gemini/modes/inv-a-v2-v5` |
 | F5 mode shell, F7 hand-off packet | brief `agents/f5-f7-mode-shell.md` | `gemini/modes/f5-f7-mode-shell` |
 | Library lane: F13a sources and sync, F16a corrections by code, F15 write-up core | brief `agents/lib-f13a-f16a-f15.md` | `gemini/modes/lib-f13a-f16a-f15` |

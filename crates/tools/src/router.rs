@@ -5,6 +5,7 @@ use crate::approval::{
     WorkerEpoch, APPROVAL_SCHEMA_VERSION,
 };
 use crate::canon::{canonical_json, random_hex};
+use crate::gate::{Gate, GateDecision, GateRequest, PostCallCtx, GUARDRAIL_BLOCKED_EVENT};
 use crate::registry::{check_args, CallCtx, Registry, ToolDef};
 use crate::EVENT_SCHEMA_VERSION;
 use ledger::Ledger;
@@ -55,6 +56,7 @@ pub struct Router {
     store: ApprovalStore,
     worker_instance: String,
     tool_profile: Option<String>,
+    gate: Option<Arc<dyn Gate>>,
 }
 
 impl Router {
@@ -68,6 +70,7 @@ impl Router {
             store: ApprovalStore::new(),
             worker_instance: random_hex(16),
             tool_profile: None,
+            gate: None,
         }
     }
 
@@ -75,6 +78,17 @@ impl Router {
     pub fn with_tool_profile(mut self, profile: impl Into<String>) -> Self {
         self.tool_profile = Some(profile.into());
         self
+    }
+
+    /// Attach a pre-policy gate and post-call hook (`solve.md` 5.1, 5.4, rule R11).
+    pub fn with_gate(mut self, gate: Arc<dyn Gate>) -> Self {
+        self.gate = Some(gate);
+        self
+    }
+
+    /// Installed router gate, if any.
+    pub fn gate(&self) -> Option<&Arc<dyn Gate>> {
+        self.gate.as_ref()
     }
 
     /// Tool profile id that built this router, if any.
@@ -162,7 +176,49 @@ impl Router {
             return self.finish_error(call_id, &format!("invalid arguments: {e}"));
         }
 
-        let request = self.policy_request(caller, tool_id, &canonical).expect("tool exists");
+        let gate_req = GateRequest {
+            session: &self.session,
+            caller,
+            tool_id,
+            call_id,
+            args,
+            canonical_args: &canonical,
+            effect: def.effect,
+            approval_scope: scope,
+        };
+        if let Some(gate) = &self.gate {
+            if let GateDecision::Block(refusal) = gate.before(&gate_req) {
+                self.record(
+                    GUARDRAIL_BLOCKED_EVENT,
+                    json!({
+                        "gate": refusal.gate,
+                        "tool": tool_id,
+                        "call_id": call_id,
+                        "message": refusal.message,
+                    }),
+                )?;
+                let outcome = self.finish_error(call_id, &refusal.formatted_error())?;
+                gate.on_outcome(&gate_req, &outcome);
+                return Ok(outcome);
+            }
+        }
+
+        let outcome = self.evaluate_and_dispatch(&gate_req, def, epoch_src)?;
+        if let Some(gate) = &self.gate {
+            gate.on_outcome(&gate_req, &outcome);
+        }
+        Ok(outcome)
+    }
+
+    fn evaluate_and_dispatch(
+        &self,
+        req: &GateRequest<'_>,
+        def: &ToolDef,
+        epoch_src: Option<&Arc<dyn WorkerEpoch>>,
+    ) -> Result<CallOutcome, String> {
+        let (caller, tool_id, args, canonical, call_id, scope) =
+            (req.caller, req.tool_id, req.args, req.canonical_args, req.call_id, req.approval_scope);
+        let request = self.policy_request(caller, tool_id, canonical).expect("tool exists");
         let response = policy::evaluate(&self.policy, &request);
         self.record(
             "policy.decision",
@@ -230,7 +286,7 @@ impl Router {
                     caller,
                     tool_id,
                     &def_hash,
-                    &canonical,
+                    canonical,
                     &self.policy.version,
                     &nonce,
                 );
@@ -247,7 +303,7 @@ impl Router {
                     tool_id: tool_id.to_string(),
                     scope,
                     effect: def.effect,
-                    canonical_args: canonical.clone(),
+                    canonical_args: canonical.to_string(),
                     policy_reason: response.reason.clone(),
                 });
                 let reply = outcome.reply;
@@ -421,6 +477,20 @@ impl Router {
                         result.insert("tool_call_ref".into(), json!(call_id));
                     }
                 }
+                // Run post-call hook with no ledger lock held so nested `ctx.router.try_call(...)`
+                // calls run deadlock-free and mutations to `value` are captured in `tool.result`.
+                if let Some(gate) = &self.gate {
+                    let mut post = PostCallCtx {
+                        router: self,
+                        session: &self.session,
+                        caller,
+                        tool_id,
+                        call_id,
+                        args,
+                        result: &mut value,
+                    };
+                    gate.after_success(&mut post)?;
+                }
                 let stored = self.inline_or_blob(&canonical_json(&value))?;
                 let mut payload = json!({ "call_id": call_id, "ok": true, "result": stored });
                 if let (Some(epoch), Some(request_id)) = (ctx.worker_epoch(), ctx.worker_request_id()) {
@@ -500,5 +570,7 @@ impl Router {
     }
 }
 
+#[cfg(test)]
+mod gate_tests;
 #[cfg(test)]
 mod tests;
