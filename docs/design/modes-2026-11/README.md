@@ -39,10 +39,11 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | F11 literature services, X1 terms and ranking, S3 router gate | reviewed and merged | `lit_providers.rs`, `lit_abstracts.rs`, `idea_{terms,queries,rank}.rs`, `tools/src/gate.rs` |
 | S6 check worker protocol | cloud checkpoint received; Windows verification pending | `gemini/modes/q-f11-x1-s3-s6` |
 | F12 coverage gate and prior-work wording | brief ready | `agents/f12-coverage.md` |
-| Investigate lane A: V2, V3, V4, V5 in order | brief `agents/inv-a-v2-v5.md` | `gemini/modes/inv-a-v2-v5` |
+| V2 Investigate dependencies, tags, numbering and bibliography | reviewed and merged | `crates/research-tools/src/skeleton/`; checkpoint `afea25b` |
+| Investigate lane A: V3, V4, V5 in order | in progress | `gemini/modes/inv-a-v2-v5` |
 | F5 mode shell, F7 hand-off packet | brief `agents/f5-f7-mode-shell.md` | `gemini/modes/f5-f7-mode-shell` |
 | Library lane: F13a sources and sync, F16a corrections by code, F15 write-up core | brief `agents/lib-f13a-f16a-f15.md` | `gemini/modes/lib-f13a-f16a-f15` |
-| V17 Investigate PDF skeleton | brief ready; launch after V2 merges (F14a merged) | `agents/inv-v17-pdf-skeleton.md` |
+| V17 Investigate PDF skeleton | brief ready; V2 and F14a merged | `agents/inv-v17-pdf-skeleton.md` |
 | V6 Investigate reader and task lifecycle | brief ready; launch after V3 merges (F1, F4, F9 merged) | `agents/inv-v6-tasks.md` |
 | F13b, F13c, F14b, F14c, F16b, mode adapters of F15 | planned, no brief yet | - |
 | S16 formal tier (Lean) | cut | - |
