@@ -1,7 +1,7 @@
 # Three modes, one foundation (2026-11)
 
 Plan and working files for the Investigate, Explore and Solve modes and the shared foundation
-packages F0 to F16 (F13 to F16 were added by the scope revision of 2026-11-25). The base branch is `gemini/work/fixed`; the integrator works on `claude/project-thread-caszr2`.
+packages F0 to F16 (F13 to F16 were added by the scope revision of 2026-11-25). The base branch is `gemini/work/fixed`.
 Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it needs.
 
 | File | What it is |
@@ -20,6 +20,14 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | F0 guard rails | done | work branch |
 | F2 paper key | done | work branch, `crates/research-tools/src/paper_key.rs` |
 | F8 evaluation harness skeleton | done | work branch, `crates/agent/tests/eval_support/`, `tests/fixtures/eval/`, `docs/design/eval-2026-11/` |
+| F8 Solve fixed case set Q | Neon launched | `gemini/modes/eval-q-cases` |
+| F8 Investigate fixed case set P | Neon launched | `gemini/modes/eval-p-cases` |
+| F1/F4/F14a integration review | Carbon launched | `gemini/modes/audit-mode-foundations` |
+| Later lane briefs | Neon planning launched | `gemini/modes/draft-next-lanes` |
+| F8 Solve evaluation gate and badge names | brief ready | `agents/eval-solve-badges.md` |
+| F9b Orchestrator and smaller worker routing | design recorded; Carbon review brief ready | `agents/audit-orchestration-routing.md` |
+| Solve evidence labels | brief ready; S2 merged | `agents/solve-evidence-labels.md` |
+| Solve comparison evidence | brief ready; S2 merged | `agents/solve-comparison-evidence.md` |
 | F3 network gate and paper fetch | done, reviewed and merged | `net_rate.rs`, `paper_fetch*.rs`, `ledger/src/fulltext_cache.rs`; report `reports/f3-net-gate.md` |
 | F4 quote core, F9 run budget | done, reviewed and merged | `quote_core.rs`, `lines_sent.rs`, `run_budget.rs`; report `reports/f4-f9-quote-budget.md` |
 | V1 skeleton core for TeX | done, reviewed and merged | `crates/research-tools/src/skeleton/`; report `reports/v1-skeleton.md` |
@@ -32,7 +40,9 @@ Priority (owner, 2026-11-25): Investigate first, with the foundation pieces it n
 | Investigate lane A: V2, V3, V4, V5 in order | brief `agents/inv-a-v2-v5.md` | `gemini/modes/inv-a-v2-v5` |
 | F5 mode shell, F7 hand-off packet | brief `agents/f5-f7-mode-shell.md` | `gemini/modes/f5-f7-mode-shell` |
 | Library lane: F13a sources and sync, F16a corrections by code, F15 write-up core | brief `agents/lib-f13a-f16a-f15.md` | `gemini/modes/lib-f13a-f16a-f15` |
-| F13b, F13c, F14b, F14c, F16b, V17, mode adapters of F15 | planned, no brief yet | - |
+| V17 Investigate PDF skeleton | brief ready; launch after V2 merges (F14a merged) | `agents/inv-v17-pdf-skeleton.md` |
+| V6 Investigate reader and task lifecycle | brief ready; launch after V3 merges (F1, F4, F9 merged) | `agents/inv-v6-tasks.md` |
+| F13b, F13c, F14b, F14c, F16b, mode adapters of F15 | planned, no brief yet | - |
 | S16 formal tier (Lean) | cut | - |
 | S22 engine manager (Cadabra2, FORM), V14 prior work in Investigate, version tracking (half of V10) | deferred | - |
 

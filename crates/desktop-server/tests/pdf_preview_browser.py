@@ -49,12 +49,14 @@ def check_pdf_preview(browser, binary):
             assert uploaded.ok, uploaded.text()
             source = uploaded.json()["ingested"][0]
             path, source_id = source["primary_path"], source["source_id"]
-            lines = (root / "data" / "sessions" / sid / "sources" / path).read_text(encoding="utf-8").splitlines()
+            # Form feeds mark PDF page boundaries. Only newlines advance source line numbers.
+            lines = (root / "data" / "sessions" / sid / "sources" / path).read_text(encoding="utf-8").split("\n")
+            first_line = next(i for i, text in enumerate(lines, 1) if text.strip() == "--- [Page 3] ---")
             line = next(i for i, text in enumerate(lines, 1) if "Green rectangle" in text)
             endpoint = f"{server}/api/sessions/{sid}/sources/{source_id}/original-pdf"
             assert page.request.get(endpoint).status == 401
             assert page.request.get(endpoint.replace(f"/{sid}/", f"/{other}/"), headers=headers).status == 404
-            first = page.request.get(endpoint + "?" + urlencode({"path":path,"line":2}), headers=headers)
+            first = page.request.get(endpoint + "?" + urlencode({"path":path,"line":first_line}), headers=headers)
             assert first.headers["x-research-pdf-page"] == "1" and first.body() == data
             page.evaluate("""async args => { const {openOriginalPdf} = await import('/assets/pdf_preview.js');
                 await openOriginalPdf(args); }""", {"sessionId":sid,"sourceId":source_id,"path":path,"startLine":line,"label":"Figure 5"})

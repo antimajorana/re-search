@@ -308,7 +308,7 @@ equal to the current ones; reviews and acknowledgements with `entry_sha256` equa
    | series | `series_match` to the order stated in the claim, or `vanishes_to_order`, with every coefficient compared exactly | Verified | "to O(x^n)", always shown: the claim is the truncated one |
    | series | the same checks with coefficients compared numerically | Checked numerically | "to O(x^n), numeric coefficients" |
    | value | `identity_numeric` where lhs and rhs were produced by two receipts with different `code_sha256` (this includes every SciPy result: quadrature, root finding, ODE solutions, linear algebra in floating point) | Checked numerically | "two runs agree, same solver" |
-   | value, equation | `independent_recompute` (blind task, package S20) | Verified if the two results are compared exactly, otherwise Checked numerically | "independent recompute" |
+   | value, equation | `independent_recompute` (blind task, package S20), with an explicit comparison kind and a check receipt | Verified for an exact comparison; Numerically checked for a recorded numeric comparison | "independent recompute" |
    | inequality | none. `counterexample_search` passing gives the sublabel "sampled, no counterexample" and the tier stays Unchecked | | |
 
    Three guards on Verified. (a) The exact check runs in the check process on the handles, never on text the model wrote, and a `True` returned by solver code is not a check. (b) Every Verified equation is also evaluated at the numeric points of `identity_numeric` for zero model calls; a disagreement gives Failed and is recorded as a suspected simplification error, because a computer algebra system can simplify wrongly across branch cuts. (c) The assumptions used by the simplification (signs, reality, integer-ness) are stored in the check record and shown in the why popover: Verified always means "under these assumptions".
@@ -333,6 +333,25 @@ step through rule 3, like anyone else's.
 **Flags**, shown on the badge and never hidden: "transcription unconfirmed", "same model", "to O(x^n)" on a truncated series,
 "rests on N assumptions made by the model", "OCR source" (a Cited step whose quote was matched in the text
 of a scanned page).
+
+#### Inspecting a check
+
+- Show the **own check** next to the **effective tier** when they differ. For example, "Own check:
+  Verified · Rests on: Lemma 2, unchecked." The dependency name opens the step holding the result back.
+- Display **Inconclusive**, **Not run**, and **Failed** with their recorded reasons. Distinguish a
+  timeout or an undecidable simplification from a counterexample. Keep the old receipt available
+  when its expression or assumptions change, and show it as **Stale**. Never count an inconclusive,
+  missing or stale comparison as a passing check.
+- Open the check recipe and output from its badge. Show the exact identity, assumptions and domain,
+  engine and version, and outcome. For numerics show the samples or seed, precision, tolerance and
+  worst residual or counterexample. Let the reader rerun the same recipe using the contained check
+  process. A rerun produces its own receipt and preserves the earlier one.
+- Link the smaller worker's assignment, submitted result and computation outputs next to the check.
+  Show the acceptance or rejection reason. Keep any verifier review separate. A model's agreement
+  and a missing comparison-kind indicator never grant a computation badge.
+
+S2 enforces the tier mapping, S9 and S20 write explicit comparison evidence, and S13 opens the
+receipts and rerun action. The worker details come from F9b (overview 3.4).
 
 ---
 
@@ -686,6 +705,21 @@ Nothing in the free column calls a paid service. The number of model calls is sh
 ---
 
 ## 11. What is borrowed from where
+
+### Solver agent patterns to apply
+
+Review of the re-Solve fork at `5d68b0115a42f294b9ff066f2d2eb854e45c46ed` confirms
+three patterns for this design. Keep the integration in the existing Rust and Python packages.
+
+| Pattern in re-Solve | Solve implementation |
+|---|---|
+| A step verifier can compute and retrieve evidence, and has a bounded role of its own. | S14 gives the verifier tools, a separate model route where available, and the relevant dependency closure. Report its review separately from a deterministic check. |
+| The coordinating solver must interpret a successful computation in a result linked to its receipt before proceeding. | S3/S11 enforce the gate in code and explain refusals where they occur. S8 pins the expression, assumptions, result and provenance to the ledger. |
+| Named expressions and the actual worker code and outputs can be used in later steps or inspected. | S6/S7 pass versioned exact handles with domain information. S9 records the evidence for each check. S13 and F9b show the worker assignment, output, computation and why a badge was earned. |
+
+Apply the current [evidence labels and worker activity contract](00-overview.md#210-one-evidence-scale-for-display).
+The final answer refers to checked steps and carries any remaining open items. A review verdict
+does not award a computation badge.
 
 | Source | Licence | Taken as | What |
 |---|---|---|---|
