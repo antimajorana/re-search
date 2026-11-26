@@ -210,14 +210,16 @@ impl Worker {
         env.insert("PYTHONNOUSERSITE".into(), "1".into());
         env.insert("PYTHONIOENCODING".into(), "utf-8".into());
 
+        let mut args = vec![
+            "-u".to_string(),
+            strip_verbatim(&self.config.script).to_string_lossy().into_owned(),
+            to_child.their_handle_value().to_string(),
+            from_child.their_handle_value().to_string(),
+        ];
+        args.extend(self.role.cli_args().iter().map(|arg| arg.to_string()));
         let launch = WorkerLaunch {
             exe: self.config.python.clone(),
-            args: vec![
-                "-u".to_string(),
-                strip_verbatim(&self.config.script).to_string_lossy().into_owned(),
-                to_child.their_handle_value().to_string(),
-                from_child.their_handle_value().to_string(),
-            ],
+            args,
             cwd: scratch,
             env,
             inherit_handles: vec![to_child.their_handle_value(), from_child.their_handle_value()],
@@ -248,7 +250,7 @@ impl Worker {
         let mut running = Running { proc, requests, responses: rx, hello: Value::Null };
         match running.responses.recv_timeout(self.config.startup_timeout) {
             Ok(line) => match serde_json::from_str::<Value>(&line) {
-                Ok(v) if v["ready"] == json!(true) && v["protocol"] == json!(PROTOCOL_VERSION) => {
+                Ok(v) if protocol::validate_hello(&v, self.role).is_ok() => {
                     running.hello = v;
                     self.running = Some(running);
                     Ok(())
@@ -337,6 +339,9 @@ impl Worker {
             return Err(WorkerError::Protocol("evaluate is forbidden on a check-role worker".into()));
         }
         self.check_epoch(required_epoch)?;
+        if exprs_in.is_some() && self.running.is_none() {
+            self.spawn()?;
+        }
         if exprs_in.is_some() && self.negotiated_protocol() == Some(1) {
             return Err(WorkerError::Protocol(
                 "exprs_in requires worker protocol >= 2 (connected worker speaks protocol 1)".into(),

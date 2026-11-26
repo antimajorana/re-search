@@ -103,7 +103,7 @@ def open_pipes(argv):
 
     fd_in = msvcrt.open_osfhandle(req_h, os.O_RDONLY | os.O_BINARY)
     fd_out = msvcrt.open_osfhandle(resp_h, os.O_BINARY)
-    return os.fdopen(fd_in, "rb", buffering=0), os.fdopen(fd_out, "wb", buffering=0), role
+    return os.fdopen(fd_in, "rb"), os.fdopen(fd_out, "wb", buffering=0), role
 
 
 def clip(text):
