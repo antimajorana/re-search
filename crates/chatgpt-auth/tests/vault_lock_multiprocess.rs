@@ -3,7 +3,9 @@
 
 use chatgpt_auth::vault::{self, VaultLock};
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(windows)]
+use std::io::{BufRead, BufReader};
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
