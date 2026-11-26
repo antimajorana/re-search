@@ -5,6 +5,10 @@ pub mod diff;
 pub mod fork;
 pub mod html;
 pub mod latex;
+pub mod writeup;
+pub mod writeup_bib;
+pub mod writeup_md;
+pub mod writeup_tex;
 pub mod zip;
 
 use ledger::Ledger;

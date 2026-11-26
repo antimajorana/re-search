@@ -1,0 +1,63 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,booktabs,hyperref}
+
+\title{Synthetic Lattice Sum Identity}
+\date{}
+
+\begin{document}
+\maketitle
+
+\noindent\textbf{Status:} Done with open items: 1 step checked numerically\\
+
+\section{Assumptions and Sources}
+\label{sec:setup}
+
+User-supplied lattice conventions for the finite chain.
+
+\noindent\textbf{e-1} [Given]: Let N >= 2 be an integer and let x > 0.
+
+\begin{quote}
+The discrete boundary sum equals 7/12 for every even chain length.
+\end{quote}
+\noindent --- \cite{voss2024lattice} (p. 2, line 4) (OCR)
+
+\noindent\textbf{e-2} [Cited]: Boundary sum lemma from the cited lattice note.
+
+\section{Derivation}
+\label{sec:derivation}
+
+We expand the polynomial identity and test the tail bound. \textit{(model)}
+
+% handle: poly_id@1
+\begin{equation}
+\label{eq:poly}
+(x + 1)^2 - (x^2 + 2x + 1) = 0
+\end{equation}
+
+\noindent\textbf{e-3} [Verified]: Symbolic expansion of the square vanishes identically.
+
+% handle: tail_err@1
+\[
+\left|\sum_{k=1}^{64} k^{-2} - \frac{\pi^2}{6}\right| < 0.016
+\]
+
+\noindent\textbf{e-4} [Checked numerically]: Partial sum matches the analytic limit at 12 points.
+
+\section*{How each statement was checked}
+
+\begin{tabular}{p{0.18\linewidth}p{0.28\linewidth}p{0.46\linewidth}}
+\toprule
+Step / Claim & How checked & Rests on \\
+\midrule
+e-1 & Given & --- \\
+e-2 & Cited & --- (OCR source) \\
+e-3 & Verified & e-1 \\
+e-4 & Checked numerically & e-1, e-3 \\
+\bottomrule
+\end{tabular}
+
+\bibliographystyle{plain}
+\bibliography{writeup_sample}
+
+\end{document}
