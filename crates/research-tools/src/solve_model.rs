@@ -155,19 +155,8 @@ impl<'de> Deserialize<'de> for HandleRef {
     }
 }
 
-/// Shared quote reference (package F4, `00-overview.md` section 2.5).
-/// Defined locally until F4 (`quote_core.rs`) is merged; replace with re-export on merge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QuoteRef {
-    pub source_id: String,
-    pub path: String,
-    pub start_line: usize,
-    pub end_line: usize,
-    pub file_sha256: String,
-    pub quote_sha256: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub evidence_seq: Option<u64>,
-}
+/// Shared quote reference re-exported from package F4 (`quote_core::QuoteRef`, `00-overview.md` 2.5).
+pub use crate::quote_core::QuoteRef;
 
 /// Folded representation of a shared `evidence.quote` event (`00-overview.md` 2.5 & 2.10).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

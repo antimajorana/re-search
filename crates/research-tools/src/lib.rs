@@ -67,6 +67,8 @@ mod solve_badge;
 pub mod solve_model;
 mod solve_model_records;
 mod solve_own_tier;
+pub mod solve_setup;
+mod solve_setup_prefill;
 pub mod solve_state;
 pub mod solve_status;
 pub mod source_dedupe;

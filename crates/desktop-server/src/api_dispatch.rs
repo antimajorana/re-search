@@ -306,6 +306,9 @@ pub(crate) fn dispatch_api(
         ("GET", ["api", "sessions", id, "handoffs"]) => {
             write_api_res(&mut stream, crate::handoff::handle_get_handoffs(state, id));
         }
+        (method, ["api", "sessions", id, "solve", rest @ ..]) => {
+            write_api_res(&mut stream, crate::solve::handle_solve(state, method, id, rest, &req.body));
+        }
         ("GET", ["api", "sessions", id, "diff", other_id]) => {
             write_api_res(&mut stream, handle_diff(state, id, other_id));
         }
