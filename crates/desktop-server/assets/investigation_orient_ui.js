@@ -28,12 +28,13 @@ export function isOrientTaskRunning(task) {
   return norm.key === 'running' || norm.key === 'waiting';
 }
 
+export function buildTaskPayload(hooks, base) {
+  const m = hooks?.getTaskModelOptions?.();
+  return m?.provider && m?.model ? { ...base, provider: m.provider, model: m.model } : { ...base };
+}
+
 export function buildOrientPayload(hooks) {
-  const modelOpts = hooks?.getTaskModelOptions?.();
-  if (modelOpts?.provider && modelOpts?.model) {
-    return { task: 'orient', provider: modelOpts.provider, model: modelOpts.model };
-  }
-  return { task: 'orient' };
+  return buildTaskPayload(hooks, { task: 'orient' });
 }
 
 export function watchModelConnection(isConnectedFn, onChange) {

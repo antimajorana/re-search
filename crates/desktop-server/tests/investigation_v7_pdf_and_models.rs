@@ -401,14 +401,26 @@ fn openai_only_orient_works_without_default_provider_and_rejects_cli_route() {
     let (st_cli, _, raw_cli) = req(&srv, "POST", &format!("/api/sessions/{sid}/investigation/tasks"), Some(&json!({ "task": "orient", "provider": "claude-cli" })));
     assert_eq!(st_cli, 400, "{raw_cli}");
 
-    // Omit provider/model: must resolve OpenAI automatically.
-    let (st_1, _, raw_1) = req(&srv, "POST", &format!("/api/sessions/{sid}/investigation/tasks"), Some(&json!({ "task": "orient" })));
+    // Omit provider/model when only OpenAI is connected and default_provider is unset:
+    // must fail cleanly with a "Choose a provider" error and NEVER fall back silently.
+    let (st_missing, _, raw_missing) = req(&srv, "POST", &format!("/api/sessions/{sid}/investigation/tasks"), Some(&json!({ "task": "orient" })));
+    assert_eq!(st_missing, 400, "{raw_missing}");
+    assert!(raw_missing.contains("Choose a provider"), "expected clear choose-a-provider error, got: {raw_missing}");
+    assert!(mock.captured().is_empty(), "OpenAI mock must NOT be called without an explicit provider choice");
+    assert_eq!(
+        Ledger::open(&data_dir).unwrap().read_session(sid).unwrap().iter().filter(|e| e.kind == "investigation.task_requested").count(),
+        0,
+        "refused task must not append investigation.task_requested"
+    );
+
+    // Explicitly choose OpenAI (as the UI toolbar / Orient controls do): succeeds cleanly.
+    let (st_1, _, raw_1) = req(&srv, "POST", &format!("/api/sessions/{sid}/investigation/tasks"), Some(&json!({ "task": "orient", "provider": "openai" })));
     assert_eq!(st_1, 202, "{raw_1}");
     wait_idle(&srv, sid);
     assert!(!mock.captured().is_empty(), "OpenAI mock must have been called");
 
     // Re-run Orient changing ONLY `attributed_to` -> must flag `changed` & `changed_since_last`.
-    let (st_2, _, raw_2) = req(&srv, "POST", &format!("/api/sessions/{sid}/investigation/tasks"), Some(&json!({ "task": "orient" })));
+    let (st_2, _, raw_2) = req(&srv, "POST", &format!("/api/sessions/{sid}/investigation/tasks"), Some(&json!({ "task": "orient", "provider": "openai" })));
     assert_eq!(st_2, 202, "{raw_2}");
     wait_idle(&srv, sid);
 

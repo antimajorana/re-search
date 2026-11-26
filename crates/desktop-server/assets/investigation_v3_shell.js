@@ -11,7 +11,7 @@ import { createQualityBanner, renderInvestigationOutline } from '/assets/investi
 import { filterResultNodes, renderInvestigationResults } from '/assets/investigation_results.js';
 import { lookupNearestSymbol, renderReadingPlanStrip, renderSymbolPopover } from '/assets/investigation_skip.js';
 import { createInvestigateWholeMap, VIEW_MODES } from '/assets/investigation_wholemap.js';
-import { mountOrientControls } from '/assets/investigation_orient_ui.js';
+import { buildTaskPayload, mountOrientControls } from '/assets/investigation_orient_ui.js';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -340,7 +340,7 @@ export function createInvestigationV3Controller(deps = {}) {
     const contextDrawer = st.contextDrawer;
     contextHost.replaceChildren(contextDrawer.element);
 
-    const startOpenTag = (tag) => apiMod.startInvestigationTask?.(sessionId, { task: 'open', tags: [tag] })?.then(refreshMv).catch((err) => hooks?.showStatus?.(err?.message || 'Could not open node.'));
+    const startOpenTag = (tag) => apiMod.startInvestigationTask?.(sessionId, buildTaskPayload(hooks, { task: 'open', tags: [tag] }))?.then(refreshMv)?.catch((err) => hooks?.showStatus?.(err?.message || 'Could not open node.'));
 
     const mountNodeCard = (entry) => {
       renderInvestigationNodeCard(nodeCardHost, mv, st.selectedTag, {
