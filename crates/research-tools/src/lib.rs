@@ -64,6 +64,9 @@ pub mod search_coverage;
 pub mod session_activity;
 pub mod skeleton;
 mod solve_badge;
+pub mod solve_defs;
+pub mod solve_exprs;
+mod solve_exprs_show;
 pub mod solve_model;
 mod solve_model_records;
 mod solve_own_tier;
@@ -112,7 +115,9 @@ pub use literature::{
     literature_search_def, run_literature_search, LiteratureHit, LiteratureRequest,
     LITERATURE_SEARCH,
 };
-pub use policy_preset::{research_policy, RESEARCH_POLICY_VERSION};
+pub use policy_preset::{
+    research_policy, solve_policy, RESEARCH_POLICY_VERSION, SOLVE_POLICY_VERSION,
+};
 pub use proof_dag::{
     effective_verification_verdict, ledger_append_def, ledger_query_def, ledger_supersede_def, read_proof_dag, ProofDag,
     ProofEntry, ProofStatus, LEDGER_APPEND, LEDGER_QUERY, LEDGER_SUPERSEDE,

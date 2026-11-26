@@ -184,6 +184,7 @@ fn build_router_inner(
                     sympy_epoch,
                     sympy_handler,
                     session_title_handler: None,
+                    solve_check: None,
                 },
             )?;
             (policy, Some(profile.name))
