@@ -7,16 +7,14 @@
 //! Needs no PDF first-page extraction for metadata and never modifies any file on disk.
 
 use crate::library::{
-    LibraryIds, SourceItemFile, SourceItemRecord, SourceItemState, SourceKind, SourceRecord,
+    SourceItemFile, SourceItemRecord, SourceItemState, SourceKind, SourceRecord,
 };
-use crate::paper_key::{canonical_doi, split_arxiv_id};
 use crate::paper_sources::{
     canonicalize_source_root, derive_paper_key, file_meta_without_reading, hash_contained_file,
     portable_path_string, read_contained_bytes, resolve_contained_abs, resolve_contained_rel,
     PaperSourceAdapter, ScanContext, ScanOutput, ScanWarning, ScannedItem, FILE_ROLE_PDF,
     FILE_ROLE_TEX, MAX_SOURCE_TEXT_BYTES,
 };
-use crate::pdf_firstpage::normalize_valid_isbn;
 use crate::pdf_pages::MAX_USER_PDF_BYTES;
 use crate::sandbox::is_symlink_or_junction;
 pub use crate::source_bibtex_parse::{
@@ -508,113 +506,9 @@ fn is_absolute_portable(norm: &str) -> bool {
             && norm.as_bytes()[2] == b'/')
 }
 
-pub(crate) fn extract_bibtex_ids(fields: &BTreeMap<String, String>) -> (LibraryIds, Option<String>) {
-    let mut ids = LibraryIds::default();
-    let mut version: Option<String> = None;
-
-    if let Some(raw_doi) = fields.get("doi") {
-        if let Ok(norm) = canonical_doi(raw_doi) {
-            if let Some(ax_part) = norm.strip_prefix("10.48550/arxiv.") {
-                if let Ok((base, ver)) = split_arxiv_id(ax_part) {
-                    ids.arxiv = Some(base);
-                    version = ver;
-                }
-            }
-            ids.doi = Some(norm);
-        }
-    }
-
-    if let Some(raw_ax) = fields.get("arxiv").or_else(|| fields.get("archiveid")) {
-        if let Ok((base, ver)) = split_arxiv_id(raw_ax) {
-            ids.arxiv = Some(base);
-            if ver.is_some() {
-                version = ver;
-            }
-        }
-    }
-
-    if ids.arxiv.is_none() {
-        if let Some(eprint) = fields.get("eprint") {
-            let prefix = fields
-                .get("archiveprefix")
-                .or_else(|| fields.get("eprinttype"))
-                .map(|s| s.trim().to_ascii_lowercase());
-            let allow_eprint = prefix.as_deref().is_none_or(|p| p.is_empty() || p == "arxiv");
-            if allow_eprint {
-                if let Ok((base, ver)) = split_arxiv_id(eprint) {
-                    ids.arxiv = Some(base);
-                    if ver.is_some() {
-                        version = ver;
-                    }
-                }
-            }
-        }
-    }
-
-    if ids.arxiv.is_none() {
-        if let Some(url) = fields.get("url") {
-            if let Some((base, ver)) = parse_arxiv_from_url(url) {
-                ids.arxiv = Some(base);
-                if ver.is_some() {
-                    version = ver;
-                }
-            }
-        }
-    }
-
-    if let Some(raw_isbn) = fields.get("isbn") {
-        if let Some(norm) = normalize_valid_isbn(raw_isbn) {
-            ids.isbn = Some(norm);
-        }
-    }
-
-    (ids, version)
-}
-
-pub(crate) fn parse_arxiv_from_url(raw: &str) -> Option<(String, Option<String>)> {
-    let low = raw.to_ascii_lowercase();
-    for marker in ["arxiv.org/abs/", "arxiv.org/pdf/", "arxiv.org/e-print/"] {
-        if let Some(idx) = low.find(marker) {
-            let tail = &raw[idx + marker.len()..];
-            let token = tail
-                .split(['?', '#', ' ', '\t', '\r', '\n'])
-                .next()
-                .unwrap_or("")
-                .trim_end_matches('/')
-                .trim_end_matches(".pdf");
-            if let Ok(parsed) = split_arxiv_id(token) {
-                return Some(parsed);
-            }
-        }
-    }
-    None
-}
-
-fn split_list_field(raw: Option<&String>) -> Vec<String> {
-    let Some(text) = raw else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for part in text.split([',', ';']) {
-        let item = decode_tex_text(part);
-        if !item.is_empty() && !out.contains(&item) {
-            out.push(item);
-        }
-    }
-    out
-}
-
-fn normalize_bib_item_kind(entry_type: &str) -> String {
-    match entry_type.to_ascii_lowercase().as_str() {
-        "article" => "journalArticle".to_string(),
-        "inproceedings" | "conference" => "conferencePaper".to_string(),
-        "book" | "inbook" | "incollection" => "book".to_string(),
-        "phdthesis" | "mastersthesis" => "thesis".to_string(),
-        "techreport" => "report".to_string(),
-        "misc" | "unpublished" | "preprint" => "preprint".to_string(),
-        other => other.to_string(),
-    }
-}
+pub(crate) use crate::source_bibtex_tex::{
+    extract_bibtex_ids, normalize_bib_item_kind, parse_arxiv_from_url, split_list_field,
+};
 
 #[cfg(test)]
 #[path = "source_bibtex_tests.rs"]
