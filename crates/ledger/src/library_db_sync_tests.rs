@@ -118,6 +118,7 @@ fn apply_source_sync_batch_rolls_back_all_tables_on_alias_fk_error() {
             "pdf",
         )],
         stale_user_paths: Vec::new(),
+        stale_user_fulltext_keys: Vec::new(),
         affected_fulltext_keys: Vec::new(),
         sync_ts_ms: 2_000,
         next_state: "synced".into(),
@@ -182,6 +183,7 @@ fn apply_source_sync_batch_rejects_stale_snapshot_and_removed_source() {
             "pdf",
         )],
         stale_user_paths: Vec::new(),
+        stale_user_fulltext_keys: Vec::new(),
         affected_fulltext_keys: Vec::new(),
         sync_ts_ms: 5_000,
         next_state: "synced".into(),
@@ -215,6 +217,7 @@ fn apply_source_sync_batch_rejects_stale_snapshot_and_removed_source() {
         aliases: Vec::new(),
         upsert_user_fulltext: Vec::new(),
         stale_user_paths: Vec::new(),
+        stale_user_fulltext_keys: Vec::new(),
         affected_fulltext_keys: Vec::new(),
         sync_ts_ms: 4_000,
         next_state: "synced".into(),
@@ -235,6 +238,7 @@ fn apply_source_sync_batch_rejects_stale_snapshot_and_removed_source() {
         aliases: Vec::new(),
         upsert_user_fulltext: Vec::new(),
         stale_user_paths: Vec::new(),
+        stale_user_fulltext_keys: Vec::new(),
         affected_fulltext_keys: Vec::new(),
         sync_ts_ms: 5_000,
         next_state: "synced".into(),
@@ -252,6 +256,7 @@ fn apply_source_sync_batch_rejects_stale_snapshot_and_removed_source() {
         aliases: Vec::new(),
         upsert_user_fulltext: Vec::new(),
         stale_user_paths: Vec::new(),
+        stale_user_fulltext_keys: Vec::new(),
         affected_fulltext_keys: Vec::new(),
         sync_ts_ms: 6_000,
         next_state: "synced".into(),
@@ -332,6 +337,7 @@ fn unregister_source_atomic_preserves_overlapping_paths_fallback_copies_and_othe
             make_user_ft("arxiv:2502.00001", Some("v1"), "/virtual/vault/arxiv_local.pdf", "pdf"),
         ],
         stale_user_paths: Vec::new(),
+        stale_user_fulltext_keys: Vec::new(),
         affected_fulltext_keys: Vec::new(),
         sync_ts_ms: 2_000,
         next_state: "synced".into(),
@@ -375,6 +381,7 @@ fn unregister_source_atomic_preserves_overlapping_paths_fallback_copies_and_othe
             "pdf",
         )],
         stale_user_paths: Vec::new(),
+        stale_user_fulltext_keys: Vec::new(),
         affected_fulltext_keys: Vec::new(),
         sync_ts_ms: 2_500,
         next_state: "synced".into(),
@@ -407,6 +414,170 @@ fn unregister_source_atomic_preserves_overlapping_paths_fallback_copies_and_othe
     assert!(db.list_fulltext_for_paper("doi:10.9999/shared.path").unwrap().is_empty());
     assert!(db.list_fulltext_for_paper("doi:10.9999/two.copies").unwrap().is_empty());
     assert_eq!(db.list_fulltext_for_paper("arxiv:2502.00001").unwrap().len(), 1);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn register_source_atomic_and_live_alias_convergence_and_rekey_prune() {
+    let dir = temp_dir("reg-alias-rekey");
+    let db = LibraryDb::open(&dir).unwrap();
+
+    // 1. register_source_atomic preserves synced state on identical re-registration and rejects conflicts.
+    let s1 = make_source("src-a", "folder", "/virtual/a");
+    let (stored, created) = db.register_source_atomic(&s1).unwrap();
+    assert!(created);
+    let snap = SourceSyncSnapshot::from_source_row(&stored);
+    let b1 = SourceSyncBatch {
+        expected_source: snap,
+        upsert_source_items: vec![make_item(
+            "src-a",
+            "p.pdf",
+            "arxiv:2506.00001",
+            None,
+            "/virtual/a/p.pdf",
+            "pdf",
+            "Canonical Preprint",
+        )],
+        paper_updates: vec![SourceSyncPaperUpdate {
+            paper_key: "arxiv:2506.00001".into(),
+            ids_json: r#"{"arxiv":"2506.00001","doi":"10.9999/conv.1"}"#.into(),
+            title: "Canonical Preprint".into(),
+            authors_json: r#"["Ada Synth"]"#.into(),
+            year: Some(2025),
+            abstract_text: String::new(),
+            venue: None,
+            seen_ms: 1000,
+            mode: PaperUpdateMode::UpsertMerge,
+        }],
+        aliases: vec![("doi:10.9999/conv.1".into(), "arxiv:2506.00001".into())],
+        upsert_user_fulltext: vec![make_user_ft(
+            "arxiv:2506.00001",
+            None,
+            "/virtual/a/p.pdf",
+            "pdf",
+        )],
+        stale_user_paths: Vec::new(),
+        stale_user_fulltext_keys: Vec::new(),
+        affected_fulltext_keys: Vec::new(),
+        sync_ts_ms: 1000,
+        next_state: "synced".into(),
+    };
+    db.apply_source_sync_batch(&b1).unwrap();
+
+    // Identical re-register preserves state="synced" and last_sync_ms=Some(1000).
+    let (again, created2) = db.register_source_atomic(&s1).unwrap();
+    assert!(!created2);
+    assert_eq!(again.state, "synced");
+    assert_eq!(again.last_sync_ms, Some(1000));
+
+    // Different root under same id is rejected.
+    let conflict = make_source("src-a", "folder", "/virtual/other");
+    assert!(db.register_source_atomic(&conflict).is_err());
+
+    // 2. Concurrent second source committing with secondary DOI key converges onto live alias `arxiv:2506.00001`.
+    let s2 = make_source("src-b", "folder", "/virtual/b");
+    let (stored_b, _) = db.register_source_atomic(&s2).unwrap();
+    let b2 = SourceSyncBatch {
+        expected_source: SourceSyncSnapshot::from_source_row(&stored_b),
+        upsert_source_items: vec![make_item(
+            "src-b",
+            "pub.pdf",
+            "doi:10.9999/conv.1",
+            None,
+            "/virtual/b/pub.pdf",
+            "pdf",
+            "Published Copy",
+        )],
+        paper_updates: vec![SourceSyncPaperUpdate {
+            paper_key: "doi:10.9999/conv.1".into(),
+            ids_json: r#"{"doi":"10.9999/conv.1"}"#.into(),
+            title: "Published Copy".into(),
+            authors_json: r#"["Ada Synth"]"#.into(),
+            year: Some(2025),
+            abstract_text: String::new(),
+            venue: None,
+            seen_ms: 1500,
+            mode: PaperUpdateMode::UpsertMerge,
+        }],
+        aliases: Vec::new(),
+        upsert_user_fulltext: Vec::new(),
+        stale_user_paths: Vec::new(),
+        stale_user_fulltext_keys: Vec::new(),
+        affected_fulltext_keys: Vec::new(),
+        sync_ts_ms: 1500,
+        next_state: "synced".into(),
+    };
+    db.apply_source_sync_batch(&b2).unwrap();
+    // No unmerged duplicate `paper` row for `doi:10.9999/conv.1`.
+    assert!(db.get_paper("doi:10.9999/conv.1").unwrap().is_none());
+    let b_items = db.list_source_items_for_source("src-b").unwrap();
+    assert_eq!(b_items[0].paper_key.as_deref(), Some("arxiv:2506.00001"));
+
+    // 3. Re-keying an item prunes its orphaned old-key fulltext row even though file path stayed active.
+    let s3 = make_source("src-c", "folder", "/virtual/c");
+    let (stored_c, _) = db.register_source_atomic(&s3).unwrap();
+    let c1 = SourceSyncBatch {
+        expected_source: SourceSyncSnapshot::from_source_row(&stored_c),
+        upsert_source_items: vec![make_item(
+            "src-c",
+            "local.pdf",
+            "file:0123456789abcdef",
+            None,
+            "/virtual/c/local.pdf",
+            "pdf",
+            "Local Unkeyed",
+        )],
+        paper_updates: Vec::new(),
+        aliases: Vec::new(),
+        upsert_user_fulltext: vec![make_user_ft(
+            "file:0123456789abcdef",
+            None,
+            "/virtual/c/local.pdf",
+            "pdf",
+        )],
+        stale_user_paths: Vec::new(),
+        stale_user_fulltext_keys: Vec::new(),
+        affected_fulltext_keys: Vec::new(),
+        sync_ts_ms: 2000,
+        next_state: "synced".into(),
+    };
+    db.apply_source_sync_batch(&c1).unwrap();
+    assert_eq!(db.list_fulltext_for_paper("file:0123456789abcdef").unwrap().len(), 1);
+
+    let live_c = db.list_sources().unwrap().into_iter().find(|s| s.id == "src-c").unwrap();
+    let c2 = SourceSyncBatch {
+        expected_source: SourceSyncSnapshot::from_source_row(&live_c),
+        upsert_source_items: vec![make_item(
+            "src-c",
+            "local.pdf",
+            "doi:10.9999/rekeyed.1",
+            None,
+            "/virtual/c/local.pdf",
+            "pdf",
+            "Local Now Keyed",
+        )],
+        paper_updates: Vec::new(),
+        aliases: Vec::new(),
+        upsert_user_fulltext: vec![make_user_ft(
+            "doi:10.9999/rekeyed.1",
+            None,
+            "/virtual/c/local.pdf",
+            "pdf",
+        )],
+        stale_user_paths: Vec::new(),
+        stale_user_fulltext_keys: vec![(
+            "file:0123456789abcdef".into(),
+            String::new(),
+            "/virtual/c/local.pdf".into(),
+        )],
+        affected_fulltext_keys: Vec::new(),
+        sync_ts_ms: 2500,
+        next_state: "synced".into(),
+    };
+    db.apply_source_sync_batch(&c2).unwrap();
+    assert!(db.list_fulltext_for_paper("file:0123456789abcdef").unwrap().is_empty());
+    assert_eq!(db.list_fulltext_for_paper("doi:10.9999/rekeyed.1").unwrap().len(), 1);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

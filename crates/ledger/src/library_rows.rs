@@ -228,6 +228,9 @@ pub struct SourceSyncBatch {
     pub aliases: Vec<(String, String)>,
     pub upsert_user_fulltext: Vec<LibraryFulltextRow>,
     pub stale_user_paths: Vec<String>,
+    /// `(paper_key, version, file_path)` tuples whose key/version changed while the path may
+    /// still be active under a different key; pruned only when no active source item matches.
+    pub stale_user_fulltext_keys: Vec<(String, String, String)>,
     pub affected_fulltext_keys: Vec<(String, String)>,
     pub sync_ts_ms: i64,
     pub next_state: String,

@@ -379,6 +379,18 @@ impl Library {
             .map_err(|e| e.to_string())
     }
 
+    pub fn register_source_atomic(
+        &self,
+        record: &SourceRecord,
+    ) -> Result<(SourceRecord, bool), String> {
+        let row = record.to_row()?;
+        let (stored, created) = self
+            .db
+            .register_source_atomic(&row)
+            .map_err(|e| e.to_string())?;
+        Ok((SourceRecord::from_row(stored)?, created))
+    }
+
     pub fn apply_source_sync_batch(&self, batch: &SourceSyncBatch) -> Result<i64, String> {
         self.db
             .apply_source_sync_batch(batch)

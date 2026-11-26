@@ -216,11 +216,15 @@ pub fn resolve_contained_abs(canon_root: &Path, candidate: &Path) -> Result<Path
     }
     let clean_root = strip_verbatim_prefix(canon_root);
     let clean_cand = strip_verbatim_prefix(candidate);
-    let rel = clean_cand
-        .strip_prefix(&clean_root)
-        .map_err(|_| format!("path `{}` escapes registered root `{}`", candidate.display(), clean_root.display()))?;
+    let rel_comps = strip_root_components(&clean_root, &clean_cand).ok_or_else(|| {
+        format!(
+            "path `{}` escapes registered root `{}`",
+            candidate.display(),
+            clean_root.display()
+        )
+    })?;
     let mut parts = Vec::new();
-    for comp in rel.components() {
+    for comp in rel_comps {
         match comp {
             Component::CurDir => {}
             Component::Normal(os) => {
@@ -241,6 +245,27 @@ pub fn resolve_contained_abs(canon_root: &Path, candidate: &Path) -> Result<Path
         return Ok(clean_root);
     }
     walk_contained_parts(&clean_root, &parts, &raw)
+}
+
+fn strip_root_components<'a>(root: &Path, cand: &'a Path) -> Option<Vec<Component<'a>>> {
+    let r_comps: Vec<_> = root.components().collect();
+    let c_comps: Vec<_> = cand.components().collect();
+    if c_comps.len() < r_comps.len() {
+        return None;
+    }
+    for (rc, cc) in r_comps.iter().zip(c_comps.iter()) {
+        #[cfg(windows)]
+        let eq = rc
+            .as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&cc.as_os_str().to_string_lossy());
+        #[cfg(not(windows))]
+        let eq = rc == cc;
+        if !eq {
+            return None;
+        }
+    }
+    Some(c_comps[r_comps.len()..].to_vec())
 }
 
 fn walk_contained_parts(
@@ -379,17 +404,18 @@ pub fn attach_source_paper_to_session(
     version: Option<&str>,
     section_filter: Option<&str>,
 ) -> Result<IngestedSource, String> {
-    if let Ok(ingested) = lib.attach_to_session(sandbox, ledger, session_id, key, version, section_filter) {
-        return Ok(ingested);
-    }
     let canonical = lib.resolve_key(key)?.unwrap_or_else(|| key.clone());
+    if lib.read_fulltext_bytes(&canonical, version)?.is_some() {
+        return lib.attach_to_session(sandbox, ledger, session_id, &canonical, version, section_filter);
+    }
     let detail = lib
         .get_paper(&canonical)?
         .ok_or_else(|| format!("paper `{canonical}` not found in library"))?;
 
     let allowed_roots = collect_allowed_roots_for_sources(&lib.list_sources()?);
-    let chosen = pick_best_user_file(&detail.source_items, &detail.fulltext)
-        .ok_or_else(|| format!("no readable full-text file found in library for `{canonical}`"))?;
+    let (chosen, chosen_version) =
+        pick_best_user_file(&detail.source_items, &detail.fulltext, version)
+            .ok_or_else(|| format!("no readable full-text file found in library for `{canonical}`"))?;
 
     let cand_path = PathBuf::from(&chosen.path);
     let safe_root = allowed_roots
@@ -418,10 +444,15 @@ pub fn attach_source_paper_to_session(
         .unwrap_or("paper.pdf")
         .to_string();
     let format = format_from_path_and_role(&chosen.path, &chosen.role);
+    let effective_version = version
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .or(chosen_version);
 
-    let _ = lib.upsert_user_library_fulltext(&FulltextRecord {
+    lib.upsert_user_library_fulltext(&FulltextRecord {
         key: canonical.clone(),
-        version: version.map(str::to_string),
+        version: effective_version,
         raw_blob: None,
         format,
         bytes: raw_bytes.len() as u64,
@@ -431,7 +462,7 @@ pub fn attach_source_paper_to_session(
         file_size: Some(size),
         file_mtime_ms: Some(mtime_ms),
         file_sha256: Some(sha),
-    });
+    })?;
 
     let title = (!detail.paper.title.trim().is_empty()).then_some(detail.paper.title.as_str());
     let origin = format!("user_library:{canonical}");
@@ -472,33 +503,48 @@ fn collect_allowed_roots_for_sources(sources: &[SourceRecord]) -> Vec<PathBuf> {
 fn pick_best_user_file(
     items: &[SourceItemRecord],
     fulltext: &[FulltextRecord],
-) -> Option<SourceItemFile> {
-    // Prefer TeX over PDF when both exist (`00-overview.md` 2.11).
+    requested_version: Option<&str>,
+) -> Option<(SourceItemFile, Option<String>)> {
+    let wanted = requested_version.map(str::trim).filter(|v| !v.is_empty());
+    // Prefer TeX over PDF when both exist (`00-overview.md` 2.11), matching requested version if given.
     for want_role in [FILE_ROLE_TEX, FILE_ROLE_PDF] {
         for item in items {
             if item.state == SourceItemState::Missing {
                 continue;
             }
+            if let Some(v) = wanted {
+                if item.version.as_deref().map(str::trim) != Some(v) {
+                    continue;
+                }
+            }
             if let Some(f) = item.files.iter().find(|f| f.role == want_role) {
-                return Some(f.clone());
+                return Some((f.clone(), item.version.clone()));
             }
         }
     }
     for ft in fulltext {
         if ft.origin == ORIGIN_USER_LIBRARY {
+            if let Some(v) = wanted {
+                if ft.version.as_deref().map(str::trim) != Some(v) {
+                    continue;
+                }
+            }
             if let Some(path) = &ft.file_path {
                 let role = if ft.format == "tex" {
                     FILE_ROLE_TEX
                 } else {
                     FILE_ROLE_PDF
                 };
-                return Some(SourceItemFile {
-                    path: path.clone(),
-                    role: role.to_string(),
-                    size: ft.file_size.unwrap_or(ft.bytes),
-                    mtime_ms: ft.file_mtime_ms.unwrap_or(0),
-                    sha256: ft.file_sha256.clone(),
-                });
+                return Some((
+                    SourceItemFile {
+                        path: path.clone(),
+                        role: role.to_string(),
+                        size: ft.file_size.unwrap_or(ft.bytes),
+                        mtime_ms: ft.file_mtime_ms.unwrap_or(0),
+                        sha256: ft.file_sha256.clone(),
+                    },
+                    ft.version.clone(),
+                ));
             }
         }
     }

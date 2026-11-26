@@ -294,6 +294,7 @@ pub(crate) fn build_source_sync_batch(
     let mut alias_map: BTreeMap<String, String> = BTreeMap::new();
     let mut upsert_user_fulltext = Vec::new();
     let mut new_active_paths: BTreeSet<String> = BTreeSet::new();
+    let mut new_active_key_ver_paths: BTreeSet<(String, String, String)> = BTreeSet::new();
 
     for entry in entries {
         if entry.dirty {
@@ -302,9 +303,20 @@ pub(crate) fn build_source_sync_batch(
         if entry.item.state == SourceItemState::Missing {
             continue;
         }
+        let entry_ver = entry
+            .item
+            .version
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
         for f in &entry.item.files {
             if f.role != FILE_ROLE_NOTE && !f.path.is_empty() {
-                new_active_paths.insert(f.path.clone());
+                let norm = normalize_sync_path(&f.path);
+                new_active_paths.insert(norm.clone());
+                if let Some(key) = &entry.item.key {
+                    new_active_key_ver_paths.insert((key.to_string(), entry_ver.clone(), norm));
+                }
             }
         }
         let Some(key) = &entry.item.key else {
@@ -368,20 +380,38 @@ pub(crate) fn build_source_sync_batch(
     }
 
     let mut stale_paths_set: BTreeSet<String> = BTreeSet::new();
+    let mut stale_key_ver_paths: BTreeSet<(String, String, String)> = BTreeSet::new();
     let mut affected_keys_set: BTreeSet<(String, String)> = BTreeSet::new();
     for prev in previous {
+        let prev_ver = prev
+            .version
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string();
         let mut had_stale = false;
         for f in &prev.files {
-            if f.role != FILE_ROLE_NOTE && !f.path.is_empty() && !new_active_paths.contains(&f.path)
-            {
-                stale_paths_set.insert(f.path.clone());
-                had_stale = true;
+            if f.role != FILE_ROLE_NOTE && !f.path.is_empty() {
+                let norm = normalize_sync_path(&f.path);
+                if !new_active_paths.contains(&norm) {
+                    stale_paths_set.insert(f.path.clone());
+                    had_stale = true;
+                } else if let Some(pk) = &prev.key {
+                    let tuple = (pk.to_string(), prev_ver.clone(), norm);
+                    if !new_active_key_ver_paths.contains(&tuple) {
+                        stale_key_ver_paths.insert((
+                            pk.to_string(),
+                            prev_ver.clone(),
+                            f.path.clone(),
+                        ));
+                        had_stale = true;
+                    }
+                }
             }
         }
         if had_stale {
             if let Some(pk) = &prev.key {
-                let ver = prev.version.as_deref().map(str::trim).unwrap_or("").to_string();
-                affected_keys_set.insert((pk.to_string(), ver));
+                affected_keys_set.insert((pk.to_string(), prev_ver));
             }
         }
     }
@@ -393,10 +423,26 @@ pub(crate) fn build_source_sync_batch(
         aliases: alias_map.into_iter().collect(),
         upsert_user_fulltext,
         stale_user_paths: stale_paths_set.into_iter().collect(),
+        stale_user_fulltext_keys: stale_key_ver_paths.into_iter().collect(),
         affected_fulltext_keys: affected_keys_set.into_iter().collect(),
         sync_ts_ms: ts,
         next_state: SOURCE_STATE_SYNCED.to_string(),
     })
+}
+
+fn normalize_sync_path(raw: &str) -> String {
+    let mut s = raw.trim().replace('\\', "/");
+    if let Some(rest) = s.strip_prefix("//?/") {
+        s = rest.to_string();
+    }
+    while s.len() > 1 && s.ends_with('/') {
+        s.pop();
+    }
+    #[cfg(windows)]
+    {
+        s.make_ascii_lowercase();
+    }
+    s
 }
 
 fn build_user_fulltext_row(

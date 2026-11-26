@@ -20,7 +20,12 @@ pub(crate) struct ActiveSourceFile {
 }
 
 pub(crate) type SourcePathsAndKeys = (Vec<String>, Vec<(String, String)>);
-pub(crate) type ActiveFilesIndex = (BTreeSet<String>, BTreeMap<(String, String), ActiveSourceFile>);
+
+pub(crate) struct ActiveFilesIndex {
+    pub(crate) paths: BTreeSet<String>,
+    pub(crate) key_ver_paths: BTreeSet<(String, String, String)>,
+    pub(crate) by_key: BTreeMap<(String, String), ActiveSourceFile>,
+}
 
 pub(crate) fn collect_source_paths_and_keys(
     conn: &Connection,
@@ -65,15 +70,18 @@ pub(crate) fn collect_active_source_files(conn: &Connection) -> Result<ActiveFil
             r.get::<_, String>(2)?,
         ))
     })?;
-    let mut active_paths = BTreeSet::new();
+    let mut paths = BTreeSet::new();
+    let mut key_ver_paths = BTreeSet::new();
     let mut by_key: BTreeMap<(String, String), ActiveSourceFile> = BTreeMap::new();
     for row in rows {
         let (pk, ver, files_json) = row?;
         let ver_norm = ver.as_deref().map(str::trim).unwrap_or("").to_string();
         for f in parse_non_note_files(&files_json) {
-            active_paths.insert(normalize_index_path(&f.path));
+            let norm_path = normalize_index_path(&f.path);
+            paths.insert(norm_path.clone());
             if let Some(ref key) = pk {
                 if !key.is_empty() {
+                    key_ver_paths.insert((key.clone(), ver_norm.clone(), norm_path));
                     let kv = (key.clone(), ver_norm.clone());
                     let replace = match by_key.get(&kv) {
                         None => true,
@@ -91,7 +99,11 @@ pub(crate) fn collect_active_source_files(conn: &Connection) -> Result<ActiveFil
             }
         }
     }
-    Ok((active_paths, by_key))
+    Ok(ActiveFilesIndex {
+        paths,
+        key_ver_paths,
+        by_key,
+    })
 }
 
 fn parse_non_note_files(files_json: &str) -> Vec<ActiveSourceFile> {
@@ -266,6 +278,43 @@ pub(crate) fn prune_unreferenced_user_fulltext_in_tx(
             "DELETE FROM fulltext WHERE paper_key = ?1 AND version = ?2 AND origin = ?3",
             params![pk, ver, ORIGIN_USER_LIBRARY],
         )?;
+    }
+    Ok(removed)
+}
+
+/// Prune `user_library` fulltext rows orphaned when an item changed `paper_key` or `version`
+/// while its file path stayed active under the new key. Preserves any `(paper_key, version, path)`
+/// still referenced by an active `source_item` and never touches unrelated origins.
+pub(crate) fn prune_rekeyed_user_fulltext_in_tx(
+    conn: &Connection,
+    candidates: &[(String, String, String)],
+    active_key_ver_paths: &BTreeSet<(String, String, String)>,
+) -> Result<usize> {
+    let mut removed = 0usize;
+    for (pk, ver, path) in candidates {
+        let ver_norm = ver.trim().to_string();
+        let path_norm = normalize_index_path(path);
+        if pk.is_empty()
+            || path_norm.is_empty()
+            || active_key_ver_paths.contains(&(pk.clone(), ver_norm.clone(), path_norm.clone()))
+        {
+            continue;
+        }
+        let existing: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT origin, file_path FROM fulltext WHERE paper_key = ?1 AND version = ?2",
+                params![pk, ver_norm],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?;
+        if let Some((origin, Some(ft_path))) = existing {
+            if origin == ORIGIN_USER_LIBRARY && normalize_index_path(&ft_path) == path_norm {
+                removed += conn.execute(
+                    "DELETE FROM fulltext WHERE paper_key = ?1 AND version = ?2 AND origin = ?3",
+                    params![pk, ver_norm, ORIGIN_USER_LIBRARY],
+                )?;
+            }
+        }
     }
     Ok(removed)
 }

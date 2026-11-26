@@ -5,9 +5,9 @@
 //! transaction while leaving all expensive filesystem scans outside the write lock.
 
 use crate::library_db::{validate_non_empty, LibraryDb};
-use crate::library_db_query::refresh_fts_with_conn;
+use crate::library_db_query::refresh_fts_metadata_in_tx;
 use crate::library_db_sync_ft::{
-    collect_active_source_files, collect_source_paths_and_keys,
+    collect_active_source_files, collect_source_paths_and_keys, prune_rekeyed_user_fulltext_in_tx,
     prune_unreferenced_user_fulltext_in_tx, restore_surviving_user_fulltext_in_tx,
     upsert_user_fulltext_in_tx,
 };
@@ -60,11 +60,56 @@ impl Drop for ImmediateTx<'_> {
 }
 
 impl LibraryDb {
+    /// Atomically register a source if absent without clobbering an existing source's
+    /// `last_sync_ms` or `state`.
+    ///
+    /// Returns `(row, true)` when newly inserted, `(existing, false)` when an identical source
+    /// (`kind`, `root`, `settings_json`) is already registered, and an error if the same `id`
+    /// already exists with a different configuration.
+    pub fn register_source_atomic(&self, row: &LibrarySourceRow) -> Result<(LibrarySourceRow, bool)> {
+        validate_non_empty("id", &row.id)?;
+        validate_non_empty("root", &row.root)?;
+        serde_json::from_str::<Value>(&row.settings_json)?;
+        let tx = ImmediateTx::begin(&self.conn)?;
+        if let Some(live) = query_source_row(tx.conn, &row.id)? {
+            if live.kind == row.kind
+                && live.root == row.root
+                && live.settings_json == row.settings_json
+            {
+                tx.commit()?;
+                return Ok((live, false));
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "paper source `{}` is already registered with a different kind, root, or settings",
+                    row.id
+                ),
+            )
+            .into());
+        }
+        tx.conn.execute(
+            "INSERT INTO source (id, kind, root, settings_json, added_ms, last_sync_ms, state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                row.id,
+                row.kind,
+                row.root,
+                row.settings_json,
+                row.added_ms,
+                row.last_sync_ms,
+                row.state,
+            ],
+        )?;
+        tx.commit()?;
+        Ok((row.clone(), true))
+    }
+
     /// Atomically apply one source sync batch inside a single `BEGIN IMMEDIATE` transaction.
     ///
     /// Uses optimistic concurrency control (CAS) on `batch.expected_source`: if the `source`
     /// row was removed or modified while scanning, returns an error and rolls back every write
-    /// without advancing `last_sync_ms` or leaving a partial index.
+    /// without advancing `last_sync_ms` or leaving a partial index. Performs zero disk I/O.
     pub fn apply_source_sync_batch(&self, batch: &SourceSyncBatch) -> Result<i64> {
         validate_sync_batch(batch)?;
         let tx = ImmediateTx::begin(&self.conn)?;
@@ -100,38 +145,55 @@ impl LibraryDb {
         };
 
         for row in &batch.upsert_source_items {
-            upsert_source_item_in_tx(tx.conn, row)?;
+            let mut resolved = row.clone();
+            if let Some(ref pk) = row.paper_key {
+                resolved.paper_key = Some(resolve_live_canonical_key(tx.conn, pk)?);
+            }
+            upsert_source_item_in_tx(tx.conn, &resolved)?;
         }
 
         let mut touched_papers = BTreeSet::new();
         for upd in &batch.paper_updates {
-            if apply_paper_update_in_tx(tx.conn, upd)? {
-                touched_papers.insert(upd.paper_key.clone());
+            let mut resolved = upd.clone();
+            resolved.paper_key = resolve_live_canonical_key(tx.conn, &upd.paper_key)?;
+            if apply_paper_update_in_tx(tx.conn, &resolved)? {
+                touched_papers.insert(resolved.paper_key);
             }
         }
 
         for (ident, canon_key) in &batch.aliases {
+            let live_canon = resolve_live_canonical_key(tx.conn, canon_key)?;
+            if ident == &live_canon {
+                continue;
+            }
             tx.conn.execute(
                 "INSERT INTO alias (identifier, paper_key) VALUES (?1, ?2)
                  ON CONFLICT(identifier) DO UPDATE SET paper_key = excluded.paper_key",
-                params![ident, canon_key],
+                params![ident, live_canon],
             )?;
         }
 
-        let (active_paths, active_by_key) = collect_active_source_files(tx.conn)?;
+        let active = collect_active_source_files(tx.conn)?;
         for ft in &batch.upsert_user_fulltext {
-            upsert_user_fulltext_in_tx(tx.conn, ft, &active_paths)?;
+            let mut resolved = ft.clone();
+            resolved.paper_key = resolve_live_canonical_key(tx.conn, &ft.paper_key)?;
+            upsert_user_fulltext_in_tx(tx.conn, &resolved, &active.paths)?;
         }
-        prune_unreferenced_user_fulltext_in_tx(tx.conn, &batch.stale_user_paths, &active_paths)?;
+        prune_unreferenced_user_fulltext_in_tx(tx.conn, &batch.stale_user_paths, &active.paths)?;
+        prune_rekeyed_user_fulltext_in_tx(
+            tx.conn,
+            &batch.stale_user_fulltext_keys,
+            &active.key_ver_paths,
+        )?;
         restore_surviving_user_fulltext_in_tx(
             tx.conn,
             &batch.affected_fulltext_keys,
-            &active_by_key,
+            &active.by_key,
             committed_sync_ms,
         )?;
 
         for key in &touched_papers {
-            refresh_fts_with_conn(tx.conn, self, key)?;
+            refresh_fts_metadata_in_tx(tx.conn, key)?;
         }
 
         let updated = tx.conn.execute(
@@ -177,12 +239,12 @@ impl LibraryDb {
             return Ok(false);
         }
 
-        let (surviving_paths, surviving_by_key) = collect_active_source_files(tx.conn)?;
-        prune_unreferenced_user_fulltext_in_tx(tx.conn, &candidate_paths, &surviving_paths)?;
+        let surviving = collect_active_source_files(tx.conn)?;
+        prune_unreferenced_user_fulltext_in_tx(tx.conn, &candidate_paths, &surviving.paths)?;
         restore_surviving_user_fulltext_in_tx(
             tx.conn,
             &affected_keys,
-            &surviving_by_key,
+            &surviving.by_key,
             now_ms(),
         )?;
 
@@ -197,8 +259,8 @@ impl LibraryDb {
     ) -> Result<()> {
         validate_user_fulltext_row(row)?;
         let tx = ImmediateTx::begin(&self.conn)?;
-        let (active_paths, _) = collect_active_source_files(tx.conn)?;
-        upsert_user_fulltext_in_tx(tx.conn, row, &active_paths)?;
+        let active = collect_active_source_files(tx.conn)?;
+        upsert_user_fulltext_in_tx(tx.conn, row, &active.paths)?;
         tx.commit()?;
         Ok(())
     }
@@ -209,11 +271,22 @@ impl LibraryDb {
             return Ok(0);
         }
         let tx = ImmediateTx::begin(&self.conn)?;
-        let (active_paths, _) = collect_active_source_files(tx.conn)?;
-        let removed = prune_unreferenced_user_fulltext_in_tx(tx.conn, paths, &active_paths)?;
+        let active = collect_active_source_files(tx.conn)?;
+        let removed = prune_unreferenced_user_fulltext_in_tx(tx.conn, paths, &active.paths)?;
         tx.commit()?;
         Ok(removed)
     }
+}
+
+fn resolve_live_canonical_key(conn: &Connection, key: &str) -> Result<String> {
+    let aliased: Option<String> = conn
+        .query_row(
+            "SELECT paper_key FROM alias WHERE identifier = ?1",
+            params![key],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(aliased.unwrap_or_else(|| key.to_string()))
 }
 
 fn validate_sync_batch(batch: &SourceSyncBatch) -> Result<()> {

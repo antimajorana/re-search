@@ -19,7 +19,8 @@ use crate::state::DesktopState;
 use research_tools::library::{Library, SourceKind};
 use research_tools::source_dedupe::find_duplicates;
 use research_tools::source_sync::{
-    preview_source, register_source, remove_source, sync_all_sources, sync_source, SyncOptions,
+    preview_source, register_source_with_status, remove_source, sync_all_sources, sync_source,
+    SyncOptions,
 };
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -63,8 +64,8 @@ pub fn handle_list_sources(state: &DesktopState) -> ApiResult {
     for src in sources {
         let item_count = lib
             .list_source_items_for_source(&src.id)
-            .map(|v| v.len())
-            .unwrap_or(0);
+            .map_err(internal)?
+            .len();
         rows.push(json!({
             "source": src,
             "item_count": item_count,
@@ -112,22 +113,31 @@ pub fn handle_add_source(state: &DesktopState, body: &[u8]) -> ApiResult {
         // First-sync preview: pure read-only scan with zero writes to library.db.
         preview_source(&lib, kind, &root_path, settings, custom_id, hash_files).map_err(bad)?
     } else {
-        let source = register_source(&lib, kind, &root_path, settings, custom_id).map_err(bad)?;
-        let report = sync_source(
+        let (source, created) =
+            register_source_with_status(&lib, kind, &root_path, settings, custom_id)
+                .map_err(bad)?;
+        let report = match sync_source(
             &lib,
             &source.id,
             &SyncOptions {
                 dry_run: false,
                 hash_files,
             },
-        )
-        .map_err(map_sync_err)?;
+        ) {
+            Ok(report) => report,
+            Err(err) => {
+                if created {
+                    let _ = remove_source(&lib, &source.id);
+                }
+                return Err(map_sync_err(err));
+            }
+        };
         let refreshed = lib
             .list_sources()
             .map_err(internal)?
             .into_iter()
             .find(|s| s.id == source.id)
-            .unwrap_or(source);
+            .ok_or_else(|| not_found(format!("paper source `{}` was removed", source.id)))?;
         (refreshed, report)
     };
     Ok((

@@ -2,6 +2,7 @@ use super::*;
 use crate::library::SourceItemFile;
 use crate::paper_sources::FILE_ROLE_PDF;
 
+#[allow(clippy::too_many_arguments)]
 fn make_item(
     source_id: &str,
     external_id: &str,

@@ -97,6 +97,10 @@ fn build_candidate_source(
 }
 
 /// Register a new read-only paper source in F10's `source` table without writing to user folders.
+///
+/// Idempotent when the same `(id, kind, root, settings)` is already registered (preserves
+/// `last_sync_ms` and `state`); fails closed if the same `id` is already bound to a different
+/// configuration.
 pub fn register_source(
     lib: &Library,
     kind: SourceKind,
@@ -104,9 +108,21 @@ pub fn register_source(
     settings: Value,
     custom_id: Option<String>,
 ) -> Result<SourceRecord, String> {
-    let rec = build_candidate_source(kind, root, settings, custom_id)?;
-    lib.upsert_source(&rec)?;
+    let (rec, _) = register_source_with_status(lib, kind, root, settings, custom_id)?;
     Ok(rec)
+}
+
+/// Like [`register_source`], also returning whether the source row was newly created (`true`)
+/// or already existed with identical configuration (`false`).
+pub fn register_source_with_status(
+    lib: &Library,
+    kind: SourceKind,
+    root: &Path,
+    settings: Value,
+    custom_id: Option<String>,
+) -> Result<(SourceRecord, bool), String> {
+    let rec = build_candidate_source(kind, root, settings, custom_id)?;
+    lib.register_source_atomic(&rec)
 }
 
 /// Run a pure read-only first-sync preview for a candidate source without writing or deleting
