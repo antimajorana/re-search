@@ -2,6 +2,7 @@
 //! embedded Gemini-inspired research UI.
 
 pub mod agent_models;
+mod api_dispatch;
 mod investigation;
 mod investigation_cites;
 mod investigation_finish;
