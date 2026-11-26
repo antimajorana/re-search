@@ -12,6 +12,7 @@ import { filterResultNodes, renderInvestigationResults } from '/assets/investiga
 import { lookupNearestSymbol, renderReadingPlanStrip, renderSymbolPopover } from '/assets/investigation_skip.js';
 import { createInvestigateWholeMap, VIEW_MODES } from '/assets/investigation_wholemap.js';
 import { buildTaskPayload, mountOrientControls } from '/assets/investigation_orient_ui.js';
+import { mountLegacyPanel } from '/assets/investigation_legacy.js';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -169,6 +170,7 @@ export function createInvestigationV3Controller(deps = {}) {
     const graphHost = el('div', 'inv-graph-stage');
     const resultsHost = el('div', 'inv-results-stage');
     centerCol.append(toolbar, orientStatusHost, symHost, skipHost, graphHost, resultsHost);
+    mountLegacyPanel(centerCol, mv?.legacy, { onSelectNode: (id) => selectNode(id, true) });
 
     const outlineHost = el('div', 'inv-outline-stage');
     leftCol.appendChild(outlineHost);
@@ -528,17 +530,15 @@ export function createInvestigationV3Controller(deps = {}) {
       return res;
     },
     async syncSession(sessionId, sessionData, hooks = {}) {
-      const host = typeof document !== 'undefined'
-        ? document.getElementById('investigation-v3-shell')
-        : null;
+      const host = typeof document !== 'undefined' ? document.getElementById('investigation-v3-shell') : null;
       activeSessionId = sessionId || null;
       if (!host) return false;
       if (!sessionId || sessionData?.mode !== 'investigation') {
         activeKey = '';
         destroyWholeMap();
         ensureEntryCard(sessionId, false, hooks);
-        host.hidden = true;
-        host.replaceChildren();
+        mountLegacyPanel(null, null);
+        host.hidden = true; host.replaceChildren();
         return false;
       }
       const inv = sessionData.investigation || {};
@@ -551,8 +551,8 @@ export function createInvestigationV3Controller(deps = {}) {
       if (!eligible) {
         activeKey = '';
         destroyWholeMap();
-        host.hidden = true;
-        host.replaceChildren();
+        mountLegacyPanel(null, null);
+        host.hidden = true; host.replaceChildren();
         return false;
       }
       const st = sessionState(sessionId);
@@ -569,8 +569,9 @@ export function createInvestigationV3Controller(deps = {}) {
         if (token !== loadToken || activeSessionId !== sessionId) return false;
         if (!mv || mv.skeleton_seq == null) {
           destroyWholeMap();
-          host.hidden = true;
-          host.replaceChildren();
+          const hasFallback = Boolean(mv?.legacy?.fallback_old_view && mv?.legacy?.has_legacy);
+          mountLegacyPanel(hasFallback ? host : null, mv?.legacy);
+          host.hidden = !hasFallback; if (!hasFallback) host.replaceChildren();
           return false;
         }
         st.mapview = mv;
