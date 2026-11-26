@@ -3,6 +3,8 @@
 import { BORDER_DASHED, BORDER_SOLID, createBadge, createNodeCardShell } from './ui_badge.js';
 import { renderMathTextInto } from './math.js';
 import { renderInvestigationBadges } from './investigation_badges.js';
+import { findLatestNodeTask, renderInvestigationNodeModel } from './investigation_node_model.js';
+import { extractNodeNotes, renderInvestigationNotes } from './investigation_notes_ui.js';
 
 // Named wording constants (00-overview.md §2.6, §3.2, investigate.md §3).
 export const NODE_BLOCK_A_LABEL = 'From source (by code)';
@@ -308,6 +310,8 @@ export function renderInvestigationNodeCard(host, mapview, tag, opts = {}) {
   ];
   for (const row of rows) if (row) blockAContent.appendChild(row);
 
+  let notesCtrl = null;
+
   // 7. Action bar.
   const actionsBar = document.createElement('div');
   actionsBar.className = 'inv-node-actions';
@@ -327,11 +331,64 @@ export function renderInvestigationNodeCard(host, mapview, tag, opts = {}) {
     }
     btn.addEventListener('click', () => {
       if (action.id === 'proof' && proofSection) toggleProof();
+      if (action.id === 'note') notesCtrl?.focusInput?.();
       opts.onAction?.(action.id, node);
     });
     actionsBar.appendChild(btn);
   }
   blockAContent.appendChild(actionsBar);
+
+  // Reserved hand-off slot for V16 ("Derive in Solve", "Has this been extended?", "Search wider in Explore").
+  const handoffSlot = document.createElement('div');
+  handoffSlot.className = 'inv-node-handoff-slot';
+  handoffSlot.setAttribute('data-node-tag', String(node.id));
+  blockAContent.appendChild(handoffSlot);
+
+  // 8. V10 reader notes composer & list (plain "you" style, kept intact across re-runs).
+  if (typeof opts.onSaveNote === 'function' || extractNodeNotes(node).length > 0) {
+    const notesSlot = document.createElement('div');
+    notesSlot.className = 'inv-node-notes-slot';
+    notesCtrl = renderInvestigationNotes(notesSlot, node, { onSaveNote: opts.onSaveNote });
+    blockAContent.appendChild(notesSlot);
+  }
+
+  // 9. V8 Block B model explanation (when not explicitly overridden by caller).
+  let modelCtrl = null;
+  let modelContent = opts.modelContent ?? null;
+  if (modelContent == null && opts.useModelView !== false) {
+    const nodeTask = opts.task || findLatestNodeTask(mapview, node.id);
+    const hasModelBlock = Boolean(
+      nodeTask
+      || opts.streamingText
+      || opts.onOpenNode
+      || node.model_node
+      || node.gist
+      || node.purpose
+      || (Array.isArray(node.hypotheses) && node.hypotheses.length > 0)
+      || (Array.isArray(node.children) && node.children.length > 0)
+      || node.changed_since_last,
+    );
+    if (hasModelBlock) {
+      const modelHost = document.createElement('div');
+      modelHost.className = 'inv-node-model-slot';
+      modelCtrl = renderInvestigationNodeModel(modelHost, {
+        mapview,
+        tag: node.id,
+        node,
+        task: nodeTask,
+        streamingText: opts.streamingText,
+        modelConnected: Boolean(opts.modelConnected),
+        onSelectNode: opts.onSelectNode,
+        onOpenNode: opts.onOpenNode,
+        onStopTask: opts.onStopTask,
+        onContinueTask: opts.onContinueTask,
+        onRetryTask: opts.onRetryTask,
+        onOpenQuote: opts.onOpenQuote,
+        onOpenPageImage: opts.onOpenPageImage,
+      });
+      modelContent = modelHost;
+    }
+  }
 
   const card = createNodeCardShell({
     title: node.label,
@@ -346,11 +403,11 @@ export function renderInvestigationNodeCard(host, mapview, tag, opts = {}) {
     codeBlock: { label: NODE_BLOCK_A_LABEL, content: blockAContent },
     modelBlock: {
       label: NODE_BLOCK_B_LABEL,
-      content: opts.modelContent ?? null,
+      content: modelContent,
       emptyText: opts.modelConnected ? MODEL_CONNECTED_EMPTY_TEXT : NODE_NO_MODEL_TEXT,
     },
   });
 
   if (host) host.replaceChildren(card);
-  return { card, relations, toggleProof, badgesCtrl };
+  return { card, relations, toggleProof, badgesCtrl, modelCtrl, notesCtrl, handoffSlot };
 }

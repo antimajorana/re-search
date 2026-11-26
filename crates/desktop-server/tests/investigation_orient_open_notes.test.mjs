@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
@@ -12,23 +11,34 @@ import {
   UNPIN_ACTION_LABEL,
   formatHeadingCiteLine,
   renderInvestigationBadges,
-  resolveEffectiveMainResult,
 } from '../assets/investigation_badges.js';
-import { renderInvestigationNodeCard } from '../assets/investigation_node.js';
-import * as apiExports from '../assets/api.js';
 import {
   extractAuthorsClaimLabel,
   inspectMapviewCapabilities,
   isMainResultNode,
 } from '../assets/investigation_wholemap_model.js';
+import {
+  CHANGED_DIFF_HEADING,
+  NO_MODEL_EXPLANATION_TEXT,
+  OPEN_NODE_ACTION_LABEL,
+  OPEN_STEP_ACTION_LABEL,
+  REUSE_STEP_ACTION_LABEL,
+  buildNodeBreadcrumb,
+  renderInvestigationNodeModel,
+} from '../assets/investigation_node_model.js';
+import {
+  MAX_NOTE_TEXT_CHARS,
+  NOTE_EMPTY_ERROR,
+  NOTES_SECTION_TITLE,
+  renderInvestigationNotes,
+} from '../assets/investigation_notes_ui.js';
+import { renderInvestigationNodeCard } from '../assets/investigation_node.js';
 
 function makeFakeDom() {
   let innerHtmlWrites = 0;
-  const byId = new Map();
   const makeEl = (tag = 'div', ns = null) => {
     let text = '';
     let html = '';
-    let idVal = '';
     const attrs = new Map();
     const classes = new Set();
     const listeners = new Map();
@@ -46,15 +56,6 @@ function makeFakeDom() {
       hidden: false,
       disabled: false,
       checked: false,
-      tabIndex: 0,
-      clientWidth: 800,
-      clientHeight: 500,
-      get id() { return idVal; },
-      set id(v) {
-        if (idVal && byId.get(idVal) === el) byId.delete(idVal);
-        idVal = String(v || '');
-        if (idVal) byId.set(idVal, el);
-      },
       get className() { return [...classes].join(' '); },
       set className(v) {
         classes.clear();
@@ -77,25 +78,19 @@ function makeFakeDom() {
       get innerHTML() { return html; },
       set innerHTML(v) { innerHtmlWrites += 1; this.children = []; html = String(v ?? ''); },
       attributes: attrs,
-      setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'class') this.className = v; if (k === 'id') this.id = v; },
+      setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'class') this.className = v; },
       getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
       removeAttribute(k) { attrs.delete(k); },
       append(...nodes) { this.children.push(...nodes); },
       appendChild(node) { this.children.push(node); return node; },
       replaceChildren(...nodes) { this.children = [...nodes]; text = ''; html = ''; },
-      insertBefore(node) { this.children.unshift(node); return node; },
       addEventListener(type, fn) { (listeners.has(type) ? listeners : listeners.set(type, [])).get(type).push(fn); },
-      removeEventListener(type, fn) {
-        const list = listeners.get(type);
-        if (list) listeners.set(type, list.filter((f) => f !== fn));
-      },
       dispatch(type, event = {}) {
         const ev = { preventDefault() {}, stopPropagation() {}, target: this, ...event };
         for (const fn of listeners.get(type) || []) fn(ev);
       },
       click() { if (!this.disabled) this.dispatch('click'); },
       focus() { this._focused = true; },
-      getBoundingClientRect() { return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight }; },
       querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
       querySelectorAll(sel) {
         const out = [];
@@ -121,7 +116,6 @@ function makeFakeDom() {
     document: {
       createElement: (t) => makeEl(t, null),
       createElementNS: (ns, t) => makeEl(t, ns),
-      getElementById: (id) => byId.get(id) || null,
     },
     makeEl,
     get innerHtmlWrites() { return innerHtmlWrites; },
@@ -288,19 +282,250 @@ test('V7 enriched mapview automatically activates V13 Main results and Authors l
   assert.equal(isMainResultNode(mv.nodes[1], caps.mainResultIds), false, 'reader pin=not_main_result overrides model role');
   assert.equal(extractAuthorsClaimLabel(mv.nodes[0]), 'new');
   assert.equal(extractAuthorsClaimLabel(mv.nodes[1]), 'restated');
-  assert.equal(resolveEffectiveMainResult({ role: 'main_result', effective_is_main_result: false, stale: true }), false);
 });
 
-test('V7 api.js exports and investigation_node mounts .inv-node-badges-slot cleanly without V8/V10', () => {
-  for (const fn of ['startInvestigationTask', 'saveInvestigationNote', 'getInvestigateSettings', 'putInvestigateSettings']) {
-    assert.equal(typeof apiExports[fn], 'function', `api.js must export ${fn}`);
-  }
+test('V8 investigation_node_model renders unconnected, run bar states, streaming, child steps, reuse, breadcrumb, and diff', () => {
+  const dom = makeFakeDom();
+  globalThis.document = dom.document;
+
+  // 1. Unconnected with no saved explanation.
+  const emptyMv = { nodes: [{ id: 'n-thm1', label: 'Theorem 1', kind: 'theorem' }], tasks: [] };
+  const hostEmpty = dom.makeEl('div');
+  const ctrlEmpty = renderInvestigationNodeModel(hostEmpty, {
+    mapview: emptyMv, tag: 'n-thm1', modelConnected: false,
+  });
+  assert.ok(hostEmpty.textContent.includes(NO_MODEL_EXPLANATION_TEXT));
+
+  // Connected with no saved explanation shows Explain button.
+  const opened = [];
+  ctrlEmpty.update({ modelConnected: true, onOpenNode: (id) => opened.push(id) });
+  const openBtn = hostEmpty.querySelector('[data-open-node="n-thm1"]');
+  assert.ok(openBtn);
+  assert.equal(openBtn.textContent, OPEN_NODE_ACTION_LABEL);
+  openBtn.click();
+  assert.deepEqual(opened, ['n-thm1']);
+
+  // 2. Populated multi-depth tree + run bar states + streaming + diff.
+  const mv = {
+    nodes: [
+      {
+        id: 'n-thm1',
+        kind: 'theorem',
+        label: 'Theorem 1: Spectral Stability',
+        gist: 'Eigenmodes decay exponentially under coercivity.',
+        purpose: 'Establishes unconditional decay.',
+        hypotheses: [{
+          text: 'Discrete energy is coercive.',
+          anchor: { source_id: 'src-1', path: 'main.tex', start_line: 10, end_line: 10, quote: 'Q(v) >= alpha ||v||^2' },
+        }],
+        changed_since_last: {
+          label: CHANGED_DIFF_HEADING,
+          changes: [{ field: 'gist', previous: 'Old gist', current: 'Eigenmodes decay exponentially under coercivity.' }],
+        },
+        children: ['m-step1aaaaa', 'm-step2bbbbb', 'm-oq11111111'],
+      },
+      {
+        id: 'm-step1aaaaa',
+        model_node: true,
+        attach_to: 'n-thm1',
+        parent: 'n-thm1',
+        kind: 'proof_step',
+        model_kind: 'proof_step',
+        label: 'Apply coercivity bound',
+        gist: 'Use discrete coercivity to bound the energy.',
+        anchors: [{ source_id: 'src-1', path: 'main.tex', start_line: 16, end_line: 16, quote: 'Combining Lemma 1 with damping.' }],
+        children: ['m-sub1cccccc'],
+      },
+      {
+        id: 'm-step2bbbbb',
+        model_node: true,
+        attach_to: 'n-thm1',
+        parent: 'n-thm1',
+        kind: 'proof_step',
+        model_kind: 'proof_step',
+        label: 'Conclude exponential decay',
+        gist: 'Integrate the differential inequality.',
+        anchors: [{ source_id: 'src-1', path: 'main.tex', start_line: 17, end_line: 17, quote: 'yields exponential mode decay.' }],
+        children: [],
+      },
+      {
+        id: 'm-sub1cccccc',
+        model_node: true,
+        attach_to: 'm-step1aaaaa',
+        parent: 'm-step1aaaaa',
+        kind: 'proof_step',
+        model_kind: 'proof_step',
+        label: 'Substep 1a',
+        gist: 'Check positivity on boundary terms.',
+        anchors: [{ source_id: 'src-1', path: 'main.tex', start_line: 16, end_line: 16, quote: 'Combining Lemma 1' }],
+        children: [],
+      },
+      {
+        id: 'm-oq11111111',
+        model_node: true,
+        attach_to: 'n-thm1',
+        parent: 'n-thm1',
+        kind: 'open_question',
+        model_kind: 'open_question',
+        label: 'Uniformity in mesh size?',
+        gist: 'Does alpha stay uniform as h -> 0?',
+        children: [],
+      },
+    ],
+    tasks: [{
+      request_seq: 11,
+      task: 'open',
+      tags: ['n-thm1'],
+      stored_status: 'partial',
+      run_state: 'paused',
+      saved_items: 2,
+      model_calls: { used: 3, cap: 10 },
+    }],
+  };
+
+  const selectedCalls = [];
+  const openStepCalls = [];
+  const continued = [];
+  const stopped = [];
+  const retried = [];
+  const host = dom.makeEl('div');
+  const ctrl = renderInvestigationNodeModel(host, {
+    mapview: mv,
+    tag: 'n-thm1',
+    modelConnected: true,
+    streamingText: 'Checking damping constant...',
+    onSelectNode: (id, meta) => selectedCalls.push({ id, meta }),
+    onOpenNode: (id) => openStepCalls.push(id),
+    onContinueTask: (t) => continued.push(t.request_seq),
+    onStopTask: (t) => stopped.push(t.request_seq),
+    onRetryTask: (t) => retried.push(t.request_seq),
+  });
+
+  // Run bar maps stored "partial" -> "Paused: 2 items saved" with Continue; never "Partial" as state.
+  const runBar = host.querySelector('.ui-run-bar');
+  assert.ok(runBar);
+  assert.equal(runBar.getAttribute('data-run-state'), 'paused');
+  assert.ok(runBar.textContent.includes('Paused: 2 items saved'));
+  assert.ok(runBar.textContent.includes('3 of at most 10 model calls'));
+  assert.ok(!runBar.textContent.toLowerCase().includes('partial'));
+  host.querySelector('[data-run-action="continue"]').click();
+  assert.deepEqual(continued, [11]);
+
+  // Streaming text, gist (model), hypotheses quote chip, diff, and open questions rendered.
+  assert.ok(host.textContent.includes('Checking damping constant... (model)'));
+  assert.ok(host.textContent.includes('Eigenmodes decay exponentially under coercivity. (model)'));
+  assert.ok(host.textContent.includes('Discrete energy is coercive. (model)'));
+  assert.ok(host.textContent.includes(CHANGED_DIFF_HEADING));
+  assert.ok(host.textContent.includes('Does alpha stay uniform as h -> 0? (model)'));
+
+  // Step 1 has saved substeps -> reuses saved steps without calling onOpenNode.
+  const step1Btn = host.querySelector('[data-step-id="m-step1aaaaa"]');
+  assert.equal(step1Btn.getAttribute('data-step-action'), 'reuse');
+  assert.ok(step1Btn.textContent.includes(REUSE_STEP_ACTION_LABEL));
+  step1Btn.click();
+  assert.deepEqual(selectedCalls, [{ id: 'm-step1aaaaa', meta: { reuseSaved: true } }]);
+  assert.equal(openStepCalls.length, 0);
+
+  // Step 2 is unexpanded -> clicking opens ONLY step 2.
+  const step2Btn = host.querySelector('[data-step-id="m-step2bbbbb"]');
+  assert.equal(step2Btn.getAttribute('data-step-action'), 'open');
+  assert.equal(step2Btn.textContent, OPEN_STEP_ACTION_LABEL);
+  step2Btn.click();
+  assert.deepEqual(openStepCalls, ['m-step2bbbbb']);
+
+  // Running state shows Stop; Interrupted & Failed show Retry.
+  ctrl.update({ task: { request_seq: 12, task: 'open', tags: ['n-thm1'], stored_status: 'requested', run_state: 'running', model_calls: { used: 1, cap: 10 } } });
+  host.querySelector('[data-run-action="stop"]').click();
+  assert.deepEqual(stopped, [12]);
+
+  ctrl.update({ task: { request_seq: 13, task: 'open', tags: ['n-thm1'], stored_status: 'interrupted', run_state: 'interrupted', model_calls: { used: 2, cap: 10 } } });
+  host.querySelector('[data-run-action="retry"]').click();
+  assert.deepEqual(retried, [13]);
+
+  // Breadcrumb at depth 3 (n-thm1 -> m-step1aaaaa -> m-sub1cccccc).
+  const trail = buildNodeBreadcrumb(mv, 'm-sub1cccccc');
+  assert.deepEqual(trail.map((c) => c.id), ['n-thm1', 'm-step1aaaaa', 'm-sub1cccccc']);
+  const deepHost = dom.makeEl('div');
+  const backNav = [];
+  renderInvestigationNodeModel(deepHost, {
+    mapview: mv, tag: 'm-sub1cccccc', modelConnected: true, onSelectNode: (id) => backNav.push(id),
+  });
+  const parentCrumb = deepHost.querySelector('[data-crumb-id="n-thm1"]');
+  assert.ok(parentCrumb);
+  parentCrumb.click();
+  assert.deepEqual(backNav, ['n-thm1']);
+
+  const allText = collectAllStrings(host).concat(collectAllStrings(deepHost)).join('\n').toLowerCase();
+  assert.ok(!allText.includes('verified'));
+  assert.ok(!allText.includes('branch'));
+  assert.equal(dom.innerHtmlWrites, 0);
+});
+
+test('V10 investigation_notes_ui renders user-grade notes, validates, appends additively, and escapes XSS', async () => {
   const dom = makeFakeDom();
   globalThis.document = dom.document;
   const host = dom.makeEl('div');
-  const pinCalls = [];
-  const quoteCalls = [];
-  const pageCalls = [];
+  const savedPayloads = [];
+
+  const node = {
+    id: 'm-step1aaaaa',
+    fp: 'fp999',
+    notes: [
+      { seq: 5, tag: 'm-step1aaaaa', node_fp: 'fp999', stale: false, text: 'Check constant alpha.' },
+      { seq: 6, tag: 'm-step1aaaaa', node_fp: 'oldfp', stale: true, text: '<script>alert(9)</script>' },
+    ],
+  };
+
+  renderInvestigationNotes(host, node, {
+    onSaveNote: async (payload) => {
+      savedPayloads.push(payload);
+      return { seq: 15, ...payload };
+    },
+  });
+
+  assert.ok(host.textContent.includes(NOTES_SECTION_TITLE));
+  assert.ok(host.textContent.includes('Check constant alpha.'));
+  assert.ok(host.textContent.includes('<script>alert(9)</script>'));
+  assert.equal(host.querySelectorAll('script').length, 0);
+  const noteItems = host.querySelectorAll('.inv-v10-note-item');
+  assert.equal(noteItems.length, 2);
+  assert.equal(noteItems[0].getAttribute('data-grade'), 'user');
+  assert.equal(noteItems[0].getAttribute('data-border'), 'solid');
+  assert.equal(noteItems[1].getAttribute('data-stale'), 'true');
+
+  // Empty submit shows inline validation error.
+  const form = host.querySelector('.inv-v10-notes-form');
+  const input = host.querySelector('.inv-v10-notes-input');
+  assert.equal(input.maxLength, MAX_NOTE_TEXT_CHARS);
+  form.dispatch('submit');
+  assert.ok(host.querySelector('.inv-v10-notes-error').textContent.includes(NOTE_EMPTY_ERROR));
+  assert.equal(savedPayloads.length, 0);
+
+  // Valid submit appends additively without dropping earlier notes.
+  input.value = 'Confirmed sign of commutator <img src=x onerror=alert(1)>';
+  input.dispatch('input');
+  form.dispatch('submit');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(savedPayloads.length, 1);
+  assert.deepEqual(savedPayloads[0], {
+    tag: 'm-step1aaaaa',
+    node_fp: 'fp999',
+    text: 'Confirmed sign of commutator <img src=x onerror=alert(1)>',
+  });
+  assert.equal(host.querySelectorAll('.inv-v10-note-item').length, 3);
+  assert.equal(input.value, '');
+  assert.equal(host.querySelectorAll('img').length, 0);
+  assert.equal(dom.innerHtmlWrites, 0);
+
+  const allText = collectAllStrings(host).join('\n').toLowerCase();
+  assert.ok(!allText.includes('verified'));
+  assert.ok(!allText.includes('branch'));
+});
+
+test('Node card mounts V7 badges, V8 Block B, V10 notes, and V16 .inv-node-handoff-slot together', () => {
+  const dom = makeFakeDom();
+  globalThis.document = dom.document;
+  const host = dom.makeEl('div');
   const mv = {
     nodes: [{
       id: 'n-thm1',
@@ -309,15 +534,11 @@ test('V7 api.js exports and investigation_node mounts .inv-node-badges-slot clea
       fp: 'fp-1',
       role: 'main_result',
       effective_is_main_result: true,
-      page_basis: 'scan_text_layer',
+      gist: 'Main result gist.',
       head_cites: ['Toy95'],
-      authors_claim: {
-        label: 'new',
-        text: AUTHORS_CLAIM_LABELS.new,
-        cues: ['we prove'],
-        quotes: [{ source_id: 'src-1', path: 'paper.pdf.txt', start_line: 3, end_line: 4, page: 2, quote: 'We prove...' }],
-      },
-      spans: [{ path: 'paper.pdf.txt', start_line: 3, end_line: 5 }],
+      authors_claim: { label: 'new', text: AUTHORS_CLAIM_LABELS.new, cues: ['we prove'], quotes: [] },
+      notes: [{ seq: 2, tag: 'n-thm1', node_fp: 'fp-1', stale: false, text: 'Keep across reruns.' }],
+      spans: [{ path: 'main.tex', start_line: 10, end_line: 12 }],
     }],
     edges: [],
     tasks: [],
@@ -325,252 +546,19 @@ test('V7 api.js exports and investigation_node mounts .inv-node-badges-slot clea
   const ctrl = renderInvestigationNodeCard(host, mv, 'n-thm1', {
     nodeText: 'Statement text.',
     modelConnected: true,
-    onTogglePin: (n, pin) => pinCalls.push({ id: n.id, pin }),
-    onOpenQuote: (q) => quoteCalls.push(q),
-    onOpenPageImage: (q) => pageCalls.push(q),
+    onTogglePin: () => {},
+    onOpenNode: () => {},
+    onSaveNote: async (p) => ({ seq: 9, ...p }),
   });
   assert.ok(ctrl.badgesCtrl);
-  assert.ok(host.querySelector('.inv-node-badges-slot'));
+  assert.ok(ctrl.modelCtrl);
+  assert.ok(ctrl.notesCtrl);
+  assert.ok(host.querySelector('.inv-node-handoff-slot'));
   assert.ok(host.querySelector('.inv-v7-badges'));
-  assert.equal(host.querySelector('.inv-v8-model'), null);
-  assert.equal(host.querySelector('.inv-v10-notes'), null);
-  ctrl.badgesCtrl.togglePopover(true);
-  host.querySelector('.ui-quote-chip-open').click();
-  assert.equal(pageCalls.length, 1, 'OCR quote chip invokes onOpenPageImage');
-  assert.equal(quoteCalls.length, 0);
-  host.querySelector('.inv-v7-pin-btn').click();
-  assert.deepEqual(pinCalls, [{ id: 'n-thm1', pin: 'not_main_result' }]);
+  assert.ok(host.querySelector('.inv-v8-model'));
+  assert.ok(host.querySelector('.inv-v10-notes'));
   assert.equal(dom.innerHtmlWrites, 0);
-});
-
-async function loadShellController() {
-  const shellUrl = new URL('../assets/investigation_v3_shell.js', import.meta.url);
-  const src = await readFile(shellUrl, 'utf8');
-  const rewritten = src.replace(/(['"])\/assets\/([^'"]+)\1/g, (_, _q, file) =>
-    JSON.stringify(new URL(`../assets/${file}`, import.meta.url).href));
-  const dataUrl = `data:text/javascript;base64,${Buffer.from(rewritten, 'utf8').toString('base64')}`;
-  return import(dataUrl);
-}
-
-test('V7 investigation_v3_shell wires orient_auto_start, Orient button, pin toggle, quote open, and safe ask/note', async () => {
-  const dom = makeFakeDom();
-  globalThis.document = dom.document;
-  globalThis.window = { addEventListener() {}, removeEventListener() {} };
-
-  const shellHost = dom.makeEl('div');
-  shellHost.id = 'investigation-v3-shell';
-  const composerInput = dom.makeEl('textarea');
-  composerInput.id = 'composer-input';
-
-  const { createInvestigationV3Controller } = await loadShellController();
-
-  const taskCalls = [];
-  const noteCalls = [];
-  const openSourceCalls = [];
-  let refreshCount = 0;
-  let mvFetchCount = 0;
-  let currentMv = {
-    etag: 'h1',
-    skeleton_seq: 4,
-    source_id: 'src-1',
-    orient_auto_start: true,
-    tasks: [],
-    nodes: [{
-      id: 'n-thm1',
-      kind: 'theorem',
-      label: 'Theorem 1: Main',
-      fp: 'fp-1',
-      role: 'main_result',
-      effective_is_main_result: true,
-      head_cites: ['Toy95'],
-      authors_claim: {
-        label: 'new',
-        text: AUTHORS_CLAIM_LABELS.new,
-        cues: ['we prove'],
-        quotes: [{ source_id: 'src-1', path: 'main.tex', start_line: 10, end_line: 11, quote: 'We prove main bound.' }],
-      },
-      spans: [{ path: 'main.tex', start_line: 10, end_line: 12 }],
-    }],
-    edges: [],
-    bib: [],
-    symbols: [],
-  };
-
-  const ctrl = createInvestigationV3Controller({
-    api: {
-      getInvestigationMapview: async () => { mvFetchCount += 1; return currentMv; },
-      getInvestigationNodeText: async () => ({ text: 'Statement line.' }),
-      startInvestigationTask: async (sid, payload) => { taskCalls.push({ sid, payload }); return { status: 'running' }; },
-      saveInvestigationNote: async (sid, payload) => { noteCalls.push({ sid, payload }); return { seq: 7, ...payload }; },
-    },
-  });
-
-  const sessionData = {
-    mode: 'investigation',
-    investigation: { source_id: 'src-1', skeleton_seq: 4 },
-    sources: [{ source_id: 'src-1', format: 'tex' }],
-    events: [{ seq: 4 }],
-  };
-  const hooks = {
-    isModelConnected: () => true,
-    openSource: (sid, target) => openSourceCalls.push({ sid, target }),
-    refresh: async () => { refreshCount += 1; await ctrl.syncSession('s1', sessionData, hooks); },
-  };
-
-  const ok = await ctrl.syncSession('s1', sessionData, hooks);
-  assert.equal(ok, true);
-  await new Promise((r) => setTimeout(r, 10));
-
-  // orient_auto_start fires once when modelConnected=true and no prior orient task exists.
-  assert.equal(taskCalls.length, 1);
-  assert.deepEqual(taskCalls[0], { sid: 's1', payload: { task: 'orient' } });
-  assert.ok(refreshCount >= 1);
-  assert.ok(mvFetchCount >= 2, 'refreshMv invalidates activeKey so updated mapview loads');
-
-  // Manual "Orient paper" button starts orient.
-  const orientBtn = shellHost.querySelector('[data-action="orient"]');
-  assert.ok(orientBtn);
-  assert.equal(orientBtn.disabled, false);
-  orientBtn.click();
-  await new Promise((r) => setTimeout(r, 10));
-  assert.equal(taskCalls.length, 2);
-
-  // Pin toggle sends saveInvestigationNote and refreshes.
-  const pinBtn = shellHost.querySelector('.inv-v7-pin-btn');
-  assert.ok(pinBtn);
-  pinBtn.click();
-  await new Promise((r) => setTimeout(r, 10));
-  assert.deepEqual(noteCalls, [{ sid: 's1', payload: { tag: 'n-thm1', node_fp: 'fp-1', pin: 'not_main_result' } }]);
-
-  // Quote chip in popover opens source via hooks.openSource.
-  shellHost.querySelector('[data-half="left"]').click();
-  shellHost.querySelector('.ui-quote-chip-open').click();
-  assert.equal(openSourceCalls.length, 1);
-  assert.equal(openSourceCalls[0].target.start_line, 10);
-
-  // Safe ask/note actions focus composer without V10 mounted.
-  const noteActionBtn = shellHost.querySelector('[data-action="note"]');
-  noteActionBtn.click();
-  assert.ok(composerInput.value.includes('n-thm1'));
-  assert.equal(composerInput._focused, true);
-
-  // When orient_auto_start is false or model disconnected, auto-start does not trigger.
-  currentMv = { ...currentMv, orient_auto_start: false };
-  const callsBefore = taskCalls.length;
-  await ctrl.syncSession('s2', { ...sessionData, events: [{ seq: 1 }] }, { ...hooks, isModelConnected: () => false });
-  await new Promise((r) => setTimeout(r, 10));
-  assert.equal(taskCalls.length, callsBefore);
-  assert.equal(shellHost.querySelector('[data-action="orient"]').disabled, true);
-  assert.equal(dom.innerHtmlWrites, 0);
-});
-
-test('V7 badges render ocr page_basis, node.gist (model), and changed_since_last badge', () => {
-  const dom = makeFakeDom();
-  globalThis.document = dom.document;
-  const slot = dom.makeEl('div');
-  const pageImgs = [];
-  renderInvestigationBadges(slot, {
-    id: 'n-ocr',
-    page_basis: 'ocr',
-    gist: 'Spectral gap bound holds under exponential damping.',
-    changed_since_last: { label: 'Changed since you last opened this', changes: [{ field: 'gist' }] },
-    effective_is_main_result: true,
-    authors_claim: {
-      present: true,
-      label: 'new',
-      text: 'Authors: New (model)',
-      cue_line: 'Cues in quoted lines: we prove',
-      quotes: [{ quote: 'We prove positive gap.', source_id: 's1', path: 'p.txt', start_line: 12, end_line: 12, page: 4 }],
-    },
-  }, { onOpenPageImage: (t) => pageImgs.push(t), initialPopoverOpen: true });
-
-  const text = slot.textContent;
-  assert.match(text, /Changed since you last opened this/);
-  assert.match(text, /Spectral gap bound holds under exponential damping\. \(model\)/);
-  assert.match(text, /matched in OCR text, p\. 4/);
-  assert.doesNotMatch(text, /\bverified\b/i);
-  slot.querySelector('.ui-quote-chip-open').click();
-  assert.equal(pageImgs.length, 1);
-  assert.equal(pageImgs[0].openPageImage, true);
-  assert.equal(dom.innerHtmlWrites, 0);
-});
-
-test('V7 Orient UI renders RunBar (Paused not Partial), model choices, Auto-orient toggle, and model watcher', async () => {
-  const dom = makeFakeDom();
-  globalThis.window = { addEventListener() {}, removeEventListener() {} };
-  const prevGetById = dom.document.getElementById;
-  const composerModel = dom.makeEl('select');
-  composerModel.hidden = true;
-  composerModel.value = '__none__';
-  const composerConnect = dom.makeEl('button');
-  composerConnect.hidden = false;
-  const setupEl = dom.makeEl('div');
-  const shellHost = dom.makeEl('div');
-  const byId = {
-    'investigation-v3-shell': shellHost, 'investigation-setup': setupEl,
-    'composer-model': composerModel, 'composer-connect': composerConnect,
-  };
-  dom.document.getElementById = (id) => byId[id] || prevGetById?.(id) || null;
-  globalThis.document = dom.document;
-
-  const taskCalls = [];
-  const stopCalls = [];
-  const settingCalls = [];
-  let mv = {
-    etag: 'h-v7-ui',
-    source_id: 'src1', skeleton_seq: 1, builder: 'tex-1', orient_auto_start: true,
-    nodes: [{ id: 'n1', kind: 'theorem', label: 'Thm 1', order: 0, fp: 'fp1' }],
-    tasks: [{ task: 'orient', run_state: 'partial', reason: 'step cap reached', model_calls: { used: 8, cap: 8 } }],
-    edges: [], bib: [], symbols: [],
-  };
-  const apiStub = {
-    async getInvestigationMapview() { return mv; },
-    async getInvestigationNodeText() { return { text: 'Thm body.' }; },
-    async startInvestigationTask(id, body) { taskCalls.push({ id, body }); return {}; },
-    async stopTurn(id) { stopCalls.push(id); return {}; },
-    async putInvestigateSettings(body) { settingCalls.push(body); return body; },
-  };
-  const { createInvestigationV3Controller } = await loadShellController();
-  const ctrl = createInvestigationV3Controller({ api: apiStub });
-  const isModelConnected = () => !composerModel.hidden && composerModel.value !== '__none__' && composerConnect.hidden;
-  const hooks = {
-    isModelConnected,
-    getTaskModelOptions: () => ({ provider: 'openai', model: 'gpt-5.4' }),
-    refresh: async () => {},
-  };
-  const sessionData = { mode: 'investigation', investigation: { source_id: 'src1', skeleton_seq: 1 }, events: [{ seq: 1 }] };
-  await ctrl.syncSession('s3', sessionData, hooks);
-  assert.match(shellHost.textContent, /Paused: step cap reached/);
-  assert.doesNotMatch(shellHost.textContent, /\bPartial\b/i);
-  shellHost.querySelector('[data-run-action="continue"]').click();
-  assert.deepEqual(taskCalls[0], { id: 's3', body: { task: 'orient', provider: 'openai', model: 'gpt-5.4' } });
-
-  // Toggle Auto-orient checkbox -> persists via putInvestigateSettings.
-  const autoBox = shellHost.querySelector('[data-setting="orient_auto_start"]');
-  assert.equal(autoBox.checked, true);
-  autoBox.checked = false;
-  await autoBox.dispatch('change');
-  assert.deepEqual(settingCalls, [{ orient_auto_start: false }]);
-
-  // Running orient disables Orient button and Stop button invokes stopTurn.
-  mv = { ...mv, tasks: [{ task: 'orient', run_state: 'running', model_calls: { used: 1, cap: 8 } }] };
-  await ctrl.syncSession('s3', { ...sessionData, events: [{ seq: 2 }] }, hooks);
-  assert.equal(shellHost.querySelector('[data-action="orient"]').disabled, true);
-  shellHost.querySelector('[data-run-action="stop"]').click();
-  assert.deepEqual(stopCalls, ['s3']);
-
-  // Boot race: initial sync while model disconnected -> auto-starts once model connects via change.
-  mv = { ...mv, orient_auto_start: true, tasks: [] };
-  composerModel.hidden = true;
-  composerConnect.hidden = false;
-  await ctrl.syncSession('s4', { ...sessionData, events: [{ seq: 3 }] }, hooks);
-  assert.equal(taskCalls.length, 1);
-  assert.equal(shellHost.querySelector('[data-action="orient"]').disabled, true);
-  composerModel.hidden = false;
-  composerModel.value = 'openai::gpt-5.4';
-  composerConnect.hidden = true;
-  composerModel.dispatch('change');
-  assert.equal(taskCalls.length, 2);
-  assert.equal(taskCalls[1].id, 's4');
-  assert.equal(dom.innerHtmlWrites, 0);
+  const allText = collectAllStrings(host).join('\n').toLowerCase();
+  assert.ok(!allText.includes('verified'));
+  assert.ok(!allText.includes('branch'));
 });

@@ -10,6 +10,7 @@ mod investigation_cites;
 mod investigation_finish;
 pub mod investigation_mapview;
 pub mod investigation_mapview_v7;
+mod investigation_mapview_v8;
 pub mod investigation_notes;
 pub mod investigation_open;
 mod investigation_question;

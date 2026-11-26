@@ -156,6 +156,10 @@ pub struct ReadingItemRecord {
     pub tag: String,
     pub node_fp: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attach_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<ReadingRole>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gist: Option<String>,

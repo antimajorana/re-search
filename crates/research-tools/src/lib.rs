@@ -32,6 +32,7 @@ pub mod literature;
 pub mod map_authors_claim;
 pub mod map_defs;
 pub mod map_fold;
+pub mod map_model_nodes;
 pub mod map_node_read;
 pub mod map_reading;
 pub mod net_rate;

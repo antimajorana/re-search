@@ -9,6 +9,7 @@ use crate::map_defs::{
     AuthorsClaimRecord, HypothesisRecord, MapReadingEventPayload, ModelEdgeRecord, ModelEdgeRole,
     ReadingRole, VerifiedMapAnchor,
 };
+use crate::map_model_nodes::is_model_node_tag;
 use crate::run_budget::{
     count_model_calls, investigate_task_run_state, InvestigateTaskState, ModelCallBudget, RunScope,
     RunState, RunStateAction,
@@ -18,7 +19,7 @@ use crate::tool_profile::MARKER_INVESTIGATION_STARTED;
 use ledger::Event;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One timestamped, fingerprint-tagged value stored inside an additive [`FieldSlot`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,6 +91,14 @@ pub struct FoldedNote {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FoldedNodeReading {
     pub tag: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attach_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_kind: Option<String>,
+    #[serde(default)]
+    pub is_model_node: bool,
+    #[serde(default)]
+    pub children: Vec<String>,
     pub role: FieldSlot<ReadingRole>,
     pub gist: FieldSlot<String>,
     pub purpose: FieldSlot<String>,
@@ -106,8 +115,13 @@ pub struct FoldedNodeReading {
 
 impl FoldedNodeReading {
     fn new(tag: String) -> Self {
+        let is_model_node = is_model_node_tag(&tag);
         Self {
             tag,
+            attach_to: None,
+            model_kind: None,
+            is_model_node,
+            children: Vec::new(),
             role: FieldSlot::default(),
             gist: FieldSlot::default(),
             purpose: FieldSlot::default(),
@@ -209,10 +223,35 @@ struct FoldAcc {
     edges_map: BTreeMap<(String, String, ModelEdgeRole), FoldedModelEdge>,
     limitations: Vec<String>,
     task_counts: BTreeMap<u64, TaskCounts>,
+    child_links: Vec<(String, String)>,
 }
 
 fn versioned<T>(seq: u64, request_seq: u64, skeleton_seq: u64, node_fp: &str, stale: bool, value: T) -> VersionedValue<T> {
     VersionedValue { seq, request_seq, skeleton_seq, node_fp: node_fp.to_string(), stale, value }
+}
+
+fn resolve_expected_fp<'a>(
+    tag: &str,
+    attach_hint: Option<&str>,
+    nodes_by_tag: &BTreeMap<&'a str, &'a SkNode>,
+    folded_nodes: &BTreeMap<String, FoldedNodeReading>,
+) -> Option<&'a str> {
+    if let Some(sk) = nodes_by_tag.get(tag) {
+        return Some(sk.fp.as_str());
+    }
+    let mut cur = attach_hint.or_else(|| folded_nodes.get(tag).and_then(|n| n.attach_to.as_deref()));
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for _ in 0..64 {
+        let next = cur?;
+        if let Some(sk) = nodes_by_tag.get(next) {
+            return Some(sk.fp.as_str());
+        }
+        if !seen.insert(next) {
+            return None;
+        }
+        cur = folded_nodes.get(next).and_then(|n| n.attach_to.as_deref());
+    }
+    None
 }
 
 fn fold_reading_event(
@@ -237,8 +276,22 @@ fn fold_reading_event(
     }
 
     for item in payload.items {
-        let stale = nodes_by_tag.get(item.tag.as_str()).map(|n| n.fp.as_str()) != Some(item.node_fp.as_str());
+        let expected_fp = resolve_expected_fp(
+            item.tag.as_str(),
+            item.attach_to.as_deref(),
+            nodes_by_tag,
+            &acc.nodes,
+        );
+        let stale = expected_fp != Some(item.node_fp.as_str());
         let entry = acc.nodes.entry(item.tag.clone()).or_insert_with(|| FoldedNodeReading::new(item.tag.clone()));
+        if let Some(parent) = item.attach_to {
+            entry.is_model_node = true;
+            acc.child_links.push((parent.clone(), item.tag.clone()));
+            entry.attach_to = Some(parent);
+        }
+        if let Some(kind) = item.model_kind {
+            entry.model_kind = Some(kind);
+        }
         let (rseq, sseq, fp) = (payload.request_seq, payload.skeleton_seq, item.node_fp.as_str());
         if let Some(v) = item.role { entry.role.push(versioned(ev.seq, rseq, sseq, fp, stale, v)); }
         if let Some(v) = item.gist { entry.gist.push(versioned(ev.seq, rseq, sseq, fp, stale, v)); }
@@ -249,9 +302,11 @@ fn fold_reading_event(
     }
 
     for edge in payload.edges {
-        let to_fp = nodes_by_tag.get(edge.to.as_str()).map_or("", |n| n.fp.as_str());
-        let stale = !nodes_by_tag.contains_key(edge.from.as_str())
-            || !nodes_by_tag.contains_key(edge.to.as_str())
+        let from_exists = nodes_by_tag.contains_key(edge.from.as_str()) || acc.nodes.contains_key(edge.from.as_str());
+        let to_exists = nodes_by_tag.contains_key(edge.to.as_str()) || acc.nodes.contains_key(edge.to.as_str());
+        let to_fp = resolve_expected_fp(edge.to.as_str(), None, nodes_by_tag, &acc.nodes).unwrap_or("");
+        let stale = !from_exists
+            || !to_exists
             || skeleton_seq.is_some_and(|cur| payload.skeleton_seq != cur);
         let key = (edge.from.clone(), edge.to.clone(), edge.role);
         let vv = versioned(ev.seq, payload.request_seq, payload.skeleton_seq, to_fp, stale, edge);
@@ -280,7 +335,7 @@ fn fold_note_event(
         return;
     }
     let Some(tag) = ev.payload.get("tag").and_then(Value::as_str).filter(|s| !s.is_empty()) else { return };
-    let current_fp = nodes_by_tag.get(tag).map(|n| n.fp.as_str());
+    let current_fp = resolve_expected_fp(tag, None, nodes_by_tag, nodes);
     let raw_fp = ev.payload.get("node_fp").and_then(Value::as_str).unwrap_or("");
     let stale = if raw_fp.is_empty() { current_fp.is_none() } else { current_fp != Some(raw_fp) };
     let text = ev.payload.get("text").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
@@ -381,6 +436,14 @@ pub fn fold_map(skeleton: &PaperSkeleton, events: &[Event], running: bool) -> Fo
             EVENT_INVESTIGATION_READING => fold_reading_event(ev, skeleton, skeleton_seq, &nodes_by_tag, &mut acc),
             EVENT_INVESTIGATION_NOTE => fold_note_event(ev, skeleton, &nodes_by_tag, &mut acc.nodes),
             _ => {}
+        }
+    }
+
+    // Link direct model-created child nodes onto their parent's `children` list in appearance order.
+    for (parent, child) in acc.child_links {
+        let entry = acc.nodes.entry(parent.clone()).or_insert_with(|| FoldedNodeReading::new(parent));
+        if !entry.children.contains(&child) {
+            entry.children.push(child);
         }
     }
 

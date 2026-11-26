@@ -1,9 +1,10 @@
-//! V7 `mapview` enrichment helpers (sibling of `investigation_mapview.rs`, kept <= 600 lines).
+//! V7/V8/V10 `mapview` enrichment helpers (sibling of `investigation_mapview.rs`, kept <= 600 lines).
 //!
 //! Projects folded Layer-2 `role`, `pin`/`pinned`, `gist`, `purpose`, `authors_claim` (computed
 //! via `status_badge::status_badge`), `notes`, additive change history (`changed_since_last`),
 //! and recomputed V5 `skip_plan` + section dimming (Rule 6.14) onto the `mapview` JSON so
-//! V13 (`investigation_wholemap_model.js`) and V7 badges light up consistently.
+//! V13 (`investigation_wholemap_model.js`), V7 badges, V8 Block B, and V10 notes light up
+//! consistently.
 
 use research_tools::map_defs::ModelEdgeRole;
 use research_tools::map_fold::{FoldedMap, FoldedNodeReading, ReaderPin};
@@ -84,14 +85,27 @@ pub fn enrich_mapview_with_v7(
             .collect()
     };
 
+    let mut sk_groups: BTreeMap<String, Value> = BTreeMap::new();
+    let mut existing_node_ids: BTreeSet<String> = BTreeSet::new();
     if let Some(arr) = mv["nodes"].as_array_mut() {
         for item in arr.iter_mut() {
             let id = item["id"].as_str().unwrap_or("").to_string();
+            existing_node_ids.insert(id.clone());
+            sk_groups.insert(id.clone(), item["group"].clone());
             let sk_node = sk_by_tag.get(id.as_str()).copied();
             let reading = folded.nodes.get(&id);
             enrich_one_skeleton_node(item, sk_node, reading, &sk_by_tag, &dimmed_secs, skeleton.nodes.len());
         }
     }
+    crate::investigation_mapview_v8::append_model_nodes_and_edges(
+        mv,
+        skeleton,
+        folded,
+        &sk_by_tag,
+        &dimmed_secs,
+        &sk_groups,
+        &mut existing_node_ids,
+    );
 
     mv["main_result_tags"] = json!(main_result_tags);
     mv["skip_plan"] = json!(plan);
@@ -129,6 +143,19 @@ fn enrich_one_skeleton_node(
         if let Some(purpose_vv) = &r.purpose.current {
             item["purpose"] = json!(purpose_vv.value);
         }
+        if let Some(hyps_vv) = &r.hypotheses.current {
+            let mut hv = serde_json::to_value(&hyps_vv.value).unwrap_or(Value::Null);
+            crate::investigation_mapview_v8::strip_excerpts(&mut hv);
+            item["hypotheses"] = hv;
+        }
+        if let Some(anch_vv) = &r.anchors.current {
+            let mut av = serde_json::to_value(&anch_vv.value).unwrap_or(Value::Null);
+            crate::investigation_mapview_v8::strip_excerpts(&mut av);
+            item["anchors"] = av;
+        }
+        if !r.children.is_empty() {
+            item["children"] = json!(r.children);
+        }
 
         // Pure authors'-side badge with deterministic cues and heading-cite line (rule 6.6).
         let ac_vv = r.authors_claim.current.as_ref();
@@ -154,7 +181,7 @@ fn enrich_one_skeleton_node(
             item["authors_claim"] = ac_val;
         }
 
-        // Notes array preserved cleanly across re-runs (Rule 6.12).
+        // Notes array preserved cleanly for V10 UI, F15 write-up, and V16 hand-off (Rule 6.12).
         if !r.notes.is_empty() {
             item["notes"] = json!(r.notes);
         }
@@ -206,7 +233,7 @@ fn enrich_one_skeleton_node(
     }
 }
 
-fn enclosing_section_tag<'a>(
+pub(crate) fn enclosing_section_tag<'a>(
     start: Option<&'a SkNode>,
     sk_by_tag: &BTreeMap<&'a str, &'a SkNode>,
     max_hops: usize,
@@ -423,6 +450,10 @@ mod tests {
 
         let mut reading = FoldedNodeReading {
             tag: tag.into(),
+            attach_to: None,
+            model_kind: None,
+            is_model_node: false,
+            children: vec![],
             role: FieldSlot::default(),
             gist: FieldSlot::default(),
             purpose: FieldSlot::default(),
