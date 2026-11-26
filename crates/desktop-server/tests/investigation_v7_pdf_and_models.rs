@@ -292,6 +292,9 @@ fn pdf1_v7_mapview_attaches_physical_page_and_ocr_to_authors_claim_quotes() {
     assert_eq!(q_lem[0]["page"], json!(2), "{q_lem:?}");
     assert_eq!(q_lem[0]["ocr"], json!(true), "{q_lem:?}");
     assert_eq!(q_lem[0]["page_basis"], json!("scan_text_layer"), "{q_lem:?}");
+    let (st_js, _, raw_js) = req(&srv, "GET", "/assets/investigation_orient_ui.js", None);
+    assert_eq!(st_js, 200);
+    assert!(raw_js.contains("mountOrientControls"), "{raw_js}");
     srv.shutdown();
 }
 
