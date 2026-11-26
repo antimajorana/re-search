@@ -1,7 +1,7 @@
 //! Per-role agent model assignments (`agent_models`), validation, and resolution helpers.
 
 use crate::cli_turn::CliRouteKind;
-use crate::connections::{credential, own_key, API_PROVIDERS};
+use crate::connections::{own_key, API_PROVIDERS};
 use crate::state::{DesktopState, SessionMeta, UiSettings};
 use crate::subagents::SubagentDef;
 use agent::{ProviderKeyStore, ProviderKind, Transport};
@@ -437,48 +437,6 @@ pub fn resolve_orchestrator_model(
         .to_string();
     let model = provider.resolve_model(&model_requested);
     Ok((provider, model_requested, model))
-}
-
-/// Resolves the orchestrator `(provider, model_requested, model)`, falling back to an actually
-/// connected in-core provider when no provider is pinned in `subagent`, `req`, `meta`, or `ui`
-/// and Anthropic itself has no credential configured.
-pub fn resolve_orchestrator_model_with_state(
-    state: &DesktopState,
-    subagent: Option<&SubagentDef>,
-    req: &Value,
-    meta: Option<&SessionMeta>,
-    ui: &UiSettings,
-) -> Result<(ProviderKind, String, String), String> {
-    let resolved = resolve_orchestrator_model(subagent, req, meta, ui)?;
-    let subagent_pinned = subagent.is_some_and(|sa| {
-        sa.provider.as_deref().is_some_and(|p| ProviderKind::parse(p).is_ok())
-            && sa.model.as_deref().is_some_and(|m| !m.trim().is_empty())
-    });
-    let req_p = req.get("provider").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
-    let meta_p = meta.and_then(|m| m.default_provider.as_deref()).map(str::trim).filter(|s| !s.is_empty());
-    let am_orch = ui.agent_models.get("orchestrator").is_some_and(|s| ProviderKind::parse(&s.provider).is_ok());
-    let ui_p = ui.default_provider.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    if subagent_pinned || req_p.is_some() || meta_p.is_some() || am_orch || ui_p.is_some() {
-        return Ok(resolved);
-    }
-    let store = ProviderKeyStore::load_from_data_dir(&state.cfg.data_dir).unwrap_or_default();
-    if credential(state, ProviderKind::Anthropic, &store).ok().is_some_and(|c| c.key.is_some()) {
-        return Ok(resolved);
-    }
-    let fallback = if state.chatgpt.ready() {
-        Some(ProviderKind::ChatGpt)
-    } else {
-        [ProviderKind::OpenAi, ProviderKind::Gemini, ProviderKind::Ollama]
-            .into_iter()
-            .find(|&p| credential(state, p, &store).ok().is_some_and(|c| c.key.is_some()))
-    };
-    let Some(pk) = fallback else {
-        return Ok(resolved);
-    };
-    let req_m = req.get("model").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
-    let model_requested = req_m.unwrap_or_else(|| pk.default_model()).to_string();
-    let model = pk.resolve_model(&model_requested);
-    Ok((pk, model_requested, model))
 }
 
 /// Returns the CLI route and model configured for `"orchestrator"` in `ui_settings`, if any.
