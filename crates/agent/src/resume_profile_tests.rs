@@ -495,3 +495,54 @@ fn policy_belongs_to_profile_and_is_enforced_on_resume() {
     .unwrap_err();
     assert_eq!(err.kind, ResumeRejectKind::Drift);
 }
+
+#[test]
+fn explicit_investigation_v1_enforces_exact_defs_when_router_profile_is_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let ledger = Ledger::open(dir.path()).unwrap();
+    let i1 = investigation_v1();
+    let i2 = investigation_v2();
+    let i1_defs: Vec<Value> = i1.defs.iter().map(|d| json!({ "id": d.id, "def_hash": d.def_hash() })).collect();
+    ledger
+        .append_with_hash(
+            "s-inv1-explicit",
+            "session.start",
+            1,
+            &json!({
+                "route": "api",
+                "provider": "anthropic-messages",
+                "model": "claude-haiku-4-5",
+                "prompt": "map",
+                "policy_version": i1.policy.version,
+                "tool_profile": PROFILE_INVESTIGATION_V1,
+                "tool_defs": i1_defs,
+            }),
+        )
+        .unwrap();
+
+    // Without an active router profile, explicit `investigation/1` accepts only exact `investigation/1` defs.
+    let ok_i1 = crate::resume::inspect_session_for_resume(&ledger, "s-inv1-explicit", &i1.policy.version, &i1.defs).unwrap();
+    assert_eq!(ok_i1.tool_profile, PROFILE_INVESTIGATION_V1);
+    let err_i2 = crate::resume::inspect_session_for_resume(&ledger, "s-inv1-explicit", &i2.policy.version, &i2.defs).unwrap_err();
+    assert_eq!(err_i2.kind, ResumeRejectKind::Drift);
+
+    // Passing active router profile `investigation/2` upgrades explicitly and checks `investigation/2` exact defs.
+    let ok_upg = crate::resume::inspect_session_for_resume_with_profile(
+        &ledger,
+        "s-inv1-explicit",
+        &i2.policy.version,
+        &i2.defs,
+        Some(PROFILE_INVESTIGATION_V2),
+    )
+    .unwrap();
+    assert_eq!(ok_upg.tool_profile, PROFILE_INVESTIGATION_V2);
+    let err_wrong_defs = crate::resume::inspect_session_for_resume_with_profile(
+        &ledger,
+        "s-inv1-explicit",
+        &i1.policy.version,
+        &i1.defs,
+        Some(PROFILE_INVESTIGATION_V2),
+    )
+    .unwrap_err();
+    assert_eq!(err_wrong_defs.kind, ResumeRejectKind::Drift);
+}

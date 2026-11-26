@@ -95,15 +95,6 @@ pub(crate) fn format_fork_assumption(assumption: &str) -> String {
     )
 }
 
-pub(crate) fn verify_and_read(
-    ledger: &Ledger,
-    session: &str,
-    expected_policy_version: &str,
-    expected_defs: &[ToolDef],
-) -> Result<(ResumeInspection, Vec<Event>), ResumeReject> {
-    verify_and_read_with_profile(ledger, session, expected_policy_version, expected_defs, None)
-}
-
 pub(crate) fn verify_and_read_with_profile(
     ledger: &Ledger,
     session: &str,
@@ -207,7 +198,29 @@ pub fn inspect_session_for_resume(
     expected_policy_version: &str,
     expected_defs: &[ToolDef],
 ) -> Result<ResumeInspection, ResumeReject> {
-    let (insp, events) = verify_and_read(ledger, session, expected_policy_version, expected_defs)?;
+    inspect_session_for_resume_with_profile(
+        ledger,
+        session,
+        expected_policy_version,
+        expected_defs,
+        None,
+    )
+}
+
+pub fn inspect_session_for_resume_with_profile(
+    ledger: &Ledger,
+    session: &str,
+    expected_policy_version: &str,
+    expected_defs: &[ToolDef],
+    active_router_profile: Option<&str>,
+) -> Result<ResumeInspection, ResumeReject> {
+    let (insp, events) = verify_and_read_with_profile(
+        ledger,
+        session,
+        expected_policy_version,
+        expected_defs,
+        active_router_profile,
+    )?;
     // Validate full blob & tool-output rehydration during pre-flight inspection
     // before any caller creates session directories, locks, or workers.
     rehydrate_history(ledger, &events, insp.last_provider)?;

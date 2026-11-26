@@ -5,12 +5,12 @@ pub(crate) use crate::session_view::{reconstruct_session_view, SseEventSink};
 use crate::state::DesktopState;
 use crate::turn_control::ApiTurnGuard;
 use agent::{
-    compute_worker_tools, explore_worker_tools, inspect_session_for_resume, lean_worker_tools,
-    literature_worker_tools, resume_autonomous_research_loop, run_autonomous_research_loop,
-    AgentConfig, AutonomousConfig, AutonomousRoles, CancelToken, CustomSubagentDelegation,
-    DelegatedWorkerSpec, DelegationConfig, GuardrailConfig, ResumeConfig, SessionOutcome,
-    DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_WORKER_MAX_TURNS, EXPLORE_BRANCH_MAX_TURNS,
-    WORKER_MAX_TOKENS,
+    compute_worker_tools, explore_worker_tools, inspect_session_for_resume_with_profile,
+    lean_worker_tools, literature_worker_tools, resume_autonomous_research_loop,
+    run_autonomous_research_loop, AgentConfig, AutonomousConfig, AutonomousRoles, CancelToken,
+    CustomSubagentDelegation, DelegatedWorkerSpec, DelegationConfig, GuardrailConfig, ResumeConfig,
+    SessionOutcome, DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_WORKER_MAX_TURNS,
+    EXPLORE_BRANCH_MAX_TURNS, WORKER_MAX_TOKENS,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -511,11 +511,12 @@ fn run_session_turn(
     } else {
         let defs = router.registry().defs();
         let expected_defs: Vec<tools::ToolDef> = defs.iter().map(|d| (*d).clone()).collect();
-        inspect_session_for_resume(
+        inspect_session_for_resume_with_profile(
             &ledger,
             session_id,
             router.policy().version.as_str(),
             &expected_defs,
+            router.tool_profile(),
         )
         .map_err(|e| e.to_string())?;
         let eff_prompt = match &subagent {

@@ -219,10 +219,6 @@ pub(crate) fn verify_profile_policy_and_defs(
             )));
         }
         expected_defs
-    } else if active_router_profile.is_none()
-        && resolved.profile.name == PROFILE_INVESTIGATION_V1
-    {
-        expected_defs
     } else if resolved.explicit {
         let actual_refs: Vec<&ToolDef> = expected_defs.iter().collect();
         if !defs_match_exact(&actual_refs, &resolved.profile.defs) {

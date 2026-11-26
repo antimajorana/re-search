@@ -9,9 +9,10 @@ use crate::runtime::{build_in_process_router, WorkerSetup};
 use crate::session::{Recorder, EXIT_ABORTED, EXIT_REFUSAL};
 use crate::session_lock::acquire_session_lock;
 use agent::{
-    inspect_session_for_resume, resume_agent_loop, run_agent_loop, AgentConfig, AnthropicConfig, AnthropicTransport,
-    EventSink, GeminiConfig, GeminiTransport, OpenAiConfig, OpenAiTransport, ProviderKind, ResumeConfig,
-    ResumeRejectKind, SessionOutcome, Transport, DEFAULT_SYSTEM_PROMPT,
+    inspect_session_for_resume, inspect_session_for_resume_with_profile, resume_agent_loop,
+    run_agent_loop, AgentConfig, AnthropicConfig, AnthropicTransport, EventSink, GeminiConfig,
+    GeminiTransport, OpenAiConfig, OpenAiTransport, ProviderKind, ResumeConfig, ResumeRejectKind,
+    SessionOutcome, Transport, DEFAULT_SYSTEM_PROMPT,
 };
 use ledger::{AppendedEvent, Ledger};
 use serde_json::Value;
@@ -468,11 +469,12 @@ pub fn resume_with_research(opts: &ApiResumeOpts, res: &ResearchOpts) -> Result<
         },
     )?;
     let defs: Vec<tools::ToolDef> = built.router.registry().defs().into_iter().cloned().collect();
-    let inspection = match inspect_session_for_resume(
+    let inspection = match inspect_session_for_resume_with_profile(
         &ledger,
         &opts.session,
         built.router.policy().version.as_str(),
         &defs,
+        built.router.tool_profile(),
     ) {
         Ok(info) => info,
         Err(r) => match r.kind {

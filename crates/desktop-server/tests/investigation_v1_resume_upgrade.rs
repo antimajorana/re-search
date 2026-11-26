@@ -4,10 +4,11 @@
 mod common;
 
 use agent::{
-    inspect_session_for_resume, inspect_session_with_profile, resume_autonomous_research_loop,
-    AutonomousConfig, AutonomousRoles, ContentBlock, ModelRequest, ModelResponse, NoopSink,
-    PreparedRequest, ResumeConfig, ResumeRejectKind, SessionOutcome, StopReason, Transport,
-    TransportError, TransportInfo, DEFAULT_MAX_TOKENS,
+    inspect_session_for_resume, inspect_session_for_resume_with_profile,
+    inspect_session_with_profile, resume_autonomous_research_loop, AutonomousConfig,
+    AutonomousRoles, ContentBlock, ModelRequest, ModelResponse, NoopSink, PreparedRequest,
+    ResumeConfig, ResumeRejectKind, SessionOutcome, StopReason, Transport, TransportError,
+    TransportInfo, DEFAULT_MAX_TOKENS,
 };
 use common::{raw_http, test_cfg};
 use desktop_server::{start_desktop_server, RunningDesktopServer};
@@ -28,10 +29,10 @@ use research_tools::map_defs::{
 use research_tools::paper_key::PaperKey;
 use research_tools::skeleton::{build_tex_skeleton_from_ingested, PaperSkeleton, SkNodeKind};
 use research_tools::tool_profile::{
-    active_profile_for_session_events, investigation_v1, lookup as lookup_profile,
-    profile_for_session_events, register_profile, research_v1, ProfileHostTools,
-    MARKER_INVESTIGATION_STARTED, PROFILE_INVESTIGATION_V1, PROFILE_INVESTIGATION_V2,
-    PROFILE_RESEARCH_V1, TOOL_PROFILE_FIELD,
+    active_profile_for_session_events, investigation_v1, investigation_v2,
+    lookup as lookup_profile, profile_for_session_events, register_profile, research_v1,
+    ProfileHostTools, MARKER_INVESTIGATION_STARTED, PROFILE_INVESTIGATION_V1,
+    PROFILE_INVESTIGATION_V2, PROFILE_RESEARCH_V1, TOOL_PROFILE_FIELD,
 };
 use research_tools::{ingest_bytes, research_policy, IngestRequest, ResearchEnv};
 use serde_json::{json, Value};
@@ -365,25 +366,42 @@ fn investigation_v1_accepts_all_four_v2_may_gain_read_workspace_tools_and_reject
     all_four_defs.sort_by(|a, b| a.id.cmp(&b.id));
     assert_eq!(INVESTIGATION_V2_MAY_GAIN.len(), 4);
 
-    for (sid, explicit_v1) in [("s-gain4-pref1", false), ("s-gain4-explicit", true)] {
-        write_old_inv_leg1(dir.path(), sid, explicit_v1, false);
-        let insp = inspect_session_for_resume(&ledger, sid, &research_policy().version, &all_four_defs).unwrap();
-        assert_eq!(insp.tool_profile, PROFILE_INVESTIGATION_V1);
+    let mut with_unapproved = all_four_defs.clone();
+    with_unapproved.push(mk_reserved_def("unapproved_map_tool", EffectClass::ReadWorkspace));
+    with_unapproved.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut wrong_effect = investigation_v1().defs;
+    wrong_effect.push(mk_reserved_def(RECORD_CONTEXT_CARDS, EffectClass::WriteWorkspace));
+    wrong_effect.sort_by(|a, b| a.id.cmp(&b.id));
 
-        // Unapproved ReadWorkspace tool ID -> Drift.
-        let mut with_unapproved = all_four_defs.clone();
-        with_unapproved.push(mk_reserved_def("unapproved_map_tool", EffectClass::ReadWorkspace));
-        with_unapproved.sort_by(|a, b| a.id.cmp(&b.id));
-        let err = inspect_session_for_resume(&ledger, sid, &research_policy().version, &with_unapproved).unwrap_err();
-        assert_eq!(err.kind, ResumeRejectKind::Drift);
+    // Unlabelled pre-F1 `investigation/1`: may_gain tolerates all 4 ReadWorkspace tools even with active_router_profile = None,
+    // and also upgrades cleanly via inspect_session_for_resume_with_profile(..., Some(PROFILE_INVESTIGATION_V2)).
+    write_old_inv_leg1(dir.path(), "s-gain4-pref1", false, false);
+    let insp = inspect_session_for_resume(&ledger, "s-gain4-pref1", &research_policy().version, &all_four_defs).unwrap();
+    assert_eq!(insp.tool_profile, PROFILE_INVESTIGATION_V1);
+    let upg = inspect_session_for_resume_with_profile(
+        &ledger, "s-gain4-pref1", &research_policy().version, &investigation_v2().defs, Some(PROFILE_INVESTIGATION_V2),
+    ).unwrap();
+    assert_eq!(upg.tool_profile, PROFILE_INVESTIGATION_V2);
+    assert_eq!(inspect_session_for_resume(&ledger, "s-gain4-pref1", &research_policy().version, &with_unapproved).unwrap_err().kind, ResumeRejectKind::Drift);
+    assert_eq!(inspect_session_for_resume(&ledger, "s-gain4-pref1", &research_policy().version, &wrong_effect).unwrap_err().kind, ResumeRejectKind::Drift);
 
-        // Non-ReadWorkspace effect on an approved may_gain ID -> Drift.
-        let mut wrong_effect = investigation_v1().defs;
-        wrong_effect.push(mk_reserved_def(RECORD_CONTEXT_CARDS, EffectClass::WriteWorkspace));
-        wrong_effect.sort_by(|a, b| a.id.cmp(&b.id));
-        let err = inspect_session_for_resume(&ledger, sid, &research_policy().version, &wrong_effect).unwrap_err();
-        assert_eq!(err.kind, ResumeRejectKind::Drift);
-    }
+    // Explicitly labelled `investigation/1`: when active_router_profile = None, defs_match_exact against `investigation/1`
+    // rejects `investigation/2` and `all_four_defs` with Drift, while explicit upgrade with Some("investigation/2") succeeds.
+    write_old_inv_leg1(dir.path(), "s-gain4-explicit", true, false);
+    let insp_exact = inspect_session_for_resume(&ledger, "s-gain4-explicit", &research_policy().version, &investigation_v1().defs).unwrap();
+    assert_eq!(insp_exact.tool_profile, PROFILE_INVESTIGATION_V1);
+    assert_eq!(inspect_session_for_resume(&ledger, "s-gain4-explicit", &research_policy().version, &investigation_v2().defs).unwrap_err().kind, ResumeRejectKind::Drift);
+    assert_eq!(inspect_session_for_resume(&ledger, "s-gain4-explicit", &research_policy().version, &all_four_defs).unwrap_err().kind, ResumeRejectKind::Drift);
+    let upg_exp = inspect_session_for_resume_with_profile(
+        &ledger, "s-gain4-explicit", &research_policy().version, &investigation_v2().defs, Some(PROFILE_INVESTIGATION_V2),
+    ).unwrap();
+    assert_eq!(upg_exp.tool_profile, PROFILE_INVESTIGATION_V2);
+    assert_eq!(
+        inspect_session_for_resume_with_profile(&ledger, "s-gain4-explicit", &research_policy().version, &all_four_defs, Some(PROFILE_INVESTIGATION_V2)).unwrap_err().kind,
+        ResumeRejectKind::Drift
+    );
+    assert_eq!(inspect_session_for_resume(&ledger, "s-gain4-explicit", &research_policy().version, &with_unapproved).unwrap_err().kind, ResumeRejectKind::Drift);
+    assert_eq!(inspect_session_for_resume(&ledger, "s-gain4-explicit", &research_policy().version, &wrong_effect).unwrap_err().kind, ResumeRejectKind::Drift);
 
     // `research/1` session must reject gaining any of the four Investigate v2 tools.
     let r1_defs: Vec<Value> = research_v1().defs.iter().map(|d| json!({ "id": d.id, "def_hash": d.def_hash() })).collect();
