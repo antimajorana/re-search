@@ -1,0 +1,39 @@
+% Original fixed-tier evaluation fixture for Set P (not a real paper).
+% Section 1 of eval-07-multifile: operator setup, resolvent definition, and Neumann series.
+\section{Operator setup and Neumann series}
+\label{sec:setup}
+
+\begin{myassump}
+\label{assump:domain}
+Let $H_0$ be a self-adjoint operator on a complex Hilbert space $\mathcal{H}$
+with dense domain $\dom(H_0)$, and let $V$ be a bounded symmetric operator on
+$\mathcal{H}$ with $\opnorm{V} < \infty$.
+\end{myassump}
+
+\begin{mydef}
+\label{def:resolvent}
+For a closed linear operator $T$ on $\mathcal{H}$, the \emph{resolvent set}
+$\rho(T)$ consists of all $z \in \mathbb{C}$ such that
+$T - zI : \dom(T) \to \mathcal{H}$ is bijective with bounded inverse
+$R_T(z) = \res{T}{zI}$.
+\end{mydef}
+
+\begin{mylem}
+\label{lem:neumann}
+Let $B$ be a bounded linear operator on $\mathcal{H}$ with $\opnorm{B} < 1$.
+Then $I + B$ is boundedly invertible and satisfies
+\begin{equation}
+\label{eq:neumann-series}
+(I + B)^{-1} = \sum_{n=0}^{\infty} (-1)^n B^n,
+\qquad
+\opnorm{(I + B)^{-1}} \le \frac{1}{1 - \opnorm{B}}.
+\end{equation}
+\end{mylem}
+\begin{proof}
+Because $\sum_{n=0}^{\infty} \opnorm{B}^n = (1 - \opnorm{B})^{-1} < \infty$,
+the partial sums $S_N = \sum_{n=0}^{N} (-1)^n B^n$ form a Cauchy sequence in
+operator norm and converge to a bounded operator $S$ with
+$\opnorm{S} \le (1 - \opnorm{B})^{-1}$. Direct multiplication gives
+$(I + B) S_N = S_N (I + B) = I - (-1)^{N+1} B^{N+1} \to I$ as $N \to \infty$,
+so $S = (I + B)^{-1}$.
+\end{proof}
