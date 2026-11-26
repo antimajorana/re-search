@@ -12,7 +12,7 @@ use research_tools::skeleton::{
     SkNodeKind, SkeletonBuilder, SkeletonQuality, Span,
 };
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Mode display name (`00-overview.md` §3.2, §8).
 pub const MODE_DISPLAY_NAME: &str = "Investigate";
@@ -153,6 +153,7 @@ pub fn build_mapview_json(
         { "label": "Heuristic reference (not checked by code)", "icon": "model", "tone": "muted", "dashed": true },
     ]);
 
+    let skip_plan = research_tools::skeleton::compute_skip_plan(skeleton, &[], &[]);
     json!({
         "etag": ledger_head, "skeleton_seq": skeleton_seq, "skeleton_blob": skeleton_blob,
         "source_id": skeleton.source_id, "source_seq": skeleton.source_seq,
@@ -160,10 +161,69 @@ pub fn build_mapview_json(
         "builder": skeleton.builder, "quality": skeleton.quality,
         "quality_reason": skeleton.quality_reason, "quality_line": format_quality_line(skeleton),
         "nodes": nodes, "edges": edges, "legend": legend,
-        "stats": skeleton.stats, "bib": skeleton.bib, "macros": skeleton.macros,
-        "skip_plan": Value::Null, "tasks": [], "carry": skeleton.carry,
+        "stats": skeleton.stats, "bib": skeleton.bib, "symbols": skeleton.symbols,
+        "macros": skeleton.macros, "skip_plan": skip_plan, "tasks": [], "carry": skeleton.carry,
         "fallback_note": fallback_note,
     })
+}
+
+/// Builds the `GraphView` mapview JSON with a computed [`research_tools::skeleton::SkipPlan`]
+/// for the given `main_result_tags` and optional extra/model edges, setting `dim: true` on
+/// nodes belonging to unreferenced sections (Rule 6.14).
+pub fn build_mapview_json_with_plan(
+    skeleton: &PaperSkeleton,
+    skeleton_seq: u64,
+    skeleton_blob: &str,
+    ledger_head: &str,
+    main_result_tags: &[String],
+    extra_edges: &[research_tools::skeleton::ExtraUseEdge],
+    fallback_note: Option<&str>,
+) -> Value {
+    let mut mv = build_mapview_json(skeleton, skeleton_seq, skeleton_blob, ledger_head, fallback_note);
+    let plan = research_tools::skeleton::compute_skip_plan(skeleton, main_result_tags, extra_edges);
+    if !plan.empty {
+        let dimmed_secs: BTreeSet<&str> = plan
+            .sections
+            .iter()
+            .filter(|s| s.dim)
+            .map(|s| s.section_tag.as_str())
+            .collect();
+        let node_by_tag: BTreeMap<&str, &SkNode> = skeleton
+            .nodes
+            .iter()
+            .filter_map(|n| n.tag.as_deref().map(|t| (t, n)))
+            .collect();
+        if let Some(arr) = mv["nodes"].as_array_mut() {
+            for item in arr.iter_mut() {
+                let id = item["id"].as_str().unwrap_or("");
+                let mut cur = node_by_tag.get(id).copied();
+                let mut steps = 0usize;
+                let mut sec_tag: Option<&str> = None;
+                while let Some(n) = cur {
+                    if n.kind == SkNodeKind::Section {
+                        sec_tag = n.tag.as_deref();
+                        break;
+                    }
+                    cur = n.parent.as_deref().and_then(|p| node_by_tag.get(p).copied());
+                    steps += 1;
+                    if steps > skeleton.nodes.len() {
+                        break;
+                    }
+                }
+                if sec_tag.is_some_and(|st| dimmed_secs.contains(st)) {
+                    item["dim"] = json!(true);
+                    if let Some(flags) = item["flags"].as_array_mut() {
+                        let msg = json!(research_tools::skeleton::SKIP_LABEL_UNREFERENCED);
+                        if !flags.contains(&msg) {
+                            flags.push(msg);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    mv["skip_plan"] = json!(plan);
+    mv
 }
 
 /// Reads the exact hash-checked physical TeX lines for `tag` (and its attached proof, if any)
@@ -313,7 +373,9 @@ mod tests {
         assert_eq!(mv["etag"], "head-abc");
         assert_eq!(mv["skeleton_seq"], 7);
         assert_eq!(mv["quality_line"], "Structure read from TeX source, v2");
-        assert!(mv["skip_plan"].is_null());
+        assert_eq!(mv["skip_plan"]["empty"], json!(true));
+        assert_eq!(mv["skip_plan"]["basis"], json!("explicit"));
+        assert!(mv["symbols"].is_array());
         assert_eq!(mv["tasks"], json!([]));
 
         let serialized = serde_json::to_string(&mv).unwrap();
