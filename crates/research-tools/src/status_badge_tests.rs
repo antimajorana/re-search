@@ -100,3 +100,32 @@ fn status_badge_without_claim_preserves_heading_cites_only() {
     assert_eq!(badge.heading_cite_line.as_deref(), Some("cites [Toy98] in its heading"));
     assert_eq!(badge.cue_line, NO_EXPLICIT_CUE_TEXT);
 }
+
+#[test]
+fn badge_quote_omits_pdf_page_metadata_unless_present() {
+    let plain = BadgeQuote {
+        source_id: "s1".into(),
+        path: "main.tex".into(),
+        start_line: 10,
+        end_line: 12,
+        quote: "We prove the theorem.".into(),
+        page: None,
+        end_page: None,
+        ocr: None,
+    };
+    let plain_json = serde_json::to_value(&plain).unwrap();
+    assert!(plain_json.get("page").is_none());
+    assert!(plain_json.get("end_page").is_none());
+    assert!(plain_json.get("ocr").is_none());
+
+    let pdf_ocr = BadgeQuote {
+        page: Some(4),
+        end_page: Some(5),
+        ocr: Some(true),
+        ..plain
+    };
+    let pdf_json = serde_json::to_value(&pdf_ocr).unwrap();
+    assert_eq!(pdf_json["page"], 4);
+    assert_eq!(pdf_json["end_page"], 5);
+    assert_eq!(pdf_json["ocr"], true);
+}

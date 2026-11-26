@@ -240,6 +240,7 @@ pub fn handle_with_etag(
                         if let Ok(env) = state.research_env_for_session(session_id) {
                             if let Ok(pdf) = load_ingested_pdf_source(&env.sandbox(), session_id, receipt) {
                                 attach_pdf_page_metadata(&mut mv, &rec.skeleton, &pdf);
+                                crate::investigation_mapview_v7::attach_v7_pdf_quote_pages(&mut mv, &pdf);
                             }
                         }
                     }

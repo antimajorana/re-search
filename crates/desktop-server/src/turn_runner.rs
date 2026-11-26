@@ -245,7 +245,8 @@ fn run_session_turn(
     let ui = state.load_ui_settings();
     let (reasoning_effort, subagent) =
         crate::subagents::resolve_turn_options(state, session_id, req, meta.clone());
-    let (provider, model_requested, model) = crate::agent_models::resolve_orchestrator_model(
+    let (provider, model_requested, model) = crate::agent_models::resolve_orchestrator_model_with_state(
+        state,
         subagent.as_ref(),
         req,
         meta.as_ref(),

@@ -67,6 +67,11 @@ pub fn handle(state: &Arc<DesktopState>, session_id: &str, body: &[u8]) -> ApiRe
     }
 
     let task = parse_task_kind(req_json.get("task").and_then(Value::as_str))?;
+    if let Some(p) = req_json.get("provider").and_then(Value::as_str).map(str::trim) {
+        if matches!(p, crate::state::CLAUDE_CLI_ROUTE | crate::state::ANTIGRAVITY_ROUTE | "claude-code-cli") {
+            return Err(bad("Background Investigate tasks require an in-core API or ChatGPT provider (subscription CLI routes are not supported)."));
+        }
+    }
     let depth = parse_optional_text(req_json.get("depth"), "depth", MAX_DEPTH_CHARS)?;
     let focus = parse_optional_text(req_json.get("focus"), "focus", MAX_FOCUS_CHARS)?;
 

@@ -7,9 +7,10 @@
 
 use research_tools::map_defs::ModelEdgeRole;
 use research_tools::map_fold::{FoldedMap, FoldedNodeReading, ReaderPin};
+use research_tools::pdf_pages::PageBasis;
 use research_tools::skeleton::{
-    compute_skip_plan, ExtraUseEdge, PaperSkeleton, SkEdgeRole, SkNode, SkNodeKind,
-    SKIP_LABEL_UNREFERENCED,
+    compute_skip_plan, ExtraUseEdge, IngestedPdfSource, PaperSkeleton, SkEdgeRole, SkNode,
+    SkNodeKind, SKIP_LABEL_UNREFERENCED,
 };
 use research_tools::status_badge::{status_badge, BORDER_DASHED, BORDER_SOLID};
 use serde_json::{json, Value};
@@ -143,6 +144,7 @@ fn enrich_one_skeleton_node(
                 if let (Some(cur), Some(prev)) = (ac_vv, r.authors_claim.history.last()) {
                     if cur.value.label != prev.value.label
                         || cur.value.relation_note != prev.value.relation_note
+                        || cur.value.attributed_to != prev.value.attributed_to
                     {
                         obj.insert("previous_label".into(), json!(prev.value.label));
                         obj.insert("changed".into(), json!(true));
@@ -262,7 +264,10 @@ pub fn collect_field_changes(r: &FoldedNodeReading) -> Vec<Value> {
         }
     }
     if let (Some(cur), Some(prev)) = (&r.authors_claim.current, r.authors_claim.history.last()) {
-        if cur.value.label != prev.value.label || cur.value.relation_note != prev.value.relation_note {
+        if cur.value.label != prev.value.label
+            || cur.value.relation_note != prev.value.relation_note
+            || cur.value.attributed_to != prev.value.attributed_to
+        {
             out.push(json!({
                 "field": "authors_claim",
                 "previous": prev.value.label,
@@ -273,6 +278,78 @@ pub fn collect_field_changes(r: &FoldedNodeReading) -> Vec<Value> {
         }
     }
     out
+}
+
+/// Attaches 1-based physical `page` (and `ocr: true` / `page_basis: "scan_text_layer"` when on a
+/// scanned page) to V7 `authors_claim.quotes` entries anchored to `pdf`'s verified reading file,
+/// failing closed whenever any line falls outside `pdf.page_map` or on `PageBasis::None`.
+pub fn attach_v7_pdf_quote_pages(mv: &mut Value, pdf: &IngestedPdfSource) {
+    let Some(nodes) = mv.get_mut("nodes").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for node in nodes {
+        let Some(quotes) = node
+            .get_mut("authors_claim")
+            .and_then(|c| c.get_mut("quotes"))
+            .and_then(Value::as_array_mut)
+        else {
+            continue;
+        };
+        for q in quotes {
+            let Some(obj) = q.as_object_mut() else { continue };
+            if obj.get("source_id").and_then(Value::as_str) != Some(pdf.source_id.as_str())
+                || obj.get("path").and_then(Value::as_str) != Some(pdf.primary_path.as_str())
+            {
+                continue;
+            }
+            let Some(start) = obj
+                .get("start_line")
+                .and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok())
+                .filter(|&n| n >= 1)
+            else {
+                continue;
+            };
+            let end = obj
+                .get("end_line")
+                .and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(start)
+                .max(start);
+            let mut min_p: Option<usize> = None;
+            let mut max_p: Option<usize> = None;
+            let mut has_scan = false;
+            let mut valid = true;
+            for line in start..=end {
+                let Some(rec) = pdf.page_map.record_of_line(line) else {
+                    valid = false;
+                    break;
+                };
+                if rec.basis == PageBasis::None {
+                    valid = false;
+                    break;
+                }
+                if rec.basis == PageBasis::ScanTextLayer {
+                    has_scan = true;
+                }
+                min_p = Some(min_p.map_or(rec.page, |m| m.min(rec.page)));
+                max_p = Some(max_p.map_or(rec.page, |m| m.max(rec.page)));
+            }
+            if !valid {
+                continue;
+            }
+            if let (Some(sp), Some(ep)) = (min_p, max_p) {
+                obj.insert("page".into(), json!(sp));
+                if ep > sp {
+                    obj.insert("end_page".into(), json!(ep));
+                }
+                if has_scan {
+                    obj.insert("ocr".into(), json!(true));
+                    obj.insert("page_basis".into(), json!("scan_text_layer"));
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -388,7 +465,7 @@ mod tests {
             value: ReadingRole::MainResult,
         });
         reading.any_stale = true;
-        folded.nodes.insert(tag.into(), reading);
+        folded.nodes.insert(tag.into(), reading.clone());
         let mut mv_diff = build_mapview_json_with_fold(&sk, 1, "b", "h", None, Some(&folded));
         enrich_mapview_with_v7(&mut mv_diff, &sk, &folded, false);
         let node_diff = mv_diff["nodes"].as_array().unwrap().iter().find(|n| n["id"] == tag).unwrap();
@@ -399,5 +476,82 @@ mod tests {
         assert!(node_diff.get("role").is_none());
         assert_eq!(node_diff["effective_is_main_result"], json!(false));
         assert_eq!(mv_diff["orient_auto_start"], json!(false));
+
+        // Changing only `attributed_to` must also flag `changed` and `changed_since_last`.
+        reading.authors_claim.push(VersionedValue {
+            seq: 7,
+            request_seq: 6,
+            skeleton_seq: 1,
+            node_fp: "fp1".into(),
+            stale: false,
+            value: AuthorsClaimRecord {
+                label: AuthorsClaimLabel::Restated,
+                relation_note: Some("restated".into()),
+                attributed_to: vec!["Toy98".into()],
+                anchors: vec![],
+                cues: vec![],
+            },
+        });
+        folded.nodes.insert(tag.into(), reading);
+        let mut mv_attr = build_mapview_json_with_fold(&sk, 1, "b", "h", None, Some(&folded));
+        enrich_mapview_with_v7(&mut mv_attr, &sk, &folded, false);
+        let node_attr = mv_attr["nodes"].as_array().unwrap().iter().find(|n| n["id"] == tag).unwrap();
+        assert_eq!(node_attr["authors_claim"]["changed"], json!(true));
+        assert!(node_attr["changed_since_last"]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["field"] == "authors_claim"));
+    }
+
+    #[test]
+    fn attach_v7_pdf_quote_pages_sets_page_and_ocr_and_skips_none_or_foreign() {
+        use research_tools::pdf_pages::{PageMap, PageQualityMetrics, PageRecord};
+        use research_tools::skeleton::IngestedPdfSource;
+        use std::collections::BTreeMap;
+        let metrics = PageQualityMetrics {
+            char_count: 100, alpha_count: 80, word_count: 15,
+            image_coverage_pct: 0, has_invisible_text: false, width_pt: 612, height_pt: 792,
+        };
+        let pdf = IngestedPdfSource {
+            source_id: "src-pdf".into(),
+            source_seq: 2,
+            primary_path: "paper.txt".into(),
+            text: "a\nb\nc\nd\ne\nf\n".into(),
+            page_map: PageMap {
+                page_count: 3,
+                pages: vec![
+                    PageRecord { page: 1, basis: PageBasis::TextLayer, first_line: Some(1), last_line: Some(2), metrics: metrics.clone(), reason: None },
+                    PageRecord { page: 2, basis: PageBasis::ScanTextLayer, first_line: Some(3), last_line: Some(4), metrics: metrics.clone(), reason: None },
+                    PageRecord { page: 3, basis: PageBasis::None, first_line: Some(5), last_line: Some(6), metrics, reason: None },
+                ],
+            },
+            extractor_id: None,
+            files_sha256: BTreeMap::new(),
+            files_root_sha256: "0".repeat(64),
+            extra_quality_notes: vec![],
+        };
+        let mut mv = json!({
+            "nodes": [{
+                "id": "n1",
+                "authors_claim": {
+                    "quotes": [
+                        { "source_id": "src-pdf", "path": "paper.txt", "start_line": 1, "end_line": 2, "quote": "digital" },
+                        { "source_id": "src-pdf", "path": "paper.txt", "start_line": 3, "end_line": 4, "quote": "scanned" },
+                        { "source_id": "src-pdf", "path": "paper.txt", "start_line": 5, "end_line": 6, "quote": "none-page" },
+                        { "source_id": "other", "path": "paper.txt", "start_line": 1, "end_line": 1, "quote": "foreign" }
+                    ]
+                }
+            }]
+        });
+        attach_v7_pdf_quote_pages(&mut mv, &pdf);
+        let qs = mv["nodes"][0]["authors_claim"]["quotes"].as_array().unwrap();
+        assert_eq!(qs[0]["page"], 1);
+        assert!(qs[0].get("ocr").is_none());
+        assert_eq!(qs[1]["page"], 2);
+        assert_eq!(qs[1]["ocr"], true);
+        assert_eq!(qs[1]["page_basis"], "scan_text_layer");
+        assert!(qs[2].get("page").is_none());
+        assert!(qs[3].get("page").is_none());
     }
 }

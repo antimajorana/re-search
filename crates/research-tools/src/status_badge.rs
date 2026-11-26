@@ -93,6 +93,12 @@ pub struct BadgeQuote {
     pub start_line: usize,
     pub end_line: usize,
     pub quote: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_page: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ocr: Option<bool>,
 }
 
 /// Pure authors'-side half-badge projection derived from an optional [`AuthorsClaimRecord`]
@@ -292,6 +298,9 @@ pub fn status_badge(
                     start_line: a.start_line,
                     end_line: a.end_line,
                     quote: clip_quote(a.quote.trim()).to_string(),
+                    page: None,
+                    end_page: None,
+                    ocr: None,
                 })
                 .collect();
             AuthorsStatusBadge {
