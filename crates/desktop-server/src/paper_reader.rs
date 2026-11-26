@@ -390,17 +390,7 @@ fn active_marker(events: &[Event]) -> Option<(&Event, &Event)> {
     let marker = history
         .iter()
         .rev()
-        .find(|e| {
-            matches!(
-                e.kind.as_str(),
-                "investigation.mapping_requested" | "investigation.mapping_finished"
-                    | "investigation.branch_requested" | "investigation.branch_finished"
-                    | "investigation.conventions_resumed" | "investigation.conventions_finished"
-                    | "investigation.question_requested" | "investigation.answer"
-                    | "investigation.requested" | "investigation.result"
-                    | "session.end" | "session.abort"
-            )
-        })
+        .find(|e| research_tools::investigation_markers::is_investigation_marker(&e.kind))
         .filter(|e| {
             matches!(
                 e.kind.as_str(),

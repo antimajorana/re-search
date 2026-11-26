@@ -21,6 +21,26 @@ pub(crate) fn spawn_turn_thread(
     mut req_json: Value,
     prompt: String,
 ) -> Result<(), (u16, String)> {
+    crate::investigation_tasks::strip_internal_task_fields(&mut req_json);
+    spawn_turn_thread_inner(state, session_id, req_json, prompt, false)
+}
+
+pub(crate) fn spawn_task_turn_thread(
+    state: Arc<DesktopState>,
+    session_id: String,
+    req_json: Value,
+    prompt: String,
+) -> Result<(), (u16, String)> {
+    spawn_turn_thread_inner(state, session_id, req_json, prompt, true)
+}
+
+fn spawn_turn_thread_inner(
+    state: Arc<DesktopState>,
+    session_id: String,
+    mut req_json: Value,
+    prompt: String,
+    allow_task_spec: bool,
+) -> Result<(), (u16, String)> {
     let ledger = state
         .open_ledger()
         .map_err(|e| (500, e))?;
@@ -44,6 +64,21 @@ pub(crate) fn spawn_turn_thread(
     // `provider: "claude-cli"` / `"antigravity"` (or a session bound to one) runs on that
     // subscription-CLI route; anything else on the in-core API route. A session never mixes
     // routes.
+    if allow_task_spec {
+        let req_prov = req_json.get("provider").and_then(Value::as_str).map(str::trim);
+        let bound_route = state.load_meta(&session_id).and_then(|m| m.route);
+        if matches!(req_prov, Some("claude-cli" | "antigravity"))
+            || matches!(bound_route.as_deref(), Some("claude-cli" | "antigravity"))
+        {
+            if let Ok(mut active) = state.active_turns.lock() {
+                active.remove(&session_id);
+            }
+            return Err((
+                400,
+                "Investigate v2 tasks require an API or ChatGPT provider until `cli_turn.rs` passes `CORE_TOOL_PROFILE`.".to_string(),
+            ));
+        }
+    }
     let on_cli_route = match crate::cli_turn::wants_cli_route(&state, &session_id, &req_json) {
         Ok(v) => v,
         Err(e) => {
@@ -53,6 +88,15 @@ pub(crate) fn spawn_turn_thread(
             return Err(e);
         }
     };
+    if allow_task_spec && on_cli_route.is_some() {
+        if let Ok(mut active) = state.active_turns.lock() {
+            active.remove(&session_id);
+        }
+        return Err((
+            400,
+            "Investigate v2 tasks require an API or ChatGPT provider until `cli_turn.rs` passes `CORE_TOOL_PROFILE`.".to_string(),
+        ));
+    }
 
     // Register stop handles before spawning the worker thread so an immediate `POST .../stop`
     // after `202 Accepted` reaches both CLI and in-core API/ChatGPT turns.
@@ -83,29 +127,52 @@ pub(crate) fn spawn_turn_thread(
     } else {
         crate::investigation::PaperRoute::InCore
     };
-    if let Err(error) =
-        crate::investigation::prepare(&state, &session_id, &mut req_json, &prompt, paper_route)
-    {
-        if let Ok(mut active) = state.active_turns.lock() { active.remove(&session_id); }
-        return Err(error);
+    let is_v6_task = if allow_task_spec {
+        match crate::investigation_tasks::prepare_task(&state, &session_id, &mut req_json) {
+            Ok(v) => v,
+            Err(error) => {
+                if let Ok(mut active) = state.active_turns.lock() { active.remove(&session_id); }
+                return Err(error);
+            }
+        }
+    } else {
+        false
+    };
+    if !is_v6_task {
+        if let Err(error) =
+            crate::investigation::prepare(&state, &session_id, &mut req_json, &prompt, paper_route)
+        {
+            if let Ok(mut active) = state.active_turns.lock() { active.remove(&session_id); }
+            return Err(error);
+        }
     }
 
+    let spawn_fail_req = is_v6_task.then(|| req_json.clone());
     let thread_state = Arc::clone(&state);
     let thread_session = session_id.clone();
     std::thread::Builder::new()
         .name(format!("turn-{session_id}"))
         .spawn(move || {
             let _activity = activity;
-            let outcome = match (&registered_cli, &registered_api) {
+            let (outcome, cancelled) = match (&registered_cli, &registered_api) {
                 (Some((reg, kind)), _) => {
-                    crate::cli_turn::run_cli_turn(&thread_state, &thread_session, &req_json, &prompt, &reg.stop, *kind)
+                    let caller = format!("{}:{}", kind.ledger_route(), thread_session);
+                    let res = crate::investigation_tasks::record_supplied_for_caller(
+                        &thread_state, &thread_session, &req_json, &caller,
+                    ).and_then(|()| {
+                        crate::cli_turn::run_cli_turn(&thread_state, &thread_session, &req_json, &prompt, &reg.stop, *kind)
+                    });
+                    (res, reg.stop.is_stopped())
                 }
                 (_, Some(api_guard)) => {
-                    run_session_turn(&thread_state, &thread_session, &req_json, &prompt, &api_guard.cancel)
+                    let res = run_session_turn(&thread_state, &thread_session, &req_json, &prompt, &api_guard.cancel);
+                    (res, api_guard.cancel.is_cancelled())
                 }
-                (None, None) => Err("missing turn registration".into()),
+                (None, None) => (Err("missing turn registration".into()), false),
             };
-            let outcome = crate::investigation::finish(&thread_state, &thread_session, &req_json, outcome);
+            let outcome = crate::investigation_finish::finish_with_cancel(
+                &thread_state, &thread_session, &req_json, outcome, cancelled,
+            );
             drop(registered_cli);
             drop(registered_api);
             if let Ok(mut active) = thread_state.active_turns.lock() {
@@ -129,10 +196,14 @@ pub(crate) fn spawn_turn_thread(
             }
         })
         .map_err(|e| {
+            let err = format!("failed to spawn solver thread: {e}");
+            if let Some(req_meta) = &spawn_fail_req {
+                crate::investigation_tasks::fail_task_on_spawn_error(&state, &session_id, req_meta, &err);
+            }
             if let Ok(mut active) = state.active_turns.lock() {
                 active.remove(&session_id);
             }
-            (500, format!("failed to spawn solver thread: {e}"))
+            (500, err)
         })?;
     Ok(())
 }
@@ -209,6 +280,8 @@ fn run_session_turn(
         prepared_paper_reader.is_some(),
     );
     let transport = state.build_transport(provider, &model)?;
+    let in_core_caller = format!("agent:{}:{}", transport.info().provider, session_id);
+    crate::investigation_tasks::record_supplied_for_caller(state, session_id, req, &in_core_caller)?;
     let v_built = crate::agent_models::resolve_optional_role_transport(
         state,
         &ui,
@@ -302,7 +375,8 @@ fn run_session_turn(
     };
     let paper_reading_turn = req.get("_paper_map_request").is_some()
         || req.get("_paper_branch_request").is_some()
-        || req.get("_paper_conventions_request").is_some();
+        || req.get("_paper_conventions_request").is_some()
+        || crate::investigation_tasks::is_task_turn(req);
     let delegation_cfg = DelegationConfig {
         compute_worker: if paper_reading_turn { None } else { compute_built.as_ref().map(|b| {
             make_worker_spec(

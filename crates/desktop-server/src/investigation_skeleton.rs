@@ -12,7 +12,7 @@
 //! ```
 
 use crate::investigation::{is_investigation, latest};
-use crate::investigation_mapview::{build_mapview_json, read_verified_node_text};
+use crate::investigation_mapview::{build_mapview_json_with_fold, read_verified_node_text};
 use crate::routes_session::{bad, conflict, internal, not_found, parse_json_body, ApiResult};
 use crate::state::DesktopState;
 use ledger::{Event, Ledger};
@@ -192,7 +192,24 @@ pub fn handle_with_etag(
             let head = events.last().map_or_else(String::new, |e| e.event_hash.clone());
             if etag_matches(if_none_match, &head) { return Ok((304, Some(head), Value::Null)); }
             if let Some(rec) = rec {
-                return Ok((200, Some(head.clone()), build_mapview_json(&rec.skeleton, rec.event_seq, &rec.blob_hash, &head, None)));
+                let running = state
+                    .active_turns
+                    .lock()
+                    .ok()
+                    .is_some_and(|active| active.contains(session_id));
+                let folded = research_tools::map_fold::fold_map(&rec.skeleton, &events, running);
+                return Ok((
+                    200,
+                    Some(head.clone()),
+                    build_mapview_json_with_fold(
+                        &rec.skeleton,
+                        rec.event_seq,
+                        &rec.blob_hash,
+                        &head,
+                        None,
+                        Some(&folded),
+                    ),
+                ));
             }
             Ok((200, Some(head.clone()), json!({
                 "etag": head, "skeleton_seq": Value::Null, "nodes": [], "edges": [],
