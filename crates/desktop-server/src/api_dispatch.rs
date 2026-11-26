@@ -323,6 +323,10 @@ pub(crate) fn dispatch_api(
         ("DELETE", ["api", "subagents", id]) => {
             write_api_res(&mut stream, crate::routes_subagents::handle_delete_subagent(state, id));
         }
+        (_, ["api", "library", rest @ ..]) => write_api_res(
+            &mut stream,
+            crate::routes_library::handle_library(state, method, rest, &req.query, &req.body),
+        ),
         _ => write_json(
             &mut stream,
             404,
