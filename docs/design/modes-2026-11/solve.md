@@ -687,6 +687,21 @@ Nothing in the free column calls a paid service. The number of model calls is sh
 
 ## 11. What is borrowed from where
 
+### Solver agent patterns to apply
+
+Review of the re-Solve fork at `5d68b0115a42f294b9ff066f2d2eb854e45c46ed` confirms
+three patterns for this design. Keep the integration in the existing Rust and Python packages.
+
+| Pattern in re-Solve | Solve implementation |
+|---|---|
+| A step verifier can compute and retrieve evidence, and has a bounded role of its own. | S14 gives the verifier tools, a separate model route where available, and the relevant dependency closure. Report its review separately from a deterministic check. |
+| The coordinating solver must interpret a successful computation in a result linked to its receipt before proceeding. | S3/S11 enforce the gate in code and explain refusals where they occur. S8 pins the expression, assumptions, result and provenance to the ledger. |
+| Named expressions and the actual worker code and outputs can be used in later steps or inspected. | S6/S7 pass versioned exact handles with domain information. S9 records the evidence for each check. S13 and F9b show the worker assignment, output, computation and why a badge was earned. |
+
+Apply the current [evidence labels and worker activity contract](00-overview.md#210-one-evidence-scale-for-display).
+The final answer refers to checked steps and carries any remaining open items. A review verdict
+does not award a computation badge.
+
 | Source | Licence | Taken as | What |
 |---|---|---|---|
 | Solver agent (`re-Solve`), `stepVerificationAgent.ts`, `fullVerificationAgent.ts` | AGPL-3.0 | idea, re-coded in Rust | verifiers as loops of up to 12 model calls with compute and ledger-read tools on a separately routed model |

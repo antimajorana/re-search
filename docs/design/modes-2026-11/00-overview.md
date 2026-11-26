@@ -288,14 +288,22 @@ Not a shared storage field; a shared mapping so the same look means the same thi
 
 | Grade | Investigate | Explore | Solve | Look |
 |---|---|---|---|---|
-| By code | Skeleton node or edge | Coverage, verdict text | Verified (exact symbolic check), Checked numerically (numeric agreement) | Solid, plain; the badge text tells the two apart |
-| Matched quote, full text | From this paper / Outside this paper | `xe` evidence | Cited | Solid, quote chip; for a PDF the chip names the page |
-| Matched quote, scanned page (OCR text) | Same, from a scan | `xe` evidence from a scan | Cited, flag "OCR source" | Solid, quote chip tagged "OCR", which opens the page image (2.12) |
-| Matched quote, abstract | - | `xa` evidence | - | Dashed, "abstract only" |
+| By code | Skeleton node or edge | Coverage, verdict text | Verified (exact symbolic check), Numerically checked (numeric agreement) | Solid, plain; a check badge opens its receipt |
+| Matched quote, full text | Found, from this paper or outside it | Found, `xe` evidence | Found (stored tier `cited`) | Solid, quote chip; for a PDF the chip names the page |
+| Matched quote, scanned page (OCR text) | Found, from a scan | Found, `xe` evidence from a scan | Found, flag "OCR source" | Solid, quote chip tagged "OCR", which opens the page image (2.12) |
+| Matched quote, abstract | - | Found in abstract, `xa` evidence | - | Dashed, "abstract only" |
 | Model statement | Gist, role, model edge, model background; a formula read by a model from a page image | Summary, difference, direction text | Model agreed, Assumed by model | Dashed or tagged "(model)" |
 | User statement | Note, pin | Idea text, marks, confirmation | Given, Checked by you | Plain, "you" |
 
 There is no grade above "By code". The formal tier (Lean) was cut.
+
+Owner clarification, 2026-11-26. **Found** opens the source and the matched passage. It locates a
+claim, while its correctness remains a separate question. **Verified** requires an exact symbolic
+check against the current claim and assumptions. **Numerically checked** requires a numeric check
+against that claim, within the recorded domain, precision and tolerance. Both badges open the
+actual computation, inputs and output. A run that merely completed, a model agreement, a failed
+check, or a missing or stale receipt cannot earn either check badge. Keep machine enums and saved
+records readable. These display strings supersede the earlier spellings in the mode drafts.
 
 ### 2.11 Paper sources and sync: bring your own papers (F13)
 
@@ -626,6 +634,22 @@ evidence and retains interpretation. A failed worker can leave a partial result 
 an unverified conclusion. Parallel and retried calls respect the shared cap and are counted once.
 Compare a held-out case with and without delegation and record frontier tokens, total tokens,
 latency, accepted evidence and corrections before making a cost or quality claim.
+
+**Worker activity and reader control.** From a run, result or check receipt, open the relevant
+worker jobs. Show the assigned task, effective model, input ranges or calculation inputs, returned
+records and accessible artifacts, tool receipts, usage, and whether each result was accepted or
+rejected and why. Load details on demand from the session's existing ledger and artifact store.
+Keep them accessible after stop or resume. Use the recorded response or artifact, with credentials
+and transport secrets kept out of the display. Keep evidence separate from the worker's own
+summary. The reader can adjust focus, pin or dismiss a proposal, change assignments or the budget
+for a subsequent run, pause before the next stage, and stop or continue without losing accepted
+evidence. Record those choices so the next stage follows the reader's direction.
+
+For a symbolic check, show the exact expressions, assumptions and domain, tool and engine version,
+and result. For a numeric check, also show the sample points or seed, precision, tolerance and
+residuals or counterexample. A missing artifact must be visible as missing. Test that a reader
+can open the evidence from each badge and open the returned worker artifact without needing an
+extra model call. Reuse S9 check receipts, S13 step inspection and the existing run bar for this.
 
 ---
 
