@@ -110,14 +110,15 @@ fn push_passage_range(
     }
 }
 
-/// Collect line ranges received by the model for `primary_path` from `tool.result`
-/// events recorded after `request_seq`, together with the maximum `total_lines`
+/// Collect line ranges received by the model for `primary_path` from `tool.result` and
+/// `context.supplied` events recorded after `request_seq`, together with the maximum `total_lines`
 /// reported by any matching `fs_read` or `read_paper_lines` result.
-pub(crate) fn collect_received_ranges(
+pub(crate) fn collect_received_ranges_with_sha(
     ledger: Option<&Ledger>,
     events: &[Event],
     request_seq: u64,
     primary_path: &str,
+    expected_sha: Option<&str>,
     source_bytes: Option<&[u8]>,
     known_total_lines: Option<usize>,
 ) -> (Vec<(usize, usize)>, Option<usize>) {
@@ -231,6 +232,59 @@ pub(crate) fn collect_received_ranges(
         push_passage_range(&mut ranges, passage, source_bytes, effective_total);
     }
 
+    // Rule 6.17: credit `context.supplied` and `read_map_node` results through F4's shared
+    // `lines_sent_with_ledger`, bounded to this request window and checking caller, run_id, and
+    // pinned `file_sha256`.
+    let end_seq = events
+        .iter()
+        .find(|e| {
+            e.seq > request_seq
+                && research_tools::investigation_markers::is_investigation_marker(&e.kind)
+        })
+        .map(|e| e.seq);
+    let f4_events: Vec<Event> = events
+        .iter()
+        .filter(|e| {
+            e.seq > request_seq
+                && end_seq.is_none_or(|end| e.seq < end)
+                && (e.kind == research_tools::lines_sent::CONTEXT_SUPPLIED_EVENT
+                    || (e.kind == "tool.request"
+                        && e.payload["tool"]
+                            .as_str()
+                            .or_else(|| e.payload["tool_id"].as_str())
+                            == Some(research_tools::lines_sent::READ_MAP_NODE_TOOL))
+                    || (e.kind == "tool.result"
+                        && e.payload["call_id"]
+                            .as_str()
+                            .and_then(|cid| requests.get(cid))
+                            .is_some_and(|(tool, _)| {
+                                *tool == research_tools::lines_sent::READ_MAP_NODE_TOOL
+                            })))
+        })
+        .cloned()
+        .collect();
+    if !f4_events.is_empty() {
+        let req_id = request_seq.to_string();
+        let sent =
+            research_tools::lines_sent::lines_sent_with_ledger(&f4_events, ledger, Some(&req_id));
+        for (key, line_ranges) in sent.all_entries() {
+            if key.path != primary_path {
+                continue;
+            }
+            if !caller_allowed(Some(&Value::String(key.caller.clone()))) {
+                continue;
+            }
+            if let Some(sha) = expected_sha {
+                if key.file_sha256 != sha {
+                    continue;
+                }
+            }
+            for r in line_ranges {
+                ranges.push((r.start_line, r.end_line));
+            }
+        }
+    }
+
     (merge_ranges(ranges), observed_total_lines)
 }
 
@@ -304,6 +358,7 @@ pub(crate) fn parse_line_citations(text: &str) -> Vec<(usize, usize)> {
 
 /// Build the `cites` array (`[{start, end, read}]`) stored on `investigation.answer`.
 /// Keeps only ranges with `1 <= start <= end <= total_lines` (when `total_lines` is known).
+#[cfg(test)]
 pub(crate) fn answer_cites_with_bytes(
     ledger: Option<&Ledger>,
     events: &[Event],
@@ -313,11 +368,35 @@ pub(crate) fn answer_cites_with_bytes(
     source_bytes: Option<&[u8]>,
     answer_text: &str,
 ) -> Vec<Value> {
-    let (received, observed_total) = collect_received_ranges(
+    answer_cites_with_bytes_and_sha(
         ledger,
         events,
         request_seq,
         primary_path,
+        None,
+        total_lines,
+        source_bytes,
+        answer_text,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn answer_cites_with_bytes_and_sha(
+    ledger: Option<&Ledger>,
+    events: &[Event],
+    request_seq: u64,
+    primary_path: &str,
+    expected_sha: Option<&str>,
+    total_lines: Option<usize>,
+    source_bytes: Option<&[u8]>,
+    answer_text: &str,
+) -> Vec<Value> {
+    let (received, observed_total) = collect_received_ranges_with_sha(
+        ledger,
+        events,
+        request_seq,
+        primary_path,
+        expected_sha,
         source_bytes,
         total_lines,
     );
@@ -438,11 +517,12 @@ pub(crate) fn answer_cites_for_session(
         .and_then(Value::as_str);
     let (total_lines, source_bytes) =
         verified_source_info(state, session, primary_path, expected_sha);
-    answer_cites_with_bytes(
+    answer_cites_with_bytes_and_sha(
         Some(ledger),
         events,
         request_seq,
         primary_path,
+        expected_sha,
         total_lines,
         source_bytes.as_deref(),
         answer_text,

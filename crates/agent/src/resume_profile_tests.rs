@@ -145,9 +145,16 @@ fn table_driven_equivalence_against_legacy_drift_oracle() {
     expected_wrong_effect.sort_by(|a, b| a.id.cmp(&b.id));
 
     let mut unknown_read_tool = research_tools::paper_lines::def();
-    unknown_read_tool.id = "read_map_node".into();
+    unknown_read_tool.id = "unrelated_read_tool".into();
     let mut expected_unknown_gain = vec![builtin::ledger_note_def(), unknown_read_tool];
     expected_unknown_gain.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let mut v6_read_map_node = research_tools::map_defs::read_map_node_def();
+    let mut expected_v6_gain = vec![builtin::ledger_note_def(), v6_read_map_node.clone()];
+    expected_v6_gain.sort_by(|a, b| a.id.cmp(&b.id));
+    v6_read_map_node.effect = EffectClass::WriteWorkspace;
+    let mut expected_v6_wrong_effect = vec![builtin::ledger_note_def(), v6_read_map_node];
+    expected_v6_wrong_effect.sort_by(|a, b| a.id.cmp(&b.id));
 
     let mut mutated_summary = summary_def();
     mutated_summary.input_schema["properties"]["what"]["type"] = json!("string");
@@ -195,7 +202,7 @@ fn table_driven_equivalence_against_legacy_drift_oracle() {
             false,
         ),
         (
-            "untolerated ReadWorkspace tool read_map_node rejected",
+            "untolerated ReadWorkspace tool unrelated_read_tool rejected",
             recorded_json(&[builtin::ledger_note_def()]),
             expected_unknown_gain,
             false,
@@ -260,6 +267,13 @@ fn table_driven_equivalence_against_legacy_drift_oracle() {
             );
         }
     }
+
+    // V6 profile split: `research/1` stays frozen and rejects gaining `read_map_node`,
+    // while `investigation/1` accepts gaining `read_map_node` ONLY with `ReadWorkspace` effect.
+    let rec_note = recorded_json(&[builtin::ledger_note_def()]);
+    assert!(check_tool_defs_drift_for_profile("s-eq", &rec_note, &expected_v6_gain, &r1).is_err());
+    assert!(check_tool_defs_drift_for_profile("s-eq", &rec_note, &expected_v6_gain, &i1).is_ok());
+    assert!(check_tool_defs_drift_for_profile("s-eq", &rec_note, &expected_v6_wrong_effect, &i1).is_err());
 }
 
 #[test]
@@ -308,8 +322,14 @@ fn resolve_session_profile_handles_explicit_legacy_unbuilt_and_r2_drift() {
     assert_eq!(r.profile.name, PROFILE_RESEARCH_V1);
     assert!(!r.explicit);
 
+    // Built investigation/2 resolves cleanly as an explicit profile.
+    let evs_v2 = [dummy_event(1, "session.start", json!({ "tool_profile": PROFILE_INVESTIGATION_V2 }))];
+    let r_v2 = resolve_session_profile("s-inv2", &evs_v2).unwrap();
+    assert_eq!(r_v2.profile.name, PROFILE_INVESTIGATION_V2);
+    assert!(r_v2.explicit);
+
     // Reserved / unbuilt profiles fail closed with Drift ("profile not built yet").
-    for name in [PROFILE_INVESTIGATION_V2, PROFILE_EXPLORE_V1, PROFILE_SOLVE_V1] {
+    for name in [PROFILE_EXPLORE_V1, PROFILE_SOLVE_V1] {
         let evs = [dummy_event(1, "session.start", json!({ "tool_profile": name }))];
         let err = resolve_session_profile("s-res", &evs).unwrap_err();
         assert_eq!(err.kind, ResumeRejectKind::Drift);

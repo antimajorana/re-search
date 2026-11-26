@@ -76,6 +76,19 @@ pub fn build_mapview_json(
     ledger_head: &str,
     fallback_note: Option<&str>,
 ) -> Value {
+    build_mapview_json_with_fold(skeleton, skeleton_seq, skeleton_blob, ledger_head, fallback_note, None)
+}
+
+/// Projects a [`PaperSkeleton`] plus optional folded Layer-2 records (`map_fold::FoldedMap`)
+/// into the shared `GraphView` JSON shape (`investigate.md` §4.3, §5.2).
+pub fn build_mapview_json_with_fold(
+    skeleton: &PaperSkeleton,
+    skeleton_seq: u64,
+    skeleton_blob: &str,
+    ledger_head: &str,
+    fallback_note: Option<&str>,
+    folded: Option<&research_tools::map_fold::FoldedMap>,
+) -> Value {
     let ids: Vec<String> = skeleton.nodes.iter().map(node_id).collect();
     let labels: Vec<String> = skeleton.nodes.iter().map(format_node_label).collect();
     let mut id_to_idx: HashMap<String, usize> = HashMap::with_capacity(ids.len());
@@ -127,11 +140,13 @@ pub fn build_mapview_json(
                         .collect()
                 })
                 .unwrap_or_default();
-            json!({
+            let reading = folded.and_then(|f| f.nodes.get(id));
+            let stale = reading.is_some_and(|r| r.any_stale);
+            let mut obj = json!({
                 "id": id, "kind": node.kind, "label": labels[idx],
                 "group": group, "parent": node.parent, "grade": "code",
                 "badges": [{ "text": BADGE_BY_CODE, "icon": "code", "tone": "ok" }],
-                "flags": flags, "stale": false, "dim": false,
+                "flags": flags, "stale": stale, "dim": false,
                 "order": node.order, "number": node.number, "number_basis": node.number_basis,
                 "env_name": node.env_name, "title": node.title, "tex_label": node.label,
                 "spans": node.spans, "proof_of": node.proof_of,
@@ -139,12 +154,18 @@ pub fn build_mapview_json(
                 "head_cites": node.head_cites, "cites": cites, "intro_refs": node.intro_refs,
                 "fp": node.fp, "words": node.words, "eq_count": node.eq_count,
                 "read_minutes": node.read_minutes, "confidence": node.confidence,
-            })
+            });
+            if let Some(r) = reading {
+                let mut rv = serde_json::to_value(r).unwrap_or(Value::Null);
+                strip_anchor_excerpts(&mut rv);
+                obj["reading"] = rv;
+            }
+            obj
         })
         .collect();
 
     // Emit only node-to-node edges with live endpoints; Cites live on node.cites & bib.
-    let edges: Vec<Value> = skeleton
+    let mut edges: Vec<Value> = skeleton
         .edges
         .iter()
         .filter(|e| {
@@ -163,7 +184,26 @@ pub fn build_mapview_json(
             })
         })
         .collect();
+    if let Some(f) = folded {
+        for me in &f.edges {
+            if node_tags.contains(&me.from) && node_tags.contains(&me.to) {
+                let mut edge_val = json!({
+                    "src": me.from, "dst": me.to, "kind": "uses", "role": me.role,
+                    "basis": "model", "model_edge": true,
+                    "edge_basis": me.current.value.basis,
+                    "reason": me.current.value.reason,
+                    "anchor": me.current.value.anchor,
+                    "history": me.history,
+                });
+                strip_anchor_excerpts(&mut edge_val);
+                edges.push(edge_val);
+            }
+        }
+    }
 
+    let tasks = folded
+        .map(|f| serde_json::to_value(&f.tasks).unwrap_or_else(|_| json!([])))
+        .unwrap_or_else(|| json!([]));
     let legend = json!([
         { "label": "By code (skeleton)", "icon": "code", "tone": "ok", "dashed": false },
         { "label": "Heuristic reference (not checked by code)", "icon": "model", "tone": "muted", "dashed": true },
@@ -178,7 +218,7 @@ pub fn build_mapview_json(
         "quality_reason": skeleton.quality_reason, "quality_line": format_quality_line(skeleton),
         "nodes": nodes, "edges": edges, "legend": legend,
         "stats": skeleton.stats, "bib": skeleton.bib, "symbols": skeleton.symbols,
-        "macros": skeleton.macros, "skip_plan": skip_plan, "tasks": [], "carry": skeleton.carry,
+        "macros": skeleton.macros, "skip_plan": skip_plan, "tasks": tasks, "carry": skeleton.carry,
         "fallback_note": fallback_note,
     })
 }
@@ -314,6 +354,23 @@ pub fn read_verified_node_text(
 }
 
 fn non_empty(s: Option<&str>) -> Option<&str> { s.map(str::trim).filter(|t| !t.is_empty()) }
+
+fn strip_anchor_excerpts(val: &mut Value) {
+    match val {
+        Value::Object(map) => {
+            map.remove("excerpt");
+            for child in map.values_mut() {
+                strip_anchor_excerpts(child);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                strip_anchor_excerpts(child);
+            }
+        }
+        _ => {}
+    }
+}
 
 fn node_id(node: &SkNode) -> String { node.tag.clone().unwrap_or_else(|| format!("ord-{}", node.order)) }
 

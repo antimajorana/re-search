@@ -2,12 +2,26 @@
 use crate::state::DesktopState;
 use serde_json::{json, Value};
 
+#[cfg(test)]
 pub(crate) fn finish(
     state: &DesktopState,
     session: &str,
     req: &Value,
     outcome: std::result::Result<String, String>,
 ) -> std::result::Result<String, String> {
+    finish_with_cancel(state, session, req, outcome, false)
+}
+
+pub(crate) fn finish_with_cancel(
+    state: &DesktopState,
+    session: &str,
+    req: &Value,
+    outcome: std::result::Result<String, String>,
+    cancelled: bool,
+) -> std::result::Result<String, String> {
+    if req.get(crate::investigation_tasks::TASK_REQUEST_SEQ_FIELD).is_some() {
+        return crate::investigation_tasks::finish_task(state, session, req, outcome, cancelled);
+    }
     if let Some(seq) = req["_paper_question_request"].as_u64() {
         return match state.open_ledger() {
             Ok(ledger) => {

@@ -1,5 +1,6 @@
 //! Session-level Investigation state. Map revisions, reader corrections and optional checks are
 //! separate ledger records, so reopening a paper preserves what the authors and the reader said.
+#[cfg(test)]
 pub(crate) use crate::investigation_finish::finish;
 pub(crate) use crate::investigation_view::view;
 use crate::investigation_view::branch_history;

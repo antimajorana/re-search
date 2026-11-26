@@ -175,6 +175,8 @@ fn mark_last_running(rows: &mut [Value], events: &[Event]) {
                         | "investigation.branch_requested"
                         | "investigation.question_requested"
                         | "investigation.requested"
+                        | "investigation.task_requested"
+                        | "investigation.task_finished"
                 )
         }) {
             row["status"] = json!("running");
@@ -232,6 +234,8 @@ pub(crate) fn branch_history(events: &[Event], running: bool) -> Vec<Value> {
                         | "investigation.conventions_resumed"
                         | "investigation.question_requested"
                         | "investigation.requested"
+                        | "investigation.task_requested"
+                        | "investigation.task_finished"
                 )
         }) {
             row["status"] = json!("running");
