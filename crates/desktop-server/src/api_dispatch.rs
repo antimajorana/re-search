@@ -340,6 +340,9 @@ pub(crate) fn dispatch_api(
         ("POST", ["api", "sessions", id, "fork"]) => {
             write_api_res(&mut stream, handle_fork(state, id, &req.body));
         }
+        ("POST", ["api", "sessions", id, "open-in-solve"]) => {
+            write_api_res(&mut stream, crate::solve_migrate::handle_open_in_solve(state, id, &req.body));
+        }
         ("POST", ["api", "sessions", id, "handoff"]) => {
             write_api_res(&mut stream, crate::handoff::handle_create_handoff(state, id, &req.body));
         }
@@ -462,6 +465,15 @@ pub(crate) fn dispatch_api(
         }
         ("POST", ["api", "sessions", id, "idea", op]) => {
             write_api_res(&mut stream, crate::routes_idea::handle_idea_op(state, id, op, &req.body));
+        }
+        ("GET", ["api", "sessions", id, "workers"]) => {
+            write_api_res(&mut stream, crate::routes_worker_activity::handle_list_workers(state, id));
+        }
+        ("GET", ["api", "sessions", id, "workers", job_id]) => {
+            write_api_res(&mut stream, crate::routes_worker_activity::handle_get_worker_detail(state, id, job_id));
+        }
+        ("POST", ["api", "sessions", id, "run-control"]) => {
+            write_api_res(&mut stream, crate::routes_worker_activity::handle_post_run_control(state, id, &req.body));
         }
         _ => write_json(
             &mut stream,

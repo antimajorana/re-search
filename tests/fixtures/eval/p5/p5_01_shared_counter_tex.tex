@@ -1,0 +1,41 @@
+\documentclass{article}
+\usepackage{amsmath,amsthm}
+\title{Exponential Decay on Damped Waveguides}
+\author{Synthetic Case P5-01}
+\newtheorem{thm}{Theorem}[section]
+\newtheorem{lem}[thm]{Lemma}
+\newtheorem{defn}[thm]{Definition}
+\begin{document}
+\maketitle
+
+\section{Preliminaries}
+\label{sec:prelim}
+
+\begin{defn}[Admissible potential]
+\label{def:potential}
+A scalar potential $V(x)$ is admissible if $V(x) \ge 0$ holds pointwise.
+\end{defn}
+
+\begin{lem}[Pointwise Gronwall estimate]
+\label{lem:gronwall}
+Every smooth scalar function $y(t)$ satisfying $y'(t) \le -\alpha y(t)$ satisfies $y(t) \le e^{-\alpha t} y(0)$.
+\end{lem}
+
+\begin{proof}
+Multiply by $e^{\alpha t}$ and integrate on $[0, t]$.
+\end{proof}
+
+\section{Main Estimate}
+\label{sec:main}
+
+\begin{thm}[Exponential energy decay]
+\label{thm:energy-decay}
+Let $u(t,x)$ solve the damped waveguide equation with an admissible potential $V(x)$.
+Then the total energy decays exponentially in time.
+\end{thm}
+
+\begin{proof}
+Apply Lemma~\ref{lem:gronwall} to the waveguide energy functional.
+\end{proof}
+
+\end{document}
