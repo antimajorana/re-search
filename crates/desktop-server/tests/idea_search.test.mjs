@@ -349,4 +349,142 @@ test('X7 Search plan mounts shared approval_card.js and Where I looked shows Ret
   }
 });
 
+test('X8 Triage groups candidates, marks "from abstract", collapses unrelated, edits reading list, and toggles pause before reading', () => {
+  const dom = makeFakeDom();
+  globalThis.document = dom.document;
+
+  const host = dom.makeEl('div');
+  const savedReadingLists = [];
+  const pauseToggles = [];
+
+  const candidates = [
+    { key: 'arxiv:2501.01234', title: 'Core Lanczos Paper <script>x</script>', authors: ['A. One'], year: 2025, read_badge: 'not read' },
+    { key: 'arxiv:2406.05432', title: 'Related Spread Complexity Paper', authors: ['B. Two'], year: 2024, read_badge: 'not read' },
+    { key: 'arxiv:2301.00001', title: 'Background Review', authors: ['C. Three'], year: 2023, read_badge: 'not read' },
+    { key: 'arxiv:2201.00002', title: 'Unrelated Cosmology Paper', authors: ['D. Four'], year: 2022, read_badge: 'not read' },
+  ];
+  const triage = {
+    items: [
+      {
+        key: 'arxiv:2501.01234',
+        relevance: 'core',
+        why: 'Studies Lanczos scaling directly <img onerror=alert(1)>',
+        abstract_quote: 'b_n grows linearly in the volume-law phase',
+        evidence_id: 'xa-12',
+        label_basis: 'from abstract',
+      },
+      { key: 'arxiv:2406.05432', relevance: 'related', why: 'Spread complexity analogue.', label_basis: 'from abstract' },
+      { key: 'arxiv:2301.00001', relevance: 'background', why: 'Background context.', label_basis: 'from abstract' },
+      { key: 'arxiv:2201.00002', relevance: 'unrelated', why: 'Different domain.', label_basis: 'from abstract' },
+    ],
+    reading_list: ['arxiv:2501.01234'],
+    quick_abstract_only: false,
+  };
+
+  const state = ideaReducer(createInitialIdeaState({ hasModel: true }), {
+    type: 'SET_IDEA_VIEW',
+    sessionId: 's-ui-x8',
+    view: {
+      statement: { rev: 1, text: 'Test Krylov growth across phases.' },
+      stages: [],
+      run_bar: { state: 'done', modelCallsUsed: 2, modelCallsMax: 24 },
+      budget: { max_papers: 6 },
+      pause_before_reading: false,
+      candidates,
+      triage,
+      where_i_looked: { providers: [], queries: [], library: { hits: 0, owned_hits: 0 }, not_searched: [] },
+    },
+  });
+
+  renderExploreSession(host, state, {
+    onSaveReadingList: (rl) => savedReadingLists.push(rl),
+    onTogglePauseBeforeReading: (val) => pauseToggles.push(val),
+  });
+
+  assert.equal(dom.getInnerHtmlWrites(), 0, 'zero innerHTML writes');
+  assert.ok(host.querySelector('[data-triage-group="core"]'), 'core group must render');
+  assert.ok(host.querySelector('[data-triage-group="related"]'), 'related group must render');
+  assert.ok(host.querySelector('[data-triage-group="background"]'), 'background group must render');
+  const unrelatedDetails = host.querySelector('[data-triage-group="unrelated"]');
+  assert.ok(unrelatedDetails, 'unrelated group must render');
+  assert.equal(unrelatedDetails.tagName, 'DETAILS');
+  assert.equal(unrelatedDetails.open, false, 'unrelated group must start collapsed');
+
+  const evBox = host.querySelector('[data-evidence-id="xa-12"]');
+  assert.ok(evBox, 'matched xa-12 abstract evidence must render');
+  assert.ok(evBox.textContent.includes('matched · abstract only · xa-12'));
+
+  // Toggle reading list on the related paper -> adds it to reading list and accumulates on rapid ticks.
+  const rlCheckboxes = host.querySelectorAll('[data-action="toggle-reading-list"]');
+  const relatedCb = rlCheckboxes.find((c) => c.getAttribute('data-candidate-key') === 'arxiv:2406.05432');
+  const bgCb = rlCheckboxes.find((c) => c.getAttribute('data-candidate-key') === 'arxiv:2301.00001');
+  assert.ok(relatedCb && relatedCb.checked === false);
+  relatedCb.checked = true;
+  relatedCb.dispatchEvent({ type: 'change' });
+  bgCb.checked = true;
+  bgCb.dispatchEvent({ type: 'change' });
+  assert.deepEqual(savedReadingLists[0], ['arxiv:2501.01234', 'arxiv:2406.05432']);
+  assert.deepEqual(savedReadingLists[1], ['arxiv:2501.01234', 'arxiv:2406.05432', 'arxiv:2301.00001']);
+
+  // Toggle "Pause before reading".
+  const pauseCb = host.querySelector('[data-action="toggle-pause-before-reading"]');
+  assert.ok(pauseCb);
+  pauseCb.checked = true;
+  pauseCb.dispatchEvent({ type: 'change' });
+  assert.deepEqual(pauseToggles, [true]);
+
+  for (const s of collectVisibleStrings(host)) {
+    assert.ok(!RULE_S8_RE.test(s), `Rule S8 violation: ${s}`);
+    assert.ok(!FORBIDDEN_BRIEF_RE.test(s), `Forbidden word "brief": ${s}`);
+  }
+
+  // Reaching `max_papers` cap disables remaining unchecked checkboxes.
+  const capHost = dom.makeEl('div');
+  const capState = ideaReducer(state, {
+    type: 'SET_IDEA_VIEW',
+    sessionId: 's-ui-x8-cap',
+    view: { ...state.view, budget: { max_papers: 1 } },
+  });
+  renderExploreSession(capHost, capState, { onSaveReadingList: () => {} });
+  const capCbs = capHost.querySelectorAll('[data-action="toggle-reading-list"]');
+  const capCore = capCbs.find((c) => c.getAttribute('data-candidate-key') === 'arxiv:2501.01234');
+  const capRel = capCbs.find((c) => c.getAttribute('data-candidate-key') === 'arxiv:2406.05432');
+  assert.equal(capCore.disabled, false);
+  assert.equal(capRel.disabled, true);
+
+  // SSE `idea.answer` syncs `triage.reading_list` and SSE `idea.triage` clears stale override.
+  const afterAns = ideaReducer(state, {
+    type: 'APPLY_SSE_EVENT',
+    kind: 'idea.answer',
+    payload: { reading_list: ['arxiv:2406.05432'] },
+  });
+  assert.deepEqual(afterAns.view.triage.reading_list, ['arxiv:2406.05432']);
+  const afterNewTriage = ideaReducer(afterAns, {
+    type: 'APPLY_SSE_EVENT',
+    kind: 'idea.triage',
+    payload: { ...triage, reading_list: ['arxiv:2501.01234'] },
+  });
+  assert.equal(afterNewTriage.view.reading_list_override, null);
+
+  // Quick preset (`max_papers: 0`) disables reading-list ticks.
+  const quickHost = dom.makeEl('div');
+  const quickState = ideaReducer(createInitialIdeaState({ hasModel: true }), {
+    type: 'SET_IDEA_VIEW',
+    sessionId: 's-ui-x8-quick',
+    view: {
+      statement: { rev: 1, text: 'Quick preset idea.' },
+      stages: [],
+      run_bar: { state: 'done', modelCallsUsed: 2, modelCallsMax: 5 },
+      budget: { max_papers: 0 },
+      candidates,
+      triage: { ...triage, reading_list: [], quick_abstract_only: true },
+      where_i_looked: { providers: [], queries: [], library: { hits: 0, owned_hits: 0 }, not_searched: [] },
+    },
+  });
+  renderExploreSession(quickHost, quickState, { onSaveReadingList: () => {} });
+  const quickCbs = quickHost.querySelectorAll('[data-action="toggle-reading-list"]');
+  assert.ok(quickCbs.length > 0 && quickCbs.every((c) => c.disabled && !c.checked));
+});
+
+
 

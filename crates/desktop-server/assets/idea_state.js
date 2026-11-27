@@ -187,9 +187,16 @@ export function ideaReducer(state, action) {
             statement: payload,
             brief: null,
             sharpened_idea: null,
+            triage: null,
             question_answers: {},
             map_stale: hasMap || Boolean(state.view.map_stale),
           },
+        };
+      }
+      if (action.kind === 'idea.triage' && payload && typeof payload === 'object') {
+        return {
+          ...state,
+          view: { ...state.view, triage: payload, reading_list_override: null },
         };
       }
       if (action.kind === 'idea.stage' && payload.stage) {
@@ -261,6 +268,14 @@ export function ideaReducer(state, action) {
               answers: nextAnswers,
             }
           : prev;
+        const isQuick =
+          Number(state.view.budget?.max_papers ?? 1) === 0 ||
+          Boolean(state.view.triage?.quick_abstract_only);
+        const hasRl = !isQuick && Array.isArray(payload.reading_list);
+        const nextTriage =
+          hasRl && state.view.triage
+            ? { ...state.view.triage, reading_list: payload.reading_list }
+            : state.view.triage;
         return {
           ...state,
           view: {
@@ -268,7 +283,8 @@ export function ideaReducer(state, action) {
             brief: merged,
             sharpened_idea: merged,
             question_answers: nextAnswers,
-            ...(Array.isArray(payload.reading_list) ? { reading_list_override: payload.reading_list } : {}),
+            triage: nextTriage,
+            ...(hasRl ? { reading_list_override: payload.reading_list } : {}),
             ...(typeof payload.pause_before_reading === 'boolean'
               ? { pause_before_reading: payload.pause_before_reading }
               : {}),
