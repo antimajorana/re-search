@@ -13,6 +13,7 @@ import {
 import { buildHandleLookup, createSolveExprsView, renderClaimFormula } from './solve_exprs.js';
 import { createSolveWhyPopover } from './solve_why.js';
 import { BORDER_SOLID, createBadge, formatModelText } from './ui_badge.js';
+import { mountWriteupButton } from './writeup_btn.js';
 
 // Owner decisions (`00-overview.md` 3.3, `solve.md` 3 & 5.5, R15).
 export const DONE_LABEL = 'Done';
@@ -354,7 +355,7 @@ export function createSolveWorkspace(host, initialView = {}, opts = {}) {
   let renderedClosureOnly = closureOnly;
   let closureCheckbox = null;
   let showSuperseded = false;
-  let runBarApi = null, graphViewApi = null, exprsViewApi = null, whyPopoverApi = null, activeExtApi = null, activeExtDestroy = null;
+  let runBarApi = null, graphViewApi = null, exprsViewApi = null, whyPopoverApi = null, activeExtApi = null, activeExtDestroy = null, writeupCtrl = null;
 
   const localTabs = new Map();
   for (const t of Array.isArray(opts.extraTabs) ? opts.extraTabs : []) {
@@ -364,13 +365,15 @@ export function createSolveWorkspace(host, initialView = {}, opts = {}) {
   const root = el(doc, 'section', 'solve-workspace');
   root.setAttribute('data-testid', 'solve-workspace');
   const runBarHost = el(doc, 'div', 'solve-run-bar-host');
+  const writeupHost = el(doc, 'div', 'solve-writeup-host');
   const grid = el(doc, 'div', 'solve-workspace-grid');
   const mainCol = el(doc, 'div', 'solve-derivation-col');
   const sideCol = el(doc, 'aside', 'solve-canvas-col');
   const whyHost = el(doc, 'div', 'solve-why-host');
   whyHost.hidden = true;
   grid.append(mainCol, sideCol);
-  root.append(runBarHost, grid, whyHost);
+  root.append(runBarHost, writeupHost, grid, whyHost);
+  writeupCtrl = mountWriteupButton(writeupHost, { document: doc, sessionId: opts.sessionId || '', token: opts.token, getToken: opts.getToken, fetchFn: opts.fetch });
   host.replaceChildren(root);
 
   function allTabs() {
@@ -568,6 +571,7 @@ export function createSolveWorkspace(host, initialView = {}, opts = {}) {
 
   function renderAll() {
     renderRunBarSection();
+    writeupCtrl?.update({ sessionId: opts.sessionId || '' });
     renderMain();
     renderSideTabs(false);
     if (whyEntryId) {
@@ -585,6 +589,6 @@ export function createSolveWorkspace(host, initialView = {}, opts = {}) {
     selectTab(tabId) { activeTabId = String(tabId || 'graph'); renderSideTabs(true); },
     registerTab(tab) { if (tab?.id) { localTabs.set(String(tab.id), tab); renderSideTabs(true); } },
     getTabs: allTabs, getGraphView: () => graphViewApi, getRunBar: () => runBarApi,
-    destroy() { closeWhy(); destroySideWidgets(); if (runBarApi) { runBarApi.destroy(); runBarApi = null; } host.replaceChildren(); },
+    destroy() { closeWhy(); destroySideWidgets(); if (writeupCtrl) { writeupCtrl.destroy(); writeupCtrl = null; } if (runBarApi) { runBarApi.destroy(); runBarApi = null; } host.replaceChildren(); },
   };
 }
