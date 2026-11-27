@@ -112,9 +112,11 @@ export function createRememberThisCard(doc, context = {}, deps = {}) {
     const scopeSelect = el(doc, 'select', 'remember-scope-select', null, { 'data-testid': 'remember-scope-select' });
     for (const c of choices) {
       const opt = el(doc, 'option', null, c.label, { value: c.id });
+      opt.value = c.id;
       if (c.id === selectedScopeId) opt.selected = true;
       scopeSelect.appendChild(opt);
     }
+    scopeSelect.value = selectedScopeId;
     scopeSelect.addEventListener('change', () => {
       selectedScopeId = scopeSelect.value;
     });

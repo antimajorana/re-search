@@ -101,6 +101,7 @@ export function createLessonsManager(hostEl, deps = {}) {
   const fetchJson = (method, path, body) => lessonsFetchJson(method, path, body, deps);
   let lessons = Array.isArray(deps.initialLessons) ? [...deps.initialLessons] : [];
   let editingId = null;
+  let editingDraft = null;
   let confirmDeleteId = null;
   let showRestore = false;
   let exportedBackupText = '';
@@ -162,11 +163,12 @@ export function createLessonsManager(hostEl, deps = {}) {
   function renderLessonRow(lesson) {
     const item = el(doc, 'article', 'lesson-card', null, { 'data-testid': 'lesson-item', 'data-lesson-id': lesson.id });
     if (editingId === lesson.id) {
+      const curKind = editingDraft?.kind || lesson.scope?.kind || 'global';
       const form = el(doc, 'form', 'lesson-edit-form', null, { 'data-testid': 'lesson-edit-form' });
       const textarea = el(doc, 'textarea', 'lesson-edit-input', null, {
         'data-testid': 'lesson-edit-input', rows: '3',
       });
-      textarea.value = lesson.text || '';
+      textarea.value = editingDraft ? editingDraft.text : (lesson.text || '');
 
       const scopeSelect = el(doc, 'select', 'lesson-scope-select', null, { 'data-testid': 'lesson-edit-scope' });
       const kindChoices = [
@@ -178,22 +180,34 @@ export function createLessonsManager(hostEl, deps = {}) {
       ];
       for (const [val, label] of kindChoices) {
         const opt = el(doc, 'option', null, label, { value: val });
-        if ((lesson.scope?.kind || 'global') === val) opt.selected = true;
+        opt.value = val;
+        if (curKind === val) opt.selected = true;
         scopeSelect.appendChild(opt);
       }
+      scopeSelect.value = curKind;
 
       const modeInput = el(doc, 'input', 'lesson-meta-input', null, {
         type: 'text', placeholder: 'mode (solve/explore/investigate)', 'data-testid': 'lesson-edit-mode',
       });
-      modeInput.value = lesson.scope?.mode || lesson.from?.mode || 'solve';
+      modeInput.value = editingDraft ? editingDraft.mode : (lesson.scope?.mode || lesson.from?.mode || 'solve');
       const fieldInput = el(doc, 'input', 'lesson-meta-input', null, {
         type: 'text', placeholder: 'field (e.g. qft)', 'data-testid': 'lesson-edit-field',
       });
-      fieldInput.value = lesson.scope?.field || '';
+      fieldInput.value = editingDraft ? editingDraft.field : (lesson.scope?.field || '');
       const paperInput = el(doc, 'input', 'lesson-meta-input', null, {
         type: 'text', placeholder: 'paper_key (e.g. arxiv:2401.00001)', 'data-testid': 'lesson-edit-paper',
       });
-      paperInput.value = lesson.scope?.paper_key || lesson.from?.paper?.key || '';
+      paperInput.value = editingDraft ? editingDraft.paper : (lesson.scope?.paper_key || lesson.from?.paper?.key || '');
+
+      const syncDraft = () => {
+        editingDraft = {
+          text: textarea.value,
+          kind: scopeSelect.value,
+          mode: modeInput.value,
+          field: fieldInput.value,
+          paper: paperInput.value,
+        };
+      };
 
       const counter = el(doc, 'span', 'lesson-char-count', `${unicodeCharCount(textarea.value)} / ${LESSONS_MAX_CHARS}`, {
         'data-testid': 'lesson-char-count',
@@ -204,9 +218,10 @@ export function createLessonsManager(hostEl, deps = {}) {
       const cancelBtn = el(doc, 'button', 'pill-btn sm', 'Cancel', {
         type: 'button', 'data-action': 'cancel-lesson-edit',
       });
-      cancelBtn.addEventListener('click', () => { editingId = null; render(); });
+      cancelBtn.addEventListener('click', () => { editingId = null; editingDraft = null; render(); });
 
       textarea.addEventListener('input', () => {
+        syncDraft();
         const len = unicodeCharCount(textarea.value);
         counter.textContent = `${len} / ${LESSONS_MAX_CHARS}`;
         const bad = len === 0 || len > LESSONS_MAX_CHARS;
@@ -216,6 +231,7 @@ export function createLessonsManager(hostEl, deps = {}) {
 
       form.addEventListener('submit', async (ev) => {
         ev.preventDefault();
+        syncDraft();
         const text = String(textarea.value || '').trim();
         const len = unicodeCharCount(text);
         if (len === 0 || len > LESSONS_MAX_CHARS) {
@@ -233,6 +249,7 @@ export function createLessonsManager(hostEl, deps = {}) {
             text, scope, model_summary: false,
           });
           editingId = null;
+          editingDraft = null;
           setStatus('Saved lesson update.', 'ok');
           await refresh();
         } catch (err) {
@@ -274,7 +291,7 @@ export function createLessonsManager(hostEl, deps = {}) {
     const editBtn = el(doc, 'button', 'pill-btn sm', 'Edit', {
       type: 'button', 'data-action': 'edit-lesson',
     });
-    editBtn.addEventListener('click', () => { editingId = lesson.id; confirmDeleteId = null; render(); });
+    editBtn.addEventListener('click', () => { editingId = lesson.id; editingDraft = null; confirmDeleteId = null; render(); });
     btns.appendChild(editBtn);
 
     if (confirmDeleteId === lesson.id) {
