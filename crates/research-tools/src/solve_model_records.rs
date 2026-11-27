@@ -144,22 +144,29 @@ pub enum ReviewIndependence {
 fn canonical_provider_family(raw: &str) -> String {
     let norm = raw.trim().to_ascii_lowercase();
     match norm.as_str() {
-        "anthropic" | "claude-cli" | "claude" => "anthropic".to_string(),
-        "openai" | "chatgpt" => "openai".to_string(),
-        "gemini" | "google" | "antigravity" => "gemini".to_string(),
+        "anthropic" | "anthropic-messages" | "claude-cli" | "claude" => "anthropic".to_string(),
+        "openai" | "openai-chat" | "chatgpt" | "chatgpt-responses" => "openai".to_string(),
+        "gemini" | "gemini-generate-content" | "google" | "antigravity" => "gemini".to_string(),
+        "ollama" | "ollama-chat" => "ollama".to_string(),
         _ => norm,
     }
 }
 
-fn canonical_model_id(raw: &str) -> String {
-    let norm = raw.trim().to_ascii_lowercase();
+fn canonical_model_id(provider_family: &str, raw: &str) -> String {
+    let mut norm = raw.trim().to_ascii_lowercase();
     if let Some(rest) = norm.strip_prefix("models/") {
-        return rest.trim().to_string();
-    }
-    for prefix in ["anthropic/", "openai/", "chatgpt/", "gemini/", "google/"] {
-        if let Some(rest) = norm.strip_prefix(prefix) {
-            return rest.trim().to_string();
+        norm = rest.trim().to_string();
+    } else {
+        for prefix in ["anthropic/", "openai/", "chatgpt/", "gemini/", "google/", "ollama/"] {
+            if let Some(rest) = norm.strip_prefix(prefix) {
+                norm = rest.trim().to_string();
+                break;
+            }
         }
+    }
+    // Keep Anthropic shorthand aliases in sync with `agent::transport::ProviderKind::resolve_model`.
+    if provider_family == "anthropic" && norm == "haiku" {
+        return "claude-haiku-4-5".to_string();
     }
     norm
 }
@@ -173,8 +180,8 @@ pub fn compute_review_independence(
 ) -> ReviewIndependence {
     let sp = canonical_provider_family(&solver.provider);
     let rp = canonical_provider_family(&reviewer.provider);
-    let sm = canonical_model_id(&solver.model);
-    let rm = canonical_model_id(&reviewer.model);
+    let sm = canonical_model_id(&sp, &solver.model);
+    let rm = canonical_model_id(&rp, &reviewer.model);
     if sp.is_empty() || rp.is_empty() || sm.is_empty() || rm.is_empty() {
         return ReviewIndependence::SameModel;
     }
