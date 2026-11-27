@@ -34,7 +34,7 @@ fn setup_payload() -> Value {
             "max_review_loops": 6,
             "max_gate_bounces": 3
         },
-        "review": { "mode": "prose_only" },
+        "review": "prose_only",
         "tool_profile": "solve/1",
         "math_sha256": msha
     })
@@ -127,7 +127,7 @@ fn solve_continue_runs_background_leg_and_reconcile_handles_interrupted_sessions
     let (st, _, view2_raw) = raw_http(port, "GET", "/api/sessions/s-solve-int/solve/view", &auth, b"");
     assert_eq!(st, 200);
     let view2: Value = serde_json::from_slice(&view2_raw).unwrap();
-    assert_eq!(view2["solve"]["run_state"]["state"], "interrupted");
+    assert_eq!(view2["run_state"]["state"], "interrupted");
     let seq_before_rec2 = ledger.read_session("s-solve-int").unwrap().len();
     // Double check GET appended zero events.
     let _ = raw_http(port, "GET", "/api/sessions/s-solve-int/solve/view", &auth, b"");

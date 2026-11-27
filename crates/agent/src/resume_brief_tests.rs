@@ -133,7 +133,12 @@ fn brief_is_byte_deterministic_and_preserves_required_sections_and_last_4_turns(
         mk_event(
             8,
             event_kinds::TOOL_RESULT,
-            json!({ "call_id": "uninterpreted-call-9", "tool": "sympy_eval", "ok": true }),
+            json!({
+                "call_id": "uninterpreted-call-9",
+                "tool": "sympy_eval",
+                "ok": true,
+                "result": { "inline": "{\"value\":\"42\",\"error\":null}" }
+            }),
         ),
     ];
     for t in 1..=6u64 {

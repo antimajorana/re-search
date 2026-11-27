@@ -162,7 +162,7 @@ fn seed_setup(ledger: &Ledger, session: &str, per_leg: u32, total_calls: u32, bo
         "conventions": "", "symbols": [], "dimensions": {}, "assumptions": [], "sources": [],
         "roles": { "solver": { "provider": "anthropic", "model": "claude-sonnet-4-5" }, "verifier": { "provider": "openai", "model": "gpt-4.1" } },
         "budgets": { "max_model_calls": total_calls, "max_wall_minutes": 30, "max_model_calls_per_leg": per_leg, "max_review_loops": 6, "max_gate_bounces": bounces },
-        "review": { "mode": "prose_only" },
+        "review": "prose_only",
         "tool_profile": "solve/1",
         "math_sha256": msha
     })).unwrap();
@@ -350,7 +350,7 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
         "conventions": "", "symbols": [], "dimensions": {}, "assumptions": [], "sources": [],
         "roles": { "solver": { "provider": "anthropic", "model": "claude-sonnet-4-5" }, "verifier": { "provider": "openai", "model": "gpt-4.1" } },
         "budgets": { "max_model_calls": 60, "max_wall_minutes": 30, "max_model_calls_per_leg": 48, "max_review_loops": 6, "max_gate_bounces": 3 },
-        "review": { "mode": "prose_only" }, "tool_profile": "solve/1", "math_sha256": msha
+        "review": "prose_only", "tool_profile": "solve/1", "math_sha256": msha
     })).unwrap();
     let hook_called = Arc::new(AtomicBool::new(false));
     struct SeamHook(Arc<AtomicBool>);
