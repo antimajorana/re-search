@@ -41,7 +41,7 @@ fn fixed_tier_manifests_load_and_validate() {
     let sets: Vec<Set> = set.manifests.iter().map(|m| m.set).collect();
     let unique_sets: BTreeSet<Set> = sets.iter().copied().collect();
     assert_eq!(unique_sets.len(), sets.len(), "each fixed set has at most one manifest");
-    for required in [Set::P, Set::Q, Set::B] {
+    for required in [Set::P, Set::Q, Set::B, Set::P5] {
         assert!(unique_sets.contains(&required), "fixed tier must ship manifest for set {}", required.letter());
     }
     let p_cases = set.cases_of(Set::P);
@@ -55,6 +55,7 @@ fn fixed_tier_manifests_load_and_validate() {
     assert_eq!(b_cases.len(), 3, "vault + folder + bibtex fixed Set B evaluation cases");
     let (_, b_vault) = set.case("B-eval-vault").unwrap();
     assert_eq!(b_vault.answer_key["items"].as_array().unwrap().len(), 30);
+    assert_eq!(set.cases_of(Set::P5).len(), 10, "10 fixed Set P5 cited-statement evaluation cases");
     for (s, case) in set.cases() {
         assert_eq!(case.mode, s.mode());
         let is_selftest = case.id.starts_with("P-selftest-") || case.id.starts_with("Q-selftest-");

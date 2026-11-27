@@ -1,0 +1,267 @@
+{
+  "format_version": 1,
+  "set": "P5",
+  "tier": "fixed",
+  "cases": [
+    {
+      "id": "P5-eval-01",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p5/p5_01_shared_counter_tex.tex"
+        ],
+        "locator": "Theorem 2.1"
+      },
+      "answer_key": {
+        "statement": {
+          "present": true,
+          "format": "tex",
+          "kind": "theorem",
+          "number": "2.1",
+          "label": "thm:energy-decay",
+          "title": "Exponential energy decay",
+          "expected_status": "found",
+          "number_basis": "computed",
+          "source_line_start": 31,
+          "source_line_end": 35
+        }
+      },
+      "notes": "Exact shared-counter TeX theorem lookup."
+    },
+    {
+      "id": "P5-eval-02",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p5/p5_02_printed_eq_tag.tex"
+        ],
+        "locator": "Eq. (A1)"
+      },
+      "answer_key": {
+        "statement": {
+          "present": true,
+          "format": "tex",
+          "kind": "equation",
+          "number": "A1",
+          "label": "eq:commutator-identity",
+          "title": null,
+          "expected_status": "found",
+          "number_basis": "printed",
+          "source_line_start": 23,
+          "source_line_end": 26
+        }
+      },
+      "notes": "Explicit \\tag{A1} printed equation tag in appendix."
+    },
+    {
+      "id": "P5-eval-03",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p5/p5_03_html_lemma.html"
+        ],
+        "locator": "Lemma 1.2"
+      },
+      "answer_key": {
+        "statement": {
+          "present": true,
+          "format": "html",
+          "kind": "lemma",
+          "number": "1.2",
+          "html_id": "S1.Thmlemma2",
+          "title": "Spectral gap bound",
+          "expected_status": "found",
+          "number_basis": "html"
+        }
+      },
+      "notes": "LaTeXML HTML5 exact lemma lookup."
+    },
+    {
+      "id": "P5-eval-04",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p5/p5_04_html_roman_theorem.html"
+        ],
+        "locator": "Theorem 2"
+      },
+      "answer_key": {
+        "statement": {
+          "present": true,
+          "format": "html",
+          "kind": "theorem",
+          "number": "II",
+          "arabic_equivalent": "2",
+          "html_id": "S2.Thmtheorem2",
+          "title": "Asymptotic stability",
+          "wrong_number_must_not_locate": "I",
+          "accepted_outcomes": [
+            "found_matching_target",
+            "candidates_including_target",
+            "paper_found_locator_not_found_including_target"
+          ]
+        }
+      },
+      "notes": "Roman vs Arabic equivalence check: Arabic locator Theorem 2 targeting Roman Theorem II must never wrongly locate Theorem I."
+    },
+    {
+      "id": "P5-eval-05",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p5/p5_05_tex_ambiguous_compound.tex"
+        ],
+        "locator": "Corollary to Theorem 1.1"
+      },
+      "answer_key": {
+        "statement": {
+          "present": true,
+          "format": "tex",
+          "kind": "corollary",
+          "ambiguous": true,
+          "candidate_labels": [
+            "cor:simple-rate",
+            "cor:proj-bound"
+          ],
+          "expected_status": "candidates"
+        }
+      },
+      "notes": "Ambiguous compound locator returns Candidates (never Found)."
+    },
+    {
+      "id": "P5-eval-06",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p5/p5_06_tex_missing_locator.tex"
+        ],
+        "locator": "Theorem 9.4"
+      },
+      "answer_key": {
+        "statement": {
+          "present": false,
+          "format": "tex",
+          "kind": "theorem",
+          "number": "9.4",
+          "expected_status": "paper_found_locator_not_found",
+          "candidate_labels": [
+            "thm:compactness",
+            "lem:equiv",
+            "prop:closed-range"
+          ]
+        }
+      },
+      "notes": "Missing locator returns paper_found_locator_not_found with available candidates."
+    },
+    {
+      "id": "P5-eval-07",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p5/p5_07_tex_counter_drift.tex"
+        ],
+        "locator": "Theorem 2.1"
+      },
+      "answer_key": {
+        "statement": {
+          "present": true,
+          "format": "tex",
+          "kind": "theorem",
+          "label": "thm:drifted-bound",
+          "title": "Bounded tail energy",
+          "counter_drifted": true,
+          "expected_status": "candidates"
+        }
+      },
+      "notes": "Drifted unshared counters plus \\setcounter{thm}{3} forces Candidates rather than possibly wrong Found."
+    },
+    {
+      "id": "P5-eval-08",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p5/p5_08_pdf_multipage_text.pdf"
+        ],
+        "locator": "Theorem 2.1"
+      },
+      "answer_key": {
+        "statement": {
+          "present": true,
+          "format": "pdf",
+          "kind": "theorem",
+          "number": "2.1",
+          "title": "Uniform coercive estimate",
+          "page": 2,
+          "page_basis": "text_layer",
+          "ocr": false,
+          "render_math": true,
+          "expected_status": "candidates"
+        }
+      },
+      "notes": "PDF-only multi-page text-layer paper resolves Theorem 2.1 on physical page 2."
+    },
+    {
+      "id": "P5-eval-09",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p5/p5_09_pdf_two_column_aps.pdf"
+        ],
+        "locator": "Theorem 2.1"
+      },
+      "answer_key": {
+        "statement": {
+          "present": true,
+          "format": "pdf",
+          "kind": "theorem",
+          "number": "2.1",
+          "title": "Decay bound",
+          "page": 2,
+          "page_basis": "text_layer",
+          "two_column": true,
+          "expected_section": "Wave Splitting",
+          "ocr": false,
+          "render_math": true,
+          "expected_status": "candidates"
+        }
+      },
+      "notes": "PDF-only two-column APS layout splits columns cleanly so Theorem 2.1 stays under Section 2 on physical page 2."
+    },
+    {
+      "id": "P5-eval-10",
+      "mode": "investigate",
+      "input": {
+        "kind": "fixture",
+        "files": [
+          "p5/p5_10_pdf_scanned_ocr_and_image_only.pdf"
+        ],
+        "locator": "Lemma 3.1"
+      },
+      "answer_key": {
+        "statement": {
+          "present": true,
+          "format": "pdf",
+          "kind": "lemma",
+          "number": "3.1",
+          "title": "Discrete trace inequality",
+          "page": 2,
+          "page_basis": "scan_text_layer",
+          "ocr": true,
+          "render_math": false,
+          "image_only_page": 3,
+          "expected_status": "candidates"
+        }
+      },
+      "notes": "PDF-only scanned OCR page (3 Tr + full-page image) reports scan_text_layer with ocr=true, render_math=false on page 2, plus image-only page 3."
+    }
+  ]
+}
