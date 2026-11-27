@@ -57,6 +57,8 @@ mod pdf_pages_bench;
 mod pdf_pages_job;
 mod pdf_pages_layout;
 mod pdf_pages_scan;
+pub mod pdf_render;
+mod pdf_render_png;
 pub mod policy_preset;
 pub mod prior_work;
 pub mod prior_work_wording;
