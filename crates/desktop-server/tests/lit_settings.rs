@@ -293,6 +293,9 @@ fn put_rejects_malformed_inputs_without_echoing_secret() {
     ];
 
     let bad_key = "secret-with-bad-space 9999";
+    let non_ascii_key = "secret-non-ascii-\u{2013}-key";
+    let huge_key = "a".repeat(513);
+    let huge_mailto = format!("{}@example.org", "a".repeat(250));
     let cases = [
         br#"{}"#.to_vec(),
         br#"[]"#.to_vec(),
@@ -300,16 +303,23 @@ fn put_rejects_malformed_inputs_without_echoing_secret() {
         br#"{"openalex_polite_pool":"yes"}"#.to_vec(),
         br#"{"openalex_api_key":123}"#.to_vec(),
         serde_json::to_vec(&json!({ "openalex_api_key": bad_key })).unwrap(),
+        serde_json::to_vec(&json!({ "openalex_api_key": non_ascii_key })).unwrap(),
+        serde_json::to_vec(&json!({ "openalex_api_key": huge_key })).unwrap(),
         serde_json::to_vec(&json!({ "openalex_api_key": "line1\r\nX-Injected: 1" })).unwrap(),
         br#"{"openalex_mailto":"not-an-email"}"#.to_vec(),
+        br#"{"openalex_mailto":"user@.example.org"}"#.to_vec(),
+        br#"{"openalex_mailto":"user@domain..org"}"#.to_vec(),
         br#"{"openalex_mailto":"bad@example.org?inject=1"}"#.to_vec(),
+        serde_json::to_vec(&json!({ "openalex_mailto": huge_mailto })).unwrap(),
     ];
     for body in cases {
         let (st, _, raw) = raw_http(port, "PUT", "/api/settings/literature", &hdrs, &body);
         assert_eq!(st, 400, "expected 400 for body `{}`", String::from_utf8_lossy(&body));
         let text = String::from_utf8_lossy(&raw);
         assert!(
-            !text.contains("secret-with-bad-space") && !text.contains("X-Injected"),
+            !text.contains("secret-with-bad-space")
+                && !text.contains("secret-non-ascii")
+                && !text.contains("X-Injected"),
             "error response echoed invalid secret: {text}"
         );
     }
@@ -317,3 +327,41 @@ fn put_rejects_malformed_inputs_without_echoing_secret() {
     // No sidecar file was created by rejected writes.
     assert!(!settings_path(tmp.path()).exists());
 }
+
+#[test]
+fn corrupt_sidecar_fails_closed_on_get_and_put_without_overwriting() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = settings_path(tmp.path());
+    let corrupt = b"{\"openalex_api_key\": \"keep-me-unwiped\", ";
+    std::fs::write(&path, corrupt).unwrap();
+
+    let srv = start_desktop_server(test_cfg(tmp.path(), None, None, None)).unwrap();
+    let port = srv.addr.port();
+    let token = srv.info.token.clone();
+    let bearer = format!("Bearer {token}");
+
+    // GET with Bearer token must fail closed (500) rather than reporting empty defaults.
+    let (st_get, _, _) = raw_http(
+        port,
+        "GET",
+        "/api/settings/literature",
+        &[("Authorization", bearer.as_str())],
+        b"",
+    );
+    assert_eq!(st_get, 500);
+
+    // PUT must fail closed (500) and leave the original corrupt file untouched for user recovery.
+    let (st_put, _, _) = raw_http(
+        port,
+        "PUT",
+        "/api/settings/literature",
+        &[
+            ("X-ReSearch-Token", token.as_str()),
+            ("Content-Type", "application/json"),
+        ],
+        br#"{"openalex_polite_pool":true}"#,
+    );
+    assert_eq!(st_put, 500);
+    assert_eq!(std::fs::read(&path).unwrap(), corrupt);
+}
+

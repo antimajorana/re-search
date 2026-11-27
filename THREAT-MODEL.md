@@ -358,6 +358,14 @@ result.
     no key field. Saving a `base_url` without an `http(s)://` scheme, or with
     `user@`, a query string, a fragment or a backslash, is refused, and a
     stored value that fails the same check is not echoed.
+  - *Literature settings (X19 Part 1).* Optional OpenAlex credentials and
+    polite-pool preferences are stored outside git in `<data_dir>/lit_settings.json`
+    (`0600` on Unix; inherits data-directory ACLs on Windows, symlinks refused,
+    with `OPENALEX_API_KEY` environment-variable fallback). `GET`/`PUT
+    /api/settings/literature` require `AuthGuard::authorize_api` header token
+    auth, return only a masked key (`****<last4>` or `****`) plus source
+    provenance, fail closed on corrupt files, and never write keys to URLs,
+    `Debug` logs, or `ledger.db`.
   - KaTeX `0.19.1` is served offline from the binary; the UI loads nothing
     from the network. Markdown/LaTeX rendering (`math.js`, `math_katex.js`,
     `math_scan.js`, `math_equations.js`, `markdown.js`, `tex_preview.js`, and

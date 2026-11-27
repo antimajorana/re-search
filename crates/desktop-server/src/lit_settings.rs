@@ -73,6 +73,16 @@ impl Drop for LitSettings {
     }
 }
 
+impl LitSettings {
+    /// Returns the polite-pool contact email only when the user explicitly opted into
+    /// `openalex_polite_pool` AND supplied a validated `openalex_mailto`.
+    pub fn effective_polite_mailto(&self) -> Option<&str> {
+        self.openalex_polite_pool
+            .then_some(self.openalex_mailto.as_deref())
+            .flatten()
+    }
+}
+
 /// Path to `<data_dir>/lit_settings.json`.
 pub fn settings_path(data_dir: &Path) -> PathBuf {
     data_dir.join(LIT_SETTINGS_FILE)
@@ -84,10 +94,21 @@ pub fn settings_path(data_dir: &Path) -> PathBuf {
 /// return `"****"` so no full or majority substring of the secret is ever echoed.
 pub fn mask_api_key(raw: &str) -> String {
     let trimmed = raw.trim();
-    let chars: Vec<char> = trimmed.chars().collect();
-    if chars.len() >= 8 {
-        let tail: String = chars[chars.len() - 4..].iter().collect();
-        format!("****{tail}")
+    if trimmed.is_ascii() {
+        return if trimmed.len() >= 8 {
+            format!("****{}", &trimmed[trimmed.len() - 4..])
+        } else {
+            "****".to_string()
+        };
+    }
+    let count = trimmed.chars().count();
+    if count >= 8 {
+        let start = trimmed
+            .char_indices()
+            .nth(count - 4)
+            .map(|(i, _)| i)
+            .unwrap_or(trimmed.len());
+        format!("****{}", &trimmed[start..])
     } else {
         "****".to_string()
     }
@@ -103,9 +124,10 @@ fn validate_api_key(raw: &str) -> Result<Option<String>, String> {
             "`openalex_api_key` exceeds maximum length ({MAX_API_KEY_LEN} bytes)."
         ));
     }
-    if trimmed.bytes().any(|b| b <= 0x20 || b == 0x7f) {
+    if !trimmed.bytes().all(|b| b.is_ascii_graphic()) {
         return Err(
-            "`openalex_api_key` must not contain whitespace or control characters.".into(),
+            "`openalex_api_key` must contain only visible ASCII characters (no spaces, control characters, or non-ASCII bytes)."
+                .into(),
         );
     }
     Ok(Some(trimmed.to_string()))
@@ -121,7 +143,7 @@ fn validate_mailto(raw: &str) -> Result<Option<String>, String> {
             "`openalex_mailto` exceeds maximum length ({MAX_MAILTO_LEN} bytes)."
         ));
     }
-    if trimmed.bytes().any(|b| b <= 0x20 || b == 0x7f)
+    if !trimmed.bytes().all(|b| b.is_ascii_graphic())
         || trimmed.contains(['?', '&', '#', '\\', '<', '>', '"', '\''])
     {
         return Err("`openalex_mailto` contains invalid characters.".into());
@@ -143,11 +165,16 @@ fn validate_mailto(raw: &str) -> Result<Option<String>, String> {
 }
 
 /// Load [`LitSettings`] from `<data_dir>/lit_settings.json`, distinguishing missing files
-/// (returns `Ok(LitSettings::default())`) from unreadable/corrupt files.
+/// (returns `Ok(LitSettings::default())`) from symlinks, unreadable files, or corrupt JSON.
 pub fn try_load_settings(data_dir: &Path) -> Result<LitSettings, String> {
     let path = settings_path(data_dir);
-    if !path.exists() {
-        return Ok(LitSettings::default());
+    match fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(LitSettings::default()),
+        Err(e) => return Err(format!("failed to inspect `{LIT_SETTINGS_FILE}`: {e}")),
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(format!("refusing to read `{LIT_SETTINGS_FILE}` through a symlink"));
+        }
+        Ok(_) => {}
     }
     let mut bytes = fs::read(&path)
         .map_err(|e| format!("failed to read `{LIT_SETTINGS_FILE}`: {e}"))?;
@@ -178,7 +205,7 @@ pub fn load_settings(data_dir: &Path) -> LitSettings {
 }
 
 /// Atomically persist [`LitSettings`] to `<data_dir>/lit_settings.json` with `0600` Unix
-/// permissions and scrubbed temporary serialization buffers.
+/// permissions, symlink refusal, Windows rollback-safe replacement, and scrubbed buffers.
 pub fn save_settings(data_dir: &Path, settings: &LitSettings) -> Result<(), String> {
     fs::create_dir_all(data_dir).map_err(|e| {
         format!(
@@ -186,14 +213,25 @@ pub fn save_settings(data_dir: &Path, settings: &LitSettings) -> Result<(), Stri
             data_dir.display()
         )
     })?;
+    let target = settings_path(data_dir);
+    if let Ok(meta) = fs::symlink_metadata(&target) {
+        if meta.file_type().is_symlink() {
+            return Err(format!("refusing to overwrite symlink `{LIT_SETTINGS_FILE}`"));
+        }
+    }
+
     let mut bytes = serde_json::to_vec_pretty(settings)
         .map_err(|e| format!("failed to serialize literature settings: {e}"))?;
     bytes.push(b'\n');
 
-    let target = settings_path(data_dir);
     let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = data_dir.join(format!(
         ".{LIT_SETTINGS_FILE}.{}.{}.tmp",
+        std::process::id(),
+        seq
+    ));
+    let bak = data_dir.join(format!(
+        ".{LIT_SETTINGS_FILE}.{}.{}.bak",
         std::process::id(),
         seq
     ));
@@ -222,11 +260,18 @@ pub fn save_settings(data_dir: &Path, settings: &LitSettings) -> Result<(), Stri
         }
 
         if let Err(err) = fs::rename(&tmp, &target) {
-            // On Windows, `rename` fails if the destination exists; fall back to remove + rename.
-            if target.exists() {
-                let _ = fs::remove_file(&target);
-                fs::rename(&tmp, &target)
-                    .map_err(|e| format!("failed to commit literature settings: {e}"))?;
+            // On Windows, `rename` fails if the destination exists; stage the old file to `.bak`
+            // and restore it if replacing fails so saved credentials are never permanently lost.
+            if fs::symlink_metadata(&target).is_ok() {
+                fs::rename(&target, &bak)
+                    .map_err(|e| format!("failed to back up existing literature settings: {e}"))?;
+                if let Err(replace_err) = fs::rename(&tmp, &target) {
+                    let _ = fs::rename(&bak, &target);
+                    return Err(format!(
+                        "failed to commit literature settings: {replace_err}"
+                    ));
+                }
+                let _ = fs::remove_file(&bak);
             } else {
                 return Err(format!("failed to commit literature settings: {err}"));
             }
@@ -235,8 +280,13 @@ pub fn save_settings(data_dir: &Path, settings: &LitSettings) -> Result<(), Stri
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
-                .map_err(|e| format!("failed to enforce 0600 permissions on settings: {e}"))?;
+            if fs::symlink_metadata(&target)
+                .map(|m| m.file_type().is_file())
+                .unwrap_or(false)
+            {
+                fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
+                    .map_err(|e| format!("failed to enforce 0600 permissions on settings: {e}"))?;
+            }
         }
         Ok(())
     })();
@@ -276,8 +326,14 @@ fn env_openalex_key(state: &DesktopState) -> Option<String> {
 
 /// Build an F11/X19 [`ProviderConfig`] populated with the effective OpenAlex API key
 /// (saved sidecar first, then `OPENALEX_API_KEY` env fallback).
+///
+/// Provided as X19 Part 1 scaffolding for Explore/literature runners that execute F11
+/// `lit_providers::run_query*` against OpenAlex.
 pub fn resolve_provider_config(state: &DesktopState) -> ProviderConfig {
-    let settings = load_settings(&state.cfg.data_dir);
+    let settings = match state.ledger_write_lock.lock() {
+        Ok(_guard) => load_settings(&state.cfg.data_dir),
+        Err(_) => load_settings(&state.cfg.data_dir),
+    };
     let mut env_val = env_openalex_key(state);
     let (openalex_api_key, _) = resolve_openalex_key(&settings, env_val.as_deref());
     if let Some(s) = &mut env_val {
@@ -317,7 +373,11 @@ pub fn handle(state: &DesktopState, method: &str, body: &[u8]) -> ApiResult {
 
 /// HTTP handler for `GET /api/settings/literature`.
 pub fn handle_get(state: &DesktopState) -> ApiResult {
-    let settings = load_settings(&state.cfg.data_dir);
+    let _lock = state
+        .ledger_write_lock
+        .lock()
+        .map_err(|_| internal("settings lock poisoned"))?;
+    let settings = try_load_settings(&state.cfg.data_dir).map_err(internal)?;
     let mut env_val = env_openalex_key(state);
     let view = redacted_json(&settings, env_val.as_deref());
     if let Some(s) = &mut env_val {
@@ -367,7 +427,7 @@ pub fn handle_put(state: &DesktopState, body: &[u8]) -> ApiResult {
         .ledger_write_lock
         .lock()
         .map_err(|_| internal("settings write lock poisoned"))?;
-    let mut settings = load_settings(&state.cfg.data_dir);
+    let mut settings = try_load_settings(&state.cfg.data_dir).map_err(internal)?;
     if let Some(k) = next_key {
         if let Some(old) = &mut settings.openalex_api_key {
             scrub_string(old);
