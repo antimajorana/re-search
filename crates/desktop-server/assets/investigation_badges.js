@@ -173,6 +173,7 @@ export function renderInvestigationBadges(host, node, opts = {}) {
   if (claim) {
     const labelText = AUTHORS_CLAIM_LABELS[claim.label];
     const tone = AUTHORS_CLAIM_TONES[claim.label] || 'muted';
+    const rightEnabled = typeof opts.onSearchWider === 'function' || Boolean(opts.enableRightSlot);
     const split = createSplitBadge(
       {
         text: labelText,
@@ -187,7 +188,12 @@ export function renderInvestigationBadges(host, node, opts = {}) {
         icon: 'link',
         tone: 'muted',
         border: BORDER_SOLID,
-        title: RIGHT_SLOT_V16_TITLE,
+        title: rightEnabled
+          ? 'Search earlier literature in Explore (origin paper excluded).'
+          : RIGHT_SLOT_V16_TITLE,
+        ...(rightEnabled && typeof opts.onSearchWider === 'function'
+          ? { onClick: () => opts.onSearchWider(node) }
+          : {}),
       },
     );
     const leftHalf = split.querySelector?.('[data-half="left"]');
@@ -195,8 +201,12 @@ export function renderInvestigationBadges(host, node, opts = {}) {
     const rightHalf = split.querySelector?.('[data-half="right"]');
     if (rightHalf) {
       rightHalf.setAttribute('data-v16-slot', 'prior-work-explore');
-      rightHalf.setAttribute('aria-disabled', 'true');
-      rightHalf.classList.add('inv-v7-right-placeholder');
+      if (rightEnabled) {
+        rightHalf.classList.add('inv-v16-right-active');
+      } else {
+        rightHalf.setAttribute('aria-disabled', 'true');
+        rightHalf.classList.add('inv-v7-right-placeholder');
+      }
     }
     wrap.appendChild(split);
 

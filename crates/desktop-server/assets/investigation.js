@@ -434,7 +434,7 @@ export function showInvestigationSession(id, data) {
     },
     isModelConnected: () => { const m = byId('composer-model'); return Boolean(m && !m.hidden && m.value && m.value !== '__none__' && byId('composer-connect')?.hidden); },
     getTaskModelOptions: () => { try { const o = callbacks.requestOptions?.(); return o?.provider && o?.model && !['claude-cli', 'claude-code-cli', 'antigravity'].includes(o.provider) ? { provider: o.provider, model: o.model } : null; } catch { return null; } },
-    refresh: refreshInvestigation, showStatus,
+    refresh: refreshInvestigation, showStatus, openSession: callbacks?.open,
   });
 }
 
