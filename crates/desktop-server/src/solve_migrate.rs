@@ -42,14 +42,13 @@ const FALLBACK_STATEMENT_PREFIX: &str = "Continued from earlier Research session
 const MAX_ASSUMPTION_TEXT_CHARS: usize = 2_000;
 const MAX_ASSUMPTION_ID_CHARS: usize = 64;
 const MAX_ROLE_CHARS: usize = 200;
-const ALLOWED_OPTION_KEYS: &[&str] = &["at_seq", "statement", "conventions", "task_kind", "solver", "verifier"];
+const ALLOWED_OPTION_KEYS: &[&str] = &["at_seq", "statement", "conventions", "task_kind", "verifier"];
 
 struct OpenInSolveOptions {
     at_seq: Option<u64>,
     statement: Option<String>,
     conventions: Option<String>,
     task_kind: Option<TaskKind>,
-    solver: Option<RoleModel>,
     verifier: Option<RoleModel>,
 }
 
@@ -76,7 +75,9 @@ pub fn handle_open_in_solve(state: &DesktopState, session_id: &str, body: &[u8])
         if is_turn_running(state, session_id) {
             return Err(conflict("Cannot open a Research session in Solve while a turn is running."));
         }
-        let parent_events = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
+        let (_, parent_events) = ledger
+            .read_verified_session(session_id)
+            .map_err(|e| bad(e.to_string()))?;
         if parent_events.is_empty() {
             return Err(bad("Research session has no ledger events to open in Solve."));
         }
@@ -182,6 +183,11 @@ pub fn handle_open_in_solve(state: &DesktopState, session_id: &str, body: &[u8])
 fn parse_options(val: &Value) -> Result<OpenInSolveOptions, (u16, String)> {
     if let Some(map) = val.as_object() {
         for key in map.keys() {
+            if key == "solver" {
+                return Err(bad(
+                    "`solver` cannot be overridden during open-in-solve (preserved from parent Research session for D19 review tiers)",
+                ));
+            }
             if !ALLOWED_OPTION_KEYS.contains(&key.as_str()) {
                 return Err(bad(format!("unknown field `{key}` in open-in-solve request")));
             }
@@ -226,7 +232,6 @@ fn parse_options(val: &Value) -> Result<OpenInSolveOptions, (u16, String)> {
         .transpose()?;
     Ok(OpenInSolveOptions {
         at_seq, statement, conventions, task_kind,
-        solver: parse_role_override(val.get("solver"), "solver")?,
         verifier: parse_role_override(val.get("verifier"), "verifier")?,
     })
 }
@@ -238,6 +243,9 @@ fn parse_role_override(val: Option<&Value>, label: &str) -> Result<Option<RoleMo
         .ok_or_else(|| bad(format!("`{label}.provider` must be a string")))?.trim();
     let model = obj.get("model").and_then(Value::as_str)
         .ok_or_else(|| bad(format!("`{label}.model` must be a string")))?.trim();
+    if provider.is_empty() || model.is_empty() {
+        return Err(bad(format!("`{label}` requires non-empty `provider` and `model`")));
+    }
     if provider.chars().count() > MAX_ROLE_CHARS || model.chars().count() > MAX_ROLE_CHARS {
         return Err(bad(format!("`{label}` provider/model exceeds {MAX_ROLE_CHARS} characters")));
     }
@@ -258,7 +266,7 @@ fn build_migrated_setup(
 ) -> Result<SolveSetup, (u16, String)> {
     let statement = extract_statement(session_id, prefix, parent_meta, opts.statement.as_deref(), warnings);
     let pinned_conventions = extract_conventions(prefix, parent_meta, ui, opts.conventions.as_deref(), warnings);
-    let solver = opts.solver.clone().unwrap_or_else(|| extract_solver_role(prefix, parent_meta, ui));
+    let solver = extract_solver_role(prefix, parent_meta, ui);
     let verifier = opts.verifier.clone().unwrap_or_else(|| extract_verifier_role(prefix, ui, &solver));
     let prefill = prefill_solve_setup(&PrefillRequest {
         statement: statement.clone(),
@@ -427,7 +435,11 @@ fn extract_ingested_sources(prefix: &[Event], warnings: &mut Vec<String>) -> Vec
 fn extract_solver_role(prefix: &[Event], parent_meta: Option<&SessionMeta>, ui: &UiSettings) -> RoleModel {
     let start_ev = prefix.iter().rev().find(|e| matches!(e.kind.as_str(), "session.start" | "session.resume"));
     let provider = start_ev
-        .and_then(|e| non_empty_str(e.payload.get("provider")).or_else(|| non_empty_str(e.payload.get("route"))))
+        .and_then(|e| {
+            non_empty_str(e.payload.get("provider")).or_else(|| {
+                non_empty_str(e.payload.get("route")).filter(|r| !r.eq_ignore_ascii_case("api"))
+            })
+        })
         .or_else(|| parent_meta.and_then(|m| non_empty_str_opt(m.default_provider.as_deref())))
         .or_else(|| non_empty_str_opt(ui.default_provider.as_deref()))
         .unwrap_or("");
