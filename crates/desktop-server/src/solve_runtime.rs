@@ -10,7 +10,6 @@ use research_tools::solve_checks::{
 use research_tools::solve_exprs::{stage_exprs_in, CanonicalizedExpr, CheckCanonicalizer};
 use research_tools::solve_gates::{solve_check_host_v1, solve_gate_chain, SolveGate};
 use research_tools::solve_model::{HandleRef, SolveExpr, SymbolSpec};
-use research_tools::solve_state::SolveState;
 use research_tools::tool_profile::{
     lookup as lookup_profile, register_profile, ProfileHostTools, PROFILE_SOLVE_V1,
 };
@@ -127,9 +126,9 @@ impl SolveWorkerRuntime for DesktopSolverRuntime {
         &self,
         ledger: &Ledger,
         session: &str,
-        handles: &BTreeMap<HandleRef, SolveExpr>,
+        _handles: &BTreeMap<HandleRef, SolveExpr>,
     ) -> Result<(), String> {
-        let staged = stage_exprs_in(ledger, session, handles)?;
+        let staged = stage_exprs_in(ledger, session)?;
         if staged.is_empty() {
             return Ok(());
         }
@@ -254,9 +253,7 @@ pub(crate) fn build_solve_router(
         let code = args["code"].as_str().ok_or("`code` must be a string")?;
         let staged = {
             let guard = ctx.ledger.lock().map_err(|_| "ledger lock poisoned".to_string())?;
-            let evs = guard.read_session(&session_for_handler).map_err(|e| e.to_string())?;
-            let st = SolveState::from_events(&evs);
-            stage_exprs_in(&guard, &session_for_handler, &st.handles)?
+            stage_exprs_in(&guard, &session_for_handler)?
         };
         let mut guard = w_for_handler.lock().map_err(|_| "worker lock poisoned".to_string())?;
         let w = guard

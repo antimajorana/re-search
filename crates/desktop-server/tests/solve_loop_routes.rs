@@ -95,11 +95,14 @@ fn solve_continue_runs_background_leg_and_reconcile_handles_interrupted_sessions
     std::fs::create_dir_all(&data_dir).unwrap();
     std::fs::write(
         data_dir.join("providers.json"),
-        serde_json::to_vec(&json!({ "anthropic": "sk-test-solve-123" })).unwrap(),
+        serde_json::to_vec(&json!({
+            "providers": { "anthropic": { "api_key": "sk-test-solve-123" } }
+        }))
+        .unwrap(),
     )
     .unwrap();
     let mock = MockHttp::start(vec![anthropic_json_reply("msg_c1", "Continued leg finished cleanly.")]);
-    let srv = start_desktop_server(test_cfg(&data_dir, None, None, Some(mock.base_url.clone()))).unwrap();
+    let srv = start_desktop_server(test_cfg(&data_dir, None, Some(mock.base_url.clone()), None)).unwrap();
     let port = srv.addr.port();
     let auth = [("X-ReSearch-Token", srv.info.token.as_str()), ("Content-Type", "application/json")];
 
@@ -166,7 +169,10 @@ fn solve_post_messages_dispatches_to_solve_loop_and_pauses_on_transport_error_r1
     std::fs::create_dir_all(&data_dir).unwrap();
     std::fs::write(
         data_dir.join("providers.json"),
-        serde_json::to_vec(&json!({ "anthropic": "sk-test-solve-456" })).unwrap(),
+        serde_json::to_vec(&json!({
+            "providers": { "anthropic": { "api_key": "sk-test-solve-456" } }
+        }))
+        .unwrap(),
     )
     .unwrap();
 
@@ -175,7 +181,7 @@ fn solve_post_messages_dispatches_to_solve_loop_and_pauses_on_transport_error_r1
         content_type: "application/json",
         body: br#"{"error":{"message":"boom"}}"#.to_vec(),
     }]);
-    let srv = start_desktop_server(test_cfg(&data_dir, None, None, Some(mock.base_url.clone()))).unwrap();
+    let srv = start_desktop_server(test_cfg(&data_dir, None, Some(mock.base_url.clone()), None)).unwrap();
     let port = srv.addr.port();
     let auth = [("X-ReSearch-Token", srv.info.token.as_str()), ("Content-Type", "application/json")];
 
