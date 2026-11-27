@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 import sympy as sp
 
+from .algebra import ALGEBRA_CHECKS
 from .srepr_safe import UnsafeSreprError, canonicalize_srepr, parse_srepr_safe
 
 CheckFn = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
@@ -107,6 +108,8 @@ def _symbolic_zero_smoke(handles: dict[str, Any], _params: dict[str, Any]) -> di
 
 
 register_check("symbolic_zero_smoke", _symbolic_zero_smoke)
+for _check_name, _check_fn in ALGEBRA_CHECKS.items():
+    register_check(_check_name, _check_fn)
 
 __all__ = [
     "UnknownCheckError",
