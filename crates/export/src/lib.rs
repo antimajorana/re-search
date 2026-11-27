@@ -14,6 +14,9 @@ pub mod paper_map_import;
 pub mod writeup;
 pub mod writeup_bib;
 pub mod writeup_md;
+pub mod writeup_paper;
+mod writeup_paper_meta;
+mod writeup_paper_nodes;
 pub mod writeup_tex;
 pub mod zip;
 
