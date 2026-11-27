@@ -45,8 +45,9 @@ function resolveToken(opts) {
     const t = String(opts.token).trim();
     if (t) return t;
   }
-  if (typeof document !== 'undefined' && typeof document.querySelector === 'function') {
-    const meta = document.querySelector('meta[name="re-search-csrf"]');
+  const doc = resolveDoc(null, opts);
+  if (doc && typeof doc.querySelector === 'function') {
+    const meta = doc.querySelector('meta[name="re-search-csrf"]');
     if (meta && typeof meta.content === 'string' && meta.content.trim()) {
       return meta.content.trim();
     }
@@ -71,6 +72,23 @@ export function safeCropDataUrl(mediaType, base64) {
   const b64 = String(base64 || '');
   if (!b64 || b64.length % 4 !== 0 || !STRICT_BASE64_RE.test(b64)) return null;
   return `data:${mt};base64,${b64}`;
+}
+
+export function validateCropRect(crop) {
+  if (!Array.isArray(crop) || crop.length !== 4) {
+    throw new Error('Crop must be a 4-element [x, y, width, height] array.');
+  }
+  const nums = crop.map((v) => {
+    if (typeof v !== 'number' || !Number.isFinite(v) || !Number.isInteger(v)) {
+      throw new Error('Crop coordinates must be finite integers [x, y, width, height].');
+    }
+    return v;
+  });
+  const [x, y, w, h] = nums;
+  if (x < 0 || y < 0 || w < 1 || h < 1) {
+    throw new Error('Crop must satisfy x >= 0, y >= 0, width >= 1, height >= 1.');
+  }
+  return nums;
 }
 
 export function transcribeEquationsUrl(sessionId, sourceId) {
@@ -126,8 +144,8 @@ export async function requestEquationTranscription(sessionId, sourceId, opts = {
   }
 
   const payload = { page, opt_in: true };
-  if (Array.isArray(opts.crop) && opts.crop.length === 4) {
-    payload.crop = opts.crop.map((n) => Math.floor(Number(n) || 0));
+  if (opts.crop !== undefined && opts.crop !== null) {
+    payload.crop = validateCropRect(opts.crop);
   }
   if (opts.imageMediaType !== undefined || opts.imageBase64 !== undefined) {
     if (!safeCropDataUrl(opts.imageMediaType, opts.imageBase64)) {
@@ -328,6 +346,7 @@ export function mountFormulaTranscriptionPanel(container, opts = {}) {
       const data = await requestEquationTranscription(sid, src, {
         ...params,
         optIn: true,
+        document: doc,
         fetchFn: opts.fetchFn,
         getToken: opts.getToken,
         token: opts.token,
@@ -338,8 +357,8 @@ export function mountFormulaTranscriptionPanel(container, opts = {}) {
       const record = data?.transcription || data;
       const card = renderFormulaTranscriptionCard(record, {
         document: doc,
-        cropMediaType: params.imageMediaType,
-        cropBase64: params.imageBase64,
+        cropMediaType: params.imageMediaType ?? data?.crop_image_media_type,
+        cropBase64: params.imageBase64 ?? data?.crop_image_base64,
       });
       if (card) cardHost.appendChild(card);
       setStatus(`Recorded ${MODEL_TRANSCRIBED_LABEL} draft (not a matched quote).`);
@@ -359,6 +378,12 @@ export function mountFormulaTranscriptionPanel(container, opts = {}) {
       }
     }
   }
+
+  transcribeBtn.addEventListener('click', () => {
+    const nextParams =
+      typeof opts.getParams === 'function' ? opts.getParams() : (opts.defaultParams || {});
+    void transcribe(nextParams || {});
+  });
 
   syncButtonState();
   root.appendChild(optInLabel);

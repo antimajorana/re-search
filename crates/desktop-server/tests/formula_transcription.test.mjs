@@ -16,6 +16,7 @@ import {
   requestEquationTranscription,
   safeCropDataUrl,
   transcribeEquationsUrl,
+  validateCropRect,
 } from '../assets/formula_transcription.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -328,3 +329,67 @@ test('assets.rs registers /assets/formula_transcription.js and auth.rs never exe
   );
   assert.ok(!authRs.includes('transcribe-equations'));
 });
+
+test('transcribeBtn click listener, strict crop validation, custom-document CSRF, and server-returned crop work', async () => {
+  // Strict crop validation rejects non-integers, strings, negative coords, and zero area.
+  assert.deepEqual(validateCropRect([0, 10, 200, 80]), [0, 10, 200, 80]);
+  for (const bad of [[0, 0, 0, 10], [0, 0, 10, 0], [-1, 0, 10, 10], ['abc', 0, 10, 10], [1, 2, 3]]) {
+    assert.throws(() => validateCropRect(bad));
+  }
+
+  const { doc } = createStrictMockDom();
+  doc.querySelector = (sel) =>
+    sel === 'meta[name="re-search-csrf"]' ? { content: 'tok-from-custom-doc' } : null;
+  const host = doc.createElement('div');
+  const calls = [];
+  let doneResolve;
+  const donePromise = new Promise((r) => {
+    doneResolve = r;
+  });
+
+  const panel = mountFormulaTranscriptionPanel(host, {
+    sessionId: 's-click',
+    sourceId: 'paper1',
+    document: doc,
+    getParams: () => ({ page: 1, crop: [0, 0, 100, 50] }),
+    onTranscribed: (data) => doneResolve(data),
+    fetchFn: async (url, init) => {
+      calls.push({ url, init });
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            label: MODEL_TRANSCRIBED_LABEL,
+            quotable: false,
+            crop_image_media_type: 'image/png',
+            crop_image_base64: SAMPLE_PNG_B64,
+            transcription: {
+              source_id: 'paper1',
+              page: 1,
+              crop: [0, 0, 100, 50],
+              model: 'gpt-4o',
+              latex_draft: 'E = m c^2',
+              label: MODEL_TRANSCRIBED_LABEL,
+              agreed_with_text_layer: true,
+            },
+          };
+        },
+      };
+    },
+  });
+
+  panel.optInCheckbox.checked = true;
+  panel.optInCheckbox.dispatch('change');
+  // Click the actual button (not panel.transcribe directly).
+  panel.transcribeBtn.dispatch('click');
+  await donePromise;
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].init.headers['X-ReSearch-Token'], 'tok-from-custom-doc');
+  assert.equal(panel.cardHost.children.length, 1);
+  const img = panel.cardHost.children[0].querySelector('[data-testid="transcription-crop-img"]');
+  assert.ok(img, 'server-rendered crop_image_* should render beside draft');
+  assert.equal(img.getAttribute('src'), `data:image/png;base64,${SAMPLE_PNG_B64}`);
+});
+
