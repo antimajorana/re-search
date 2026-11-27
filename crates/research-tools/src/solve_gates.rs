@@ -25,6 +25,11 @@ use tools::{Gate, GateChain, GateDecision, GateRefusal, GateRequest, WorkerEpoch
 const DEFAULT_MAX_GATE_BOUNCES: u32 = 3;
 const EVENT_SCHEMA_VERSION: u32 = 1;
 
+/// Host-handled blind compute tool id (`solve.md` 5.2, 5.4; package S20).
+pub const COMPUTE_BLIND: &str = "compute_blind";
+/// Maximum character length allowed for `compute_blind.operation` (`solve.md` 5.2).
+pub const COMPUTE_BLIND_MAX_OPERATION_CHARS: usize = 600;
+
 /// Tools still allowed by Gate G1 once un-cited `sympy_eval` runs exceed 3 (`solve.md` 5.4).
 pub const ALLOW_G1_CLEANUP_TOOLS: &[&str] = &[
     STEP_RECORD,
@@ -155,6 +160,13 @@ impl Gate for SolveGate {
                     _ => "G4",
                 };
                 return GateDecision::Block(GateRefusal::new(gate_id, trigger.message));
+            }
+        }
+
+        // G3: refuse `compute_blind` if `compare_with` appears in `inputs` or `operation` (`solve.md` 5.4).
+        if req.tool_id == COMPUTE_BLIND {
+            if let Err(msg) = check_g3_blind_compute(req.args) {
+                return GateDecision::Block(GateRefusal::new("G3", msg));
             }
         }
 
@@ -357,6 +369,112 @@ pub fn check_g1_pending_runs(
             "{pending} un-cited `sympy_eval` run(s) pending ({}); record one via `step_record` or discard via `ledger_note` (`\"discard:...\"`) before calling `{tool_id}`",
             state.pending_runs.join(", ")
         ));
+    }
+    Ok(())
+}
+
+fn contains_identifier_token(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let bytes = haystack.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut start = 0usize;
+    while let Some(pos) = haystack[start..].find(needle) {
+        let abs = start + pos;
+        let end = abs + needle.len();
+        let left_ok = abs == 0 || !is_ident(bytes[abs - 1]);
+        let right_ok = end == bytes.len() || !is_ident(bytes[end]);
+        if left_ok && right_ok {
+            return true;
+        }
+        start = abs + needle.chars().next().map_or(1, char::len_utf8);
+    }
+    false
+}
+
+/// G3 (`solve.md` 5.2 & 5.4, package S20): refuse `compute_blind` if `compare_with` appears
+/// in `inputs` or its handle text appears in `operation`, or if `operation` exceeds 600 chars.
+pub fn check_g3_blind_compute(args: &Value) -> Result<(), String> {
+    let obj = args
+        .as_object()
+        .ok_or("`compute_blind` arguments must be a JSON object")?;
+    let compare_raw = obj
+        .get("compare_with")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or("`compute_blind` requires a non-empty `compare_with` handle")?;
+    let compare_base = compare_raw.split('@').next().unwrap_or(compare_raw).trim();
+    if compare_base.is_empty() {
+        return Err("`compute_blind` requires a valid `compare_with` handle name".into());
+    }
+
+    let operation = obj
+        .get("operation")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or("`compute_blind` requires a non-empty `operation` description")?;
+    if operation.chars().count() > COMPUTE_BLIND_MAX_OPERATION_CHARS {
+        return Err(format!(
+            "`compute_blind.operation` exceeds {COMPUTE_BLIND_MAX_OPERATION_CHARS} characters; shorten it to the minimal blind calculation"
+        ));
+    }
+
+    let inputs = obj
+        .get("inputs")
+        .and_then(Value::as_array)
+        .ok_or("`compute_blind` requires `inputs` (an array of input handle strings)")?;
+    for item in inputs {
+        let inp = item
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or("every item in `compute_blind.inputs` must be a non-empty handle string")?;
+        let inp_base = inp.split('@').next().unwrap_or(inp).trim();
+        if inp == compare_raw || inp_base == compare_base {
+            return Err(format!(
+                "`compare_with` handle `{compare_raw}` must not appear in `inputs` (found `{inp}`); remove it so the blind worker computes independently"
+            ));
+        }
+    }
+
+    if (compare_raw.contains('@') && operation.contains(compare_raw))
+        || contains_identifier_token(operation, compare_base)
+    {
+        return Err(format!(
+            "`compare_with` handle `{compare_raw}` must not appear in `operation`; state only the calculation to perform from `inputs`"
+        ));
+    }
+
+    Ok(())
+}
+
+/// Host-side Gate G3 enforcement for host-handled `compute_blind` calls: records
+/// `guardrail.blocked` on refusal and returns `Err("GATE G3: ...")`.
+pub fn enforce_g3_blind_compute(
+    ledger: &Ledger,
+    session: &str,
+    call_id: &str,
+    args: &Value,
+) -> Result<(), String> {
+    if let Err(reason) = check_g3_blind_compute(args) {
+        let message = format!("GATE G3: {reason}");
+        ledger
+            .append_with_hash(
+                session,
+                event_kinds::GUARDRAIL_BLOCKED,
+                EVENT_SCHEMA_VERSION,
+                &json!({
+                    "gate": "G3",
+                    "tool": COMPUTE_BLIND,
+                    "call_id": call_id,
+                    "message": message,
+                }),
+            )
+            .map_err(|e| format!("failed to record G3 guardrail.blocked: {e}"))?;
+        return Err(message);
     }
     Ok(())
 }

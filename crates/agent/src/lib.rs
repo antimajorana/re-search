@@ -10,6 +10,7 @@ pub mod anthropic;
 pub mod autonomous;
 pub(crate) mod autonomous_prompts;
 pub mod delegate;
+pub mod delegate_blind;
 pub(crate) mod dispatch;
 pub mod explore;
 pub mod gemini;
@@ -39,6 +40,10 @@ pub(crate) mod stream_codecs;
 pub(crate) mod stream_http;
 pub mod transport;
 pub mod usage;
+pub(crate) mod verifier_context;
+pub mod verifier_loop;
+pub(crate) mod verifier_parse;
+pub mod verifier_tools;
 pub mod verifiers;
 pub(crate) mod wire;
 
