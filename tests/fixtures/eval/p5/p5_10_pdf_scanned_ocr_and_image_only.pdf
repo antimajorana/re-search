@@ -1,0 +1,93 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [6 0 R 8 0 R 10 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Length 340 >>
+stream
+/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Synthetic) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Synthetic-UTF16 def
+/CMapType 2 def
+1 begincodespacerange
+<00> <FF>
+endcodespacerange
+1 beginbfrange
+<20> <7E> <0020>
+endbfrange
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end
+
+endstream
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 3 0 R >>
+endobj
+5 0 obj
+<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 7 >>
+stream
+808080>
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 7 0 R >>
+endobj
+7 0 obj
+<< /Length 431 >>
+stream
+BT /F1 13.0 Tf 0 Tr 1 0 0 1 72.0 730.0 Tm <5363616E6E6564204172636869766520547261636520496E657175616C6974696573> Tj ET
+BT /F1 11.0 Tf 0 Tr 1 0 0 1 72.0 700.0 Tm <312046726F6E74204D61747465722053756D6D617279> Tj ET
+BT /F1 11.0 Tf 0 Tr 1 0 0 1 72.0 680.0 Tm <446566696E6974696F6E20312E312028426F756E64617279206E6F726D292E20546865207472616365206E6F726D207265737472696374732066756E6374696F6E7320746F2074686520626F756E646172792E> Tj ET
+
+endstream
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> /XObject << /Im1 5 0 R >> >> /Contents 9 0 R >>
+endobj
+9 0 obj
+<< /Length 681 >>
+stream
+q 560 0 0 720 26 36 cm /Im1 Do Q
+BT /F1 11.0 Tf 3 Tr 1 0 0 1 72.0 720.0 Tm <33205363616E6E656420417070656E646978> Tj ET
+BT /F1 11.0 Tf 3 Tr 1 0 0 1 72.0 696.0 Tm <4C656D6D6120332E312028446973637265746520747261636520696E657175616C697479292E> Tj ET
+BT /F1 11.0 Tf 3 Tr 1 0 0 1 72.0 676.0 Tm <457665727920646973637265746520626F756E6461727920766563746F72206F626579732074686520776569676874656420747261636520626F756E64206F6E20756E69666F726D206D65736865732E> Tj ET
+BT /F1 11.0 Tf 3 Tr 1 0 0 1 72.0 656.0 Tm <50726F6F66206F66204C656D6D6120332E312E2053756D6D696E672072616469616C20646966666572656E6365732066726F6D207468652063656E7465722067697665732074686520626F756E642E20512E452E442E> Tj ET
+
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> /XObject << /Im1 5 0 R >> >> /Contents 11 0 R >>
+endobj
+11 0 obj
+<< /Length 33 >>
+stream
+q 560 0 0 720 26 36 cm /Im1 Do Q
+
+endstream
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000128 00000 n 
+0000000519 00000 n 
+0000000606 00000 n 
+0000000779 00000 n 
+0000000905 00000 n 
+0000001387 00000 n 
+0000001539 00000 n 
+0000002271 00000 n 
+0000002425 00000 n 
+trailer
+<< /Size 12 /Root 1 0 R >>
+startxref
+2509
+%%EOF
