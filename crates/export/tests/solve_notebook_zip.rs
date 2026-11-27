@@ -372,6 +372,9 @@ fn solve_notebook_runs_in_standalone_python_and_zip_replays_r19() {
         "_re_search_runtime/checks/srepr_safe.py",
         "_re_search_runtime/checks/algebra.py",
         "_re_search_runtime/checks/algebra_probe.py",
+        "_re_search_runtime/checks/physics.py",
+        "_re_search_runtime/checks/physics_helpers.py",
+        "_re_search_runtime/checks/physics_matrix.py",
         &format!("code/step_{req1}.py"),
     ] {
         assert!(out_dir.join(expected).is_file(), "missing `{expected}` in Solve ZIP");

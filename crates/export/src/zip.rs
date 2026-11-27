@@ -42,7 +42,7 @@ pub(crate) fn write_zip_entries(entries: BTreeMap<String, Vec<u8>>) -> Result<Ve
 }
 
 pub(crate) fn insert_runtime_files(entries: &mut BTreeMap<String, Vec<u8>>) -> Vec<Value> {
-    let runtime: [(&str, &[u8]); 9] = [
+    let runtime: [(&str, &[u8]); 12] = [
         ("run_all_checks.py", include_bytes!("replay_checks.py")),
         (
             "_re_search_runtime/worker.py",
@@ -75,6 +75,18 @@ pub(crate) fn insert_runtime_files(entries: &mut BTreeMap<String, Vec<u8>>) -> V
         (
             "_re_search_runtime/checks/algebra_probe.py",
             include_bytes!("../../../python/checks/algebra_probe.py"),
+        ),
+        (
+            "_re_search_runtime/checks/physics.py",
+            include_bytes!("../../../python/checks/physics.py"),
+        ),
+        (
+            "_re_search_runtime/checks/physics_helpers.py",
+            include_bytes!("../../../python/checks/physics_helpers.py"),
+        ),
+        (
+            "_re_search_runtime/checks/physics_matrix.py",
+            include_bytes!("../../../python/checks/physics_matrix.py"),
         ),
     ];
     runtime

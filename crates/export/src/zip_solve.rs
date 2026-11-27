@@ -14,7 +14,7 @@ use crate::zip::{
 use ledger::{sha256_hex, Event, Ledger};
 use research_tools::sandbox::sanitize_rel_components;
 use research_tools::solve_exprs::{load_handle_srepr, stage_exprs_in_from_state};
-use research_tools::solve_model::{event_kinds, SolveCheck};
+use research_tools::solve_model::{event_kinds, HandleRef, SolveCheck};
 use research_tools::solve_state::SolveState;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -301,6 +301,19 @@ fn build_solve_check_manifest(
     if let Some(setup) = &state.setup {
         full_params.insert("symbols".into(), json!(setup.symbols));
         full_params.insert("dimensions".into(), json!(setup.dimensions));
+        full_params.insert("assumptions".into(), json!(setup.assumptions));
+    }
+    if chk.name == "limit_case" {
+        if let Some(raw_target) = chk.params.get("target_handle").and_then(Value::as_str) {
+            if let Ok(th) = HandleRef::parse(raw_target.trim()) {
+                if let Some(expr) = state.handles.get(&th) {
+                    if let Some(srepr) = load_handle_srepr(ledger, expr)? {
+                        handles_map.insert("target".into(), json!(srepr));
+                        handles_sha_map.insert("target".into(), json!(expr.srepr_sha256));
+                    }
+                }
+            }
+        }
     }
     if let Some(c) = claim {
         full_params
