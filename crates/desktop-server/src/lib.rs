@@ -33,6 +33,7 @@ mod investigation_view;
 pub mod antigravity;
 pub mod approver;
 pub mod assets;
+mod assets_fonts;
 pub mod auth;
 pub mod chatgpt;
 mod cli_relay;
