@@ -31,6 +31,7 @@ pub mod resume_brief;
 pub mod resume_profile;
 pub mod runner;
 pub mod sidetalk;
+pub mod solve_loop;
 pub mod solve_prompts;
 pub mod strategist;
 pub(crate) mod stream_codecs;
@@ -87,6 +88,11 @@ pub use runner::{
     DEFAULT_SYSTEM_PROMPT, EVENT_VERSION,
 };
 pub use sidetalk::{ask_sidetalk, read_sidetalk_thread, sidetalk_session_key, SideTalkTurn};
+pub use solve_loop::{
+    resume_solve_loop, run_solve_loop, NoopSolveHostHooks, SolveHostHooks, SolveLoopConfig,
+    SolveWorkerRuntime, DEFAULT_SOLVE_BRIEF_BUDGET_CHARS, DEFAULT_SOLVE_CONTEXT_WINDOW_CHARS,
+    SOLVE_CALLER, SOLVE_ROUTER_CALLER,
+};
 pub use solve_prompts::{build_solve_system_prompt, task_kind_instructions, task_kind_label};
 pub use strategist::{
     consult_strategist, consult_strategist_cancellable, count_strategist_consultations, mandatory_strategist_required,
