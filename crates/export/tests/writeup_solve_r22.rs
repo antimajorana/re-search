@@ -299,3 +299,97 @@ fn raw_ocr_flag_quote_cap_and_tampered_ledger_chain_are_enforced() {
     let err = build_solve_writeup(&data_dir, sid).unwrap_err();
     assert!(err.contains("ledger verification failed"), "unexpected err: {err}");
 }
+
+#[test]
+fn audit_regressions_status_r22_utf8_and_ocr_fallback() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let ledger = Ledger::open(&data_dir).unwrap();
+
+    // 1. Stale `solve.done` followed by `session.resume` and `solve.paused` must not report "Done".
+    let s_res = "s-resumed-after-done";
+    append_setup(&ledger, s_res, "Resume after done.", "Resume Status");
+    append_step(&ledger, s_res, "e-1", StepEntryType::FinalAnswer, StepOrigin::Solver, "First answer.", "", &[], &[], None, None, None);
+    append_done(&ledger, s_res, "e-1", Tier::Unchecked, Tier::Unchecked, SolveDoneStatus::Finished);
+    ledger.append_with_hash(s_res, event_kinds::SESSION_RESUME, 1, &json!({})).unwrap();
+    let doc_running = build_solve_writeup(&data_dir, s_res).unwrap();
+    assert!(doc_running.status_line.starts_with("In progress"), "got: {}", doc_running.status_line);
+    ledger.append_with_hash(s_res, event_kinds::SOLVE_PAUSED, 1, &json!({
+        "reason": "user", "leg": 2, "turn": 1, "model_calls_used": 2, "open_items": []
+    })).unwrap();
+    let doc_paused = build_solve_writeup(&data_dir, s_res).unwrap();
+    assert!(doc_paused.status_line.starts_with("Paused: user"), "got: {}", doc_paused.status_line);
+
+    // 2. Model-authored step prose claiming "verified" on non-Verified step or "proved" is refused (R22).
+    let s_bad_r22 = "s-bad-r22-prose";
+    append_setup(&ledger, s_bad_r22, "Honesty lint.", "R22 Prose");
+    append_step(&ledger, s_bad_r22, "e-1", StepEntryType::FinalAnswer, StepOrigin::Solver, "This step is verified by inspection.", "", &[], &[], None, None, None);
+    let r22_err = build_solve_writeup(&data_dir, s_bad_r22).unwrap_err();
+    assert!(r22_err.contains("R22"), "expected R22 refusal, got: {r22_err}");
+
+    // 3. Non-ASCII UTF-8 `raw_blob` and `file_sha256` must return Err cleanly (never panic on [..16]).
+    let s_utf8 = "s-utf8-hash";
+    append_setup(&ledger, s_utf8, "UTF-8 hash guard.", "UTF8 Guard");
+    let bad_hash = "éééééééééééééééééé"; // multi-byte UTF-8 spanning byte index 16
+    let qsha = quote_sha256("hello");
+    ledger.append_with_hash(s_utf8, "source.ingested", 1, &json!({
+        "source_id": "src-u", "origin": "u.txt", "format": "txt", "status": "ok",
+        "bytes": 5, "raw_blob": bad_hash, "primary_path": "src-u/u.txt",
+        "files": ["src-u/u.txt"], "files_sha256": { "src-u/u.txt": bad_hash },
+    })).unwrap();
+    let eq_seq = ledger.append_with_hash(s_utf8, event_kinds::EVIDENCE_QUOTE, 1, &json!({
+        "source_id": "src-u", "path": "src-u/u.txt", "start_line": 1, "end_line": 1,
+        "file_sha256": bad_hash, "quote_sha256": qsha, "quote": "hello", "excerpt": "hello",
+        "source_seq": 3, "caller": "user",
+    })).unwrap().seq;
+    let qref = QuoteRef {
+        source_id: "src-u".into(), path: "src-u/u.txt".into(), start_line: 1, end_line: 1,
+        file_sha256: bad_hash.into(), quote_sha256: qsha, evidence_seq: Some(eq_seq),
+    };
+    append_step(&ledger, s_utf8, "e-1", StepEntryType::ReferenceLookup, StepOrigin::Solver, "UTF8 ref.", "", &[], &[], None, None, Some(&qref));
+    append_done(&ledger, s_utf8, "e-1", Tier::Cited, Tier::Cited, SolveDoneStatus::Finished);
+    assert!(build_solve_writeup(&data_dir, s_utf8).is_err());
+
+    // 4. `pdf_pages` with missing line bounds + `pdf_page_lines` fallback still detects OCR scan on page 2.
+    let s_fb = "s-ocr-fallback";
+    append_setup(&ledger, s_fb, "OCR fallback.", "OCR Fallback");
+    let sandbox = WorkspaceSandbox::new(&data_dir, None);
+    let src_id = "scan-fb";
+    let rel = format!("{src_id}/scan.pdf.extracted.txt");
+    let content = "Page one text.\n\x0cPage two scanned result equals 9.\n";
+    let fsha = ledger::sha256_hex(content.as_bytes());
+    let sroot = sandbox.canonical_root(SandboxRoot::Sources, s_fb, true).unwrap().unwrap();
+    fs::create_dir_all(sroot.join(src_id)).unwrap();
+    fs::write(sroot.join(&rel), content).unwrap();
+    let raw_blob = ledger.put_blob(b"%PDF-1.4 fb").unwrap();
+    let sseq = ledger.append_with_hash(s_fb, "source.ingested", 1, &json!({
+        "source_id": src_id, "origin": "scan.pdf", "title": "Fallback Scan",
+        "format": "pdf", "status": "ok", "bytes": 11, "raw_blob": raw_blob,
+        "primary_path": rel, "files": [rel], "files_sha256": { rel.clone(): fsha },
+        "page_count": 2, "pdf_page_lines": [[1, 1, 1], [2, 2, 2]],
+        "pdf_pages": [
+            { "page": 1, "basis": "text_layer", "metrics": { "char_count": 14, "alpha_count": 11, "word_count": 3, "image_coverage_pct": 0, "has_invisible_text": false, "width_pt": 612, "height_pt": 792 } },
+            { "page": 2, "basis": "scan_text_layer", "metrics": { "char_count": 30, "alpha_count": 22, "word_count": 6, "image_coverage_pct": 95, "has_invisible_text": true, "width_pt": 612, "height_pt": 792 } }
+        ]
+    })).unwrap().seq;
+    let q = "Page two scanned result equals 9.";
+    let fqsha = quote_sha256(q);
+    let feq = ledger.append_with_hash(s_fb, event_kinds::EVIDENCE_QUOTE, 1, &json!({
+        "source_id": src_id, "path": rel, "start_line": 2, "end_line": 2,
+        "file_sha256": fsha, "quote_sha256": fqsha, "quote": q, "excerpt": q,
+        "source_seq": sseq, "caller": "user",
+    })).unwrap().seq;
+    let fqref = QuoteRef {
+        source_id: src_id.into(), path: rel, start_line: 2, end_line: 2,
+        file_sha256: fsha, quote_sha256: fqsha, evidence_seq: Some(feq),
+    };
+    append_step(&ledger, s_fb, "e-1", StepEntryType::ReferenceLookup, StepOrigin::Solver, "Fallback scan cite.", "", &[], &[], None, None, Some(&fqref));
+    append_done(&ledger, s_fb, "e-1", Tier::Cited, Tier::Cited, SolveDoneStatus::Finished);
+    let doc_fb = build_solve_writeup(&data_dir, s_fb).unwrap();
+    let qblk = doc_fb.sections.iter().flat_map(|s| &s.blocks).find_map(|b| match b {
+        WriteupBlock::Quote(q) => Some(q),
+        _ => None,
+    }).unwrap();
+    assert!(qblk.ocr, "fallback page lookup must still detect ScanTextLayer");
+    assert_eq!(qblk.locator.display_text(), "p. 2, line 2");
+}

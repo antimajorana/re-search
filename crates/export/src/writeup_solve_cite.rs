@@ -277,7 +277,7 @@ pub(crate) fn detect_ocr_and_page(
         || eq_payload
             .get("page_basis")
             .and_then(Value::as_str)
-            .is_some_and(|s| matches!(s, "scan_text_layer" | "none" | "ocr"));
+            .is_some_and(is_scan_basis_str);
 
     let raw_eq_page = eq_payload
         .get("page")
@@ -286,7 +286,7 @@ pub(crate) fn detect_ocr_and_page(
         .map(|p| p as usize);
 
     let (ingested_ocr, ingested_page) = ingested_ev
-        .map(|ev| detect_ingested_ocr_and_page(&ev.payload, start_line, end_line))
+        .map(|ev| detect_ingested_ocr_and_page(&ev.payload, start_line, end_line, raw_eq_page))
         .unwrap_or((false, None));
 
     (
@@ -295,69 +295,121 @@ pub(crate) fn detect_ocr_and_page(
     )
 }
 
+fn is_scan_basis_str(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "scan_text_layer" | "none" | "ocr"
+    )
+}
+
 fn detect_ingested_ocr_and_page(
     payload: &Value,
     start_line: usize,
     end_line: usize,
+    fallback_page: Option<usize>,
 ) -> (bool, Option<usize>) {
-    let mut matched_page: Option<usize> = None;
+    let mut matched_pages: Vec<usize> = Vec::new();
     let mut any_scan = false;
 
-    if let Some(raw_pages) = payload.get("pdf_pages") {
-        if let Ok(pages) = serde_json::from_value::<Vec<PageRecord>>(raw_pages.clone()) {
-            for pg in &pages {
-                if let (Some(first), Some(last)) = (pg.first_line, pg.last_line) {
-                    if first <= end_line && last >= start_line {
-                        matched_page.get_or_insert(pg.page);
-                        if pg.basis.is_scan() {
-                            any_scan = true;
-                        }
+    let parsed_pages = payload
+        .get("pdf_pages")
+        .and_then(|v| serde_json::from_value::<Vec<PageRecord>>(v.clone()).ok());
+    let raw_pages_arr = payload.get("pdf_pages").and_then(Value::as_array);
+
+    if let Some(pages) = &parsed_pages {
+        for pg in pages {
+            if let (Some(first), Some(last)) = (pg.first_line, pg.last_line) {
+                if first <= end_line && last >= start_line {
+                    if !matched_pages.contains(&pg.page) {
+                        matched_pages.push(pg.page);
+                    }
+                    if pg.basis.is_scan() {
+                        any_scan = true;
                     }
                 }
             }
-        } else if let Some(arr) = raw_pages.as_array() {
-            // Tolerate minimal / raw `"basis": "ocr"` page objects written in fixtures or older events.
-            for item in arr {
-                let page = item.get("page").and_then(Value::as_u64).map(|n| n as usize);
-                let first = item
-                    .get("first_line")
-                    .and_then(Value::as_u64)
-                    .map(|n| n as usize);
-                let last = item
-                    .get("last_line")
-                    .and_then(Value::as_u64)
-                    .map(|n| n as usize);
-                if let (Some(p), Some(f), Some(l)) = (page, first, last) {
-                    if f <= end_line && l >= start_line {
-                        matched_page.get_or_insert(p);
-                        if item
-                            .get("basis")
-                            .and_then(Value::as_str)
-                            .is_some_and(|b| matches!(b, "scan_text_layer" | "none" | "ocr"))
-                        {
-                            any_scan = true;
-                        }
+        }
+    } else if let Some(arr) = raw_pages_arr {
+        for item in arr {
+            let page = item.get("page").and_then(Value::as_u64).map(|n| n as usize);
+            let first = item.get("first_line").and_then(Value::as_u64).map(|n| n as usize);
+            let last = item.get("last_line").and_then(Value::as_u64).map(|n| n as usize);
+            if let (Some(p), Some(f), Some(l)) = (page, first, last) {
+                if f <= end_line && l >= start_line {
+                    if !matched_pages.contains(&p) {
+                        matched_pages.push(p);
+                    }
+                    if item
+                        .get("basis")
+                        .and_then(Value::as_str)
+                        .is_some_and(is_scan_basis_str)
+                    {
+                        any_scan = true;
                     }
                 }
             }
         }
     }
 
-    if matched_page.is_none() {
+    if matched_pages.is_empty() {
         if let Some(raw_lines) = payload.get("pdf_page_lines") {
-            if let Ok(tuples) = serde_json::from_value::<Vec<(usize, usize, usize)>>(raw_lines.clone())
+            if let Ok(tuples) =
+                serde_json::from_value::<Vec<(usize, usize, usize)>>(raw_lines.clone())
             {
-                matched_page = page_of_line(&tuples, start_line);
+                for &(page, first, last) in &tuples {
+                    if first <= end_line && last >= start_line && !matched_pages.contains(&page) {
+                        matched_pages.push(page);
+                    }
+                }
+                if matched_pages.is_empty() {
+                    if let Some(p) = page_of_line(&tuples, start_line) {
+                        matched_pages.push(p);
+                    }
+                }
+            }
+        }
+    }
+
+    // Re-check `pdf_pages` by resolved page number when `first_line`/`last_line` were absent.
+    let pages_to_check: Vec<usize> = if matched_pages.is_empty() {
+        fallback_page.into_iter().collect()
+    } else {
+        matched_pages.clone()
+    };
+    if !any_scan && !pages_to_check.is_empty() {
+        if let Some(pages) = &parsed_pages {
+            if pages
+                .iter()
+                .any(|pg| pages_to_check.contains(&pg.page) && pg.basis.is_scan())
+            {
+                any_scan = true;
+            }
+        } else if let Some(arr) = raw_pages_arr {
+            for item in arr {
+                let page = item.get("page").and_then(Value::as_u64).map(|n| n as usize);
+                if page.is_some_and(|p| pages_to_check.contains(&p))
+                    && item
+                        .get("basis")
+                        .and_then(Value::as_str)
+                        .is_some_and(is_scan_basis_str)
+                {
+                    any_scan = true;
+                }
             }
         }
     }
 
     if !any_scan {
-        let format_pdf = payload.get("format").and_then(Value::as_str) == Some("pdf");
-        let status_scan = payload
-            .get("status")
+        let format_pdf = payload
+            .get("format")
             .and_then(Value::as_str)
-            .is_some_and(|s| matches!(s, "scan_only" | "ocr" | "scan_text_layer"));
+            .is_some_and(|s| s.eq_ignore_ascii_case("pdf"));
+        let status_scan = payload.get("status").and_then(Value::as_str).is_some_and(|s| {
+            matches!(
+                s.trim().to_ascii_lowercase().as_str(),
+                "scan_only" | "ocr" | "scan_text_layer" | "empty_text_layer"
+            )
+        });
         let source_kind_ocr = payload
             .get("source_kind")
             .and_then(Value::as_str)
@@ -368,7 +420,18 @@ fn detect_ingested_ocr_and_page(
         }
     }
 
-    (any_scan, matched_page)
+    (any_scan, matched_pages.first().copied())
+}
+
+fn file_key_from_hex_prefix(raw: &str) -> Option<PaperKey> {
+    if !raw.is_ascii() || raw.len() < 16 {
+        return None;
+    }
+    let prefix = raw.get(..16)?;
+    if !prefix.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    PaperKey::parse(&format!("file:{}", prefix.to_ascii_lowercase())).ok()
 }
 
 fn extract_paper_key_and_version(
@@ -414,20 +477,14 @@ fn extract_paper_key_and_version(
             }
         }
         if let Some(raw_blob) = ev.payload.get("raw_blob").and_then(Value::as_str) {
-            if raw_blob.len() >= 16 {
-                let candidate = format!("file:{}", raw_blob[..16].to_ascii_lowercase());
-                if let Ok(key) = PaperKey::parse(&candidate) {
-                    return Ok((key, None));
-                }
+            if let Some(key) = file_key_from_hex_prefix(raw_blob) {
+                return Ok((key, None));
             }
         }
     }
 
-    if qref.file_sha256.len() >= 16 {
-        let candidate = format!("file:{}", qref.file_sha256[..16].to_ascii_lowercase());
-        if let Ok(key) = PaperKey::parse(&candidate) {
-            return Ok((key, None));
-        }
+    if let Some(key) = file_key_from_hex_prefix(&qref.file_sha256) {
+        return Ok((key, None));
     }
 
     Err(format!(

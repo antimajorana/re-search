@@ -172,8 +172,10 @@ pub fn build_solve_writeup_from_verified(
 }
 
 fn resolve_target_entry_id(state: &SolveState) -> Result<String, String> {
-    if let Some(done) = &state.done {
-        return Ok(done.final_entry_id.clone());
+    if matches!(state.run_status, SolveRunStatus::Done(_)) {
+        if let Some(done) = &state.done {
+            return Ok(done.final_entry_id.clone());
+        }
     }
     for kind in [StepEntryType::FinalAnswer, StepEntryType::Result] {
         if let Some(step) = state
@@ -184,6 +186,9 @@ fn resolve_target_entry_id(state: &SolveState) -> Result<String, String> {
         {
             return Ok(step.entry_id.clone());
         }
+    }
+    if let Some(done) = &state.done {
+        return Ok(done.final_entry_id.clone());
     }
     Err("Solve write-up requires a final answer step or recorded `solve.done`".to_string())
 }
@@ -228,7 +233,7 @@ fn enforce_gate_g7(state: &SolveState, closure_ids: &[String]) -> Result<(), Str
 fn append_step_blocks(
     state: &SolveState,
     entry_id: &str,
-    closure_set: &BTreeSet<String>,
+    _closure_set: &BTreeSet<String>,
     assumptions_note: Option<&str>,
     cite_resolver: &mut SolveCiteResolver<'_>,
     blocks: &mut Vec<WriteupBlock>,
@@ -237,11 +242,8 @@ fn append_step_blocks(
     let entry = state.entry(entry_id).ok_or_else(|| format!("unknown step `{entry_id}`"))?;
     let tier = state.tier(entry_id).ok_or_else(|| format!("missing tier for step `{entry_id}`"))?;
     let basis = prose_basis_for_origin(entry.origin);
-    let rests_on: Vec<String> = all_deps(entry)
-        .into_iter()
-        .filter(|dep| closure_set.contains(*dep))
-        .map(str::to_string)
-        .collect();
+    // Preserve every declared/derived dependency (including any dangling id that downgraded tier).
+    let rests_on: Vec<String> = all_deps(entry).into_iter().map(str::to_string).collect();
     let resolved_cite = entry
         .source_ref
         .as_ref()
@@ -254,6 +256,15 @@ fn append_step_blocks(
         "" => format!("Step {} ({})", entry.entry_id, entry.entry_type.as_str()),
         s => s.to_string(),
     };
+    let details = entry.details.trim();
+
+    // Enforce R22 wording honesty on model-authored step text (`solve_done::lint_solve_summary_r22`).
+    if basis == ProseBasis::Model {
+        research_tools::solve_done::lint_solve_summary_r22(&summary_text, state, entry_id)?;
+        if !details.is_empty() {
+            research_tools::solve_done::lint_solve_summary_r22(details, state, entry_id)?;
+        }
+    }
 
     blocks.push(WriteupBlock::Statement {
         id: entry.entry_id.clone(),
@@ -263,7 +274,6 @@ fn append_step_blocks(
         rests_on: rests_on.clone(),
         note: note.clone(),
     });
-    let details = entry.details.trim();
     if !details.is_empty() && details != summary_text {
         blocks.push(WriteupBlock::Prose { text: details.to_string(), basis });
     }
@@ -304,6 +314,8 @@ fn build_step_formulas(state: &SolveState, entry: &SolveEntry) -> Result<Vec<Wri
         }
         return Ok(out);
     }
+    // Claimless steps may emit portable owned handles from `solve.expr.latex`; non-portable
+    // handles are skipped here per `solve.md` 4.3 (they may not anchor claims or earn badges).
     for (idx, (href, expr)) in state
         .handles
         .iter()
@@ -415,6 +427,17 @@ fn build_setup_prose_blocks(setup: &SolveSetup) -> Vec<WriteupBlock> {
     if !setup.conventions.trim().is_empty() {
         push(format!("Conventions: {}", setup.conventions.trim()));
     }
+    if !setup.assumptions.is_empty() {
+        let items: Vec<&str> = setup
+            .assumptions
+            .iter()
+            .map(|a| a.text.trim())
+            .filter(|t| !t.is_empty())
+            .collect();
+        if !items.is_empty() {
+            push(format!("Setup assumptions: {}.", items.join("; ")));
+        }
+    }
     if !setup.symbols.is_empty() {
         let syms: Vec<String> = setup
             .symbols
@@ -450,6 +473,12 @@ fn summarize_setup_assumptions(setup: &SolveSetup) -> Option<String> {
         .filter(|s| !s.assumptions.is_empty())
         .map(|s| format!("{} ({})", s.name, s.assumptions.join(", ")))
         .collect();
+    for a in &setup.assumptions {
+        let t = a.text.trim();
+        if !t.is_empty() && !items.iter().any(|existing| existing == t) {
+            items.push(t.to_string());
+        }
+    }
     if !setup.conventions.trim().is_empty() {
         items.push(setup.conventions.trim().to_string());
     }
@@ -473,7 +502,8 @@ fn derive_title(setup: Option<&SolveSetup>, session: &str) -> String {
     format!("{}: {session}", solve_writeup_wording::DEFAULT_TITLE)
 }
 
-/// Format opening status line matching `solve.done.status` (or current run status) under rule R22.
+/// Format opening status line matching `state.run_status` (and `solve.done.status` when Done)
+/// while strictly obeying rule R22 (`"verified"` appears ONLY when `final_tier.effective == Verified`).
 fn build_status_line(
     state: &SolveState,
     target_id: &str,
@@ -484,48 +514,47 @@ fn build_status_line(
         .map(|b| b.label)
         .unwrap_or_else(|| final_tier.effective.label().to_string());
 
-    if let Some(done) = &state.done {
-        return match done.status {
-            SolveDoneStatus::Finished => {
-                format!("{} (final answer: {final_label})", solve_writeup_wording::STATUS_DONE)
-            }
-            SolveDoneStatus::FinishedOpenItems => {
-                let mut open_parts = Vec::new();
-                let unchecked = closure_ids
-                    .iter()
-                    .filter(|id| state.tier(id).is_some_and(|t| t.own == Tier::Unchecked))
-                    .count();
-                let model_assump = closure_ids
-                    .iter()
-                    .filter(|id| state.tier(id).is_some_and(|t| t.own == Tier::AssumedByModel))
-                    .count();
-                let unmet = done.criteria.iter().filter(|c| !c.met).count();
-                if unchecked > 0 {
-                    open_parts.push(format!("{unchecked} unchecked"));
-                }
-                if model_assump > 0 {
-                    open_parts.push(format!("{model_assump} assumed by model"));
-                }
-                if unmet > 0 {
-                    open_parts.push(format!("{unmet} unmet criteria"));
-                }
-                if open_parts.is_empty() {
-                    format!(
-                        "{} (final answer: {final_label})",
-                        solve_writeup_wording::STATUS_DONE_OPEN_ITEMS
-                    )
-                } else {
-                    format!(
-                        "{}: {} (final answer: {final_label})",
-                        solve_writeup_wording::STATUS_DONE_OPEN_ITEMS,
-                        open_parts.join(", ")
-                    )
-                }
-            }
-        };
-    }
-
     match state.run_status {
+        SolveRunStatus::Done(SolveDoneStatus::Finished) => {
+            format!("{} (final answer: {final_label})", solve_writeup_wording::STATUS_DONE)
+        }
+        SolveRunStatus::Done(SolveDoneStatus::FinishedOpenItems) => {
+            let mut open_parts = Vec::new();
+            let unchecked = closure_ids
+                .iter()
+                .filter(|id| state.tier(id).is_some_and(|t| t.own == Tier::Unchecked))
+                .count();
+            let model_assump = closure_ids
+                .iter()
+                .filter(|id| state.tier(id).is_some_and(|t| t.own == Tier::AssumedByModel))
+                .count();
+            let unmet = state
+                .done
+                .as_ref()
+                .map(|d| d.criteria.iter().filter(|c| !c.met).count())
+                .unwrap_or(0);
+            if unchecked > 0 {
+                open_parts.push(format!("{unchecked} unchecked"));
+            }
+            if model_assump > 0 {
+                open_parts.push(format!("{model_assump} assumed by model"));
+            }
+            if unmet > 0 {
+                open_parts.push(format!("{unmet} unmet criteria"));
+            }
+            if open_parts.is_empty() {
+                format!(
+                    "{} (final answer: {final_label})",
+                    solve_writeup_wording::STATUS_DONE_OPEN_ITEMS
+                )
+            } else {
+                format!(
+                    "{}: {} (final answer: {final_label})",
+                    solve_writeup_wording::STATUS_DONE_OPEN_ITEMS,
+                    open_parts.join(", ")
+                )
+            }
+        }
         SolveRunStatus::Paused(reason) => format!(
             "{}{} (final answer: {final_label})",
             solve_writeup_wording::STATUS_PAUSED_PREFIX,
@@ -535,7 +564,7 @@ fn build_status_line(
             "{} (final answer: {final_label})",
             solve_writeup_wording::STATUS_IN_PROGRESS
         ),
-        SolveRunStatus::Idle | SolveRunStatus::Done(_) => format!(
+        SolveRunStatus::Idle => format!(
             "{} (final answer: {final_label})",
             solve_writeup_wording::STATUS_NOT_FINISHED
         ),
