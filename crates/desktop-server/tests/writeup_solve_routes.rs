@@ -245,3 +245,18 @@ fn writeup_route_enforces_header_auth_formats_inline_marks_g7_and_unbuilt_modes(
     assert_eq!(raw_http(port, "GET", "/api/sessions/s-wu-ok/writeup?format=pdf", &auth, b"").0, 400);
     assert_eq!(raw_http(port, "GET", "/api/sessions/s-wu-ok/writeup?inline_marks=maybe", &auth, b"").0, 400);
 }
+
+#[test]
+fn writeup_route_404_is_strictly_readonly_before_ledger_exists() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("fresh-data");
+    let srv = start_desktop_server(test_cfg(&data_dir, None, None, None)).unwrap();
+    let port = srv.addr.port();
+    let auth = [("X-ReSearch-Token", srv.info.token.as_str())];
+
+    let (st, _, _) = raw_http(port, "GET", "/api/sessions/missing-s1/writeup", &auth, b"");
+    assert_eq!(st, 404);
+    assert!(!data_dir.join("ledger.db").exists(), "GET /writeup must not create ledger.db");
+    assert!(!data_dir.join("blobs").exists(), "GET /writeup must not create blobs/");
+    srv.shutdown();
+}

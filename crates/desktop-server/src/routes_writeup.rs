@@ -10,6 +10,7 @@ use crate::routes_session::{bad, conflict, internal, not_found};
 use crate::state::DesktopState;
 use export::writeup::WriteupOptions;
 use export::{writeup_session_bytes, WriteupFormat};
+use ledger::Ledger;
 use research_tools::validate_session_id;
 use serde_json::json;
 use std::collections::HashMap;
@@ -23,6 +24,18 @@ pub struct ServedWriteup {
     pub bytes: Vec<u8>,
 }
 
+fn session_has_ledger_events_readonly(
+    data_dir: &std::path::Path,
+    session_id: &str,
+) -> Result<bool, String> {
+    if !data_dir.join("ledger.db").is_file() {
+        return Ok(false);
+    }
+    let ledger = Ledger::open_existing(data_dir).map_err(|e| e.to_string())?;
+    let events = ledger.read_session(session_id).map_err(|e| e.to_string())?;
+    Ok(!events.is_empty())
+}
+
 /// Handle `GET /api/sessions/{id}/writeup?format=tex|md|bib&inline_marks=0|1`.
 pub fn handle_writeup(
     state: &DesktopState,
@@ -30,7 +43,7 @@ pub fn handle_writeup(
     query: &HashMap<String, String>,
 ) -> Result<ServedWriteup, (u16, String)> {
     validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
-    if !state.session_exists(session_id).map_err(internal)? {
+    if !session_has_ledger_events_readonly(&state.cfg.data_dir, session_id).map_err(internal)? {
         return Err(not_found(format!("session `{session_id}` not found")));
     }
 
@@ -103,7 +116,7 @@ fn parse_inline_marks(raw: Option<&str>) -> Result<bool, (u16, String)> {
 fn map_writeup_error(err: String) -> (u16, String) {
     if err.contains("write-up adapter not built yet") {
         (501, err)
-    } else if err.contains("Gate G7") {
+    } else if err.contains("Gate G7") || err.contains("ledger verification failed") {
         conflict(err)
     } else {
         bad(err)
