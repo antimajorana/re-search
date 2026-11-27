@@ -410,3 +410,88 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
     let out6r = resume_solve_loop(&tr6_res, &router6r, &ledger6_ref, &cfg6r, &mut NoopSink).unwrap();
     assert_eq!(out6r, SessionOutcome::Completed { turns: 1, stop_reason: "end_turn".into() });
 }
+
+#[test]
+fn fresh_run_supplies_matching_lessons_once_and_resume_uses_frozen_brief() {
+    use research_tools::lessons_capture::{
+        LessonScope, LessonSourceKind, SaveLessonRequest, UserLessonsStore,
+    };
+    use research_tools::lessons_prompt::LESSONS_PROMPT_HEADING;
+    use research_tools::paper_key::{Mode, NodeRef};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let store = UserLessonsStore::open(tmp.path()).unwrap();
+    let origin = NodeRef {
+        session: "s-prev".into(),
+        mode: Mode::Solve,
+        id: "e-1".into(),
+        paper: None,
+        node_fp: None,
+    };
+    let solve_note = store
+        .save_lesson(SaveLessonRequest {
+            text: "Use mostly-minus metric (+,-,-,-) here.".into(),
+            scope: LessonScope::mode(Mode::Solve),
+            from: origin.clone(),
+            source_kind: LessonSourceKind::StepCorrection,
+            model_summary: false,
+            created_ms: Some(1_000),
+        })
+        .unwrap();
+    let _explore_only = store
+        .save_lesson(SaveLessonRequest {
+            text: "Explore-only note must stay excluded from Solve.".into(),
+            scope: LessonScope::mode(Mode::Explore),
+            from: origin,
+            source_kind: LessonSourceKind::ExploreCorrection,
+            model_summary: false,
+            created_ms: Some(2_000),
+        })
+        .unwrap();
+
+    let ledger = Ledger::open(tmp.path()).unwrap();
+    seed_setup(&ledger, "s-les", 48, 60, 3);
+    let (_, router, gate) = make_solve_router(
+        tmp.path(),
+        "s-les",
+        Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true)),
+        Arc::new(|_: &CallCtx<'_>, _: &Value| Ok(json!({}))),
+        Arc::new(DenySympyApprover),
+    );
+    let cfg = base_cfg(Arc::new(ResearchEnv::new(tmp.path())), gate);
+    let tr = MockTransport::new(vec![tool_resp("a1", "sympy_eval", json!({ "code": "1+1" }))]);
+    assert_eq!(
+        run_solve_loop(&tr, &router, &ledger, &cfg, &mut NoopSink).unwrap(),
+        SessionOutcome::Paused { turns: 1, reason: "approval_needed".into() }
+    );
+
+    let reqs = tr.seen_requests.lock().unwrap();
+    let sys = reqs[0].system.as_deref().unwrap();
+    assert!(sys.contains(LESSONS_PROMPT_HEADING));
+    assert!(sys.contains("Use mostly-minus metric (+,-,-,-) here."));
+    assert!(!sys.contains("Explore-only note"));
+    assert_eq!(store.get_lesson(&solve_note.id).unwrap().unwrap().uses, 1);
+
+    // Mutate and delete the live lesson before resuming; resume must read frozen ledger only.
+    store.delete_lesson(&solve_note.id).unwrap();
+    let (_, router_r, gate_r) = make_solve_router(
+        tmp.path(),
+        "s-les",
+        Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true)),
+        Arc::new(|_: &CallCtx<'_>, _: &Value| Ok(json!({}))),
+        Arc::new(TestApproveAll),
+    );
+    let mut cfg_r = base_cfg(Arc::new(ResearchEnv::new(tmp.path())), gate_r);
+    cfg_r.prompt = "Continue.".into();
+    let tr_r = MockTransport::new(vec![end_resp("Done.")]);
+    assert_eq!(
+        resume_solve_loop(&tr_r, &router_r, &ledger, &cfg_r, &mut NoopSink).unwrap(),
+        SessionOutcome::Completed { turns: 1, stop_reason: "end_turn".into() }
+    );
+    let res_reqs = tr_r.seen_requests.lock().unwrap();
+    let brief_msg = format!("{:?}", res_reqs[0].messages);
+    assert!(brief_msg.contains("Use mostly-minus metric (+,-,-,-) here."));
+    assert_eq!(store.get_lesson(&solve_note.id).unwrap(), None);
+    let report = ledger.verify_all().unwrap();
+    assert_eq!(report.unreferenced_blobs, 0);
+}
