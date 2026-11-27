@@ -188,6 +188,19 @@ fn dispatch_router_tool(
     name: &str,
     input: &Value,
 ) -> Result<(bool, String, Option<PauseTrigger>), String> {
+    if name == SOLVE_FINISH {
+        if let Some(hooks) = cfg.hooks {
+            let pause = hooks.before_solve_finish(audit.ledger, audit.session, input, cfg.cancel)?;
+            audit.flush_interleaved()?;
+            if let Some(trigger) = pause {
+                return Ok((
+                    true,
+                    format!("PAUSED ({}): {}", trigger.reason.as_str(), trigger.message),
+                    Some(trigger),
+                ));
+            }
+        }
+    }
     let prev_epoch = current_sympy_epoch(router, cfg.worker_runtime);
     let outcome = router.try_call(SOLVE_ROUTER_CALLER, name, input)?;
     audit.flush_interleaved()?;
