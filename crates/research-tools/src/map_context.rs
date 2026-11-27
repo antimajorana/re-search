@@ -1,17 +1,20 @@
 //! Investigate v2 context-card recorder (`record_context_cards`, package V12, rules 6.3, 6.4, 6.8, 6.9, 6.10).
 
+#[path = "map_context_cited.rs"]
+mod cited;
+
 use crate::investigation::anchor::valid_id;
 use crate::investigation_markers::{
     active_investigation_slice, check_new_recorder_gate, NewRecorderKind,
-    EVENT_INVESTIGATION_CONTEXT, EVENT_INVESTIGATION_SKELETON,
+    EVENT_INVESTIGATION_CONTEXT,
 };
 use crate::lines_sent::{lines_sent_with_ledger, SentLines};
 use crate::map_context_defs::{
     count_model_background_cards, record_context_cards_def, ContextCardOrigin, ContextCardRecord,
-    ContextCardType, MapContextEventPayload, CONTEXT_SCHEMA_VERSION,
-    EVENT_INVESTIGATION_CITED_LOOKUP, MAX_CONTEXT_CARDS, MAX_CONTEXT_CARD_ANCHORS,
-    MAX_CONTEXT_CARD_HYPOTHESES, MAX_CONTEXT_CARD_TITLE_CHARS, MAX_CONTEXT_HYPOTHESIS_CHARS,
-    MAX_GROUNDED_BODY_CHARS, MAX_MODEL_BACKGROUND_BODY_CHARS, MAX_MODEL_BACKGROUND_PER_NODE,
+    ContextCardType, MapContextEventPayload, CONTEXT_SCHEMA_VERSION, MAX_CONTEXT_CARDS,
+    MAX_CONTEXT_CARD_ANCHORS, MAX_CONTEXT_CARD_HYPOTHESES, MAX_CONTEXT_CARD_TITLE_CHARS,
+    MAX_CONTEXT_HYPOTHESIS_CHARS, MAX_GROUNDED_BODY_CHARS, MAX_MODEL_BACKGROUND_BODY_CHARS,
+    MAX_MODEL_BACKGROUND_PER_NODE,
 };
 use crate::map_defs::{HypothesisRecord, IndexedFault, VerifiedMapAnchor, RECORD_CONTEXT_CARDS};
 use crate::map_model_nodes::{collect_existing_model_nodes, ModelNodeRef};
@@ -22,13 +25,9 @@ use crate::map_reading::validate::{
 use crate::map_reading::{
     compute_open_scopes, load_pinned_skeleton, reject_app_only_fields_with, rejected_outcome,
 };
-use crate::paper_key::PaperKey;
-use crate::skeleton::{
-    build_html_skeleton_from_ingested, build_pdf_skeleton_from_ingested,
-    build_tex_skeleton_from_ingested, derive_receipt_paper_identity, is_html_receipt,
-    is_pdf_receipt, is_tex_receipt, PaperSkeleton, SkNode, Span, CITED_STATUS_FOUND,
-};
+use crate::skeleton::{PaperSkeleton, SkNode, Span};
 use crate::{resolve_sources_session_id, ResearchEnv, WorkspaceSandbox};
+use cited::resolve_cited_external_target;
 use ledger::{Event, Ledger};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -59,27 +58,27 @@ struct InputContextCard {
     bib_key: Option<String>,
 }
 
-struct ContextValidationEnv<'a> {
-    ledger: &'a Ledger,
-    sandbox: WorkspaceSandbox,
-    session: &'a str,
-    caller: &'a str,
-    primary_source_id: &'a str,
-    events: &'a [Event],
-    active_slice: &'a [Event],
-    sent: &'a SentLines,
-    receipt_primary_paths: BTreeMap<String, String>,
-    bib_keys: BTreeSet<&'a str>,
-    target_tag: &'a str,
-    target_node_fp: Option<String>,
-    model_bg_count: usize,
-    ext_skeletons: BTreeMap<String, PaperSkeleton>,
+pub(super) struct ContextValidationEnv<'a> {
+    pub(super) ledger: &'a Ledger,
+    pub(super) sandbox: WorkspaceSandbox,
+    pub(super) session: &'a str,
+    pub(super) caller: &'a str,
+    pub(super) primary_source_id: &'a str,
+    pub(super) events: &'a [Event],
+    pub(super) active_slice: &'a [Event],
+    pub(super) sent: &'a SentLines,
+    pub(super) receipt_primary_paths: BTreeMap<String, String>,
+    pub(super) bib_keys: BTreeSet<&'a str>,
+    pub(super) target_tag: &'a str,
+    pub(super) target_node_fp: Option<String>,
+    pub(super) model_bg_count: usize,
+    pub(super) ext_skeletons: BTreeMap<String, PaperSkeleton>,
 }
 
-struct CitedExternalTarget {
-    source_id: String,
-    tag: String,
-    spans: Vec<Span>,
+pub(super) struct CitedExternalTarget {
+    pub(super) source_id: String,
+    pub(super) tag: String,
+    pub(super) spans: Vec<Span>,
 }
 
 /// Register the `record_context_cards` tool on an `investigation/2` profile registry.
@@ -538,173 +537,6 @@ fn verify_card_anchor(
             report.dropped.push(dropped);
             Err(fault(index, code, message, true_text))
         }
-    }
-}
-
-fn resolve_cited_external_target(
-    ctx: &mut ContextValidationEnv<'_>,
-    index: usize,
-    bib_key: &str,
-) -> Result<CitedExternalTarget, IndexedFault> {
-    if !ctx.bib_keys.contains(bib_key) {
-        return Err(fault(
-            index,
-            "unknown_bib_key",
-            format!("Citation key `{bib_key}` is not in the pinned skeleton bibliography."),
-            None,
-        ));
-    }
-
-    let lookup_ev = ctx
-        .active_slice
-        .iter()
-        .rev()
-        .find(|e| {
-            e.kind == EVENT_INVESTIGATION_CITED_LOOKUP
-                && e.payload["tag"].as_str() == Some(ctx.target_tag)
-                && e.payload["bib_key"].as_str() == Some(bib_key)
-        })
-        .or_else(|| {
-            ctx.active_slice.iter().rev().find(|e| {
-                e.kind == EVENT_INVESTIGATION_CITED_LOOKUP
-                    && e.payload["bib_key"].as_str() == Some(bib_key)
-            })
-        })
-        .ok_or_else(|| {
-            fault(
-                index,
-                "missing_cited_lookup",
-                format!("No `investigation.cited_lookup` record exists for `{bib_key}`."),
-                None,
-            )
-        })?;
-
-    let status = lookup_ev.payload["status"].as_str().unwrap_or("unresolved");
-    let ext_source_id = lookup_ev.payload["external_source_id"]
-        .as_str()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let ext_tag = lookup_ev.payload["external_tag"]
-        .as_str()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let (Some(ext_source_id), Some(ext_tag)) = (ext_source_id, ext_tag) else {
-        return Err(fault(
-            index,
-            "cited_result_not_located",
-            format!("Citation `{bib_key}` has not resolved to one external node (`status`: `{status}`)."),
-            None,
-        ));
-    };
-    if status != CITED_STATUS_FOUND {
-        return Err(fault(
-            index,
-            "cited_result_not_located",
-            format!("Citation `{bib_key}` status is `{status}`, not `{CITED_STATUS_FOUND}`."),
-            None,
-        ));
-    }
-    if ext_source_id == ctx.primary_source_id {
-        return Err(fault(
-            index,
-            "cited_source_is_primary",
-            "Cited external source cannot equal the primary paper `source_id`.",
-            None,
-        ));
-    }
-
-    let spans = load_or_build_external_node_spans(ctx, index, ext_source_id, ext_tag, lookup_ev)?;
-    Ok(CitedExternalTarget {
-        source_id: ext_source_id.to_string(),
-        tag: ext_tag.to_string(),
-        spans,
-    })
-}
-
-fn load_or_build_external_node_spans(
-    ctx: &mut ContextValidationEnv<'_>,
-    index: usize,
-    ext_source_id: &str,
-    ext_tag: &str,
-    lookup_ev: &Event,
-) -> Result<Vec<Span>, IndexedFault> {
-    if !ctx.ext_skeletons.contains_key(ext_source_id) {
-        let skel = load_external_skeleton(ctx, ext_source_id, lookup_ev).map_err(|msg| {
-            fault(index, "external_source_unavailable", msg, None)
-        })?;
-        ctx.ext_skeletons.insert(ext_source_id.to_string(), skel);
-    }
-    let skel = ctx.ext_skeletons.get(ext_source_id).expect("inserted above");
-    let node = skel
-        .nodes
-        .iter()
-        .find(|n| n.tag.as_deref() == Some(ext_tag))
-        .ok_or_else(|| {
-            fault(
-                index,
-                "external_node_not_found",
-                format!("Located external tag `{ext_tag}` not found in source `{ext_source_id}`."),
-                None,
-            )
-        })?;
-    Ok(node.spans.clone())
-}
-
-fn load_external_skeleton(
-    ctx: &ContextValidationEnv<'_>,
-    ext_source_id: &str,
-    lookup_ev: &Event,
-) -> Result<PaperSkeleton, String> {
-    if let Some(skel_ev) = ctx.active_slice.iter().rev().find(|e| {
-        e.kind == EVENT_INVESTIGATION_SKELETON
-            && e.payload["source_id"].as_str() == Some(ext_source_id)
-    }) {
-        if let Some(blob) = skel_ev.payload["blob"].as_str().filter(|s| !s.is_empty()) {
-            let bytes = ctx
-                .ledger
-                .get_blob(blob)
-                .map_err(|_| format!("External skeleton blob `{blob}` could not be read."))?;
-            if ledger::sha256_hex(&bytes) != blob {
-                return Err(format!("External skeleton blob `{blob}` failed digest verification."));
-            }
-            let skel: PaperSkeleton = serde_json::from_slice(&bytes)
-                .map_err(|e| format!("Invalid external skeleton JSON: {e}"))?;
-            if skel.source_id == ext_source_id {
-                return Ok(skel);
-            }
-        }
-    }
-
-    let receipt = ctx
-        .events
-        .iter()
-        .rev()
-        .find(|e| {
-            e.kind == "source.ingested"
-                && e.payload["source_id"].as_str() == Some(ext_source_id)
-                && matches!(
-                    e.payload["status"].as_str().unwrap_or(""),
-                    "ok" | "pdf_only" | "empty_text_layer"
-                )
-        })
-        .ok_or_else(|| format!("No usable `source.ingested` receipt for `{ext_source_id}`."))?;
-
-    let key_override = lookup_ev.payload["resolved"]["paper_key"]
-        .as_str()
-        .and_then(|s| PaperKey::parse(s).ok());
-    let ver_override = lookup_ev.payload["resolved"]["version"]
-        .as_str()
-        .map(str::to_string);
-    let (paper_key, version) = derive_receipt_paper_identity(receipt, key_override, ver_override)?;
-
-    if is_tex_receipt(receipt) {
-        Ok(build_tex_skeleton_from_ingested(&ctx.sandbox, ctx.session, receipt, paper_key, version)?.0.skeleton)
-    } else if is_html_receipt(receipt) {
-        Ok(build_html_skeleton_from_ingested(&ctx.sandbox, ctx.session, receipt, paper_key, version)?.0.skeleton)
-    } else if is_pdf_receipt(receipt) {
-        Ok(build_pdf_skeleton_from_ingested(&ctx.sandbox, ctx.session, receipt, paper_key, version)?.0.skeleton)
-    } else {
-        Err(format!("Ingested source `{ext_source_id}` does not have a supported skeleton format."))
     }
 }
 

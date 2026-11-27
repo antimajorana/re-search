@@ -234,6 +234,12 @@ pub fn handle_with_etag(
                     &folded,
                     orient_auto_start,
                 );
+                crate::investigation_context_tasks::enrich_context_cards_metadata(
+                    &mut mv,
+                    state,
+                    session_id,
+                    &events,
+                );
                 if rec.skeleton.builder == SkeletonBuilder::Pdf1 {
                     if let Some(receipt) = find_source_receipt(&events, &rec.skeleton.source_id, Some(rec.skeleton.source_seq))
                         .or_else(|| find_source_receipt(&events, &rec.skeleton.source_id, None))
@@ -399,7 +405,7 @@ fn non_empty(v: &Value) -> Option<&str> { v.as_str().map(str::trim).filter(|s| !
 fn is_lower_hex_prefix(s: &str, n: usize) -> bool {
     s.len() >= n && s.as_bytes()[..n].iter().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
-fn find_source_receipt<'a>(events: &'a [Event], source_id: &str, seq: Option<u64>) -> Option<&'a Event> {
+pub(crate) fn find_source_receipt<'a>(events: &'a [Event], source_id: &str, seq: Option<u64>) -> Option<&'a Event> {
     events.iter().rev().find(|e| {
         e.kind == EVENT_SOURCE_INGESTED && e.payload["source_id"].as_str() == Some(source_id) && seq.is_none_or(|s| e.seq == s)
     })
