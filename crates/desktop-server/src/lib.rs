@@ -50,6 +50,7 @@ pub mod http_srv;
 pub mod idea;
 pub mod idea_view;
 pub mod launcher;
+pub mod lit_settings;
 mod manuscript_drafts;
 pub mod model_catalog;
 mod original_pdf;
