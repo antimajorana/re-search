@@ -3,13 +3,15 @@
 use super::{build_resume_brief, LESSONS_HEADING, NO_SURVIVING_PYTHON_VARS_LINE};
 use ledger::Event;
 use research_tools::lessons::LessonsStore;
+use research_tools::lessons_schema::ConventionDefault;
 use research_tools::solve_model::{compute_math_sha256, event_kinds};
 use serde_json::{json, Value};
 
 fn mk_event(seq: u64, kind: &str, payload: Value) -> Event {
     Event {
+        session: "s-brief".into(),
         seq,
-        ts_ms: 1_700_000_000_000 + seq * 10,
+        ts_ms: 1_700_000_000_000 + (seq as i64) * 10,
         kind: kind.to_string(),
         schema_version: 1,
         payload,
@@ -168,7 +170,13 @@ fn brief_reads_frozen_lessons_supplied_only_and_never_live_lessons_db_r24() {
     let dir = tempfile::tempdir().unwrap();
     let store = LessonsStore::open(dir.path()).unwrap();
     store
-        .add_note("LIVE_DB_ONLY_SECRET_DO_NOT_READ", &["solve"], None)
+        .record_convention_default(&ConventionDefault {
+            key: "metric_signature".into(),
+            value: "LIVE_DB_ONLY_SECRET_DO_NOT_READ".into(),
+            domain: "qft".into(),
+            origin_session: "other-session".into(),
+            updated_ms: 1_700_000_000_000,
+        })
         .unwrap();
 
     let frozen_blob = "Use mostly-minus signature (+,-,-,-) for momenta.";

@@ -13,10 +13,9 @@ use research_tools::solve_exprs::{
     attach_harvest_previews, harvest_from_sympy_result, CheckCanonicalizer,
 };
 use research_tools::solve_gates::{emit_solve_paused, PauseTrigger, SolveGate};
-use research_tools::solve_model::{
-    event_kinds, PauseReason, ReceiptRef, SolveSetup, SOLVE_TOOL_PROFILE_V1,
-};
+use research_tools::solve_model::{event_kinds, PauseReason, ReceiptRef, SolveSetup};
 use research_tools::solve_state::SolveState;
+use research_tools::tool_profile::PROFILE_SOLVE_V1;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tools::canon::canonical_json;
@@ -37,9 +36,9 @@ pub(super) fn validate_solve_cfg(router: &Router, cfg: &SolveLoopConfig<'_>) -> 
         return Err("model name must not be empty".into());
     }
     if let Some(p) = router.tool_profile() {
-        if p != SOLVE_TOOL_PROFILE_V1 {
+        if p != PROFILE_SOLVE_V1 {
             return Err(format!(
-                "`solve_loop` requires tool_profile `{SOLVE_TOOL_PROFILE_V1}`, got `{p}`"
+                "`solve_loop` requires tool_profile `{PROFILE_SOLVE_V1}`, got `{p}`"
             ));
         }
     }
@@ -80,7 +79,7 @@ pub(super) fn emit_brief_resume(
             "max_turns": max_turns,
             "max_tokens": cfg.max_tokens,
             "policy_version": router.policy().version.as_str(),
-            "tool_profile": SOLVE_TOOL_PROFILE_V1,
+            "tool_profile": PROFILE_SOLVE_V1,
             "resume_mode": RESUME_MODE_BRIEF,
             "brief_sha256": brief_sha256,
             "leg": leg,
@@ -338,15 +337,10 @@ pub(super) fn pause_solve(
 }
 
 fn current_sympy_epoch(
-    router: &Router,
+    _router: &Router,
     rt: Option<&dyn super::SolveWorkerRuntime>,
 ) -> Option<u64> {
-    rt.and_then(super::SolveWorkerRuntime::worker_epoch).or_else(|| {
-        router
-            .registry()
-            .get_entry("sympy_eval")
-            .and_then(|(_, _, ep)| ep.and_then(|e| e.live_epoch()))
-    })
+    rt.and_then(super::SolveWorkerRuntime::worker_epoch)
 }
 
 fn is_worker_restart_error(err: &str) -> bool {

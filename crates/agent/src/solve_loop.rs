@@ -26,8 +26,9 @@ use loop_tools::{
 };
 use research_tools::solve_exprs::CheckCanonicalizer;
 use research_tools::solve_gates::{PauseTrigger, SolveGate};
-use research_tools::solve_model::{HandleRef, PauseReason, SolveExpr, SolveSetup, SOLVE_TOOL_PROFILE_V1};
+use research_tools::solve_model::{HandleRef, PauseReason, SolveExpr, SolveSetup};
 use research_tools::solve_state::SolveState;
+use research_tools::tool_profile::PROFILE_SOLVE_V1;
 use research_tools::ResearchEnv;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -163,7 +164,7 @@ pub fn run_solve_loop(
             "policy_version": router.policy().version.as_str(),
             "containment": cfg.containment,
             "contained": cfg.contained,
-            "tool_profile": SOLVE_TOOL_PROFILE_V1,
+            "tool_profile": PROFILE_SOLVE_V1,
             "run_id": run_id,
             "caller": SOLVE_CALLER,
             "leg": 1,
@@ -382,7 +383,7 @@ fn run_solve_legs(
                 "turn": turn,
                 "model": cfg.model,
                 "caller": SOLVE_CALLER,
-                "tool_profile": SOLVE_TOOL_PROFILE_V1,
+                "tool_profile": PROFILE_SOLVE_V1,
                 "run_id": ctx.run_id,
                 "message_count": req.messages.len(),
                 "max_tokens": cfg.max_tokens,

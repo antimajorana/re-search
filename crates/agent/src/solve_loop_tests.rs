@@ -6,7 +6,7 @@ use super::{
     resume_solve_loop, run_solve_loop, SolveHostHooks, SolveLoopConfig, SolveWorkerRuntime,
     SOLVE_CALLER,
 };
-use crate::runner::{Audit, EventSink, NoopSink, SessionOutcome};
+use crate::runner::{Audit, NoopSink, SessionOutcome};
 use crate::transport::{
     CancelToken, ContentBlock, ModelRequest, ModelResponse, StopReason, StreamObserver, ToolSpec,
     Transport, TransportError, TransportErrorKind, TransportInfo,
@@ -14,19 +14,23 @@ use crate::transport::{
 use ledger::Ledger;
 use research_tools::solve_checks::{CheckExecError, CheckExecResult, CheckProcessRunner};
 use research_tools::solve_exprs::{CanonicalizedExpr, CheckCanonicalizer};
-use research_tools::solve_gates::{solve_check_host_v1, solve_gate_chain};
+use research_tools::solve_gates::{solve_check_host_v1, solve_gate_chain, SolveGate};
 use research_tools::solve_model::{
-    compute_math_sha256, event_kinds, HandleRef, PauseReason, SolveExpr, SOLVE_TOOL_PROFILE_V1,
+    compute_math_sha256, event_kinds, HandleRef, PauseReason, SolveExpr,
 };
 use research_tools::solve_state::SolveState;
-use research_tools::tool_profile::{register_profile, solve_v1, ProfileHostTools};
+use research_tools::tool_profile::{
+    register_profile, solve_v1, ProfileHostTools, PROFILE_SOLVE_V1,
+};
 use research_tools::ResearchEnv;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tools::{ApproveAll, Approver, ApprovalDecision, ApprovalRequest, CallCtx, Registry, Router, ToolHandler, WorkerEpoch};
+use tools::{
+    ApprovalReply, ApprovalRequest, Approver, CallCtx, Registry, Router, ToolHandler, WorkerEpoch,
+};
 
 struct MockTransport {
     replies: Mutex<VecDeque<Result<ModelResponse, TransportError>>>,
@@ -46,34 +50,41 @@ impl Transport for MockTransport {
     fn info(&self) -> TransportInfo {
         TransportInfo {
             provider: "anthropic-messages",
-            endpoint: "http://127.0.0.1:0/v1/messages",
-            api_key_env: "MOCK_KEY",
+            endpoint: "http://127.0.0.1:0/v1/messages".to_string(),
+            api_key_env: "MOCK_KEY".to_string(),
         }
     }
 
     fn prepare_request(&self, req: &ModelRequest) -> Result<crate::PreparedRequest, TransportError> {
         self.seen_requests.lock().unwrap().push(req.clone());
         Ok(crate::PreparedRequest {
-            url: "http://127.0.0.1:0/v1/messages".into(),
-            headers: Vec::new(),
             body: serde_json::to_vec(&json!({ "model": req.model, "messages": req.messages.len() })).unwrap(),
+        })
+    }
+
+    fn send_prepared(&self, _req: &crate::PreparedRequest) -> Result<ModelResponse, TransportError> {
+        self.replies.lock().unwrap().pop_front().unwrap_or_else(|| {
+            Err(TransportError {
+                kind: TransportErrorKind::HttpStatus,
+                status: None,
+                message: "unexpected extra call".into(),
+                raw_body: None,
+            })
         })
     }
 
     fn send_prepared_streaming(
         &self,
-        _req: &crate::PreparedRequest,
+        req: &crate::PreparedRequest,
         _observer: &mut dyn StreamObserver,
     ) -> Result<ModelResponse, TransportError> {
-        self.replies.lock().unwrap().pop_front().unwrap_or_else(|| {
-            Err(TransportError::new(TransportErrorKind::HttpStatus, "unexpected extra call"))
-        })
+        self.send_prepared(req)
     }
 }
 
 fn tool_resp(id: &str, name: &str, input: Value) -> Result<ModelResponse, TransportError> {
     Ok(ModelResponse {
-        id: format!("resp_{id}"),
+        id: Some(format!("resp_{id}")),
         model: "claude-sonnet-4-5".into(),
         stop_reason: StopReason::ToolUse,
         content: vec![ContentBlock::ToolUse { id: id.into(), name: name.into(), input }],
@@ -84,7 +95,7 @@ fn tool_resp(id: &str, name: &str, input: Value) -> Result<ModelResponse, Transp
 
 fn end_resp(text: &str) -> Result<ModelResponse, TransportError> {
     Ok(ModelResponse {
-        id: "resp_end".into(),
+        id: Some("resp_end".into()),
         model: "claude-sonnet-4-5".into(),
         stop_reason: StopReason::EndTurn,
         content: vec![ContentBlock::Text { text: text.into() }],
@@ -128,7 +139,7 @@ impl CheckProcessRunner for MockCheckRunner {
     }
 }
 
-struct StubEpoch(AtomicU64, bool);
+struct StubEpoch(Arc<AtomicU64>, bool);
 impl WorkerEpoch for StubEpoch {
     fn live_epoch(&self) -> Option<u64> {
         let v = self.0.load(Ordering::Acquire);
@@ -157,10 +168,17 @@ fn seed_setup(ledger: &Ledger, session: &str, per_leg: u32, total_calls: u32, bo
     })).unwrap();
 }
 
+struct TestApproveAll;
+impl Approver for TestApproveAll {
+    fn decide(&self, req: &ApprovalRequest) -> ApprovalReply {
+        ApprovalReply { approved: true, digest: req.digest.clone(), by: "test".into() }
+    }
+}
+
 struct DenySympyApprover;
 impl Approver for DenySympyApprover {
-    fn decide(&self, _req: &ApprovalRequest) -> ApprovalDecision {
-        ApprovalDecision { approved: false, by: "test".into() }
+    fn decide(&self, req: &ApprovalRequest) -> ApprovalReply {
+        ApprovalReply { approved: false, digest: req.digest.clone(), by: "test".into() }
     }
 }
 
@@ -181,7 +199,7 @@ fn make_solve_router(
     let policy = register_profile(&solve_v1(), &mut reg, Arc::clone(&env), host).unwrap();
     let (gate, chain) = solve_gate_chain(Arc::clone(&env), runner, seq0, seq0);
     let router = Router::new(reg, policy, ledger, session, approver)
-        .with_tool_profile(SOLVE_TOOL_PROFILE_V1)
+        .with_tool_profile(PROFILE_SOLVE_V1)
         .with_gate(chain);
     (env, router, gate)
 }
@@ -220,8 +238,8 @@ fn gate_bounces_r12_and_transport_error_r16_never_abort() {
         let n = c2.fetch_add(1, Ordering::SeqCst) + 1;
         Ok(json!({ "ok": true, "exprs_out": { format!("x{n}"): format!("Symbol('x{n}')") } }))
     });
-    let ep = Arc::new(StubEpoch(AtomicU64::new(1), true));
-    let (env, router, gate) = make_solve_router(tmp.path(), "s-r12", ep, sympy, Arc::new(ApproveAll));
+    let ep = Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true));
+    let (env, router, gate) = make_solve_router(tmp.path(), "s-r12", ep, sympy, Arc::new(TestApproveAll));
     // 3 successful un-cited sympy runs fill G1, then 3 blocked sympy calls hit G5 (max_gate_bounces=3).
     let replies = (1..=7)
         .map(|i| tool_resp(&format!("tu_{i}"), "sympy_eval", json!({ "code": format!("x={i}") })))
@@ -235,7 +253,7 @@ fn gate_bounces_r12_and_transport_error_r16_never_abort() {
     let reqs: Vec<_> = events.iter().filter(|e| e.kind == "model.request").collect();
     assert_eq!(reqs.len(), 6);
     assert_eq!(reqs[0].payload["caller"], SOLVE_CALLER);
-    assert_eq!(reqs[0].payload["tool_profile"], SOLVE_TOOL_PROFILE_V1);
+    assert_eq!(reqs[0].payload["tool_profile"], PROFILE_SOLVE_V1);
     assert_eq!(reqs[0].payload["run_id"], "run-test-1");
     assert_eq!(SolveState::from_events(&events).run_status, research_tools::solve_model::SolveRunStatus::Paused(PauseReason::GateBounces));
 
@@ -243,9 +261,14 @@ fn gate_bounces_r12_and_transport_error_r16_never_abort() {
     let ledger2 = Ledger::open(tmp.path()).unwrap();
     seed_setup(&ledger2, "s-r16", 48, 60, 3);
     let sympy_ok: Arc<dyn ToolHandler> = Arc::new(|_, _| Ok(json!({})));
-    let ep2 = Arc::new(StubEpoch(AtomicU64::new(1), true));
-    let (env2, router2, gate2) = make_solve_router(tmp.path(), "s-r16", ep2, sympy_ok, Arc::new(ApproveAll));
-    let tr2 = MockTransport::new(vec![Err(TransportError::new(TransportErrorKind::HttpStatus, "502"))]);
+    let ep2 = Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true));
+    let (env2, router2, gate2) = make_solve_router(tmp.path(), "s-r16", ep2, sympy_ok, Arc::new(TestApproveAll));
+    let tr2 = MockTransport::new(vec![Err(TransportError {
+        kind: TransportErrorKind::HttpStatus,
+        status: Some(502),
+        message: "502".into(),
+        raw_body: None,
+    })]);
     let cfg2 = base_cfg(env2, gate2);
     let out2 = run_solve_loop(&tr2, &router2, &ledger2, &cfg2, &mut NoopSink).unwrap();
     assert_eq!(out2, SessionOutcome::Paused { turns: 0, reason: "transport_error".into() });
@@ -260,8 +283,8 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
     let ledger = Ledger::open(tmp.path()).unwrap();
     seed_setup(&ledger, "s-auto", 48, 60, 3);
     let sympy_ok: Arc<dyn ToolHandler> = Arc::new(|_, _| Ok(json!({ "ok": true })));
-    let ep = Arc::new(StubEpoch(AtomicU64::new(1), true));
-    let (env, router, gate) = make_solve_router(tmp.path(), "s-auto", ep, sympy_ok, Arc::new(ApproveAll));
+    let ep = Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true));
+    let (env, router, gate) = make_solve_router(tmp.path(), "s-auto", ep, sympy_ok, Arc::new(TestApproveAll));
     let tr = MockTransport::new(vec![
         tool_resp("tu_1", "ledger_note", json!({ "text": &"a".repeat(250) })),
         end_resp("Continued after brief checkpoint."),
@@ -293,7 +316,7 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
     }
     let ledger3 = Ledger::open(tmp.path()).unwrap();
     seed_setup(&ledger3, "s-wr", 48, 60, 3);
-    let ep3 = Arc::new(StubEpoch(AtomicU64::new(1), true));
+    let ep3 = Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true));
     let ep_handler = Arc::clone(&ep3);
     let calls3 = Arc::new(AtomicUsize::new(0));
     let sympy3: Arc<dyn ToolHandler> = Arc::new(move |_, _| {
@@ -304,8 +327,8 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
             Err("worker timed out and restarted".into())
         }
     });
-    let (env3, router3, gate3) = make_solve_router(tmp.path(), "s-wr", Arc::clone(&ep3), sympy3, Arc::new(ApproveAll));
-    let rt = Rt(Arc::clone(&ep3), Arc::clone(&restaged));
+    let (env3, router3, gate3) = make_solve_router(tmp.path(), "s-wr", Arc::clone(&ep3), sympy3, Arc::new(TestApproveAll));
+    let rt = Rt(Arc::clone(&ep3.0), Arc::clone(&restaged));
     let mut cfg3 = base_cfg(env3, gate3);
     cfg3.worker_runtime = Some(&rt);
     let tr3 = MockTransport::new(vec![
@@ -339,8 +362,8 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
             (name == "review_steps").then(|| { self.0.store(true, Ordering::SeqCst); Ok((false, "{}".into())) })
         }
     }
-    let ep4 = Arc::new(StubEpoch(AtomicU64::new(1), true));
-    let (env4, router4, gate4) = make_solve_router(tmp.path(), "s-d6", ep4, Arc::new(|_, _| Ok(json!({}))), Arc::new(ApproveAll));
+    let ep4 = Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true));
+    let (env4, router4, gate4) = make_solve_router(tmp.path(), "s-d6", ep4, Arc::new(|_, _| Ok(json!({}))), Arc::new(TestApproveAll));
     let seam = SeamHook(Arc::clone(&hook_called));
     let mut cfg4 = base_cfg(env4, gate4);
     cfg4.hooks = Some(&seam);
@@ -361,21 +384,21 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
     cancel.cancel();
     let ledger5 = Ledger::open(tmp.path()).unwrap();
     seed_setup(&ledger5, "s-cancel", 48, 60, 3);
-    let (env5, router5, gate5) = make_solve_router(tmp.path(), "s-cancel", Arc::new(StubEpoch(AtomicU64::new(1), true)), Arc::new(|_, _| Ok(json!({}))), Arc::new(DenySympyApprover));
+    let (env5, router5, gate5) = make_solve_router(tmp.path(), "s-cancel", Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true)), Arc::new(|_, _| Ok(json!({}))), Arc::new(DenySympyApprover));
     let mut cfg5 = base_cfg(env5.clone(), gate5.clone());
     cfg5.cancel = Some(&cancel);
     assert_eq!(run_solve_loop(&MockTransport::new(vec![]), &router5, &ledger5, &cfg5, &mut NoopSink).unwrap(), SessionOutcome::Paused { turns: 0, reason: "user".into() });
 
     let ledger6 = Ledger::open(tmp.path()).unwrap();
     seed_setup(&ledger6, "s-app", 48, 60, 3);
-    let (env6, router6, gate6) = make_solve_router(tmp.path(), "s-app", Arc::new(StubEpoch(AtomicU64::new(1), true)), Arc::new(|_, _| Ok(json!({}))), Arc::new(DenySympyApprover));
+    let (env6, router6, gate6) = make_solve_router(tmp.path(), "s-app", Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true)), Arc::new(|_, _| Ok(json!({}))), Arc::new(DenySympyApprover));
     let cfg6 = base_cfg(env6, gate6);
     let tr6 = MockTransport::new(vec![tool_resp("a1", "sympy_eval", json!({ "code": "1+1" }))]);
     assert_eq!(run_solve_loop(&tr6, &router6, &ledger6, &cfg6, &mut NoopSink).unwrap(), SessionOutcome::Paused { turns: 1, reason: "approval_needed".into() });
     // Brief resume after approval_needed
     let ledger6_ref = Ledger::open(tmp.path()).unwrap();
     let tr6_res = MockTransport::new(vec![end_resp("Resumed cleanly.")]);
-    let (_, router6r, gate6r) = make_solve_router(tmp.path(), "s-app", Arc::new(StubEpoch(AtomicU64::new(1), true)), Arc::new(|_, _| Ok(json!({}))), Arc::new(ApproveAll));
+    let (_, router6r, gate6r) = make_solve_router(tmp.path(), "s-app", Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true)), Arc::new(|_, _| Ok(json!({}))), Arc::new(TestApproveAll));
     let mut cfg6r = base_cfg(Arc::new(ResearchEnv::new(tmp.path())), gate6r);
     cfg6r.prompt = "Approved, continue.".into();
     let out6r = resume_solve_loop(&tr6_res, &router6r, &ledger6_ref, &cfg6r, &mut NoopSink).unwrap();

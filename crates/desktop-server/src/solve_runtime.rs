@@ -9,9 +9,11 @@ use research_tools::solve_checks::{
 };
 use research_tools::solve_exprs::{stage_exprs_in, CanonicalizedExpr, CheckCanonicalizer};
 use research_tools::solve_gates::{solve_check_host_v1, solve_gate_chain, SolveGate};
-use research_tools::solve_model::{HandleRef, SolveExpr, SymbolSpec, SOLVE_TOOL_PROFILE_V1};
+use research_tools::solve_model::{HandleRef, SolveExpr, SymbolSpec};
 use research_tools::solve_state::SolveState;
-use research_tools::tool_profile::{lookup as lookup_profile, register_profile, ProfileHostTools};
+use research_tools::tool_profile::{
+    lookup as lookup_profile, register_profile, ProfileHostTools, PROFILE_SOLVE_V1,
+};
 use research_tools::ResearchEnv;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -231,7 +233,7 @@ pub(crate) fn build_solve_router(
     env: Arc<ResearchEnv>,
     session: &str,
 ) -> Result<SolveRouterBundle, String> {
-    let profile = lookup_profile(SOLVE_TOOL_PROFILE_V1).map_err(|e| e.to_string())?;
+    let profile = lookup_profile(PROFILE_SOLVE_V1).map_err(|e| e.to_string())?;
     let worker = build_solver_worker(&state, session)?;
     let solver_epoch_handle = worker.as_ref().map(Worker::epoch_handle);
     let contained = worker.as_ref().is_some_and(|w| w.containment().is_contained());

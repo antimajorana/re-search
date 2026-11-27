@@ -151,8 +151,8 @@ mod tests {
     use research_tools::solve_model::{
         compute_math_sha256, DoneCriterion, DoneCriterionKind, ReviewPolicy, RoleModel,
         SetupAssumption, SolveBudgets, SolveRoles, SolveTarget, SymbolSpec, TargetForm,
-        SOLVE_TOOL_PROFILE_V1,
     };
+    use research_tools::tool_profile::PROFILE_SOLVE_V1;
     use serde_json::json;
     use std::collections::BTreeMap;
 
@@ -196,7 +196,7 @@ mod tests {
             },
             budgets: SolveBudgets::default(),
             review: ReviewPolicy::default(),
-            tool_profile: SOLVE_TOOL_PROFILE_V1.into(),
+            tool_profile: PROFILE_SOLVE_V1.into(),
             origin: None,
             math_sha256,
         }

@@ -561,7 +561,14 @@ fn r2_brief_resume_allows_solve_transitions_but_rejects_replay_or_cross_mode() {
         other => Err(format!("unknown {other}")),
     };
     let ev = |seq: u64, kind: &str, payload: Value| ledger::Event {
-        seq, ts_ms: seq * 10, kind: kind.into(), schema_version: 1, payload, prev_hash: "".into(), event_hash: "".into(),
+        session: "s-r2".into(),
+        seq,
+        ts_ms: (seq * 10) as i64,
+        kind: kind.into(),
+        schema_version: 1,
+        payload,
+        prev_hash: "".into(),
+        event_hash: "".into(),
     };
     let start_solve = ev(1, "session.start", json!({ "tool_profile": "solve/1" }));
     let cp = ev(2, "solve.checkpoint", json!({ "leg": 1, "upto_seq": 1, "brief_blob": "b", "brief_sha256": "abc123", "reason": "context" }));
