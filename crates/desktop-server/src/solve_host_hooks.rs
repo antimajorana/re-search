@@ -119,6 +119,22 @@ impl DesktopSolveHostHooks {
         ))
     }
 
+    fn resolve_verifier_target(
+        &self,
+        setup_roles: Option<&research_tools::solve_model::SolveRoles>,
+    ) -> Result<crate::agent_models::SolveVerifierTarget, (u16, String)> {
+        let ui = self.state.load_ui_settings();
+        // Only forward an explicit `req.verifier` object: top-level `req.{provider,model}` is the solver's route.
+        let verifier_req = self.req.get("verifier").map(|v| json!({ "verifier": v }));
+        resolve_solve_verifier_transport(
+            &self.state,
+            &ui,
+            setup_roles,
+            verifier_req.as_ref(),
+            Some(&self.solver_fallback),
+        )
+    }
+
     fn exec_review_steps(
         &self,
         ledger: &Ledger,
@@ -132,14 +148,7 @@ impl DesktopSolveHostHooks {
         };
         let state = SolveState::from_events(&events);
         let setup_roles = state.setup.as_ref().map(|s| &s.roles);
-        let ui = self.state.load_ui_settings();
-        let target = match resolve_solve_verifier_transport(
-            &self.state,
-            &ui,
-            setup_roles,
-            Some(&self.req),
-            Some(&self.solver_fallback),
-        ) {
+        let target = match self.resolve_verifier_target(setup_roles) {
             Ok(t) => t,
             Err((_, msg)) => return (true, json!({ "error": msg }).to_string()),
         };
@@ -269,14 +278,7 @@ impl SolveHostHooks for DesktopSolveHostHooks {
             return Ok(None);
         }
 
-        let ui = self.state.load_ui_settings();
-        let target = match resolve_solve_verifier_transport(
-            &self.state,
-            &ui,
-            Some(&setup.roles),
-            Some(&self.req),
-            Some(&self.solver_fallback),
-        ) {
+        let target = match self.resolve_verifier_target(Some(&setup.roles)) {
             Ok(t) => t,
             Err((_, msg)) => {
                 let reason = if cancel.is_some_and(CancelToken::is_cancelled) {
