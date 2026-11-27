@@ -12,15 +12,16 @@
 
 use crate::investigation::anchor::valid_id;
 use crate::lines_sent::is_sha256_hex;
-use crate::pdf_match::{match_pdf_quote, normalize_for_pdf_match, PdfQuoteMatch};
+use crate::pdf_match::{match_pdf_quote, normalize_for_pdf_match, quotes_match_pdf, PdfQuoteMatch};
 use crate::pdf_pages::{PageBasis, PageMap, PageQualityMetrics, PageRecord};
-use crate::quote_core::{accept_quote, QuoteRejection, VerifiedQuote};
+use crate::quote_core::{accept_quote, QuoteRejection, VerifiedQuote, MAX_DISPLAY_QUOTE_CHARS};
 use crate::sandbox::{resolve_sources_session_id, SandboxRoot, WorkspaceSandbox};
 use ledger::{Event, Ledger};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
 use std::fs;
+use std::io::Read;
 
 /// Opt-in default for sending equation-page images to a user's vision model (Owner Decision 2026-11-26).
 pub const DEFAULT_EQUATION_TRANSCRIPTION_ENABLED: bool = false;
@@ -37,6 +38,9 @@ pub const MAX_LATEX_DRAFT_BYTES: usize = 16 * 1024;
 
 /// Maximum UTF-8 byte length for a model identifier recorded on a transcription.
 pub const MAX_MODEL_ID_BYTES: usize = 160;
+
+const MAX_READING_FILE_BYTES: usize = 16 * 1024 * 1024;
+const MIN_SUBSTRING_NON_WS_CHARS: usize = 16;
 
 /// Pinned text-layer provenance classes permitted to support a matched quote on a PDF page.
 ///
@@ -281,8 +285,10 @@ fn resolve_page_basis_and_lines(receipt: &Value, page: usize) -> Option<(TextLay
     {
         Some(raw) => TextLayerBasis::from_basis_str(raw)?,
         None => {
+            // Conservative scan classification when pre-F14a receipt lacks per-page scan metadata
+            // (`00-overview.md` 2.12: when unsure, treat as a scan).
             if receipt.get("status").and_then(Value::as_str) == Some("ok") {
-                TextLayerBasis::TextLayer
+                TextLayerBasis::ScanTextLayer
             } else {
                 return None;
             }
@@ -380,10 +386,23 @@ fn load_pinned_page_text(
     let resolved = sandbox
         .resolve_existing(SandboxRoot::Sources, resolved_session, &primary_path, false)
         .map_err(|e| TranscriptionGateError::ReadingFileError(e.to_string()))?;
-    let bytes = fs::read(&resolved.canonical_target)
+    if !resolved.metadata.is_file() {
+        return Err(TranscriptionGateError::ReadingFileError(format!(
+            "reading file `{primary_path}` is not a regular file"
+        )));
+    }
+    let file = fs::File::open(&resolved.canonical_target)
         .map_err(|e| TranscriptionGateError::ReadingFileError(e.to_string()))?;
-    let actual_sha = ledger::sha256_hex(&bytes);
-    if actual_sha != expected_sha {
+    let mut bytes = Vec::new();
+    file.take(MAX_READING_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| TranscriptionGateError::ReadingFileError(e.to_string()))?;
+    if bytes.len() > MAX_READING_FILE_BYTES {
+        return Err(TranscriptionGateError::ReadingFileError(format!(
+            "reading file `{primary_path}` exceeds {MAX_READING_FILE_BYTES} bytes"
+        )));
+    }
+    if ledger::sha256_hex(&bytes) != expected_sha {
         return Err(TranscriptionGateError::ReadingFileError(format!(
             "reading file `{primary_path}` hash mismatch against pinned source.ingested receipt"
         )));
@@ -444,17 +463,16 @@ fn match_candidate_on_page(pinned: &PinnedPageText, page: usize, latex_draft: &s
             last_line: Some(pinned.page_line_count),
             metrics: PageQualityMetrics {
                 char_count: pinned.page_text.chars().count(),
-                alpha_count: 0,
-                word_count: 0,
-                image_coverage_pct: 0,
-                has_invisible_text: false,
-                width_pt: 0,
-                height_pt: 0,
+                alpha_count: 0, word_count: 0, image_coverage_pct: 0,
+                has_invisible_text: false, width_pt: 0, height_pt: 0,
             },
             reason: None,
         }],
     };
     for cand in candidates {
+        if cand.chars().count() > MAX_DISPLAY_QUOTE_CHARS {
+            continue;
+        }
         let norm = normalize_for_pdf_match(cand);
         let non_ws = norm.chars().filter(|c| !c.is_whitespace()).count();
         if non_ws < 2 {
@@ -463,7 +481,23 @@ fn match_candidate_on_page(pinned: &PinnedPageText, page: usize, latex_draft: &s
         let Some(mut m) = match_pdf_quote(&pinned.page_text, &dummy_map, cand) else {
             continue;
         };
-        if !has_token_boundaries(&pinned.page_text, m.start_byte, m.end_byte) {
+        if m.stored_excerpt.chars().count() > MAX_DISPLAY_QUOTE_CHARS
+            || !has_token_boundaries(&pinned.page_text, m.start_byte, m.end_byte)
+        {
+            continue;
+        }
+        // Keep parity with quote_core's anti-short-substring rule (<16 non-ws chars must cover
+        // the entire trimmed cited line span).
+        if non_ws < MIN_SUBSTRING_NON_WS_CHARS {
+            let Some((_, line_span, _)) = slice_lines(&pinned.page_text, m.start_line, m.end_line) else {
+                continue;
+            };
+            if normalize_for_pdf_match(line_span.trim()) != normalize_for_pdf_match(m.stored_excerpt.trim()) {
+                continue;
+            }
+        }
+        // Fail closed on ambiguous duplicate occurrences on the same page.
+        if quotes_match_pdf(&pinned.page_text[m.end_byte..], cand) {
             continue;
         }
         m.start_byte += pinned.slice_start_byte;

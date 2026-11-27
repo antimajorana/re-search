@@ -373,17 +373,20 @@ fn gate_accepts_only_when_pinned_text_scan_or_ocr_layer_agrees_and_lines_were_su
     assert!(v4.basis.is_ocr_or_scan());
     assert_eq!(v4.verified.quote_ref.start_line, 9);
 
-    // Short inline substring (< 16 non-space chars inside a longer line) is still rejected by quote_core.
+    // Short inline substring (< 16 non-space chars inside a longer line) fails BOTH advisory
+    // check_text_layer_agreement and verify_transcription_against_text_layer (parity with quote_core).
+    assert!(!check_text_layer_agreement(
+        &fx.sandbox, &fx.session, &events, &fx.source_id, RAW_PDF_SHA, 1, "a + b = c"
+    ).agreed);
     let short_inline = FormulaTranscription::new(
-        &fx.source_id, RAW_PDF_SHA, 1, None, "gpt-4o", "a + b = c", true,
+        &fx.source_id, RAW_PDF_SHA, 1, None, "gpt-4o", "a + b = c", false,
     )
     .unwrap();
     assert!(matches!(
         verify_transcription_against_text_layer(
             &fx.sandbox, &fx.session, &events, Some(&fx.ledger), Some("run-2"), "reader-1", &short_inline
         ),
-        Err(TranscriptionGateError::QuoteRejected(QuoteRejection::VerificationFailed(ref f)))
-            if f.code == "quote_too_short"
+        Err(TranscriptionGateError::TextLayerDisagrees { page: 1, .. })
     ));
 
     // Tampered disk file fails closed even when lines were previously supplied.
@@ -398,4 +401,59 @@ fn gate_accepts_only_when_pinned_text_scan_or_ocr_layer_agrees_and_lines_were_su
         ),
         Err(TranscriptionGateError::ReadingFileError(_))
     ));
+}
+
+#[test]
+fn gate_rejects_ambiguous_duplicate_matches_and_treats_legacy_receipts_as_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let sandbox = WorkspaceSandbox::new(dir.path(), None);
+    let ledger = Ledger::open(dir.path()).unwrap();
+    let sid = "s-legacy-ambig";
+    let src = "leg1";
+    let path = format!("{src}/leg1.pdf.extracted.txt");
+    let text = concat!(
+        "Unique equation: alpha_0 + beta_0 = gamma_0.\n",
+        "Repeated equation: X_1 + Y_1 = Z_1 + W_1.\n",
+        "Repeated equation: X_1 + Y_1 = Z_1 + W_1.\n",
+    );
+    let dst = sandbox.resolve_for_write(SandboxRoot::Sources, sid, &path).unwrap();
+    std::fs::create_dir_all(dst.target_path.parent().unwrap()).unwrap();
+    std::fs::write(&dst.target_path, text.as_bytes()).unwrap();
+    let sha = ledger::sha256_hex(text.as_bytes());
+
+    // Pre-F14a legacy receipt: has pdf_page_lines and status="ok" but NO pdf_pages / basis.
+    ledger
+        .append(
+            sid,
+            "source.ingested",
+            1,
+            &json!({
+                "source_id": src,
+                "origin": "upload:leg1.pdf",
+                "format": "pdf",
+                "status": "ok",
+                "bytes": 64,
+                "raw_blob": RAW_PDF_SHA,
+                "primary_path": path,
+                "files": [path],
+                "files_sha256": { &path: &sha },
+                "page_count": 1,
+                "pdf_page_lines": [[1, 1, 3]]
+            }),
+        )
+        .unwrap();
+    let events = ledger.read_session(sid).unwrap();
+
+    // Unique formula matches, and legacy receipt without scan metadata is conservatively ScanTextLayer.
+    let uniq = check_text_layer_agreement(
+        &sandbox, sid, &events, src, RAW_PDF_SHA, 1, "alpha_0 + beta_0 = gamma_0",
+    );
+    assert!(uniq.agreed);
+    assert_eq!(uniq.basis, Some(TextLayerBasis::ScanTextLayer));
+
+    // Duplicate formula on the same page fails closed as ambiguous.
+    let dup = check_text_layer_agreement(
+        &sandbox, sid, &events, src, RAW_PDF_SHA, 1, "X_1 + Y_1 = Z_1 + W_1",
+    );
+    assert!(!dup.agreed);
 }
