@@ -66,6 +66,7 @@ pub mod search_coverage;
 pub mod session_activity;
 pub mod skeleton;
 mod solve_badge;
+pub mod solve_checks;
 pub mod solve_defs;
 pub mod solve_exprs;
 mod solve_exprs_show;

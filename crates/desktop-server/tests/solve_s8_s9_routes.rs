@@ -322,3 +322,36 @@ fn solve_ack_validates_hash_and_upgrades_tiers() {
     assert_eq!(v2["badge"]["effective"], "checked_by_you");
     assert_eq!(v2["badge"]["label"], wording::BADGE_CHECKED_BY_YOU);
 }
+
+#[test]
+fn solve_check_and_recheck_enforce_r18_containment_and_validation() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let srv = start_desktop_server(test_cfg(&data_dir, None, None, None)).unwrap();
+    let port = srv.addr.port();
+    let tok = srv.info.token.clone();
+    let auth = [("X-ReSearch-Token", tok.as_str())];
+
+    create_solve_session(port, &tok, "s-s9-chk");
+
+    // 401 without token; 404 when no checks exist to recheck.
+    let (st, _, _) = raw_http(port, "POST", "/api/sessions/s-s9-chk/solve/check", &[], b"{}");
+    assert_eq!(st, 401);
+    let (st, _, _) = raw_http(port, "POST", "/api/sessions/s-s9-chk/solve/recheck", &auth, b"{}");
+    assert_eq!(st, 404);
+
+    // Without active containment (or missing python worker), `solve/check` fails closed per R18 (403 denial, never bypasses approval).
+    let chk_req = serde_json::to_vec(&json!({ "entry_id": "e-1", "check": "identity_symbolic" })).unwrap();
+    let (st, _, raw) = raw_http(port, "POST", "/api/sessions/s-s9-chk/solve/check", &auth, &chk_req);
+    assert_eq!(st, 403, "expected R18 uncontained denial: {}", String::from_utf8_lossy(&raw));
+
+    // Also unknown check_id on recheck returns 404.
+    let (st, _, _) = raw_http(
+        port,
+        "POST",
+        "/api/sessions/s-s9-chk/solve/recheck",
+        &auth,
+        &serde_json::to_vec(&json!({ "check_id": "chk-missing" })).unwrap(),
+    );
+    assert_eq!(st, 404);
+}
