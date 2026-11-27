@@ -1,5 +1,5 @@
 //! Verified session forking, structural branch diffing, and reproducible
-//! publication export (`.tex` + `.bib`, standalone `.html`, and `.zip`).
+//! publication export (`.tex` + `.bib`, standalone `.html`, `.ipynb`, and `.zip`).
 
 pub mod diff;
 pub mod fork;
@@ -8,6 +8,9 @@ mod handoff_types;
 mod handoff_view;
 pub mod html;
 pub mod latex;
+pub mod notebook;
+mod notebook_prelude;
+mod notebook_render;
 pub mod paper_map;
 pub mod paper_map_html;
 pub mod paper_map_import;
@@ -18,8 +21,11 @@ pub mod writeup_solve;
 mod writeup_solve_cite;
 pub mod writeup_tex;
 pub mod zip;
+mod zip_solve;
 
 use ledger::Ledger;
+use research_tools::paper_key::Mode;
+use research_tools::tool_profile::session_mode_from_events;
 use research_tools::validate_session_id;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -63,6 +69,7 @@ pub enum ExportFormat {
     Tex,
     Html,
     Zip,
+    Notebook,
 }
 
 impl ExportFormat {
@@ -71,7 +78,10 @@ impl ExportFormat {
             "tex" | "latex" => Ok(ExportFormat::Tex),
             "html" => Ok(ExportFormat::Html),
             "zip" => Ok(ExportFormat::Zip),
-            other => Err(format!("unknown export format `{other}` (expected `tex`, `html`, or `zip`)")),
+            "ipynb" | "notebook" => Ok(ExportFormat::Notebook),
+            other => Err(format!(
+                "unknown export format `{other}` (expected `tex`, `html`, `zip`, or `notebook`)"
+            )),
         }
     }
 }
@@ -95,29 +105,29 @@ pub fn export_session_to_path(
     out_path: &Path,
 ) -> Result<Vec<u8>, String> {
     validate_session_id(session).map_err(|e| e.to_string())?;
-    let data = latex::load_session_export_data(data_dir, session)?;
     if let Some(parent) = out_path.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(parent).map_err(|e| format!("failed to create export dir: {e}"))?;
     }
-    let bytes = match format {
-        ExportFormat::Tex => {
-            let bib_stem = out_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .filter(|s| !s.is_empty())
-                .unwrap_or("references");
-            let tex_bytes = latex::render_latex_document(&data, bib_stem).into_bytes();
-            let bib_path = out_path.with_extension("bib");
-            fs::write(&bib_path, data.bibtex.as_bytes())
-                .map_err(|e| format!("failed to write sidecar `.bib` `{}`: {e}", bib_path.display()))?;
-            tex_bytes
-        }
-        ExportFormat::Html => html::render_html_document(&data).into_bytes(),
-        ExportFormat::Zip => zip::build_reproducible_zip(data_dir, &data)?,
-    };
-    fs::write(out_path, &bytes)
+    if format != ExportFormat::Tex {
+        let (_, bytes) = export_session_bytes_with_options(data_dir, session, format, false)?;
+        fs::write(out_path, &bytes)
+            .map_err(|e| format!("failed to write export `{}`: {e}", out_path.display()))?;
+        return Ok(bytes);
+    }
+
+    let data = latex::load_session_export_data(data_dir, session)?;
+    let bib_stem = out_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("references");
+    let tex_bytes = latex::render_latex_document(&data, bib_stem).into_bytes();
+    let bib_path = out_path.with_extension("bib");
+    fs::write(&bib_path, data.bibtex.as_bytes())
+        .map_err(|e| format!("failed to write sidecar `.bib` `{}`: {e}", bib_path.display()))?;
+    fs::write(out_path, &tex_bytes)
         .map_err(|e| format!("failed to write export `{}`: {e}", out_path.display()))?;
-    Ok(bytes)
+    Ok(tex_bytes)
 }
 
 pub fn export_session_bytes(
@@ -125,7 +135,50 @@ pub fn export_session_bytes(
     session: &str,
     format: ExportFormat,
 ) -> Result<(String, Vec<u8>), String> {
+    export_session_bytes_with_options(data_dir, session, format, false)
+}
+
+pub fn export_session_bytes_with_options(
+    data_dir: &Path,
+    session: &str,
+    format: ExportFormat,
+    include_all_runs: bool,
+) -> Result<(String, Vec<u8>), String> {
     validate_session_id(session).map_err(|e| e.to_string())?;
+    let ledger = Ledger::open_existing(data_dir).map_err(|e| e.to_string())?;
+    let (report, events) = ledger
+        .read_verified_session(session)
+        .map_err(|e| format!("cannot export unverified session `{session}`: {e}"))?;
+    let mode = session_mode_from_events(&events);
+
+    if format == ExportFormat::Notebook {
+        if mode != Mode::Solve {
+            return Err(format!(
+                "notebook (`.ipynb`) export is only supported for Solve sessions (`{session}` is not Solve)"
+            ));
+        }
+        let bytes = notebook::build_solve_notebook_bytes(
+            &ledger,
+            &report.head_hash,
+            session,
+            &events,
+            notebook::NotebookOptions { include_all_runs },
+        )?;
+        return Ok((format!("{session}-notebook.ipynb"), bytes));
+    }
+
+    if mode == Mode::Solve && format == ExportFormat::Zip {
+        let bytes = zip_solve::build_solve_reproducible_zip(
+            data_dir,
+            &ledger,
+            session,
+            &report.head_hash,
+            &events,
+            include_all_runs,
+        )?;
+        return Ok((format!("{session}-bundle.zip"), bytes));
+    }
+
     let data = latex::load_session_export_data(data_dir, session)?;
     match format {
         ExportFormat::Tex => Ok((
@@ -140,6 +193,7 @@ pub fn export_session_bytes(
             format!("{session}-bundle.zip"),
             zip::build_reproducible_zip(data_dir, &data)?,
         )),
+        ExportFormat::Notebook => unreachable!(),
     }
 }
 
