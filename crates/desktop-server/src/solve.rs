@@ -62,7 +62,7 @@ pub fn handle_solve(
         ("POST", ["ack"]) => crate::solve_routes_ext::handle_ack(state, session_id, body),
         ("POST", ["check"]) => crate::solve_check_routes::handle_check(state, session_id, body),
         ("POST", ["recheck"]) => crate::solve_check_routes::handle_recheck(state, session_id, body),
-        // Downstream seam: S17 (transcribe).
+        ("POST", ["transcribe"]) => crate::solve_intake::handle_transcribe(state, session_id, body),
         _ => Err(not_found(format!("unknown solve endpoint: {method} /{}", rest.join("/")))),
     }
 }
