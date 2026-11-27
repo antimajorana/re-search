@@ -36,7 +36,9 @@ pub(crate) mod stream_http;
 pub mod transport;
 pub mod usage;
 pub(crate) mod verifier_context;
+pub mod verifier_loop;
 pub(crate) mod verifier_parse;
+pub mod verifier_tools;
 pub mod verifiers;
 pub(crate) mod wire;
 
