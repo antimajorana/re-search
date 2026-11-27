@@ -8,6 +8,7 @@
 
 pub mod manifest;
 pub mod measures;
+pub mod measures_catalog;
 pub mod routed_mock;
 pub mod scripted;
 pub mod sheet;
@@ -100,6 +101,16 @@ pub fn load_manifests(dir: &Path, tier: Tier) -> Result<EvalSet, Vec<String>> {
                     for rel in case.input.fixture_paths() {
                         if !fixture_path(dir, rel).is_file() {
                             errs.push(format!("{name}: {}: fixture `{rel}` does not exist", case.id));
+                        }
+                    }
+                    for rel in case.input.fixture_dir_paths() {
+                        if !fixture_path(dir, rel).is_dir() {
+                            errs.push(format!("{name}: {}: fixture directory `{rel}` does not exist", case.id));
+                        }
+                    }
+                    for rel in case.input.fixture_auxiliary_paths() {
+                        if !fixture_path(dir, rel).exists() {
+                            errs.push(format!("{name}: {}: auxiliary fixture `{rel}` does not exist", case.id));
                         }
                     }
                 }
