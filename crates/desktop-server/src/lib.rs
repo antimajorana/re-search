@@ -38,6 +38,7 @@ pub mod chatgpt;
 mod cli_relay;
 mod claim_review;
 pub mod cli_turn;
+pub mod cli_turn_setup;
 pub mod connections;
 mod explain_export;
 mod evidence;
