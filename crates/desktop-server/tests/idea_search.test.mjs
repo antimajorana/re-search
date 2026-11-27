@@ -260,3 +260,93 @@ test('X6 reducer resets sharpened_idea on idea.stated and highlights repeated qu
   assert.deepEqual(st.view.question_answers, {});
 });
 
+test('X7 Search plan mounts shared approval_card.js and Where I looked shows Retry <service> and recall', async () => {
+  const dom = makeFakeDom();
+  globalThis.document = dom.document;
+
+  const host = dom.makeEl('div');
+  const allowedGrants = [];
+  const retriedProviders = [];
+
+  const state = ideaReducer(createInitialIdeaState({ hasModel: true }), {
+    type: 'SET_IDEA_VIEW',
+    sessionId: 's-ui-x7',
+    view: {
+      statement: { rev: 1, text: 'Test Krylov growth across phases.' },
+      plan_approval: {
+        round: 2,
+        services: ['arxiv', 'inspire'],
+        queries: [
+          { qid: 'q-r2-1', provider: 'arxiv', q: 'Krylov complexity Majorana' },
+          { qid: 'q-r2-2', provider: 'inspire', q: 'spread complexity <script>x</script>' },
+        ],
+        grants: [
+          {
+            id: 'explore-network-read',
+            kind: 'session_capability',
+            label: 'Allow literature search (arxiv, inspire) for this session',
+            tool_id: 'idea_search',
+            effect: 'network-read',
+            granted: false,
+            status: 'required',
+          },
+        ],
+      },
+      stages: [],
+      run_bar: { state: 'waiting', modelCallsUsed: 1, modelCallsMax: 24 },
+      candidates: [],
+      where_i_looked: {
+        scope_summary: 'Searched 1 of 2 literature services.',
+        providers: [
+          { name: 'arxiv', label: 'arXiv', state: 'ok', queries_ok: 1, queries_failed: 0, hits: 3, retryable: false },
+          { name: 'inspire', label: 'INSPIRE-HEP', state: 'failed', queries_ok: 0, queries_failed: 1, hits: 0, retryable: true },
+        ],
+        queries: [],
+        library: { hits: 1, owned_hits: 1, summary: 'Your library: 1 hit' },
+        known_paper_recall: {
+          given: ['arxiv:2501.01234', 'arxiv:2401.00001'],
+          found_by_search: ['arxiv:2501.01234'],
+          missed: ['arxiv:2401.00001'],
+        },
+        not_searched: ['books and monographs'],
+      },
+    },
+  });
+
+  renderExploreSession(host, state, {
+    onAllowGrant: async (grant) => {
+      allowedGrants.push(grant);
+      return { approved: true };
+    },
+    onRetryService: (prov) => retriedProviders.push(prov),
+  });
+
+  assert.equal(dom.getInnerHtmlWrites(), 0, 'zero innerHTML writes');
+  const approvalCard = host.querySelector('[data-component="approval-card"]');
+  assert.ok(approvalCard, 'must mount shared approval_card.js');
+  assert.equal(allowedGrants.length, 0, 'must never auto-approve');
+
+  const allowBtn = approvalCard.querySelector('[data-action="allow-listed"]');
+  assert.ok(allowBtn, 'Allow listed button must exist');
+  allowBtn.click();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(allowedGrants.length, 1);
+  assert.equal(allowedGrants[0].kind, 'session_capability');
+  assert.equal(allowedGrants[0].effect, 'network-read');
+
+  const retryBtn = host.querySelector('[data-action="retry-service"]');
+  assert.ok(retryBtn, 'Retry INSPIRE-HEP button must render for failed service');
+  assert.equal(retryBtn.textContent, 'Retry INSPIRE-HEP');
+  retryBtn.click();
+  assert.deepEqual(retriedProviders, ['inspire']);
+
+  const recall = host.querySelector('[data-idea-recall="1/2"]');
+  assert.ok(recall, 'known-paper recall must render');
+
+  for (const s of collectVisibleStrings(host)) {
+    assert.ok(!RULE_S8_RE.test(s), `Rule S8 violation: ${s}`);
+    assert.ok(!FORBIDDEN_BRIEF_RE.test(s), `Forbidden word "brief": ${s}`);
+  }
+});
+
+

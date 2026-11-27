@@ -195,6 +195,32 @@ export function ideaReducer(state, action) {
       if (action.kind === 'idea.stage' && payload.stage) {
         return { ...state, view: applyStageEventToView(state.view, payload) };
       }
+      if (action.kind === 'approval_requested' && payload.call_id) {
+        const prev = Array.isArray(state.pendingApprovals) ? state.pendingApprovals : [];
+        const rest = prev.filter((p) => p.call_id !== payload.call_id);
+        return { ...state, pendingApprovals: [...rest, payload] };
+      }
+      if (action.kind === 'approval_resolved' && payload.call_id) {
+        const prev = Array.isArray(state.pendingApprovals) ? state.pendingApprovals : [];
+        return { ...state, pendingApprovals: prev.filter((p) => p.call_id !== payload.call_id) };
+      }
+      if (action.kind === 'idea.search_planned' && Array.isArray(payload.queries)) {
+        return { ...state, view: { ...state.view, search_plan: payload } };
+      }
+      if (action.kind === 'idea.query_result' && payload.qid) {
+        const prevQ = Array.isArray(state.view.where_i_looked?.queries)
+          ? state.view.where_i_looked.queries
+          : [];
+        const idx = prevQ.findIndex((q) => q.qid === payload.qid);
+        const nextQ = idx >= 0 ? prevQ.map((q, i) => (i === idx ? payload : q)) : [...prevQ, payload];
+        return {
+          ...state,
+          view: {
+            ...state.view,
+            where_i_looked: { ...(state.view.where_i_looked || {}), queries: nextQ },
+          },
+        };
+      }
       if (action.kind === 'idea.search_finished' && Array.isArray(payload.results)) {
         const wil = { ...(state.view.where_i_looked || {}), queries: payload.results };
         return { ...state, view: { ...state.view, where_i_looked: wil } };

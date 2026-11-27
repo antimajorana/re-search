@@ -76,3 +76,13 @@ export function postIdeaOp(sessionId, op, payload = {}) {
     payload,
   );
 }
+
+/** Dispatch an approval decision through the shared desktop approval route. */
+export function decideIdeaApproval(sessionId, callId, payload) {
+  return ideaJson(
+    'POST',
+    `/api/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(callId)}`,
+    payload,
+  );
+}
+

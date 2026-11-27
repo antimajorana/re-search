@@ -7,6 +7,7 @@ import {
   BADGE_OWNED_LIBRARY,
   highlightTermsSegments,
 } from './idea_state.js';
+import { createApprovalCard } from './approval_card.js';
 import { createBadge } from './ui_badge.js';
 
 function el(tag, className, text) {
@@ -46,6 +47,8 @@ function providerStateTone(state) {
       return { icon: 'pause', tone: 'muted', text: 'offline' };
     case 'not_configured':
       return { icon: 'info', tone: 'muted', text: 'not configured' };
+    case 'disabled':
+      return { icon: 'pause', tone: 'muted', text: 'disabled' };
     case 'skipped_budget':
       return { icon: 'pause', tone: 'warn', text: 'skipped (budget)' };
     default:
@@ -58,6 +61,7 @@ function formatQueryStatus(raw) {
   if (s === 'rate_limited') return 'rate limited';
   if (s === 'skipped_budget') return 'skipped (budget)';
   if (s === 'not_configured') return 'not configured';
+  if (s === 'disabled') return 'disabled';
   return s || 'planned';
 }
 
@@ -187,45 +191,134 @@ export function renderCandidateList(candidates, opts = {}) {
 }
 
 /**
- * Render the `"Where I looked"` skeleton panel (`explore.md` 3 & 4.1 Coverage).
+ * Render the planned search batch and shared read-only `approval_card.js` panel (package X7).
+ * Shows every planned query, target services, and session network grant without auto-approving.
  */
-export function renderWhereILooked(whereILooked) {
+export function renderSearchPlanApproval(planApproval, opts = {}) {
+  if (!planApproval || typeof planApproval !== 'object') return null;
+  const queries = Array.isArray(planApproval.queries) ? planApproval.queries : [];
+  const grants = Array.isArray(planApproval.grants) ? planApproval.grants : [];
+  if (queries.length === 0 && grants.length === 0) return null;
+
+  const panel = el('section', 'idea-where-panel');
+  panel.setAttribute('data-idea-section', 'plan-approval');
+  panel.setAttribute('aria-label', 'Search plan approval');
+
+  const services = Array.isArray(planApproval.services) ? planApproval.services : [];
+  const round = Number(planApproval.round || 1);
+  panel.append(
+    el('h3', 'idea-card-title', `Search plan (round ${round})`),
+    el(
+      'p',
+      'idea-card-meta',
+      services.length > 0
+        ? `Services: ${services.join(', ')} · ${queries.length} planned quer${queries.length === 1 ? 'y' : 'ies'}`
+        : `${queries.length} planned quer${queries.length === 1 ? 'y' : 'ies'}`,
+    ),
+  );
+
+  if (queries.length > 0) {
+    const qList = el('div', 'idea-query-list');
+    for (const q of queries) {
+      const row = el('div', 'idea-query-chip');
+      row.append(
+        el('span', 'idea-query-provider', `${q.qid || ''} ${q.provider || ''}`.trim()),
+        el('span', 'idea-query-text', q.q || ''),
+      );
+      qList.append(row);
+    }
+    panel.append(qList);
+  }
+
+  if (grants.length > 0) {
+    const cardHost = el('div', 'idea-approval-host');
+    createApprovalCard(cardHost, {
+      title: 'Approvals for this search batch',
+      grants,
+      preTurnSupported: true,
+      onAllowGrant: typeof opts.onAllowGrant === 'function' ? opts.onAllowGrant : null,
+      onDenyGrant: typeof opts.onDenyGrant === 'function' ? opts.onDenyGrant : null,
+    });
+    panel.append(cardHost);
+  }
+
+  return panel;
+}
+
+/**
+ * Render the live `"Where I looked"` panel (`explore.md` 3 & 4.1 Coverage, package X7).
+ * Shows per-service F12 status, `"Retry <service>"` buttons, library summary, and known-paper recall.
+ */
+export function renderWhereILooked(whereILooked, opts = {}) {
   const data = whereILooked && typeof whereILooked === 'object' ? whereILooked : {};
+  const onRetryService = typeof opts.onRetryService === 'function' ? opts.onRetryService : null;
   const panel = el('section', 'idea-where-panel');
   panel.setAttribute('data-idea-section', 'where-i-looked');
   panel.setAttribute('aria-label', 'Where I looked');
 
   panel.append(el('h3', 'idea-card-title', 'Where I looked'));
 
+  if (data.scope_summary) {
+    panel.append(el('p', 'idea-card-meta', String(data.scope_summary)));
+  }
+
   const providers = Array.isArray(data.providers) ? data.providers : [];
   if (providers.length > 0) {
     const grid = el('div', 'idea-provider-grid');
     for (const p of providers) {
       const cell = el('div', 'idea-provider-cell');
-      cell.setAttribute('data-provider', String(p.name || ''));
+      const provName = String(p.name || '');
+      const provLabel = String(p.label || provName);
+      cell.setAttribute('data-provider', provName);
       const badgeSpec = providerStateTone(p.state);
       cell.append(
-        el('strong', '', p.label || p.name || ''),
+        el('strong', '', provLabel),
         createBadge(badgeSpec),
         el(
           'span',
           'idea-card-meta',
-          `${Number(p.queries_ok || 0)} ok · ${Number(p.queries_failed || 0)} failed · ${Number(p.hits || 0)} hits`,
+          p.summary
+            ? String(p.summary)
+            : `${Number(p.queries_ok || 0)} ok · ${Number(p.queries_failed || 0)} failed · ${Number(p.hits || 0)} hits`,
         ),
       );
+      if (p.retryable && onRetryService) {
+        const retryBtn = el('button', 'pill-btn sm', `Retry ${provLabel}`);
+        retryBtn.type = 'button';
+        retryBtn.setAttribute('data-action', 'retry-service');
+        retryBtn.setAttribute('data-provider', provName);
+        retryBtn.addEventListener('click', () => onRetryService(provName));
+        cell.append(retryBtn);
+      }
       grid.append(cell);
     }
     panel.append(grid);
   }
 
   const lib = data.library || { hits: 0, owned_hits: 0 };
-  panel.append(
-    el(
-      'div',
-      'idea-card-meta',
-      `Your library: ${Number(lib.hits || 0)} matched (${Number(lib.owned_hits || 0)} owned locally) — searched locally, not counted as a literature service`,
-    ),
-  );
+  const libText = lib.summary
+    ? `${lib.summary} (${Number(lib.owned_hits || 0)} owned locally) — searched locally, not counted as a literature service`
+    : `Your library: ${Number(lib.hits || 0)} matched (${Number(lib.owned_hits || 0)} owned locally) — searched locally, not counted as a literature service`;
+  panel.append(el('div', 'idea-card-meta', libText));
+
+  const recall = data.known_paper_recall;
+  if (recall && typeof recall === 'object') {
+    const total = Array.isArray(recall.given) ? recall.given.length : Number(recall.total_seeds || 0);
+    if (total > 0) {
+      const found = Array.isArray(recall.found_by_search)
+        ? recall.found_by_search.length
+        : Number(recall.found_seeds || 0);
+      const missed = Array.isArray(recall.missed) ? recall.missed : [];
+      const suffix = missed.length > 0 ? ` (missed: ${missed.join(', ')})` : '';
+      const recallEl = el(
+        'div',
+        'idea-card-meta',
+        `Known-paper recall: ${found} of ${total} seed paper(s) found by search${suffix}`,
+      );
+      recallEl.setAttribute('data-idea-recall', `${found}/${total}`);
+      panel.append(recallEl);
+    }
+  }
 
   const queries = Array.isArray(data.queries) ? data.queries : [];
   if (queries.length > 0) {

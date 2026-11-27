@@ -2,8 +2,13 @@
 // Renders verbatim Idea card, 7-stage rail mapped through F9 run states, shared F6 run_bar.js
 // cost line, no-model notice, empty/failure states, candidate list, and "Where I looked" skeleton.
 // Zero innerHTML writes. Rule S8: zero "verified", "new", "novel", or "proved" strings in DOM.
-import { getExploreSession, postIdeaOp } from './api_idea.js';
-import { renderCandidateCards, renderCandidateList, renderWhereILooked } from './idea_search.js';
+import { decideIdeaApproval, getExploreSession, postIdeaOp } from './api_idea.js';
+import {
+  renderCandidateCards,
+  renderCandidateList,
+  renderSearchPlanApproval,
+  renderWhereILooked,
+} from './idea_search.js';
 import {
   NO_MODEL_NOTICE,
   SHARPENED_IDEA_TITLE,
@@ -204,6 +209,17 @@ export function renderExploreSession(hostEl, state, callbacks = {}) {
     if (sharpenedCard) shell.append(sharpenedCard);
   }
 
+  // 5c. Search plan approval card via shared read-only `approval_card.js` (package X7).
+  const liveApprovals = Array.isArray(state?.pendingApprovals) ? state.pendingApprovals : [];
+  const effectiveApproval = buildEffectivePlanApproval(view.plan_approval, liveApprovals);
+  if (effectiveApproval) {
+    const planCard = renderSearchPlanApproval(effectiveApproval, {
+      onAllowGrant: callbacks.onAllowGrant,
+      onDenyGrant: callbacks.onDenyGrant,
+    });
+    if (planCard) shell.append(planCard);
+  }
+
   // 6. Candidate list (`idea_search.js`).
   const candidates = selectFilteredCandidates(state);
   const terms = extractHighlightTerms(view);
@@ -215,8 +231,8 @@ export function renderExploreSession(hostEl, state, callbacks = {}) {
     }),
   );
 
-  // 7. "Where I looked" skeleton (`idea_search.js`).
-  shell.append(renderWhereILooked(view.where_i_looked));
+  // 7. Live "Where I looked" panel (`idea_search.js`).
+  shell.append(renderWhereILooked(view.where_i_looked, { onRetryService: callbacks.onRetryService }));
 
   // 8. Map placeholder (F6 GraphView populated in X11/X12).
   const mapNodes = Array.isArray(view.map?.nodes) ? view.map.nodes : [];
@@ -238,12 +254,34 @@ export function renderExploreSession(hostEl, state, callbacks = {}) {
   return shell;
 }
 
+function buildEffectivePlanApproval(planApproval, pendingApprovals) {
+  const live = pendingApprovals.filter(
+    (p) => p && p.call_id && (p.tool_id === 'idea_search' || String(p.caller || '').startsWith('host:idea:')),
+  );
+  if (live.length === 0) return planApproval || null;
+  const base = planApproval && typeof planApproval === 'object' ? planApproval : { round: 1, queries: [], services: [] };
+  const grants = live.map((p) => ({
+    id: String(p.call_id),
+    kind: p.allow_session_approve ? 'session_capability' : 'worker_session',
+    label: `Allow ${p.tool_id || 'idea_search'} (${p.effect || 'network-read'})`,
+    caller: p.caller || null,
+    tool_id: p.tool_id || 'idea_search',
+    effect: p.effect || 'network-read',
+    call_id: String(p.call_id),
+    digest: String(p.digest || ''),
+    granted: false,
+    status: 'pending',
+  }));
+  return { ...base, grants };
+}
+
 /**
  * Stateful Explore session controller coordinating REST ops, focus-safe filters, and SSE updates.
  */
 export function createExploreSessionController(hostEl, deps = {}) {
   const fetchSession = deps.getExploreSession || getExploreSession;
   const runOp = deps.postIdeaOp || postIdeaOp;
+  const sendApproval = deps.decideIdeaApproval || decideIdeaApproval;
   let state = createInitialIdeaState({ hasModel: Boolean(deps.hasModel) });
   let loadSeq = 0;
 
@@ -281,6 +319,29 @@ export function createExploreSessionController(hostEl, deps = {}) {
       onRetry: () => void handleRetryClick(),
       onSaveAnswer: (payload) => void invokeOp('answer', payload),
       onPlan: () => void invokeOp('plan', {}),
+      onRetryService: (provider) => void invokeOp('search', { provider }),
+      onAllowGrant: async (grant) => {
+        if (grant?.call_id && state.sessionId) {
+          await sendApproval(state.sessionId, grant.call_id, {
+            approved: true,
+            digest: grant.digest || '',
+            approve_for_session: grant.kind === 'session_capability',
+          });
+          return { approved: true };
+        }
+        const res = await invokeOp('search', {});
+        return { approved: Boolean(res?.ok) };
+      },
+      onDenyGrant: async (grant) => {
+        if (grant?.call_id && state.sessionId) {
+          await sendApproval(state.sessionId, grant.call_id, {
+            approved: false,
+            digest: grant.digest || '',
+          });
+          return;
+        }
+        await invokeOp('stop', {});
+      },
     });
   }
 
