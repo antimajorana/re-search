@@ -14,6 +14,8 @@ pub mod paper_map_import;
 pub mod writeup;
 pub mod writeup_bib;
 pub mod writeup_md;
+pub mod writeup_solve;
+mod writeup_solve_cite;
 pub mod writeup_tex;
 pub mod zip;
 
