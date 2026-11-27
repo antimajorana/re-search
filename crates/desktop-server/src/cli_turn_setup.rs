@@ -14,7 +14,7 @@ use research_tools::solve_model::{CheckOutcome, ReviewVerdict, StepOrigin};
 use research_tools::solve_state::SolveState;
 use research_tools::solve_status::Tier;
 use research_tools::tool_profile::{
-    profile_for_session_events, session_mode_from_events, ToolProfile,
+    active_profile_for_session_events, session_mode_from_events, ToolProfile,
 };
 use research_tools::{strip_verbatim_prefix, LiteratureEndpoints};
 use serde_json::{json, Value};
@@ -269,8 +269,25 @@ pub(crate) fn path_str(p: &Path) -> String {
 /// Detect the session's mode and active frozen [`ToolProfile`] from its ledger events.
 pub fn resolve_cli_turn_profile(events: &[ledger::Event]) -> Result<(Mode, ToolProfile), String> {
     let mode = session_mode_from_events(events);
-    let profile = profile_for_session_events(events)?;
+    let profile = active_profile_for_session_events(events)?;
     Ok((mode, profile))
+}
+
+/// Distinct AppContainer sandbox session id (`1..=43` lowercase ASCII `[a-z0-9._-]`) for the
+/// isolated Solve check worker; mirrors `mcp-server/src/solve_wire::check_sandbox_id`.
+pub fn check_sandbox_id(session: &str) -> String {
+    let lower = session.to_ascii_lowercase();
+    let valid = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    let candidate = format!("{lower}-chk");
+    if valid(&candidate) && candidate.len() <= 43 && candidate != lower {
+        candidate
+    } else {
+        format!("chk-{}", &ledger::sha256_hex(session.as_bytes())[..16])
+    }
 }
 
 /// Mode-aware environment for `core.exe`: always propagates `CORE_TOOL_PROFILE` (shared seam

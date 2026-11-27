@@ -274,4 +274,69 @@ fn resolve_cli_turn_profile_maps_modes_and_rejects_unbuilt_explore() {
     let err = crate::cli_turn_setup::resolve_cli_turn_profile(&ledger.read_session("s-exp").unwrap())
         .unwrap_err();
     assert!(err.contains("profile not built yet"), "{err}");
+
+    // Legacy `investigation/1` sessions upgrade to `investigation/2` just like `turn_runner.rs`.
+    ledger.append_with_hash("s-inv1", "investigation.started", 1, &json!({})).unwrap();
+    ledger
+        .append_with_hash("s-inv1", "session.start", 1, &json!({ "tool_profile": "investigation/1" }))
+        .unwrap();
+    let (mode_i, profile_i) =
+        crate::cli_turn_setup::resolve_cli_turn_profile(&ledger.read_session("s-inv1").unwrap())
+            .unwrap();
+    assert_eq!(mode_i, research_tools::paper_key::Mode::Investigate);
+    assert_eq!(profile_i.name, research_tools::tool_profile::PROFILE_INVESTIGATION_V2);
+}
+
+#[test]
+fn wants_cli_route_enforces_antigravity_ack_on_solve_session_and_check_sandbox_id_isolates() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg = DesktopConfig {
+        port: 0,
+        data_dir: tmp.path().to_path_buf(),
+        workspace_root: None,
+        python: None,
+        worker_script: None,
+        api_base_override: None,
+        literature_endpoints: LiteratureEndpoints::default(),
+        open_window: false,
+        print_url_json: false,
+        eval_timeout_s: 30,
+        core_exe: None,
+        claude_exe: None,
+        agy_exe: None,
+        connection_env: Some(BTreeMap::new()),
+        chatgpt_test: Some(crate::chatgpt::offline_test_hooks()),
+    };
+    let chatgpt = crate::chatgpt::ChatGptHub::new(&cfg).unwrap();
+    let state = DesktopState::new(
+        cfg,
+        crate::auth::AuthGuard::new(1).unwrap(),
+        Arc::new(crate::sse::SseHub::new()),
+        chatgpt,
+    );
+    let sid = "s-solve-agy-ack";
+    let ledger = ledger::Ledger::open(tmp.path()).unwrap();
+    ledger.append_with_hash(sid, "solve.started", 1, &json!({})).unwrap();
+    state
+        .save_meta(&SessionMeta {
+            id: sid.into(),
+            title: "Solve Antigravity".into(),
+            ..SessionMeta::default()
+        })
+        .unwrap();
+
+    let (code, err) =
+        wants_cli_route(&state, sid, &json!({ "provider": "antigravity" })).unwrap_err();
+    assert_eq!(code, 403, "unacknowledged Antigravity on Solve must return 403: {err}");
+
+    crate::antigravity::handle_acknowledge(&state).unwrap();
+    let kind = wants_cli_route(&state, sid, &json!({ "provider": "antigravity" })).unwrap();
+    assert_eq!(kind, Some(CliRouteKind::Antigravity));
+
+    for s in [sid, "s-1", &"x".repeat(45)] {
+        let cid = crate::cli_turn_setup::check_sandbox_id(s);
+        assert_ne!(cid, s.to_ascii_lowercase());
+        assert!(!cid.is_empty() && cid.len() <= 43);
+        assert!(cid.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')));
+    }
 }

@@ -270,3 +270,167 @@ fn antigravity_acknowledgement_remains_enforced_for_solve_cli_route() {
     desktop_server::antigravity::handle_acknowledge(&state).unwrap();
     assert!(desktop_server::antigravity::require_acknowledged(&state).is_ok());
 }
+
+#[test]
+fn post_done_invalidation_and_api_override_and_blank_verifier_stay_honest() {
+    let tmp = TempDir::new().unwrap();
+    let data = tmp.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    // Unrelated API key in providers.json must NOT auto-fabricate a verifier when Verifier is blank.
+    std::fs::write(
+        data.join("providers.json"),
+        br#"{"providers":{"anthropic":{"api_key":"sk-ant-unrelated-key"}}}"#,
+    )
+    .unwrap();
+    let mut cfg = test_cfg(&data, None, Some("http://127.0.0.1:9".into()), None);
+    cfg.connection_env = Some(BTreeMap::new());
+    let srv = start_desktop_server(cfg).unwrap();
+    let (port, tok) = (srv.addr.port(), srv.info.token.clone());
+    let hdrs = [("X-ReSearch-Token", tok.as_str())];
+
+    let sid = "s-audit-honest";
+    create_solve_session(port, &tok, sid);
+
+    // 1. Blank verifier with unrelated key in providers.json must NOT report api_verifier_configured.
+    let blank_body = serde_json::to_vec(&json!({
+        "statement": "Compute derivative of x^4",
+        "solver": { "provider": "claude-cli", "model": "sonnet" },
+        "verifier": { "provider": "", "model": "" }
+    }))
+    .unwrap();
+    let (st, _, raw) =
+        raw_http(port, "POST", &format!("/api/sessions/{sid}/solve/prefill"), &hdrs, &blank_body);
+    assert_eq!(st, 200);
+    let resp: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(resp["cli_review"]["on_cli_route"], true);
+    assert_eq!(resp["cli_review"]["api_verifier_configured"], false);
+    assert_eq!(resp["cli_review"]["notice"], D16_CLI_REVIEW_UNAVAILABLE_NOTICE);
+
+    // 2. Explicit API solver override must NOT fall through to session/orchestrator CLI route.
+    let api_solver_body = serde_json::to_vec(&json!({
+        "statement": "Compute derivative of x^4",
+        "solver": { "provider": "anthropic", "model": "claude-sonnet-4-6" },
+        "verifier": { "provider": "", "model": "" }
+    }))
+    .unwrap();
+    let (st, _, raw) = raw_http(
+        port,
+        "POST",
+        &format!("/api/sessions/{sid}/solve/prefill"),
+        &hdrs,
+        &api_solver_body,
+    );
+    assert_eq!(st, 200);
+    let resp_api: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(resp_api["cli_review"]["on_cli_route"], false);
+
+    // 3. Post-`solve.done` invalidation: seed setup rev 1, checked step, `solve.done`, then
+    //    D15 setup rev 2 (different math_sha256 -> step becomes Stale) and verify result_sheet
+    //    reverts to `done: false` / `"Not done: ..."` with zero `"verified"` leak.
+    let ledger = Ledger::open(&data).unwrap();
+    let setup_payload = |rev: u32, math_sha: &str| {
+        json!({
+            "revision": rev,
+            "statement": format!("Rev {rev} problem"),
+            "task_kind": "calculate",
+            "target": { "description": "closed form", "form": "closed_form" },
+            "done": [],
+            "conventions": "real x",
+            "symbols": [{ "name": "x", "assumptions": ["real"] }],
+            "dimensions": {},
+            "assumptions": [],
+            "sources": [],
+            "roles": {
+                "solver": { "provider": "claude-cli", "model": "sonnet" },
+                "verifier": { "provider": "", "model": "" }
+            },
+            "budgets": {
+                "max_model_calls": 60, "max_wall_minutes": 30,
+                "max_model_calls_per_leg": 48, "max_review_loops": 6, "max_gate_bounces": 3
+            },
+            "review": "prose_only",
+            "tool_profile": "solve/1",
+            "math_sha256": math_sha
+        })
+    };
+    let math_v1 = "1".repeat(64);
+    let math_v2 = "2".repeat(64);
+    ledger.append_with_hash(sid, event_kinds::SOLVE_SETUP, 1, &setup_payload(1, &math_v1)).unwrap();
+    ledger
+        .append_with_hash(
+            sid,
+            event_kinds::PROOF_ENTRY,
+            1,
+            &json!({
+                "entry_id": "e-1",
+                "entry_type": StepEntryType::FinalAnswer.as_str(),
+                "summary": "Initial answer",
+                "details": "Computed under rev 1",
+                "depends_on": [],
+                "origin": StepOrigin::Solver,
+                "claim_sha256": "a".repeat(64),
+                "math_sha256": math_v1,
+            }),
+        )
+        .unwrap();
+    ledger
+        .append_with_hash(
+            sid,
+            event_kinds::SOLVE_DONE,
+            1,
+            &json!({
+                "final_entry_id": "e-1",
+                "own_tier": "verified",
+                "effective_tier": "verified",
+                "criteria": [],
+                "rests_on": { "given": [], "cited": [], "assumed_by_model": [], "weakest": [] },
+                "status": "finished",
+                "model_calls": { "solver": 1, "verifier": 0, "workers": 0 }
+            }),
+        )
+        .unwrap();
+
+    // Even before setup rev 2, live tier for e-1 is Unchecked -> must NEVER parrot stale "verified".
+    let (st, _, raw) = raw_http(port, "GET", &format!("/api/sessions/{sid}/solve/view"), &hdrs, b"");
+    assert_eq!(st, 200);
+    let view_pre: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(view_pre["result_sheet"]["status_line"], "Done with open items");
+    assert_eq!(view_pre["result_sheet"]["badge_label"], "Unchecked");
+    assert!(!view_pre["result_sheet"].to_string().to_ascii_lowercase().contains("verified"));
+
+    // Record a math_v1 check on e-1, then append D15 setup revision 2 (math_v2) -> e-1 becomes Stale
+    // and result_sheet MUST revert to `done: false` / `"Not done: 1 step stale"`.
+    ledger
+        .append_with_hash(
+            sid,
+            event_kinds::SOLVE_CHECK,
+            1,
+            &json!({
+                "check_id": "chk-v1",
+                "claim_sha256": "a".repeat(64),
+                "claim_index": 0,
+                "entry_id": "e-1",
+                "math_sha256": math_v1,
+                "name": "identity_symbolic",
+                "registry_sha256": "abc",
+                "params": {},
+                "outcome": "pass",
+                "asked_by": "host",
+                "receipt": { "call_id": "c-chk-1", "result_seq": 1 },
+                "evidence": {},
+                "evidence_sha256": "0".repeat(64)
+            }),
+        )
+        .unwrap();
+    ledger.append_with_hash(sid, event_kinds::SOLVE_SETUP, 1, &setup_payload(2, &math_v2)).unwrap();
+    let (st, _, raw) = raw_http(port, "GET", &format!("/api/sessions/{sid}/solve/view"), &hdrs, b"");
+    assert_eq!(st, 200);
+    let view_stale: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(view_stale["result_sheet"]["done"], false);
+    assert_eq!(view_stale["result_sheet"]["status"], "not_done");
+    assert_eq!(view_stale["result_sheet"]["stale_steps"], 1);
+    assert_eq!(view_stale["result_sheet"]["status_line"], "Not done: 1 step stale");
+    assert!(!view_stale["result_sheet"].to_string().to_ascii_lowercase().contains("verified"));
+
+    srv.shutdown();
+}

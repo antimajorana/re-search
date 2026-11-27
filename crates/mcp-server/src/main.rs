@@ -194,7 +194,7 @@ fn resolve_profile_name(
         .find(|e| e.kind == "session.start")
         .and_then(|e| e.payload.get(research_tools::tool_profile::TOOL_PROFILE_FIELD));
     if explicit.is_some() {
-        Ok(research_tools::tool_profile::profile_for_session_events(&events)?
+        Ok(research_tools::tool_profile::active_profile_for_session_events(&events)?
             .name
             .to_string())
     } else {
@@ -238,7 +238,9 @@ fn build_router() -> Result<(Router, Option<HarvestPreviews>), String> {
     let enable_flag = env("CORE_ENABLE_RESEARCH_TOOLS")
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false);
-    let explicit_profile = env(cli_route::core_tools::CORE_TOOL_PROFILE_ENV);
+    let explicit_profile = env(cli_route::core_tools::CORE_TOOL_PROFILE_ENV)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let use_profile =
         workspace_root.is_some() || sources_exist || enable_flag || explicit_profile.is_some();
 

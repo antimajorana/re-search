@@ -58,9 +58,23 @@ struct McpClient {
 
 impl McpClient {
     fn spawn_core(session: &str, data_dir: &Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_core"))
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_core"));
+        for key in [
+            "CORE_ENABLE_RESEARCH_TOOLS",
+            "CORE_WORKSPACE",
+            "RE_SEARCH_WORKSPACE",
+            "CORE_APPROVAL_ADDR",
+            "CORE_SESSION_TOKEN",
+            "CORE_PYTHON",
+            "CORE_WORKER_SCRIPT",
+            "CORE_SCRATCH",
+            "CORE_PYCACHE",
+            "CORE_CHECK_SCRATCH",
+            "CORE_CHECK_PYCACHE",
+        ] {
+            cmd.env_remove(key);
+        }
+        let mut child = cmd
             .env("CORE_SESSION", session)
             .env("CORE_DATA_DIR", data_dir)
             .env("CORE_TOOL_PROFILE", "solve/1")
@@ -252,9 +266,34 @@ fn core_binary_stdio_mcp_activates_solve_v1_without_research_flag_and_enforces_g
     }));
     assert!(is_err && fin_text.contains("GATE G7:"), "expected GATE G7, got: {fin_text}");
     assert!(!ledger.read_session(sid2).unwrap().iter().any(|e| e.kind == event_kinds::SOLVE_DONE));
+
+    // Seed 2 rejected reviews on `eid` -> GATE G6 (`verification_stuck`) blocks further tool calls.
+    for i in 1..=2 {
+        ledger.append_with_hash(sid2, event_kinds::PROOF_VERIFICATION, 1, &json!({
+            "target_entry_id": eid,
+            "verdict": "rejected",
+            "issues": [format!("gap #{i}")],
+        })).unwrap();
+    }
+    let (is_err_g6, g6_text) = mcp2.call_tool("ledger_note", json!({ "text": "continue anyway" }));
+    assert!(is_err_g6 && g6_text.contains("GATE G6:"), "expected GATE G6, got: {g6_text}");
 }
 
 fn require_sympy_python() -> (String, Vec<&'static str>) {
+    for var in ["RE_SEARCH_PYTHON", "RESEARCH_CORE_PYTHON"] {
+        if let Ok(p) = std::env::var(var) {
+            let trimmed = p.trim();
+            if !trimmed.is_empty() {
+                let ok = Command::new(trimmed)
+                    .args(["-c", "import sympy, mpmath"])
+                    .env("PYTHONNOUSERSITE", "1")
+                    .output()
+                    .is_ok_and(|o| o.status.success());
+                assert!(ok, "{var}=`{trimmed}` cannot import sympy/mpmath");
+                return (trimmed.to_string(), vec![]);
+            }
+        }
+    }
     let candidates: &[(&str, &[&'static str])] =
         if cfg!(windows) { &[("python", &[]), ("py", &["-3"])] } else { &[("python3", &[]), ("python", &[])] };
     for &(prog, prefix) in candidates {

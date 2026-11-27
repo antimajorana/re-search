@@ -17,8 +17,8 @@ use crate::cli_relay::UiRelay;
 pub use crate::cli_turn_setup::{session_route, CliRouteKind, DEFAULT_CLI_MODEL};
 pub(crate) use crate::cli_turn_setup::wants_cli_route;
 use crate::cli_turn_setup::{
-    build_cli_prompt, core_env_for_profile, path_str, pick_model, resolve_cli_turn_profile,
-    resolve_core_exe, route_of_first_start,
+    build_cli_prompt, check_sandbox_id, core_env_for_profile, path_str, pick_model,
+    resolve_cli_turn_profile, resolve_core_exe, route_of_first_start,
 };
 use crate::routes_session::ApiResult;
 use crate::state::{DesktopState, SessionMeta};
@@ -155,10 +155,11 @@ pub(crate) fn run_cli_turn(
         CliRouteKind::Antigravity => "agy",
     });
     let (scratch, pycache) = (sdir.join("scratch"), sdir.join("pycache"));
-    let (check_scratch, check_pycache) = (sdir.join("check_scratch"), sdir.join("check_pycache"));
     for d in [&work, &scratch, &pycache] {
         std::fs::create_dir_all(d).map_err(|e| format!("could not create {}: {e}", d.display()))?;
     }
+    let check_sdir = state.cfg.data_dir.join("sessions").join(check_sandbox_id(session_id));
+    let (check_scratch, check_pycache) = (check_sdir.join("scratch"), check_sdir.join("pycache"));
     let check_dirs = if mode == Mode::Solve {
         for d in [&check_scratch, &check_pycache] {
             std::fs::create_dir_all(d).map_err(|e| format!("could not create {}: {e}", d.display()))?;
@@ -229,6 +230,7 @@ pub(crate) fn run_cli_turn(
     });
     if mode == Mode::Solve && start_kind == "session.resume" {
         start_fields["resume_mode"] = json!("brief");
+        start_fields["brief_sha256"] = json!(ledger::sha256_hex(prompt_build.prompt.as_bytes()));
     }
     if kind == CliRouteKind::Antigravity {
         start_fields["confinement"] = json!(cli_route::antigravity::CONFINEMENT);

@@ -124,10 +124,11 @@ fn handle_prefill(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRes
         p.zip(m).map(|(provider, model)| RoleModel { provider, model })
     });
     let verifier = parse_optional_role(val.get("verifier")).or_else(|| {
-        ui.agent_models.get("verifier").map(|s| RoleModel {
-            provider: s.provider.clone(),
-            model: s.model.clone(),
-        })
+        ui.agent_models
+            .get("step_verifier")
+            .or_else(|| ui.agent_models.get("full_verifier"))
+            .or_else(|| ui.agent_models.get("verifier"))
+            .map(|s| RoleModel { provider: s.provider.clone(), model: s.model.clone() })
     });
     let task_kind_override = val
         .get("task_kind")

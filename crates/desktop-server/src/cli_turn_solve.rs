@@ -1,7 +1,6 @@
 //! Solve CLI parity helpers: ledger-driven result-sheet honesty (`solve.md` 5.4, 12 risk 13;
 //! rules R15, R22) and D16 subscription-CLI verifier status / CP2 API-transport seam.
 
-use crate::agent_models::resolve_in_core_role_model;
 use crate::cli_turn_setup::{meta_kind, CliRouteKind};
 use crate::state::DesktopState;
 use agent::{ProviderKind, Transport};
@@ -35,7 +34,10 @@ pub const D16_CP2_PENDING_S14_NOTICE: &str =
 ///
 /// Never inspects CLI assistant prose (`model.text` or `cli.result`), so unchecked CLI output
 /// claiming `"Final answer is verified!"` without `solve_finish` still renders
-/// `"Not done: N steps unchecked"`.
+/// `"Not done: N steps unchecked"`. Post-`solve.done` invalidation (superseded final entry,
+/// failed checks, or stale steps after a D15 setup revision) also reverts the sheet to
+/// `"Not done"` and live tiers are always derived from `state.tier(...)` rather than cached
+/// `done.effective_tier`.
 pub fn build_ledger_result_sheet(state: &SolveState) -> Value {
     let mut unchecked_steps: usize = 0;
     let mut failed_steps: usize = 0;
@@ -56,44 +58,49 @@ pub fn build_ledger_result_sheet(state: &SolveState) -> Value {
     }
 
     if let Some(done) = &state.done {
-        let status_line = match done.status {
-            SolveDoneStatus::Finished => "Done",
-            SolveDoneStatus::FinishedOpenItems => "Done with open items",
-        };
-        let badge_label = state
-            .tier(&done.final_entry_id)
-            .map(|t| t.effective.label())
-            .or_else(|| {
-                serde_json::from_value::<Tier>(json!(done.effective_tier))
-                    .ok()
-                    .map(Tier::label)
-            })
-            .unwrap_or(Tier::Unchecked.label());
-        return json!({
-            "done": true,
-            "status": done.status,
-            "status_line": status_line,
-            "unchecked_steps": unchecked_steps,
-            "failed_steps": failed_steps,
-            "stale_steps": stale_steps,
-            "final_entry_id": done.final_entry_id,
-            "own_tier": done.own_tier,
-            "effective_tier": done.effective_tier,
-            "badge_label": badge_label,
-            "criteria": done.criteria,
-            "rests_on": done.rests_on,
-        });
+        let final_active = state
+            .entry(&done.final_entry_id)
+            .is_some_and(|e| e.superseded_by.is_none());
+        let live_tier = final_active.then(|| state.tier(&done.final_entry_id)).flatten();
+        if let Some(tier) = live_tier {
+            if failed_steps == 0 && stale_steps == 0 {
+                let effective_status =
+                    if done.status == SolveDoneStatus::Finished && unchecked_steps > 0 {
+                        SolveDoneStatus::FinishedOpenItems
+                    } else {
+                        done.status
+                    };
+                let status_line = match effective_status {
+                    SolveDoneStatus::Finished => "Done",
+                    SolveDoneStatus::FinishedOpenItems => "Done with open items",
+                };
+                return json!({
+                    "done": true,
+                    "status": effective_status,
+                    "status_line": status_line,
+                    "unchecked_steps": unchecked_steps,
+                    "failed_steps": failed_steps,
+                    "stale_steps": stale_steps,
+                    "final_entry_id": done.final_entry_id,
+                    "own_tier": tier.own,
+                    "effective_tier": tier.effective,
+                    "badge_label": tier.effective.label(),
+                    "criteria": done.criteria,
+                    "rests_on": done.rests_on,
+                });
+            }
+        }
     }
 
-    let status_line = if unchecked_steps > 0 {
-        let word = if unchecked_steps == 1 { "step" } else { "steps" };
-        format!("Not done: {unchecked_steps} {word} unchecked")
-    } else if failed_steps > 0 {
+    let status_line = if failed_steps > 0 {
         let word = if failed_steps == 1 { "step" } else { "steps" };
         format!("Not done: {failed_steps} {word} failed")
     } else if stale_steps > 0 {
         let word = if stale_steps == 1 { "step" } else { "steps" };
         format!("Not done: {stale_steps} {word} stale")
+    } else if unchecked_steps > 0 {
+        let word = if unchecked_steps == 1 { "step" } else { "steps" };
+        format!("Not done: {unchecked_steps} {word} unchecked")
     } else {
         "Not done".to_string()
     };
@@ -119,13 +126,15 @@ fn cli_kind_for_solver(
     solver_override: Option<&RoleModel>,
 ) -> Option<CliRouteKind> {
     if let Some(role) = solver_override {
-        if let Some(k) = CliRouteKind::from_provider(role.provider.trim()) {
-            return Some(k);
+        let prov = role.provider.trim();
+        if !prov.is_empty() {
+            return CliRouteKind::from_provider(&prov.to_ascii_lowercase());
         }
     }
     if let Some(setup) = setup {
-        if let Some(k) = CliRouteKind::from_provider(setup.roles.solver.provider.trim()) {
-            return Some(k);
+        let prov = setup.roles.solver.provider.trim();
+        if !prov.is_empty() {
+            return CliRouteKind::from_provider(&prov.to_ascii_lowercase());
         }
     }
     let meta = state.load_meta(session_id);
@@ -138,54 +147,52 @@ fn cli_kind_for_solver(
 /// Resolved in-core API verifier `(transport, provider, model)` for CP2 S14 `verifier_loop`.
 pub type ResolvedCliVerifier = (Box<dyn Transport>, String, String);
 
+fn resolve_verifier_spec(
+    state: &DesktopState,
+    provider: &str,
+    model: &str,
+) -> Result<ResolvedCliVerifier, String> {
+    let prov = provider.trim();
+    if CliRouteKind::from_provider(&prov.to_ascii_lowercase()).is_some() {
+        return Err(D16_CLI_VERIFIER_REJECTED_NOTICE.to_string());
+    }
+    let pk = ProviderKind::parse(prov)
+        .map_err(|e| format!("invalid verifier provider `{prov}`: {e}"))?;
+    let resolved_model = if model.trim().is_empty() {
+        pk.default_model().to_string()
+    } else {
+        pk.resolve_model(model.trim())
+    };
+    let transport = state.build_transport(pk, &resolved_model)?;
+    Ok((transport, pk.cli_name().to_string(), resolved_model))
+}
+
 /// Resolve an in-core API `Transport` for Solve verifier review on a subscription-CLI session
 /// (CP2 seam for S14 `verifier_loop`).
 ///
 /// Strictly enforces `agent_models.rs`'s helper-role rule: any CLI provider (`claude-cli`,
-/// `antigravity`) in `verifier_role` is rejected with `Err(...)`, never routed as a helper.
+/// `antigravity`) in `verifier_role` or `ui.agent_models` verifier entries is rejected with
+/// `Err(...)`, never routed as a helper. Never fabricates an unrequested verifier from unrelated
+/// provider keys when the user left Verifier blank.
 pub fn resolve_api_verifier_transport_for_cli(
     state: &DesktopState,
     verifier_role: Option<&RoleModel>,
 ) -> Result<Option<ResolvedCliVerifier>, String> {
     if let Some(role) = verifier_role {
-        let prov = role.provider.trim();
-        if !prov.is_empty() {
-            if CliRouteKind::from_provider(&prov.to_ascii_lowercase()).is_some() {
-                return Err(D16_CLI_VERIFIER_REJECTED_NOTICE.to_string());
-            }
-            let pk = ProviderKind::parse(prov)
-                .map_err(|e| format!("invalid verifier provider `{prov}`: {e}"))?;
-            let model = if role.model.trim().is_empty() {
-                pk.default_model().to_string()
-            } else {
-                pk.resolve_model(role.model.trim())
-            };
-            let transport = state.build_transport(pk, &model)?;
-            return Ok(Some((transport, pk.cli_name().to_string(), model)));
+        if !role.provider.trim().is_empty() {
+            return resolve_verifier_spec(state, &role.provider, &role.model).map(Some);
         }
     }
 
     let ui = state.load_ui_settings();
     if let Some(spec) = ui
         .agent_models
-        .get("verifier")
-        .or_else(|| ui.agent_models.get("step_verifier"))
+        .get("step_verifier")
         .or_else(|| ui.agent_models.get("full_verifier"))
+        .or_else(|| ui.agent_models.get("verifier"))
     {
-        if CliRouteKind::from_provider(&spec.provider.to_ascii_lowercase()).is_some() {
-            return Err(D16_CLI_VERIFIER_REJECTED_NOTICE.to_string());
-        }
-        if let Ok(pk) = ProviderKind::parse(&spec.provider) {
-            let model = pk.resolve_model(&spec.model);
-            if let Ok(transport) = state.build_transport(pk, &model) {
-                return Ok(Some((transport, pk.cli_name().to_string(), model)));
-            }
-        }
-    }
-
-    if let Ok((pk, model)) = resolve_in_core_role_model(state, "step_verifier", None, true) {
-        if let Ok(transport) = state.build_transport(pk, &model) {
-            return Ok(Some((transport, pk.cli_name().to_string(), model)));
+        if !spec.provider.trim().is_empty() {
+            return resolve_verifier_spec(state, &spec.provider, &spec.model).map(Some);
         }
     }
 
