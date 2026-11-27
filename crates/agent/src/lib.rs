@@ -10,6 +10,7 @@ pub mod anthropic;
 pub mod autonomous;
 pub(crate) mod autonomous_prompts;
 pub mod delegate;
+pub(crate) mod dispatch;
 pub mod explore;
 pub mod gemini;
 pub mod guardrails;
