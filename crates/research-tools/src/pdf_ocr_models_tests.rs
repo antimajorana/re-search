@@ -18,7 +18,7 @@ fn real_sha256_hex(bytes: &[u8]) -> String {
 #[test]
 fn default_config_is_enabled_with_eng_and_serde_defaults() {
     let cfg = OcrLocalConfig::default();
-    assert!(DEFAULT_OCR_ENABLED);
+    const { assert!(DEFAULT_OCR_ENABLED); }
     assert!(cfg.enabled);
     assert_eq!(cfg.langs, vec!["eng".to_string()]);
     assert!(cfg.tesseract_path.is_none());

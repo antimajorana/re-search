@@ -19,7 +19,7 @@ fn build_pdf(objects: &[Vec<u8>], trailer_extra: &str) -> Vec<u8> {
     let mut offsets = Vec::with_capacity(objects.len());
     for (idx, body) in objects.iter().enumerate() {
         offsets.push(out.len());
-        write!(out, "{} 0 obj\n", idx + 1).unwrap();
+        writeln!(out, "{} 0 obj", idx + 1).unwrap();
         out.extend_from_slice(body);
         out.extend_from_slice(b"\nendobj\n");
     }
@@ -247,7 +247,7 @@ fn raster_xobject_extracts_1bit_gray_rgb_cmyk_indexed_and_predicted() {
     let renderer = RasterXObjectRenderer::default();
 
     // 1) 1-bit monochrome FlateDecode (default [0 1] and inverted /Decode [1 0]).
-    let mono_packed = zlib_compress(&[0b10110_000, 0b01001_000]);
+    let mono_packed = zlib_compress(&[0b1011_0000, 0b0100_1000]);
     let pdf_mono = build_image_pdf(5, 2, "/DeviceGray", 1, Some("/FlateDecode"), "", &mono_packed);
     let p_mono = renderer.render_page(&pdf_mono, 1, DEFAULT_RENDER_DPI).unwrap();
     assert_eq!((p_mono.width, p_mono.height, p_mono.source_kind), (5, 2, RenderedPageKind::ExtractedRasterXObject));
@@ -340,7 +340,7 @@ fn raster_renderer_enforces_bounds_and_rejects_malformed_or_unsupported_inputs()
 fn map_renderer_fallback_delegation_and_render_crop() {
     let vec_pdf = build_vector_text_pdf("Needs fallback");
     let scan_pdf = build_multipage_gray_pdf(&[(4, 4, &(0..16u8).collect::<Vec<_>>())]);
-    let injected_png = encode_rgb_png(4, 4, &vec![42u8; 4 * 4 * 3]).unwrap();
+    let injected_png = encode_rgb_png(4, 4, &[42u8; 4 * 4 * 3]).unwrap();
 
     let mut pages = BTreeMap::new();
     pages.insert(1, injected_png.clone());
