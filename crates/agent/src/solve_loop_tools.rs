@@ -140,7 +140,10 @@ pub(super) fn dispatch_solve_tools(
             let (err, txt) = run_ask_user_tool(audit, cfg.human, id, input, cfg.cancel)?;
             (err, txt, None)
         } else if let Some(hooks) = cfg.hooks {
-            if let Some(res) = hooks.handle_host_tool(audit, name, id, input, cfg.cancel) {
+            if let Some(res) =
+                hooks.handle_host_tool(audit.ledger, audit.session, name, id, input, cfg.cancel)
+            {
+                audit.flush_interleaved()?;
                 let (err, txt) = res?;
                 (err, txt, None)
             } else {

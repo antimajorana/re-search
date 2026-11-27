@@ -52,7 +52,8 @@ pub trait SolveHostHooks: Send + Sync {
 
     fn handle_host_tool(
         &self,
-        _audit: &mut Audit<'_>,
+        _ledger: &Ledger,
+        _session: &str,
         _tool_name: &str,
         _call_id: &str,
         _input: &Value,

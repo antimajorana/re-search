@@ -6,7 +6,7 @@ use super::{
     resume_solve_loop, run_solve_loop, SolveHostHooks, SolveLoopConfig, SolveWorkerRuntime,
     SOLVE_CALLER,
 };
-use crate::runner::{Audit, NoopSink, SessionOutcome};
+use crate::runner::{NoopSink, SessionOutcome};
 use crate::transport::{
     CancelToken, ContentBlock, ModelRequest, ModelResponse, StopReason, StreamObserver, ToolSpec,
     Transport, TransportError, TransportErrorKind, TransportInfo,
@@ -260,7 +260,7 @@ fn gate_bounces_r12_and_transport_error_r16_never_abort() {
     // R16: transport error -> solve.paused { transport_error }, zero session.abort.
     let ledger2 = Ledger::open(tmp.path()).unwrap();
     seed_setup(&ledger2, "s-r16", 48, 60, 3);
-    let sympy_ok: Arc<dyn ToolHandler> = Arc::new(|_, _| Ok(json!({})));
+    let sympy_ok: Arc<dyn ToolHandler> = Arc::new(|_: &CallCtx<'_>, _: &Value| Ok(json!({})));
     let ep2 = Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true));
     let (env2, router2, gate2) = make_solve_router(tmp.path(), "s-r16", ep2, sympy_ok, Arc::new(TestApproveAll));
     let tr2 = MockTransport::new(vec![Err(TransportError {
@@ -282,7 +282,7 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
     let tmp = tempfile::tempdir().unwrap();
     let ledger = Ledger::open(tmp.path()).unwrap();
     seed_setup(&ledger, "s-auto", 48, 60, 3);
-    let sympy_ok: Arc<dyn ToolHandler> = Arc::new(|_, _| Ok(json!({ "ok": true })));
+    let sympy_ok: Arc<dyn ToolHandler> = Arc::new(|_: &CallCtx<'_>, _: &Value| Ok(json!({ "ok": true })));
     let ep = Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true));
     let (env, router, gate) = make_solve_router(tmp.path(), "s-auto", ep, sympy_ok, Arc::new(TestApproveAll));
     let tr = MockTransport::new(vec![
@@ -319,7 +319,7 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
     let ep3 = Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true));
     let ep_handler = Arc::clone(&ep3);
     let calls3 = Arc::new(AtomicUsize::new(0));
-    let sympy3: Arc<dyn ToolHandler> = Arc::new(move |_, _| {
+    let sympy3: Arc<dyn ToolHandler> = Arc::new(move |_: &CallCtx<'_>, _: &Value| {
         if calls3.fetch_add(1, Ordering::SeqCst) == 0 {
             Ok(json!({ "ok": true, "exprs_out": { "ans": "Integer(42)" } }))
         } else {
@@ -358,12 +358,12 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
         fn extra_tool_specs(&self) -> Vec<ToolSpec> {
             vec![ToolSpec { name: "review_steps".into(), description: "s14".into(), input_schema: json!({}) }]
         }
-        fn handle_host_tool(&self, _: &mut Audit<'_>, name: &str, _: &str, _: &Value, _: Option<&CancelToken>) -> Option<Result<(bool, String), String>> {
+        fn handle_host_tool(&self, _: &Ledger, _: &str, name: &str, _: &str, _: &Value, _: Option<&CancelToken>) -> Option<Result<(bool, String), String>> {
             (name == "review_steps").then(|| { self.0.store(true, Ordering::SeqCst); Ok((false, "{}".into())) })
         }
     }
     let ep4 = Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true));
-    let (env4, router4, gate4) = make_solve_router(tmp.path(), "s-d6", ep4, Arc::new(|_, _| Ok(json!({}))), Arc::new(TestApproveAll));
+    let (env4, router4, gate4) = make_solve_router(tmp.path(), "s-d6", ep4, Arc::new(|_: &CallCtx<'_>, _: &Value| Ok(json!({}))), Arc::new(TestApproveAll));
     let seam = SeamHook(Arc::clone(&hook_called));
     let mut cfg4 = base_cfg(env4, gate4);
     cfg4.hooks = Some(&seam);
@@ -384,21 +384,21 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
     cancel.cancel();
     let ledger5 = Ledger::open(tmp.path()).unwrap();
     seed_setup(&ledger5, "s-cancel", 48, 60, 3);
-    let (env5, router5, gate5) = make_solve_router(tmp.path(), "s-cancel", Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true)), Arc::new(|_, _| Ok(json!({}))), Arc::new(DenySympyApprover));
+    let (env5, router5, gate5) = make_solve_router(tmp.path(), "s-cancel", Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true)), Arc::new(|_: &CallCtx<'_>, _: &Value| Ok(json!({}))), Arc::new(DenySympyApprover));
     let mut cfg5 = base_cfg(env5.clone(), gate5.clone());
     cfg5.cancel = Some(&cancel);
     assert_eq!(run_solve_loop(&MockTransport::new(vec![]), &router5, &ledger5, &cfg5, &mut NoopSink).unwrap(), SessionOutcome::Paused { turns: 0, reason: "user".into() });
 
     let ledger6 = Ledger::open(tmp.path()).unwrap();
     seed_setup(&ledger6, "s-app", 48, 60, 3);
-    let (env6, router6, gate6) = make_solve_router(tmp.path(), "s-app", Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true)), Arc::new(|_, _| Ok(json!({}))), Arc::new(DenySympyApprover));
+    let (env6, router6, gate6) = make_solve_router(tmp.path(), "s-app", Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true)), Arc::new(|_: &CallCtx<'_>, _: &Value| Ok(json!({}))), Arc::new(DenySympyApprover));
     let cfg6 = base_cfg(env6, gate6);
     let tr6 = MockTransport::new(vec![tool_resp("a1", "sympy_eval", json!({ "code": "1+1" }))]);
     assert_eq!(run_solve_loop(&tr6, &router6, &ledger6, &cfg6, &mut NoopSink).unwrap(), SessionOutcome::Paused { turns: 1, reason: "approval_needed".into() });
     // Brief resume after approval_needed
     let ledger6_ref = Ledger::open(tmp.path()).unwrap();
     let tr6_res = MockTransport::new(vec![end_resp("Resumed cleanly.")]);
-    let (_, router6r, gate6r) = make_solve_router(tmp.path(), "s-app", Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true)), Arc::new(|_, _| Ok(json!({}))), Arc::new(TestApproveAll));
+    let (_, router6r, gate6r) = make_solve_router(tmp.path(), "s-app", Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true)), Arc::new(|_: &CallCtx<'_>, _: &Value| Ok(json!({}))), Arc::new(TestApproveAll));
     let mut cfg6r = base_cfg(Arc::new(ResearchEnv::new(tmp.path())), gate6r);
     cfg6r.prompt = "Approved, continue.".into();
     let out6r = resume_solve_loop(&tr6_res, &router6r, &ledger6_ref, &cfg6r, &mut NoopSink).unwrap();
