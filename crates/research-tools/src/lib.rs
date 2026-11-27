@@ -51,6 +51,7 @@ pub mod pdf;
 pub mod pdf_firstpage;
 mod pdf_firstpage_norm;
 pub mod pdf_match;
+pub mod pdf_ocr_models;
 pub mod pdf_pages;
 mod pdf_pages_bench;
 mod pdf_pages_job;
