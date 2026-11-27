@@ -236,7 +236,12 @@ fn gate_bounces_r12_and_transport_error_r16_never_abort() {
     let c2 = Arc::clone(&count);
     let sympy: Arc<dyn ToolHandler> = Arc::new(move |_ctx: &CallCtx<'_>, _args: &Value| {
         let n = c2.fetch_add(1, Ordering::SeqCst) + 1;
-        Ok(json!({ "ok": true, "exprs_out": { format!("x{n}"): format!("Symbol('x{n}')") } }))
+        Ok(json!({
+            "ok": true,
+            "value": format!("x{n}"),
+            "error": Value::Null,
+            "exprs_out": { format!("x{n}"): format!("Symbol('x{n}')") }
+        }))
     });
     let ep = Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true));
     let (env, router, gate) = make_solve_router(tmp.path(), "s-r12", ep, sympy, Arc::new(TestApproveAll));
@@ -286,11 +291,11 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
     let ep = Arc::new(StubEpoch(Arc::new(AtomicU64::new(1)), true));
     let (env, router, gate) = make_solve_router(tmp.path(), "s-auto", ep, sympy_ok, Arc::new(TestApproveAll));
     let tr = MockTransport::new(vec![
-        tool_resp("tu_1", "ledger_note", json!({ "text": &"a".repeat(250) })),
+        tool_resp("tu_1", "ledger_note", json!({ "text": &"a".repeat(8_000) })),
         end_resp("Continued after brief checkpoint."),
     ]);
     let mut cfg = base_cfg(env, gate);
-    cfg.context_window_chars = 600; // turn 1 passes 60%, checkpointing before turn 2
+    cfg.context_window_chars = 16_000; // baseline < 60%, turn 1 pushes >= 60% -> 1 checkpoint before turn 2
     let out = run_solve_loop(&tr, &router, &ledger, &cfg, &mut NoopSink).unwrap();
     assert_eq!(out, SessionOutcome::Completed { turns: 2, stop_reason: "end_turn".into() });
     let evs = ledger.read_session("s-auto").unwrap();
@@ -321,7 +326,7 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
     let calls3 = Arc::new(AtomicUsize::new(0));
     let sympy3: Arc<dyn ToolHandler> = Arc::new(move |_: &CallCtx<'_>, _: &Value| {
         if calls3.fetch_add(1, Ordering::SeqCst) == 0 {
-            Ok(json!({ "ok": true, "exprs_out": { "ans": "Integer(42)" } }))
+            Ok(json!({ "ok": true, "value": "42", "error": Value::Null, "exprs_out": { "ans": "Integer(42)" } }))
         } else {
             ep_handler.0.store(2, Ordering::Release);
             Err("worker timed out and restarted".into())
