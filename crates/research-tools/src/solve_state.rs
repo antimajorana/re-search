@@ -457,12 +457,12 @@ fn parse_tool_result(
         .and_then(Value::as_str)
         .map(str::to_string);
     let wall_ms = meta.get("wall_ms").or_else(|| p.get("wall_ms")).and_then(Value::as_u64);
-    let process: Option<ReceiptProcess> = meta
+    let process: Option<ReceiptProcess> = p
         .get("process")
-        .or_else(|| p.get("process"))
+        .or_else(|| meta.get("process"))
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .or(match caller.as_deref() {
-            Some("verifier:solve") => Some(ReceiptProcess::Verifier),
+            Some("verifier:solve" | "worker:blind_compute") => Some(ReceiptProcess::Verifier),
             Some("host:check") => Some(ReceiptProcess::Check),
             _ => None,
         });
