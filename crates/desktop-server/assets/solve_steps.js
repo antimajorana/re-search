@@ -354,7 +354,7 @@ export function createSolveWorkspace(host, initialView = {}, opts = {}) {
   let renderedClosureOnly = closureOnly;
   let closureCheckbox = null;
   let showSuperseded = false;
-  let runBarApi = null, graphViewApi = null, exprsViewApi = null, whyPopoverApi = null, activeExtDestroy = null;
+  let runBarApi = null, graphViewApi = null, exprsViewApi = null, whyPopoverApi = null, activeExtApi = null, activeExtDestroy = null;
 
   const localTabs = new Map();
   for (const t of Array.isArray(opts.extraTabs) ? opts.extraTabs : []) {
@@ -386,6 +386,7 @@ export function createSolveWorkspace(host, initialView = {}, opts = {}) {
     if (graphViewApi) { graphViewApi.destroy(); graphViewApi = null; }
     if (exprsViewApi) { exprsViewApi.destroy(); exprsViewApi = null; }
     if (typeof activeExtDestroy === 'function') { activeExtDestroy(); activeExtDestroy = null; }
+    activeExtApi = null;
     renderedTabId = null;
     closureCheckbox = null;
   }
@@ -484,10 +485,8 @@ export function createSolveWorkspace(host, initialView = {}, opts = {}) {
         if (selectedStepId) graphViewApi.selectNode(selectedStepId);
         return;
       }
-      if (activeTabId === 'expressions' && exprsViewApi) {
-        exprsViewApi.update(view.handles || []);
-        return;
-      }
+      if (activeTabId === 'expressions' && exprsViewApi) { exprsViewApi.update(view.handles || []); return; }
+      if (activeExtApi && typeof activeExtApi.update === 'function') { activeExtApi.update(view); return; }
     }
 
     destroySideWidgets();
@@ -557,9 +556,11 @@ export function createSolveWorkspace(host, initialView = {}, opts = {}) {
     const custom = tabs.find((t) => t.id === activeTabId);
     if (custom && typeof custom.mount === 'function') {
       const mounted = custom.mount(panel, {
-        document: doc, view, sessionId: opts.sessionId || '', katex: opts.katex,
-        onSelectStep: selectStep, onAck: opts.onAck, onStepCorrected: opts.onStepCorrected,
+        document: doc, view, sessionId: opts.sessionId || '', token: opts.token, fetch: opts.fetch,
+        katex: opts.katex, onSelectStep: selectStep, onAck: opts.onAck,
+        onStepCorrected: opts.onStepCorrected, onTranscribe: opts.onTranscribe,
       });
+      activeExtApi = mounted && typeof mounted === 'object' ? mounted : null;
       if (mounted && typeof mounted.destroy === 'function') activeExtDestroy = () => mounted.destroy();
       else if (typeof mounted === 'function') activeExtDestroy = mounted;
     }
