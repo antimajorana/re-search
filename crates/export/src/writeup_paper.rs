@@ -2,14 +2,14 @@
 //! (`00-overview.md` 2.13, 3.2 rows 19–24, 7.2 Set W, 7.3, 8.1, 8.3 Q3 & Q10; `investigate.md`
 //! §3 L', §4.1–4.4, §6 rules 6.2/6.5/6.6/6.12/6.21/6.22, §12, D9).
 //!
-//! Pure, deterministic function over verified ledger events + read-only library/lessons stores.
-//! Zero model calls, zero network calls, zero disk writes.
+//! Pure, deterministic function over verified ledger events + optional existing library/lessons
+//! stores. Zero model calls, zero network calls, zero explicit writes.
 
 use crate::writeup::{RejectedWriteupQuote, Writeup, WriteupMode};
 use crate::writeup_paper_meta::{
-    build_status_line, collect_reader_overrides, load_and_verify_source_files,
-    open_existing_library, resolve_bibliography, resolve_licence, resolve_primary_paper_ref,
-    PdfPageIndex, EVENT_INVESTIGATION_PAPER, EVENT_SOURCE_INGESTED,
+    collect_reader_overrides, load_and_verify_source_files, open_existing_library,
+    resolve_bibliography, resolve_licence, resolve_primary_paper_ref, PdfPageIndex,
+    EVENT_INVESTIGATION_PAPER, EVENT_SOURCE_INGESTED, SKELETON_ONLY_STATUS,
 };
 use crate::writeup_paper_nodes::BuildCtx;
 use ledger::{sha256_hex, Event, Ledger};
@@ -17,10 +17,10 @@ use research_tools::investigation_markers::{
     active_investigation_slice, EVENT_INVESTIGATION_SKELETON,
 };
 use research_tools::library::PaperDetail;
-use research_tools::map_fold::{fold_map, FoldedMap};
+use research_tools::map_fold::{fold_map, FoldedMap, FoldedTask};
 use research_tools::paper_key::Mode;
 use research_tools::sandbox::WorkspaceSandbox;
-use research_tools::skeleton::{PaperSkeleton, SkNodeKind};
+use research_tools::skeleton::{PaperSkeleton, SkNodeKind, SkeletonBuilder, SkeletonQuality};
 use research_tools::tool_profile::session_mode_from_events;
 use research_tools::validate_session_id;
 use serde_json::Value;
@@ -71,11 +71,22 @@ pub fn build_writeup_with_options(
     let (_report, events) = ledger
         .read_verified_session(session_id)
         .map_err(|e| format!("session `{session_id}` failed ledger verification: {e}"))?;
+    build_writeup_from_verified(data_dir, session_id, &ledger, &events, opts)
+}
 
-    if session_mode_from_events(&events) != Mode::Investigate {
+/// Build an Investigate reading-notes [`Writeup`] reusing an already-verified `(ledger, events)`
+/// pair (eliminates duplicate ledger verification when called from the shared dispatcher).
+pub(crate) fn build_writeup_from_verified(
+    data_dir: &Path,
+    session_id: &str,
+    ledger: &Ledger,
+    events: &[Event],
+    opts: PaperWriteupOptions,
+) -> Result<PaperWriteupBuild, String> {
+    if session_mode_from_events(events) != Mode::Investigate {
         return Err("Investigate reading-notes write-up requires an Investigate session.".into());
     }
-    let (slice, _) = active_investigation_slice(&events)?;
+    let (slice, _) = active_investigation_slice(events)?;
 
     let paper_ev = slice.iter().rev().find(|e| e.kind == EVENT_INVESTIGATION_PAPER);
     let pinned_source = paper_ev
@@ -112,8 +123,13 @@ pub fn build_writeup_with_options(
         return Err("pinned skeleton blob `source_id` disagrees with ledger event".into());
     }
 
-    let receipt = find_source_receipt(&events, &skeleton.source_id, skeleton.source_seq)
-        .ok_or_else(|| format!("missing `source.ingested` receipt for pinned source `{}`", skeleton.source_id))?;
+    let receipt = find_source_receipt(events, &skeleton.source_id, skeleton.source_seq)
+        .ok_or_else(|| {
+            format!(
+                "missing `source.ingested` receipt for pinned source `{}` (seq {})",
+                skeleton.source_id, skeleton.source_seq
+            )
+        })?;
 
     let sandbox = WorkspaceSandbox::new(data_dir.to_path_buf(), None);
     let source_files = load_and_verify_source_files(&sandbox, session_id, receipt, &skeleton)?;
@@ -123,7 +139,7 @@ pub fn build_writeup_with_options(
     let lib_detail = lib.as_ref().and_then(|l| l.get_paper(&skeleton.paper_key).ok().flatten());
     let licence_res = resolve_licence(paper_ev, receipt, lib_detail.as_ref());
 
-    let folded = fold_map(&skeleton, &events, false);
+    let folded = fold_map(&skeleton, events, false);
     let overrides = collect_reader_overrides(slice, &skeleton, data_dir);
 
     let title = resolve_paper_title(&skeleton, paper_ev, receipt, lib_detail.as_ref());
@@ -146,7 +162,7 @@ pub fn build_writeup_with_options(
     let mut ctx = BuildCtx {
         sandbox: &sandbox,
         session_id,
-        events: &events,
+        events,
         skeleton: &skeleton,
         folded: &folded,
         overrides: &overrides,
@@ -163,9 +179,9 @@ pub fn build_writeup_with_options(
     };
 
     let mut sections = vec![ctx.build_outline_section()];
-    let (main_sec, included_tags) = ctx.build_main_results_section();
+    let (main_sec, mut included_tags) = ctx.build_main_results_section();
     sections.push(main_sec);
-    if let Some(extra_sec) = ctx.build_additional_notes_section(&included_tags) {
+    if let Some(extra_sec) = ctx.build_additional_notes_section(&mut included_tags) {
         sections.push(extra_sec);
     }
 
@@ -191,20 +207,17 @@ pub fn build_writeup_with_options(
 }
 
 fn find_source_receipt<'a>(events: &'a [Event], source_id: &str, source_seq: u64) -> Option<&'a Event> {
-    events
-        .iter()
-        .rev()
-        .find(|e| {
+    if source_seq > 0 {
+        return events.iter().rev().find(|e| {
             e.kind == EVENT_SOURCE_INGESTED
                 && e.seq == source_seq
                 && e.payload["source_id"].as_str() == Some(source_id)
-        })
-        .or_else(|| {
-            events
-                .iter()
-                .rev()
-                .find(|e| e.kind == EVENT_SOURCE_INGESTED && e.payload["source_id"].as_str() == Some(source_id))
-        })
+        });
+    }
+    events
+        .iter()
+        .rev()
+        .find(|e| e.kind == EVENT_SOURCE_INGESTED && e.payload["source_id"].as_str() == Some(source_id))
 }
 
 fn resolve_paper_title(
@@ -235,11 +248,6 @@ fn resolve_paper_authors(
     receipt: &Event,
     lib_detail: Option<&PaperDetail>,
 ) -> Vec<String> {
-    if let Some(d) = lib_detail {
-        if !d.paper.authors.is_empty() {
-            return d.paper.authors.clone();
-        }
-    }
     for ev in [paper_ev, Some(receipt)].into_iter().flatten() {
         if let Some(arr) = ev.payload.get("authors").and_then(Value::as_array) {
             let names: Vec<String> = arr
@@ -254,7 +262,7 @@ fn resolve_paper_authors(
             }
         }
     }
-    Vec::new()
+    lib_detail.map(|d| d.paper.authors.clone()).unwrap_or_default()
 }
 
 fn resolve_paper_year(
@@ -262,12 +270,11 @@ fn resolve_paper_year(
     receipt: &Event,
     lib_detail: Option<&PaperDetail>,
 ) -> Option<i32> {
-    lib_detail.and_then(|d| d.paper.year).or_else(|| {
-        [paper_ev, Some(receipt)]
-            .into_iter()
-            .flatten()
-            .find_map(|e| e.payload.get("year").and_then(Value::as_i64).map(|y| y as i32))
-    })
+    [paper_ev, Some(receipt)]
+        .into_iter()
+        .flatten()
+        .find_map(|e| e.payload.get("year").and_then(Value::as_i64).map(|y| y as i32))
+        .or_else(|| lib_detail.and_then(|d| d.paper.year))
 }
 
 fn collect_referenced_bib_keys(skeleton: &PaperSkeleton, folded: &FoldedMap) -> BTreeSet<String> {
@@ -294,4 +301,98 @@ fn collect_referenced_bib_keys(skeleton: &PaperSkeleton, folded: &FoldedMap) -> 
         }
     }
     keys
+}
+
+pub(crate) fn quality_word(q: SkeletonQuality) -> &'static str {
+    match q {
+        SkeletonQuality::Full => "full",
+        SkeletonQuality::Partial => "partial",
+        SkeletonQuality::Weak => "weak",
+    }
+}
+
+/// Mandatory opening status line (`00-overview.md` 2.13 rule 1, 8.3 Q10, `investigate.md` 6.21).
+/// Never contains `"verified"`, `"proved"`, `"new"`, or `"novel"`.
+pub(crate) fn build_status_line(
+    skeleton: &PaperSkeleton,
+    pdf_index: &PdfPageIndex,
+    tasks: &[FoldedTask],
+) -> String {
+    let paper_id = match skeleton.version.as_deref().filter(|s| !s.is_empty()) {
+        Some(v) => format!("{} ({v})", skeleton.paper_key),
+        None => skeleton.paper_key.to_string(),
+    };
+    let origin = match skeleton.builder {
+        SkeletonBuilder::Tex1 => "Structure from TeX",
+        SkeletonBuilder::Html1 => "Structure from arXiv HTML",
+        SkeletonBuilder::Pdf1 => "Structure from PDF text",
+    };
+    let mut reason_text = skeleton
+        .quality_reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_default();
+    if skeleton.builder == SkeletonBuilder::Pdf1 && pdf_index.has_scanned_pages() {
+        let lower = reason_text.to_ascii_lowercase();
+        if !lower.contains("scan") && !lower.contains("ocr") {
+            if reason_text.is_empty() {
+                reason_text = "scanned pages (OCR)".to_string();
+            } else {
+                reason_text.push_str(" (scan)");
+            }
+        }
+    }
+    let reason = if reason_text.is_empty() {
+        String::new()
+    } else {
+        format!(" — {reason_text}")
+    };
+    let structure = format!(
+        "{origin} ({}, {}{reason})",
+        skeleton.builder.as_str(),
+        quality_word(skeleton.quality)
+    );
+    let task_summary = if tasks.is_empty() {
+        SKELETON_ONLY_STATUS.to_string()
+    } else {
+        let mut parts = Vec::new();
+        if let Some(orient) = tasks.iter().rev().find(|t| t.task == "orient") {
+            parts.push(format!("Orient: {}", orient.run_state_label));
+        }
+        let open_count = tasks.iter().filter(|t| t.task == "open").count();
+        if open_count > 0 {
+            parts.push(format!("Open tasks: {open_count}"));
+        }
+        let ctx_count = tasks.iter().filter(|t| t.task == "context").count();
+        if ctx_count > 0 {
+            parts.push(format!("Context tasks: {ctx_count}"));
+        }
+        if parts.is_empty() { format!("Tasks recorded: {}", tasks.len()) } else { parts.join("; ") }
+    };
+    format!("{paper_id}. {structure}. {task_summary}.")
+}
+
+pub(crate) fn kind_display(kind: SkNodeKind) -> &'static str {
+    match kind {
+        SkNodeKind::FrontMatter => "Front matter",
+        SkNodeKind::Section => "Section",
+        SkNodeKind::Definition => "Definition",
+        SkNodeKind::Assumption => "Assumption",
+        SkNodeKind::Theorem => "Theorem",
+        SkNodeKind::Lemma => "Lemma",
+        SkNodeKind::Proposition => "Proposition",
+        SkNodeKind::Corollary => "Corollary",
+        SkNodeKind::Conjecture => "Conjecture",
+        SkNodeKind::Claim => "Claim",
+        SkNodeKind::Proof => "Proof",
+        SkNodeKind::Example => "Example",
+        SkNodeKind::Remark => "Remark",
+        SkNodeKind::Equation => "Equation",
+        SkNodeKind::Figure => "Figure",
+        SkNodeKind::Table => "Table",
+        SkNodeKind::Algorithm => "Algorithm",
+        SkNodeKind::Bibliography => "Bibliography",
+    }
 }

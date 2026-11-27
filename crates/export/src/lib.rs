@@ -15,6 +15,7 @@ pub mod writeup;
 pub mod writeup_bib;
 pub mod writeup_md;
 pub mod writeup_paper;
+mod writeup_paper_anchors;
 mod writeup_paper_meta;
 mod writeup_paper_nodes;
 pub mod writeup_tex;
@@ -142,4 +143,142 @@ pub fn export_session_bytes(
             zip::build_reproducible_zip(data_dir, &data)?,
         )),
     }
+}
+
+/// Output format for F15 reading-notes / derivation / summary write-ups (`00-overview.md` 2.13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WriteupFormat {
+    Tex,
+    Md,
+    Bib,
+}
+
+impl WriteupFormat {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "tex" | "latex" => Ok(Self::Tex),
+            "md" | "markdown" => Ok(Self::Md),
+            "bib" | "bibtex" => Ok(Self::Bib),
+            other => Err(format!(
+                "unknown write-up format `{other}` (expected `tex`, `md`, or `bib`)"
+            )),
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Tex => "tex",
+            Self::Md => "md",
+            Self::Bib => "bib",
+        }
+    }
+
+    pub fn content_type(self) -> &'static str {
+        match self {
+            Self::Tex => "application/x-tex; charset=utf-8",
+            Self::Md => "text/markdown; charset=utf-8",
+            Self::Bib => "application/x-bibtex; charset=utf-8",
+        }
+    }
+}
+
+/// Dispatch a verified session to its mode-specific F15 write-up adapter (zero model calls).
+pub fn build_session_writeup(data_dir: &Path, session: &str) -> Result<writeup::Writeup, String> {
+    validate_session_id(session).map_err(|e| e.to_string())?;
+    let ledger = Ledger::open_existing(data_dir).map_err(|e| e.to_string())?;
+    let (_report, events) = ledger
+        .read_verified_session(session)
+        .map_err(|e| format!("cannot build write-up for unverified session `{session}`: {e}"))?;
+    let mode = research_tools::tool_profile::session_mode_from_events(&events);
+    match mode {
+        research_tools::paper_key::Mode::Investigate => writeup_paper::build_writeup_from_verified(
+            data_dir,
+            session,
+            &ledger,
+            &events,
+            writeup_paper::PaperWriteupOptions::default(),
+        )
+        .map(|b| b.writeup),
+        other => Err(format!(
+            "write-up adapter not built yet for mode `{}`",
+            other.as_str()
+        )),
+    }
+}
+
+/// Build and render a session's F15 write-up to `(filename, bytes)` in `Tex`, `Md`, or `Bib`.
+pub fn writeup_session_bytes(
+    data_dir: &Path,
+    session: &str,
+    format: WriteupFormat,
+    opts: &writeup::WriteupOptions,
+) -> Result<(String, Vec<u8>), String> {
+    let doc = build_session_writeup(data_dir, session)?;
+    match format {
+        WriteupFormat::Tex => {
+            let aligned_stem = if opts.bib_stem.trim().is_empty() || opts.bib_stem == "references" {
+                format!("{session}-writeup")
+            } else {
+                opts.bib_stem.clone()
+            };
+            let tex_opts = writeup::WriteupOptions {
+                include_inline_badges: opts.include_inline_badges,
+                bib_stem: aligned_stem,
+            };
+            Ok((
+                format!("{session}-writeup.tex"),
+                writeup_tex::render_writeup_tex(&doc, &tex_opts)?.into_bytes(),
+            ))
+        }
+        WriteupFormat::Md => Ok((
+            format!("{session}-writeup.md"),
+            writeup_md::render_writeup_markdown(&doc, opts)?.into_bytes(),
+        )),
+        WriteupFormat::Bib => Ok((
+            format!("{session}-writeup.bib"),
+            writeup_bib::render_bibtex(&doc.bibliography).into_bytes(),
+        )),
+    }
+}
+
+/// Build and write a session's F15 write-up to `out_path`.
+///
+/// For `WriteupFormat::Tex`, writes BOTH `<stem>.tex` and sidecar `<stem>.bib` automatically.
+pub fn writeup_session_to_path(
+    data_dir: &Path,
+    session: &str,
+    format: WriteupFormat,
+    opts: &writeup::WriteupOptions,
+    out_path: &Path,
+) -> Result<Vec<u8>, String> {
+    let doc = build_session_writeup(data_dir, session)?;
+    if let Some(parent) = out_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).map_err(|e| format!("failed to create write-up dir: {e}"))?;
+    }
+    let bytes = match format {
+        WriteupFormat::Tex => {
+            let stem = out_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(opts.bib_stem.as_str());
+            let tex_opts = writeup::WriteupOptions {
+                include_inline_badges: opts.include_inline_badges,
+                bib_stem: stem.to_string(),
+            };
+            let tex_bytes = writeup_tex::render_writeup_tex(&doc, &tex_opts)?.into_bytes();
+            let bib_path = out_path.with_extension("bib");
+            let bib = writeup_bib::render_bibtex(&doc.bibliography);
+            fs::write(&bib_path, bib.as_bytes()).map_err(|e| {
+                format!("failed to write sidecar `.bib` `{}`: {e}", bib_path.display())
+            })?;
+            tex_bytes
+        }
+        WriteupFormat::Md => writeup_md::render_writeup_markdown(&doc, opts)?.into_bytes(),
+        WriteupFormat::Bib => writeup_bib::render_bibtex(&doc.bibliography).into_bytes(),
+    };
+    fs::write(out_path, &bytes)
+        .map_err(|e| format!("failed to write write-up `{}`: {e}", out_path.display()))?;
+    Ok(bytes)
 }

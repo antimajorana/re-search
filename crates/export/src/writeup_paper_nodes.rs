@@ -2,30 +2,25 @@
 //!
 //! Renders deterministic Outline, Main Results (honoring user pins over model roles,
 //! licence-gated full vs 300-char clipped quotes, PDF physical pages, OCR non-math tags,
-//! authors'-claim half-badges, hypotheses, open-node children, V12 context cards, F16a
-//! overrides tagged `"corrected by you"`, and user notes), and non-removable check rows.
+//! F16a overrides tagged `"corrected by you"`, and user notes), and non-removable check rows.
 
 use crate::writeup::{
-    writeup_wording, CheckTableRow, HowChecked, ProseBasis, QuoteLocator, RejectedWriteupQuote,
-    WriteupBlock, WriteupQuote, WriteupSection,
+    writeup_wording, CheckTableRow, HowChecked, ProseBasis, RejectedWriteupQuote, WriteupBlock,
+    WriteupSection,
 };
-use crate::writeup_paper::PaperWriteupOptions;
+use crate::writeup_paper::{kind_display, quality_word, PaperWriteupOptions};
+use crate::writeup_paper_anchors::{format_locator_note, narrowed_probe_end};
 use crate::writeup_paper_meta::{
-    extract_node_statement_span, kind_display, quality_word, LicenceResolution, PdfPageIndex,
-    ReaderNodeOverride, CORRECTED_BY_YOU_LABEL, FALLBACK_RESULTS_NOTE, PINNED_MAIN_RESULT_NOTE,
+    extract_node_statement_span, neutralize_ocr_math_delimiters, ExtractedStatement,
+    LicenceResolution, PdfPageIndex, ReaderNodeOverride, CORRECTED_BY_YOU_LABEL,
+    FALLBACK_RESULTS_NOTE, PINNED_MAIN_RESULT_NOTE,
 };
 use ledger::Event;
-use research_tools::map_context_defs::ContextCardOrigin;
-use research_tools::map_defs::VerifiedMapAnchor;
 use research_tools::map_fold::{FoldedMap, FoldedNodeReading, ReaderPin};
 use research_tools::paper_key::PaperRef;
-use research_tools::quote_core::{
-    clip_quote, quote_sha256, verify_quote, verify_quote_ref, QuoteFault, QuoteRef,
-    MAX_DISPLAY_QUOTE_CHARS,
-};
+use research_tools::quote_core::{clip_quote, verify_quote, MAX_DISPLAY_QUOTE_CHARS};
 use research_tools::sandbox::WorkspaceSandbox;
 use research_tools::skeleton::{PaperSkeleton, SkNode, SkNodeKind};
-use research_tools::status_badge::status_badge;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) struct BuildCtx<'a> {
@@ -48,7 +43,7 @@ pub(crate) struct BuildCtx<'a> {
 }
 
 impl<'a> BuildCtx<'a> {
-    fn push_row(
+    pub(crate) fn push_row(
         &mut self,
         id: impl Into<String>,
         statement: impl Into<String>,
@@ -73,13 +68,35 @@ impl<'a> BuildCtx<'a> {
 
     pub fn build_outline_section(&mut self) -> WriteupSection {
         let mut blocks = Vec::new();
-        let sections: Vec<&SkNode> = self.skeleton.nodes.iter()
+        let discarded_sections: Vec<&SkNode> = self
+            .skeleton
+            .nodes
+            .iter()
+            .filter(|n| n.kind == SkNodeKind::Section && self.is_not_a_node(n))
+            .collect();
+        for sec in discarded_sections {
+            if let Some(tag) = sec.tag.as_deref() {
+                if let Some(ov) = self.overrides.get(tag) {
+                    self.record_override_row(tag, ov, sec, false);
+                }
+            }
+        }
+        let sections: Vec<&SkNode> = self
+            .skeleton
+            .nodes
+            .iter()
             .filter(|n| n.kind == SkNodeKind::Section && !self.is_not_a_node(n))
             .collect();
-        let theorem_count = self.skeleton.nodes.iter()
+        let theorem_count = self
+            .skeleton
+            .nodes
+            .iter()
             .filter(|n| n.kind.is_theorem_like() && !self.is_not_a_node(n))
             .count();
-        let eq_count = self.skeleton.nodes.iter()
+        let eq_count = self
+            .skeleton
+            .nodes
+            .iter()
             .filter(|n| n.kind == SkNodeKind::Equation && !self.is_not_a_node(n))
             .count();
         let total_minutes: f64 = if !self.skeleton.stats.is_empty() {
@@ -90,25 +107,38 @@ impl<'a> BuildCtx<'a> {
 
         let lic_desc = match (&self.licence.raw, self.licence.open) {
             (Some(l), true) => format!("Licence: {l} ({}; full statements permitted).", self.licence.source),
-            (Some(l), false) => format!("Licence: {l} ({}; excerpts capped at {MAX_DISPLAY_QUOTE_CHARS} characters).", self.licence.source),
+            (Some(l), false) => format!(
+                "Licence: {l} ({}; excerpts capped at {MAX_DISPLAY_QUOTE_CHARS} characters).",
+                self.licence.source
+            ),
             (None, _) => format!("Licence: not recorded (excerpts capped at {MAX_DISPLAY_QUOTE_CHARS} characters)."),
         };
         blocks.push(WriteupBlock::Prose {
             text: format!(
                 "Deterministic outline from {}: {} section(s), {} theorem-like statement(s), {} labelled equation(s), estimated {:.1} reading minutes. {lic_desc}",
-                self.skeleton.builder.as_str(), sections.len(), theorem_count, eq_count, total_minutes
+                self.skeleton.builder.as_str(),
+                sections.len(),
+                theorem_count,
+                eq_count,
+                total_minutes
             ),
             basis: ProseBasis::App,
         });
 
-        let stats_by_tag: BTreeMap<&str, (u32, f64, u32)> = self.skeleton.stats.iter()
+        let stats_by_tag: BTreeMap<&str, (u32, f64, u32)> = self
+            .skeleton
+            .stats
+            .iter()
             .filter_map(|st| {
                 let tag = st.section_tag.as_deref()?;
                 let res = st.counts.iter().filter(|(k, _)| k.is_theorem_like()).map(|(_, &c)| c).sum();
                 Some((tag, (st.words, st.read_minutes, res)))
             })
             .collect();
-        let parent_map: BTreeMap<&str, Option<&str>> = self.skeleton.nodes.iter()
+        let parent_map: BTreeMap<&str, Option<&str>> = self
+            .skeleton
+            .nodes
+            .iter()
             .filter_map(|n| Some((n.tag.as_deref()?, n.parent.as_deref())))
             .collect();
 
@@ -124,7 +154,7 @@ impl<'a> BuildCtx<'a> {
                 basis: ProseBasis::App,
             });
             if let Some(ov_rec) = ov {
-                self.record_override_row(tag, ov_rec, sec);
+                self.record_override_row(tag, ov_rec, sec, false);
             }
         }
 
@@ -142,30 +172,44 @@ impl<'a> BuildCtx<'a> {
         let mut blocks = Vec::new();
         let mut included = BTreeSet::new();
 
-        let mut selected_sk: Vec<&SkNode> = self.skeleton.nodes.iter()
+        let mut selected_sk: Vec<&SkNode> = self
+            .skeleton
+            .nodes
+            .iter()
             .filter(|n| {
                 !self.is_not_a_node(n)
-                    && n.tag.as_deref().is_some_and(|t| self.folded.nodes.get(t).is_some_and(|r| r.effective_is_main_result))
+                    && n.tag
+                        .as_deref()
+                        .is_some_and(|t| self.folded.nodes.get(t).is_some_and(|r| r.effective_is_main_result))
             })
             .collect();
-        let selected_model_tags: Vec<String> = self.folded.nodes.values()
+        let selected_model_tags: Vec<String> = self
+            .folded
+            .nodes
+            .values()
             .filter(|r| r.is_model_node && r.effective_is_main_result)
             .map(|r| r.tag.clone())
             .collect();
 
         if selected_sk.is_empty() && selected_model_tags.is_empty() {
-            selected_sk = self.skeleton.nodes.iter()
-                .filter(|n| {
-                    n.kind.is_theorem_like()
-                        && !self.is_not_a_node(n)
-                        && !n.tag.as_deref().is_some_and(|t| {
-                            self.folded.nodes.get(t).is_some_and(|r| r.pin == Some(ReaderPin::NotMainResult))
-                        })
-                })
+            let not_pinned_out = |n: &&SkNode| {
+                !self.is_not_a_node(n)
+                    && !n.tag.as_deref().is_some_and(|t| {
+                        self.folded.nodes.get(t).is_some_and(|r| r.pin == Some(ReaderPin::NotMainResult))
+                    })
+            };
+            selected_sk = self
+                .skeleton
+                .nodes
+                .iter()
+                .filter(|n| n.kind.is_theorem_like() && not_pinned_out(n))
                 .collect();
             if selected_sk.is_empty() {
-                selected_sk = self.skeleton.nodes.iter()
-                    .filter(|n| n.kind == SkNodeKind::Equation && !self.is_not_a_node(n))
+                selected_sk = self
+                    .skeleton
+                    .nodes
+                    .iter()
+                    .filter(|n| n.kind == SkNodeKind::Equation && not_pinned_out(n))
                     .collect();
             }
             if !selected_sk.is_empty() {
@@ -175,13 +219,13 @@ impl<'a> BuildCtx<'a> {
 
         for node in selected_sk {
             let tag = node.tag.clone().unwrap_or_else(|| format!("node-{}", node.order));
-            included.insert(tag.clone());
-            self.append_skeleton_node_blocks("Main Results", node, &tag, &mut blocks);
+            self.append_skeleton_node_blocks("Main Results", node, &tag, &mut included, &mut blocks);
         }
         for mtag in selected_model_tags {
-            included.insert(mtag.clone());
-            if let Some(reading) = self.folded.nodes.get(&mtag) {
-                self.append_model_node_blocks("Main Results", reading, &mut blocks);
+            if !included.contains(&mtag) {
+                if let Some(reading) = self.folded.nodes.get(&mtag) {
+                    self.append_model_node_blocks("Main Results", reading, &mut included, &mut blocks);
+                }
             }
         }
         if blocks.is_empty() {
@@ -196,7 +240,7 @@ impl<'a> BuildCtx<'a> {
         )
     }
 
-    pub fn build_additional_notes_section(&mut self, included: &BTreeSet<String>) -> Option<WriteupSection> {
+    pub fn build_additional_notes_section(&mut self, included: &mut BTreeSet<String>) -> Option<WriteupSection> {
         let mut blocks = Vec::new();
         for node in &self.skeleton.nodes {
             let Some(tag) = node.tag.as_deref() else { continue };
@@ -205,15 +249,38 @@ impl<'a> BuildCtx<'a> {
             }
             let reading = self.folded.nodes.get(tag);
             let ov = self.overrides.get(tag);
-            let has_content = reading.is_some_and(|r| {
-                r.gist.current.is_some()
-                    || r.purpose.current.is_some()
-                    || r.authors_claim.current.is_some()
-                    || !r.context_cards.is_empty()
-                    || (self.opts.include_notes && !r.notes.is_empty())
-            });
-            if has_content || ov.is_some() {
-                self.append_skeleton_node_blocks("Additional Annotated Nodes and Reader Notes", node, tag, &mut blocks);
+            if let Some(ov_rec) = ov.filter(|o| o.not_a_node) {
+                self.record_override_row(tag, ov_rec, node, false);
+                included.insert(tag.to_string());
+                continue;
+            }
+            if reading.is_some_and(|r| self.has_reading_content(r)) || ov.is_some() {
+                self.append_skeleton_node_blocks(
+                    "Additional Annotated Nodes and Reader Notes",
+                    node,
+                    tag,
+                    included,
+                    &mut blocks,
+                );
+            }
+        }
+        let orphan_models: Vec<String> = self
+            .folded
+            .nodes
+            .values()
+            .filter(|r| r.is_model_node && !included.contains(&r.tag) && self.has_reading_content(r))
+            .map(|r| r.tag.clone())
+            .collect();
+        for mtag in orphan_models {
+            if !included.contains(&mtag) {
+                if let Some(reading) = self.folded.nodes.get(&mtag) {
+                    self.append_model_node_blocks(
+                        "Additional Annotated Nodes and Reader Notes",
+                        reading,
+                        included,
+                        &mut blocks,
+                    );
+                }
             }
         }
         (!blocks.is_empty()).then_some(WriteupSection {
@@ -223,13 +290,42 @@ impl<'a> BuildCtx<'a> {
         })
     }
 
-    fn append_skeleton_node_blocks(&mut self, section_title: &str, node: &SkNode, tag: &str, blocks: &mut Vec<WriteupBlock>) {
+    fn has_reading_content(&self, r: &FoldedNodeReading) -> bool {
+        r.gist.current.is_some()
+            || r.purpose.current.is_some()
+            || r.authors_claim.current.is_some()
+            || r.hypotheses.current.is_some()
+            || r.anchors.current.is_some()
+            || !r.context_cards.is_empty()
+            || (self.opts.include_notes && !r.notes.is_empty())
+    }
+
+    fn append_skeleton_node_blocks(
+        &mut self,
+        section_title: &str,
+        node: &SkNode,
+        tag: &str,
+        included: &mut BTreeSet<String>,
+        blocks: &mut Vec<WriteupBlock>,
+    ) {
+        if !included.insert(tag.to_string()) {
+            return;
+        }
         let reading = self.folded.nodes.get(tag);
         let ov = self.overrides.get(tag);
+        if let Some(ov_rec) = ov.filter(|o| o.not_a_node) {
+            self.record_override_row(tag, ov_rec, node, false);
+            return;
+        }
+
         let heading = self.node_heading(node, ov);
         let mut tags = Vec::new();
-        if reading.is_some_and(|r| r.pin == Some(ReaderPin::MainResult)) { tags.push(PINNED_MAIN_RESULT_NOTE); }
-        if ov.is_some() { tags.push(CORRECTED_BY_YOU_LABEL); }
+        if reading.is_some_and(|r| r.pin == Some(ReaderPin::MainResult)) {
+            tags.push(PINNED_MAIN_RESULT_NOTE);
+        }
+        if ov.is_some() {
+            tags.push(CORRECTED_BY_YOU_LABEL);
+        }
         let header = if tags.is_empty() {
             format!("{heading} [{tag}]")
         } else {
@@ -237,47 +333,51 @@ impl<'a> BuildCtx<'a> {
         };
         blocks.push(WriteupBlock::Prose { text: header, basis: ProseBasis::App });
 
+        let extracted = extract_node_statement_span(node, ov.and_then(|o| o.end_line), self.source_files);
         if let Some(ov_rec) = ov {
-            self.record_override_row(tag, ov_rec, node);
-            if ov_rec.not_a_node { return; }
+            self.record_override_row(tag, ov_rec, node, extracted.as_ref().is_some_and(|e| e.end_line_override_applied));
         }
-        if let Some((path, start, end, body)) = extract_node_statement_span(node, ov.and_then(|o| o.end_line), self.source_files) {
-            self.emit_verified_node_statement(section_title, tag, &path, start, end, &body, blocks);
+        if let Some(ex) = extracted {
+            self.emit_verified_node_statement(section_title, tag, &ex, blocks);
         }
         if let Some(r) = reading {
-            self.append_reading_blocks(section_title, tag, &node.head_cites, r, blocks);
+            self.append_reading_blocks(section_title, tag, &node.head_cites, r, included, blocks);
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn emit_verified_node_statement(
         &mut self,
         section_title: &str,
         tag: &str,
-        path: &str,
-        start_line: usize,
-        end_line: usize,
-        full_body: &str,
+        ex: &ExtractedStatement,
         blocks: &mut Vec<WriteupBlock>,
     ) {
-        let (locator, ocr, page_range) = self.pdf_index.locator_and_ocr(path, start_line, end_line);
-        let loc_note = format_locator_note(path, &locator, page_range);
-        let full_chars = full_body.chars().count();
+        let (locator, ocr, page_range) = self.pdf_index.locator_and_ocr(&ex.path, ex.start_line, ex.end_line);
+        let loc_note = format_locator_note(&ex.path, &locator, page_range);
+        let full_chars = ex.full_text.chars().count();
         let how = if ocr { HowChecked::MatchedQuoteOcr } else { HowChecked::MatchedQuoteFullText };
 
         if self.licence.open && full_chars > MAX_DISPLAY_QUOTE_CHARS {
-            let probe = clip_quote(full_body);
-            match verify_quote(self.sandbox, self.session_id, self.events, &self.skeleton.source_id, path, start_line, end_line, probe) {
+            let probe = clip_quote(&ex.primary_text);
+            let probe_end = narrowed_probe_end(ex.start_line, ex.end_line, probe);
+            match verify_quote(
+                self.sandbox, self.session_id, self.events, &self.skeleton.source_id, &ex.path, ex.start_line, probe_end, probe,
+            ) {
                 Ok(_) => {
                     let lic_name = self.licence.raw.as_deref().unwrap_or("open licence");
                     let ocr_tag = if ocr { format!(" {}", writeup_wording::OCR_TAG) } else { String::new() };
+                    let stmt_text = if ocr { neutralize_ocr_math_delimiters(&ex.full_text) } else { ex.full_text.clone() };
                     blocks.push(WriteupBlock::Statement {
                         id: format!("{tag}-statement"),
-                        text: full_body.to_string(),
+                        text: stmt_text,
                         how_checked: how,
                         own_tier: None,
-                        rests_on: vec![format!("{path}:{start_line}-{end_line}")],
+                        rests_on: vec![format!("{}:{}-{}", ex.path, ex.start_line, ex.end_line)],
                         note: Some(format!("{loc_note}; full statement ({full_chars} chars) permitted by {lic_name}{ocr_tag}")),
+                    });
+                    blocks.push(WriteupBlock::Prose {
+                        text: format!("Source: [{}] ({loc_note}){ocr_tag} — full statement permitted by {lic_name}.", self.primary_cite_key),
+                        basis: ProseBasis::App,
                     });
                 }
                 Err(fault) => self.record_unmatched_quote(section_title, &format!("{tag}-statement"), &loc_note, fault),
@@ -285,9 +385,10 @@ impl<'a> BuildCtx<'a> {
             return;
         }
 
-        let clipped = clip_quote(full_body);
+        let clipped = clip_quote(&ex.primary_text);
         let was_capped = full_chars > MAX_DISPLAY_QUOTE_CHARS;
-        match self.make_verified_quote(&self.skeleton.source_id, path, start_line, end_line, clipped, locator, ocr) {
+        let verify_end = narrowed_probe_end(ex.start_line, ex.end_line, clipped);
+        match self.make_verified_quote(&self.skeleton.source_id, &ex.path, ex.start_line, verify_end, clipped, locator, ocr) {
             Ok(vq) => {
                 blocks.push(WriteupBlock::Quote(Box::new(vq)));
                 let cap_note = if was_capped {
@@ -307,6 +408,7 @@ impl<'a> BuildCtx<'a> {
         tag: &str,
         head_cites: &[String],
         reading: &FoldedNodeReading,
+        included: &mut BTreeSet<String>,
         blocks: &mut Vec<WriteupBlock>,
     ) {
         if let Some(gist) = &reading.gist.current {
@@ -318,64 +420,37 @@ impl<'a> BuildCtx<'a> {
             blocks.push(WriteupBlock::Prose { text: format!("Purpose: {}", purpose.value.trim()), basis: ProseBasis::Model });
             self.push_row(format!("{tag}-purpose"), format!("Purpose for {tag}"), HowChecked::ModelStatement, vec![tag.to_string()], "model purpose");
         }
+        if let Some(anchors) = &reading.anchors.current {
+            for (idx, a) in anchors.value.iter().enumerate() {
+                if let Some((q, row)) = self.verify_anchor_quote(section_title, &format!("{tag}-q{}", idx + 1), a, None) {
+                    blocks.push(WriteupBlock::Quote(Box::new(q)));
+                    self.push_row(row.id, row.statement, row.how_checked, row.rests_on, row.note.unwrap_or_default());
+                }
+            }
+        }
         if let Some(ac_val) = &reading.authors_claim.current {
-            let badge = status_badge(Some(&ac_val.value), head_cites);
-            let mut parts = vec![badge.text.clone()];
-            if let Some(rel) = &badge.relation_note { parts.push(rel.clone()); }
-            if !badge.attributed_to.is_empty() {
-                let mapped: Vec<String> = badge.attributed_to.iter()
-                    .map(|k| self.cite_key_map.get(k).cloned().unwrap_or_else(|| k.clone()))
-                    .collect();
-                parts.push(format!("refs: [{}]", mapped.join(", ")));
-            }
-            if let Some(hc) = &badge.heading_cite_line { parts.push(hc.clone()); }
-            parts.push(badge.cue_line.clone());
-            blocks.push(WriteupBlock::Statement {
-                id: format!("{tag}-authors"),
-                text: parts.join(" — "),
-                how_checked: HowChecked::ModelStatement,
-                own_tier: None,
-                rests_on: vec![tag.to_string()],
-                note: Some("authors' claim (model)".to_string()),
-            });
-            for (idx, a) in ac_val.value.anchors.iter().enumerate() {
-                self.emit_verified_anchor(section_title, &format!("{tag}-authors-q{}", idx + 1), a, None, blocks);
-            }
+            self.emit_authors_claim(section_title, tag, head_cites, &ac_val.value, blocks);
         }
         if let Some(hyps) = &reading.hypotheses.current {
             for (idx, hyp) in hyps.value.iter().enumerate() {
                 let q_id = format!("{tag}-hyp-{}", idx + 1);
-                if self.emit_verified_anchor(section_title, &q_id, &hyp.anchor, None, blocks) {
+                if let Some((q, row)) = self.verify_anchor_quote(section_title, &q_id, &hyp.anchor, None) {
+                    blocks.push(WriteupBlock::Quote(Box::new(q)));
+                    self.push_row(row.id, row.statement, row.how_checked, row.rests_on, row.note.unwrap_or_default());
                     blocks.push(WriteupBlock::Prose { text: format!("Hypothesis: {}", hyp.text.trim()), basis: ProseBasis::Model });
                     self.push_row(format!("{q_id}-text"), format!("Hypothesis {} for {tag}", idx + 1), HowChecked::ModelStatement, vec![q_id], "model hypothesis");
                 }
             }
         }
         for child_tag in &reading.children {
-            if let Some(child) = self.folded.nodes.get(child_tag) {
-                self.append_model_node_blocks(section_title, child, blocks);
+            if !included.contains(child_tag) {
+                if let Some(child) = self.folded.nodes.get(child_tag) {
+                    self.append_model_node_blocks(section_title, child, included, blocks);
+                }
             }
         }
         for (idx, card_val) in reading.context_cards.iter().enumerate() {
-            let card = &card_val.value;
-            let origin_label = match card.origin {
-                ContextCardOrigin::Paper => "From this paper",
-                ContextCardOrigin::External => "Outside this paper",
-                ContextCardOrigin::ModelBackground => "Model background, not checked",
-            };
-            let card_id = format!("{tag}-ctx-{}", idx + 1);
-            let basis = if card.origin == ContextCardOrigin::ModelBackground { ProseBasis::Model } else { ProseBasis::App };
-            blocks.push(WriteupBlock::Prose {
-                text: format!("Context ({}, {origin_label}): {} — {}", card.card_type.as_str(), card.title.trim(), card.body.trim()),
-                basis,
-            });
-            self.push_row(&card_id, format!("Context card: {}", card.title.trim()), HowChecked::ModelStatement, vec![tag.to_string()], origin_label);
-            let ext_bib = (card.origin == ContextCardOrigin::External)
-                .then_some(card.bib_key.as_deref())
-                .flatten();
-            for (aidx, anchor) in card.anchors.iter().enumerate() {
-                self.emit_verified_anchor(section_title, &format!("{card_id}-q{}", aidx + 1), anchor, ext_bib, blocks);
-            }
+            self.emit_context_card(section_title, tag, idx + 1, &card_val.value, blocks);
         }
         if reading.pin == Some(ReaderPin::MainResult) {
             self.push_row(format!("{tag}-pin"), format!("Reader pin on {tag}"), HowChecked::UserStatement, vec![tag.to_string()], PINNED_MAIN_RESULT_NOTE);
@@ -388,106 +463,22 @@ impl<'a> BuildCtx<'a> {
         }
     }
 
-    fn append_model_node_blocks(&mut self, section_title: &str, node: &FoldedNodeReading, blocks: &mut Vec<WriteupBlock>) {
-        let kind = node.model_kind.as_deref().unwrap_or("step");
-        blocks.push(WriteupBlock::Prose { text: format!("Explanation step ({kind}) [{}]", node.tag), basis: ProseBasis::Model });
-        if let Some(anchors) = &node.anchors.current {
-            for (idx, a) in anchors.value.iter().enumerate() {
-                self.emit_verified_anchor(section_title, &format!("{}-q{}", node.tag, idx + 1), a, None, blocks);
-            }
-        }
-        self.append_reading_blocks(section_title, &node.tag, &[], node, blocks);
-    }
-
-    fn emit_verified_anchor(
+    fn append_model_node_blocks(
         &mut self,
         section_title: &str,
-        row_id: &str,
-        anchor: &VerifiedMapAnchor,
-        external_bib_key: Option<&str>,
+        node: &FoldedNodeReading,
+        included: &mut BTreeSet<String>,
         blocks: &mut Vec<WriteupBlock>,
-    ) -> bool {
-        let raw_quote = anchor.quote.trim();
-        let expected_ref = QuoteRef {
-            source_id: anchor.source_id.clone(),
-            path: anchor.path.clone(),
-            start_line: anchor.start_line,
-            end_line: anchor.end_line,
-            file_sha256: anchor.file_sha256.clone(),
-            quote_sha256: anchor.quote_sha256.clone(),
-            evidence_seq: None,
-        };
-        let verified = match verify_quote_ref(self.sandbox, self.session_id, self.events, &expected_ref, raw_quote) {
-            Ok(v) => v,
-            Err(fault) => {
-                let loc = format!("{}:{}-{}", anchor.path, anchor.start_line, anchor.end_line);
-                self.record_unmatched_quote(section_title, row_id, &loc, fault);
-                return false;
-            }
-        };
-        let clipped = clip_quote(raw_quote);
-        let mut final_ref = verified.quote_ref;
-        if clipped.len() != raw_quote.len() {
-            final_ref.quote_sha256 = quote_sha256(clipped);
+    ) {
+        if !included.insert(node.tag.clone()) {
+            return;
         }
-        let is_primary = anchor.source_id == self.skeleton.source_id;
-        let (cite_key, paper_ref) = if !is_primary {
-            let ck = external_bib_key.and_then(|k| self.cite_key_map.get(k)).map(String::as_str).unwrap_or(self.primary_cite_key);
-            let pr = external_bib_key.and_then(|k| self.paper_ref_map.get(k)).unwrap_or(self.primary_ref);
-            (ck.to_string(), pr.clone())
-        } else {
-            (self.primary_cite_key.to_string(), self.primary_ref.clone())
-        };
-        let (locator, ocr, page_range) = if is_primary {
-            self.pdf_index.locator_and_ocr(&final_ref.path, final_ref.start_line, final_ref.end_line)
-        } else {
-            (QuoteLocator::Lines { start_line: final_ref.start_line, end_line: final_ref.end_line }, false, None)
-        };
-        let loc_note = format_locator_note(&final_ref.path, &locator, page_range);
-
-        blocks.push(WriteupBlock::Quote(Box::new(WriteupQuote {
-            text: clipped.to_string(),
-            cite_key,
-            paper: paper_ref,
-            quote_ref: final_ref,
-            locator,
-            ocr,
-        })));
-        let how = if ocr { HowChecked::MatchedQuoteOcr } else { HowChecked::MatchedQuoteFullText };
-        let note = if ocr { "matched OCR quote" } else { "matched full-text quote" };
-        self.push_row(row_id, format!("Matched anchor quote ({row_id})"), how, vec![loc_note], note);
-        true
-    }
-
-    #[allow(clippy::too_many_arguments, clippy::result_large_err)]
-    fn make_verified_quote(
-        &self,
-        source_id: &str,
-        path: &str,
-        start_line: usize,
-        end_line: usize,
-        clipped_quote: &str,
-        locator: QuoteLocator,
-        ocr: bool,
-    ) -> Result<WriteupQuote, QuoteFault> {
-        let verified = verify_quote(self.sandbox, self.session_id, self.events, source_id, path, start_line, end_line, clipped_quote)?;
-        Ok(WriteupQuote {
-            text: clipped_quote.to_string(),
-            cite_key: self.primary_cite_key.to_string(),
-            paper: self.primary_ref.clone(),
-            quote_ref: verified.quote_ref,
-            locator,
-            ocr,
-        })
-    }
-
-    fn record_unmatched_quote(&mut self, section_title: &str, row_id: &str, loc: &str, fault: QuoteFault) {
-        self.rejected_quotes.push(RejectedWriteupQuote {
-            section_title: section_title.to_string(),
-            cite_key: self.primary_cite_key.to_string(),
-            fault,
+        let kind = node.model_kind.as_deref().unwrap_or("step");
+        blocks.push(WriteupBlock::Prose {
+            text: format!("Explanation step ({kind}) [{}]", node.tag),
+            basis: ProseBasis::Model,
         });
-        self.push_row(row_id, "Quote could not be matched and was omitted.", HowChecked::CodeSkeleton, vec![loc.to_string()], "anchor could not be matched and was omitted");
+        self.append_reading_blocks(section_title, &node.tag, &[], node, included, blocks);
     }
 
     fn is_not_a_node(&self, node: &SkNode) -> bool {
@@ -506,11 +497,11 @@ impl<'a> BuildCtx<'a> {
         }
     }
 
-    fn record_override_row(&mut self, tag: &str, ov: &ReaderNodeOverride, node: &SkNode) {
+    fn record_override_row(&mut self, tag: &str, ov: &ReaderNodeOverride, node: &SkNode, end_line_applied: bool) {
         let mut details = vec![CORRECTED_BY_YOU_LABEL.to_string()];
         if let Some(k) = &ov.kind { details.push(format!("kind: {k}")); }
         if let Some(num) = &ov.number { details.push(format!("number: {num}")); }
-        if let Some(el) = ov.end_line { details.push(format!("end line: {el}")); }
+        if let Some(el) = ov.end_line.filter(|_| end_line_applied) { details.push(format!("end line: {el}")); }
         if ov.not_a_node { details.push("marked not a node".to_string()); }
         if let Some(n) = &ov.note { details.push(n.clone()); }
         let loc = node.spans.first().map(|s| format!("{}:{}-{}", s.path, s.start_line, s.end_line)).unwrap_or_else(|| tag.to_string());
@@ -526,12 +517,4 @@ fn section_depth(tag: &str, parent_map: &BTreeMap<&str, Option<&str>>) -> usize 
         cur = parent_map.get(p).copied().flatten();
     }
     depth
-}
-
-fn format_locator_note(path: &str, locator: &QuoteLocator, page_range: Option<(usize, usize)>) -> String {
-    match page_range {
-        Some((p1, p2)) if p1 != p2 => format!("{path}, pp. {p1}-{p2} ({})", locator.display_text()),
-        Some(_) => format!("{path}, {}", locator.display_text()),
-        None => format!("{path}: {}", locator.display_text()),
-    }
 }

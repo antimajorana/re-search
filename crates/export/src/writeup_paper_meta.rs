@@ -3,7 +3,7 @@
 //! adapter (`writeup_paper.rs`, `00-overview.md` 2.13, `investigate.md` 3 L', 6.21, 6.22, 12, D9).
 //!
 //! Strictly pure/read-only over verified ledger events, pinned source files, and optional
-//! existing `library.db` / `lessons.db` stores. Zero model calls and zero disk writes.
+//! existing `library.db` / `lessons.db` stores. Zero model calls and zero explicit DB writes.
 
 use crate::writeup::{BibEntry, QuoteLocator};
 use crate::writeup_bib::resolve_bib_entry;
@@ -14,13 +14,9 @@ use research_tools::lessons_schema::{
     EVENT_INVESTIGATION_NODE_OVERRIDE, LESSONS_DB_NAME, OCR_OVERLAY_LABEL,
 };
 use research_tools::library::{Library, PaperDetail};
-use research_tools::map_fold::FoldedTask;
 use research_tools::paper_key::{PaperIds, PaperKey, PaperKeyKind, PaperRef};
 use research_tools::sandbox::{SandboxRoot, WorkspaceSandbox};
-use research_tools::skeleton::{
-    compute_files_root_sha256, BibRef, PaperSkeleton, SkNode, SkNodeKind, SkeletonBuilder,
-    SkeletonQuality,
-};
+use research_tools::skeleton::{compute_files_root_sha256, BibRef, PaperSkeleton, SkNode};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -48,41 +44,71 @@ pub(crate) struct LicenceResolution {
     pub source: &'static str,
 }
 
-/// Fail-closed check: returns `true` ONLY for explicit permissive open licences (`CC-BY*` without
-/// `-NC`/`-ND`, `CC0*`, Public Domain). arXiv's default `nonexclusive-distrib`, absent, and
-/// unknown licences return `false` (`<= 300`-char quote cap enforced).
+/// Fail-closed check: returns `true` ONLY for exact permissive open licences (`CC-BY`,
+/// `CC-BY-<ver>`, `creativecommons.org/licenses/by/<ver>`, `CC0*`, Public Domain).
+/// Rejects `nonexclusive-distrib`, `NC`, `ND`, `SA` (ShareAlike copyleft), negated strings,
+/// unknown strings, and absent licences (`<= 300`-char quote cap enforced).
 pub fn is_permissive_licence(licence: Option<&str>) -> bool {
     let Some(raw) = licence.map(str::trim).filter(|s| !s.is_empty()) else { return false };
     let lower = raw.to_ascii_lowercase();
-    if lower.contains("nonexclusive")
-        || lower.contains("non-exclusive")
-        || lower.contains("all-rights-reserved")
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '.')
+        .filter(|t| !t.is_empty())
+        .collect();
+    // Reject any restriction, copyleft, or negation token/phrase fail-closed.
+    let banned_tokens = [
+        "nc", "nd", "sa", "nonexclusive", "noncommercial", "noderivs", "noderivatives",
+        "sharealike", "restricted", "proprietary", "not", "no", "unlike", "except", "reserved",
+    ];
+    if tokens.iter().any(|t| banned_tokens.contains(t)) {
+        return false;
+    }
+    if lower.contains("non-exclusive")
+        || lower.contains("non-commercial")
+        || lower.contains("no-deriv")
+        || lower.contains("share-alike")
         || lower.contains("all rights reserved")
-        || lower.contains("by-nd")
-        || lower.contains("by-nc")
-        || lower.contains("by_nd")
-        || lower.contains("by_nc")
     {
         return false;
     }
-    if lower.contains("cc0")
-        || lower.contains("publicdomain/zero")
-        || lower.contains("public-domain")
-        || lower.contains("public domain")
-        || lower == "pd"
+
+    // 1. Canonical Creative Commons URLs (exact path check; no extra suffixes allowed).
+    if let Some(rest) = lower
+        .strip_prefix("https://creativecommons.org/")
+        .or_else(|| lower.strip_prefix("http://creativecommons.org/"))
     {
-        return true;
+        let rest = rest.trim_end_matches('/');
+        if let Some(ver) = rest.strip_prefix("licenses/by/") {
+            let ver = ver.strip_suffix("/legalcode").unwrap_or(ver);
+            return is_cc_version(ver);
+        }
+        if let Some(ver) = rest.strip_prefix("publicdomain/zero/") {
+            let ver = ver.strip_suffix("/legalcode").unwrap_or(ver);
+            return is_cc_version(ver);
+        }
+        return false;
     }
-    lower.contains("creativecommons.org/licenses/by/")
-        || lower.contains("creativecommons.org/licenses/by-sa")
-        || lower == "cc-by"
-        || lower == "cc by"
-        || lower.starts_with("cc-by-")
-        || lower.starts_with("cc-by ")
-        || lower.starts_with("cc by ")
-        || lower.starts_with("cc by-")
-        || lower.contains("cc-by-")
-        || lower.contains("cc by ")
+
+    // 2. Exact SPDX / short identifiers (tokenized).
+    match tokens.as_slice() {
+        ["pd"] | ["public", "domain"] | ["cc0"] => true,
+        ["cc0", ver] | ["cc0", ver, "universal"] => is_cc_version(ver),
+        ["cc", "0"] => true,
+        ["cc", "0", ver] => is_cc_version(ver),
+        ["cc", "by"] => true,
+        ["cc", "by", ver] | ["cc", "by", ver, "international"] | ["cc", "by", ver, "unported"] => {
+            is_cc_version(ver)
+        }
+        _ => false,
+    }
+}
+
+fn is_cc_version(ver: &str) -> bool {
+    !ver.is_empty()
+        && ver.len() <= 8
+        && ver.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        && ver.bytes().next().is_some_and(|b| b.is_ascii_digit())
+        && ver.bytes().last().is_some_and(|b| b.is_ascii_digit())
 }
 
 fn non_empty_str(v: Option<&str>) -> Option<String> {
@@ -184,6 +210,8 @@ impl PdfPageIndex {
         self.pages.iter().any(|p| p.is_ocr || p.is_none)
     }
 
+    /// Resolve physical page locator and OCR flag for `(path, start_line..=end_line)`.
+    /// Keeps physical page numbers even on `PageBasis::None` while marking `ocr = true`.
     pub fn locator_and_ocr(
         &self,
         path: &str,
@@ -205,10 +233,8 @@ impl PdfPageIndex {
                 if e.is_ocr || e.is_none {
                     ocr = true;
                 }
-                if !e.is_none {
-                    min_p = Some(min_p.map_or(e.page, |m| m.min(e.page)));
-                    max_p = Some(max_p.map_or(e.page, |m| m.max(e.page)));
-                }
+                min_p = Some(min_p.map_or(e.page, |m| m.min(e.page)));
+                max_p = Some(max_p.map_or(e.page, |m| m.max(e.page)));
             }
         }
         if let (Some(p1), Some(p2)) = (min_p, max_p) {
@@ -230,18 +256,23 @@ pub(crate) struct ReaderNodeOverride {
 }
 
 /// Fold F16a reader overrides from read-only `lessons.db` (if present) and session ledger events.
+/// Applies only to tags present in `skeleton` with matching `node_fp` when provided (rule 6.22).
 pub(crate) fn collect_reader_overrides(
     events: &[Event],
     skeleton: &PaperSkeleton,
     data_dir: &Path,
 ) -> BTreeMap<String, ReaderNodeOverride> {
-    let valid_tags: BTreeSet<&str> = skeleton.nodes.iter().filter_map(|n| n.tag.as_deref()).collect();
+    let fps_by_tag: BTreeMap<&str, &str> = skeleton
+        .nodes
+        .iter()
+        .filter_map(|n| Some((n.tag.as_deref()?, n.fp.as_str())))
+        .collect();
     let mut out: BTreeMap<String, ReaderNodeOverride> = BTreeMap::new();
 
     if data_dir.join("library").join(LESSONS_DB_NAME).is_file() {
         if let Ok(store) = LessonsStore::open(data_dir) {
             for ov in store.list_skeleton_overrides().unwrap_or_default() {
-                if !valid_tags.contains(ov.node_tag.as_str())
+                if !fps_by_tag.contains_key(ov.node_tag.as_str())
                     || ov.paper_key.as_ref().is_some_and(|pk| pk != &skeleton.paper_key)
                 {
                     continue;
@@ -273,10 +304,15 @@ pub(crate) fn collect_reader_overrides(
             .or_else(|| p.get("node_tag"))
             .and_then(Value::as_str)
             .map(str::trim)
-            .filter(|s| valid_tags.contains(*s))
+            .filter(|s| fps_by_tag.contains_key(*s))
         else {
             continue;
         };
+        if let Some(fp) = non_empty_str(p.get("node_fp").and_then(Value::as_str)) {
+            if fps_by_tag.get(tag).copied() != Some(fp.as_str()) {
+                continue;
+            }
+        }
         let fix = p.get("fix").filter(|v| v.is_object()).unwrap_or(p);
         let entry = out.entry(tag.to_string()).or_default();
         if let Some(k) = non_empty_str(fix.get("kind").or_else(|| fix.get("kind_override")).and_then(Value::as_str)) {
@@ -305,6 +341,8 @@ pub(crate) fn collect_reader_overrides(
 }
 
 /// Load and cryptographically verify every physical source file listed in `receipt["files_sha256"]`.
+/// Fails closed on empty/mismatched `files_root_sha256`, missing files, or SHA-256 mismatch.
+/// Binary non-UTF-8 assets are hash-verified and skipped from the UTF-8 text map.
 pub(crate) fn load_and_verify_source_files(
     sandbox: &WorkspaceSandbox,
     session_id: &str,
@@ -322,14 +360,15 @@ pub(crate) fn load_and_verify_source_files(
             .ok_or_else(|| format!("source.ingested `files_sha256` entry for `{rel}` is invalid"))?;
         expected_map.insert(rel.clone(), digest.to_string());
     }
-    if !skeleton.files_root_sha256.is_empty() {
-        let actual_root = compute_files_root_sha256(&expected_map);
-        if actual_root != skeleton.files_root_sha256 {
-            return Err(format!(
-                "source files_root_sha256 mismatch: skeleton pinned `{}`, receipt has `{actual_root}`",
-                skeleton.files_root_sha256
-            ));
-        }
+    if skeleton.files_root_sha256.trim().is_empty() {
+        return Err("pinned skeleton is missing required `files_root_sha256` digest".to_string());
+    }
+    let actual_root = compute_files_root_sha256(&expected_map);
+    if actual_root != skeleton.files_root_sha256 {
+        return Err(format!(
+            "source files_root_sha256 mismatch: skeleton pinned `{}`, receipt has `{actual_root}`",
+            skeleton.files_root_sha256
+        ));
     }
 
     let mut files = BTreeMap::new();
@@ -345,12 +384,58 @@ pub(crate) fn load_and_verify_source_files(
                 "pinned source file `{rel}` hash mismatch: expected `{expected_sha}`, got `{actual_sha}`"
             ));
         }
-        let text = String::from_utf8(bytes)
-            .map_err(|_| format!("pinned source file `{rel}` is not valid UTF-8"))?;
-        let lines = text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l).to_string()).collect();
-        files.insert(rel.clone(), lines);
+        if let Ok(text) = String::from_utf8(bytes) {
+            let lines = text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l).to_string()).collect();
+            files.insert(rel.clone(), lines);
+        }
     }
     Ok(files)
+}
+
+/// Check if a line contains ONLY a `\begin{...}` opener (+ optional `[title]` / `\label{...}` / comment).
+fn is_pure_begin_wrapper_line(line: &str) -> bool {
+    let mut s = line.trim();
+    if let Some(idx) = s.find('%') {
+        if idx == 0 || !s[..idx].ends_with('\\') {
+            s = s[..idx].trim();
+        }
+    }
+    let Some(after_begin) = s.strip_prefix("\\begin{") else { return false };
+    let Some(close) = after_begin.find('}') else { return false };
+    let mut rest = after_begin[close + 1..].trim();
+    if let Some(after_opt) = rest.strip_prefix('[') {
+        let Some(opt_end) = after_opt.find(']') else { return false };
+        rest = after_opt[opt_end + 1..].trim();
+    }
+    while let Some(after_lbl) = rest.strip_prefix("\\label{") {
+        let Some(lbl_end) = after_lbl.find('}') else { return false };
+        rest = after_lbl[lbl_end + 1..].trim();
+    }
+    rest.is_empty()
+}
+
+/// Check if a line contains ONLY an `\end{...}` closing tag (+ optional comment).
+fn is_pure_end_wrapper_line(line: &str) -> bool {
+    let mut s = line.trim();
+    if let Some(idx) = s.find('%') {
+        if idx == 0 || !s[..idx].ends_with('\\') {
+            s = s[..idx].trim();
+        }
+    }
+    let Some(after_end) = s.strip_prefix("\\end{") else { return false };
+    let Some(close) = after_end.find('}') else { return false };
+    after_end[close + 1..].trim().is_empty()
+}
+
+/// Extracted verbatim statement across all `node.spans` (supporting multi-file `\input` spans)
+/// plus the primary file's verified `(path, start_line, end_line)` and whether `end_line` override applied.
+pub(crate) struct ExtractedStatement {
+    pub path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub primary_text: String,
+    pub full_text: String,
+    pub end_line_override_applied: bool,
 }
 
 /// Extract clean verbatim statement text and its exact 1-based physical `(path, start, end)`.
@@ -358,7 +443,7 @@ pub(crate) fn extract_node_statement_span(
     node: &SkNode,
     override_end_line: Option<usize>,
     files: &BTreeMap<String, Vec<String>>,
-) -> Option<(String, usize, usize, String)> {
+) -> Option<ExtractedStatement> {
     let first_span = node.spans.first()?;
     let lines = files.get(&first_span.path)?;
     let mut start = first_span.start_line;
@@ -369,20 +454,20 @@ pub(crate) fn extract_node_statement_span(
         .map(|s| s.end_line)
         .max()
         .unwrap_or(first_span.end_line);
+    let mut end_line_override_applied = false;
     if let Some(ov_end) = override_end_line {
         if ov_end >= start && ov_end <= lines.len() {
             end = ov_end;
+            end_line_override_applied = true;
         }
     }
     if start == 0 || end < start || end > lines.len() {
         return None;
     }
-    if end > start + 1
-        && lines[start - 1].trim().starts_with("\\begin{")
-        && lines[end - 1].trim().starts_with("\\end{")
-        && !lines[start..end - 1].join("\n").trim().is_empty()
-    {
+    if end > start && is_pure_begin_wrapper_line(&lines[start - 1]) {
         start += 1;
+    }
+    if end > start && is_pure_end_wrapper_line(&lines[end - 1]) {
         end -= 1;
     }
     while start < end && lines[start - 1].trim().is_empty() {
@@ -391,8 +476,39 @@ pub(crate) fn extract_node_statement_span(
     while end > start && lines[end - 1].trim().is_empty() {
         end -= 1;
     }
-    let body = lines[start - 1..end].join("\n").trim().to_string();
-    (!body.is_empty()).then_some((first_span.path.clone(), start, end, body))
+    let primary_text = lines[start - 1..end].join("\n").trim().to_string();
+    if primary_text.is_empty() {
+        return None;
+    }
+    let mut parts = vec![primary_text.clone()];
+    for extra in node.spans.iter().filter(|s| s.path != first_span.path) {
+        if let Some(el) = files.get(&extra.path) {
+            if extra.start_line > 0 && extra.end_line >= extra.start_line && extra.end_line <= el.len() {
+                let chunk = el[extra.start_line - 1..extra.end_line].join("\n").trim().to_string();
+                if !chunk.is_empty() {
+                    parts.push(chunk);
+                }
+            }
+        }
+    }
+    Some(ExtractedStatement {
+        path: first_span.path.clone(),
+        start_line: start,
+        end_line: end,
+        primary_text,
+        full_text: parts.join("\n"),
+        end_line_override_applied,
+    })
+}
+
+/// Neutralize TeX/Markdown math delimiters on OCR statements (`investigate.md` rule 6.21).
+pub(crate) fn neutralize_ocr_math_delimiters(text: &str) -> String {
+    text.replace("$$", " ")
+        .replace('$', "")
+        .replace("\\[", "(")
+        .replace("\\]", ")")
+        .replace("\\(", "(")
+        .replace("\\)", ")")
 }
 
 pub(crate) fn open_existing_library(data_dir: &Path) -> Option<Library> {
@@ -470,89 +586,4 @@ pub(crate) fn resolve_bibliography(
         }
     }
     Ok(ResolvedBibliography { primary_cite_key, cite_key_map, paper_ref_map, entries })
-}
-
-pub(crate) fn quality_word(q: SkeletonQuality) -> &'static str {
-    match q {
-        SkeletonQuality::Full => "full",
-        SkeletonQuality::Partial => "partial",
-        SkeletonQuality::Weak => "weak",
-    }
-}
-
-/// Mandatory opening status line (`00-overview.md` 2.13 rule 1, 8.3 Q10, `investigate.md` 6.21).
-/// Never contains `"verified"`, `"proved"`, `"new"`, or `"novel"`.
-pub(crate) fn build_status_line(
-    skeleton: &PaperSkeleton,
-    pdf_index: &PdfPageIndex,
-    tasks: &[FoldedTask],
-) -> String {
-    let paper_id = match skeleton.version.as_deref().filter(|s| !s.is_empty()) {
-        Some(v) => format!("{} ({v})", skeleton.paper_key),
-        None => skeleton.paper_key.to_string(),
-    };
-    let origin = match skeleton.builder {
-        SkeletonBuilder::Tex1 => "Structure from TeX",
-        SkeletonBuilder::Html1 => "Structure from arXiv HTML",
-        SkeletonBuilder::Pdf1 => "Structure estimated from PDF text",
-    };
-    let reason = skeleton
-        .quality_reason
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| format!(" — {s}"))
-        .unwrap_or_else(|| {
-            if skeleton.builder == SkeletonBuilder::Pdf1 && pdf_index.has_scanned_pages() {
-                " — scanned pages (OCR)".to_string()
-            } else {
-                String::new()
-            }
-        });
-    let structure = format!(
-        "{origin} ({}, {}{reason})",
-        skeleton.builder.as_str(),
-        quality_word(skeleton.quality)
-    );
-    let task_summary = if tasks.is_empty() {
-        SKELETON_ONLY_STATUS.to_string()
-    } else {
-        let mut parts = Vec::new();
-        if let Some(orient) = tasks.iter().rev().find(|t| t.task == "orient") {
-            parts.push(format!("Orient: {}", orient.run_state_label));
-        }
-        let open_count = tasks.iter().filter(|t| t.task == "open").count();
-        if open_count > 0 {
-            parts.push(format!("Open tasks: {open_count}"));
-        }
-        let ctx_count = tasks.iter().filter(|t| t.task == "context").count();
-        if ctx_count > 0 {
-            parts.push(format!("Context tasks: {ctx_count}"));
-        }
-        if parts.is_empty() { format!("Tasks recorded: {}", tasks.len()) } else { parts.join("; ") }
-    };
-    format!("{paper_id}. {structure}. {task_summary}.")
-}
-
-pub(crate) fn kind_display(kind: SkNodeKind) -> &'static str {
-    match kind {
-        SkNodeKind::FrontMatter => "Front matter",
-        SkNodeKind::Section => "Section",
-        SkNodeKind::Definition => "Definition",
-        SkNodeKind::Assumption => "Assumption",
-        SkNodeKind::Theorem => "Theorem",
-        SkNodeKind::Lemma => "Lemma",
-        SkNodeKind::Proposition => "Proposition",
-        SkNodeKind::Corollary => "Corollary",
-        SkNodeKind::Conjecture => "Conjecture",
-        SkNodeKind::Claim => "Claim",
-        SkNodeKind::Proof => "Proof",
-        SkNodeKind::Example => "Example",
-        SkNodeKind::Remark => "Remark",
-        SkNodeKind::Equation => "Equation",
-        SkNodeKind::Figure => "Figure",
-        SkNodeKind::Table => "Table",
-        SkNodeKind::Algorithm => "Algorithm",
-        SkNodeKind::Bibliography => "Bibliography",
-    }
 }

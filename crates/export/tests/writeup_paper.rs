@@ -210,13 +210,25 @@ fn full_reading_honors_user_pins_overrides_notes_and_inline_badge_toggle() {
 fn licence_gate_enforces_300_char_cap_fail_closed_and_allows_cc_by_full_statements() {
     assert!(LONG_THEOREM_BODY.chars().count() > MAX_DISPLAY_QUOTE_CHARS);
 
-    // Direct allow-list unit checks.
-    assert!(!is_permissive_licence(None));
-    assert!(!is_permissive_licence(Some("")));
-    assert!(!is_permissive_licence(Some("http://arxiv.org/licenses/nonexclusive-distrib/1.0/")));
-    assert!(!is_permissive_licence(Some("CC-BY-NC-4.0")));
-    assert!(!is_permissive_licence(Some("CC-BY-ND-4.0")));
-    assert!(!is_permissive_licence(Some("Proprietary Publisher Licence")));
+    // Direct allow-list unit checks (including adversarial NC/ND/SA/negated bypass strings).
+    for rejected in [
+        None,
+        Some(""),
+        Some("http://arxiv.org/licenses/nonexclusive-distrib/1.0/"),
+        Some("CC-BY-NC-4.0"),
+        Some("CC-BY-ND-4.0"),
+        Some("CC-BY-SA-4.0"),
+        Some("CC BY NC 4.0"),
+        Some("CC BY ND"),
+        Some("CC-BY (NonCommercial)"),
+        Some("CC-BY (NoDerivs)"),
+        Some("CC-BY-4.0-NC"),
+        Some("Not CC-BY-4.0"),
+        Some("https://creativecommons.org/licenses/by/4.0/ + noncommercial"),
+        Some("Proprietary Publisher Licence"),
+    ] {
+        assert!(!is_permissive_licence(rejected), "licence `{rejected:?}` must fail closed");
+    }
     assert!(is_permissive_licence(Some("CC-BY-4.0")));
     assert!(is_permissive_licence(Some("https://creativecommons.org/licenses/by/4.0/")));
     assert!(is_permissive_licence(Some("CC0-1.0")));
@@ -474,5 +486,81 @@ fn tamper_refusal_rejects_corrupt_source_hash_corrupt_blob_and_forged_anchor() {
     let md = render_writeup_markdown(&built.writeup, &WriteupOptions::default()).unwrap();
     assert!(!tex.contains(forged_text), "forged quote must never be written to TeX");
     assert!(!md.contains(forged_text), "forged quote must never be written to Markdown");
+    assert!(
+        !md.contains("Authors: Background (model)"),
+        "authors' claim with zero surviving verified anchors must be omitted"
+    );
     assert!(md.contains("could not be matched"), "rejection must be disclosed in check table");
+}
+
+#[test]
+fn shared_writeup_session_dispatch_serves_tex_md_bib_writes_sidecar_and_gates_other_modes() {
+    use export::{writeup_session_bytes, writeup_session_to_path, WriteupFormat};
+
+    assert_eq!(WriteupFormat::parse("tex").unwrap(), WriteupFormat::Tex);
+    assert_eq!(WriteupFormat::parse("markdown").unwrap(), WriteupFormat::Md);
+    assert_eq!(WriteupFormat::parse("bib").unwrap(), WriteupFormat::Bib);
+    assert!(WriteupFormat::parse("docx").is_err());
+
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let ws_dir = tmp.path().join("ws");
+    fs::create_dir_all(&ws_dir).unwrap();
+    let seeded = seed_tex_session(
+        &data_dir,
+        &TexSeedConfig {
+            session_id: "s-dispatch-inv",
+            ledger_licence: None,
+            use_us_spelling: false,
+            library_licence: None,
+            user_citekey: Some("lin2024stability"),
+        },
+    );
+    append_full_layer2(&data_dir, &seeded, AuthorsClaimLabel::New, false);
+
+    let opts = WriteupOptions::default();
+    let (tex_name, tex_bytes_a) =
+        writeup_session_bytes(&data_dir, &seeded.session_id, WriteupFormat::Tex, &opts).unwrap();
+    let (_, tex_bytes_b) =
+        writeup_session_bytes(&data_dir, &seeded.session_id, WriteupFormat::Tex, &opts).unwrap();
+    let (md_name, md_bytes) =
+        writeup_session_bytes(&data_dir, &seeded.session_id, WriteupFormat::Md, &opts).unwrap();
+    let (bib_name, bib_bytes) =
+        writeup_session_bytes(&data_dir, &seeded.session_id, WriteupFormat::Bib, &opts).unwrap();
+    assert_eq!(tex_name, "s-dispatch-inv-writeup.tex");
+    assert_eq!(md_name, "s-dispatch-inv-writeup.md");
+    assert_eq!(bib_name, "s-dispatch-inv-writeup.bib");
+    assert_eq!(tex_bytes_a, tex_bytes_b, "writeup_session_bytes must be byte-deterministic");
+    assert!(String::from_utf8_lossy(&md_bytes).contains(AUTHORS_LABEL_NEW));
+    assert!(String::from_utf8_lossy(&bib_bytes).contains("@article{lin2024stability,"));
+
+    // Writing `.tex` to disk also writes sidecar `.bib` and passes `tex_audit` cleanly.
+    let out_tex = ws_dir.join("notes.tex");
+    let written = writeup_session_to_path(
+        &data_dir,
+        &seeded.session_id,
+        WriteupFormat::Tex,
+        &opts,
+        &out_tex,
+    )
+    .unwrap();
+    assert!(out_tex.is_file());
+    assert!(out_tex.with_extension("bib").is_file());
+    assert!(String::from_utf8_lossy(&written).contains("\\bibliography{notes}"));
+    let env = ResearchEnv::with_workspace(&data_dir, &ws_dir).unwrap();
+    let ledger = Ledger::open_existing(&data_dir).unwrap();
+    let audit =
+        audit_tex_sources(&env, &seeded.session_id, Some(&ledger), &AuditOptions::default()).unwrap();
+    assert!(audit.ok, "tex_audit failed on writeup_session_to_path output: {:?}", audit.issues);
+    assert_eq!(audit.blocker_count, 0);
+    assert_eq!(audit.error_count, 0);
+
+    // Non-Investigate session fails cleanly with `"write-up adapter not built yet"`.
+    ledger.append("s-research-other", "session.created", 1, &json!({ "title": "Research" })).unwrap();
+    let err = writeup_session_bytes(&data_dir, "s-research-other", WriteupFormat::Md, &opts)
+        .unwrap_err();
+    assert!(
+        err.contains("write-up adapter not built yet"),
+        "expected unbuilt-mode error, got: {err}"
+    );
 }
