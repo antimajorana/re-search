@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay successful computation checks using the live worker's evaluator."""
+"""Replay successful computation steps and Solve host checks from an exported bundle."""
 
 import argparse
 import hashlib
@@ -11,6 +11,10 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent
 
 
+def canonical_json(obj):
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
 def archived_bytes(entry):
     path = (ROOT / entry["path"]).resolve()
     path.relative_to(ROOT)
@@ -19,6 +23,18 @@ def archived_bytes(entry):
     if expected and hashlib.sha256(payload).hexdigest() != expected:
         raise ValueError(f"hash mismatch for {entry['path']}")
     return payload
+
+
+def verify_solve_check_handles(solve_checks):
+    for chk in solve_checks:
+        handles = chk.get("handles") or {}
+        expected = chk.get("handles_sha256") or {}
+        for side, digest in expected.items():
+            raw = handles.get(side)
+            if raw is None or hashlib.sha256(raw.encode("utf-8")).hexdigest() != digest:
+                raise ValueError(
+                    f"hash mismatch for solve check {chk.get('check_id', '<unknown>')} handle {side}"
+                )
 
 
 def compare_result(step, actual):
@@ -57,7 +73,11 @@ def replay_worker(steps):
         path = step["path"]
         print(f"[run_all_checks] running {path}...", flush=True)
         code = archived_bytes(step).decode("utf-8")
-        result = worker.evaluate(code, namespace)
+        exprs_in = step.get("exprs_in")
+        if exprs_in is not None:
+            result = worker.evaluate(code, namespace, exprs_in=exprs_in)
+        else:
+            result = worker.evaluate(code, namespace)
         sys.stdout.write(result["stdout"])
         sys.stderr.write(result["stderr"])
         if "error" in result:
@@ -75,28 +95,85 @@ def replay_worker(steps):
     return 0
 
 
+def replay_solve_checks(solve_checks):
+    if not solve_checks:
+        return 0
+    sys.path.insert(0, str(ROOT / "_re_search_runtime"))
+    import checks
+
+    verify_solve_check_handles(solve_checks)
+    live_reg = checks.registry_sha256()
+    warned_reg = False
+    passed = 0
+
+    for chk in solve_checks:
+        cid = chk.get("check_id", "<unknown>")
+        name = chk["name"]
+        rec_outcome = chk.get("outcome")
+        if rec_outcome == "not_run":
+            print(f"[run_all_checks] SKIP: solve_check {cid} ({name}) was not_run")
+            continue
+        handles = chk.get("handles") or {}
+        rec_ev = chk.get("recorded_evidence") or {}
+        if not handles or (not chk.get("registry_sha256") and "timeout_s" in rec_ev):
+            print(f"[run_all_checks] SKIP: solve_check {cid} ({name}) has no replayable handles")
+            continue
+        rec_reg = chk.get("registry_sha256")
+        if rec_reg and rec_reg != live_reg and not warned_reg:
+            print("[run_all_checks] WARN: replay runtime differs for checks_registry_sha256")
+            warned_reg = True
+
+        res = checks.run_registered_check(name, handles, chk.get("params") or {})
+        evidence = dict(res.get("evidence") or {})
+        for k, v in (chk.get("code_hashes") or {}).items():
+            evidence.setdefault(k, v)
+        actual_sha = hashlib.sha256(canonical_json(evidence).encode("utf-8")).hexdigest()
+        actual_outcome = res.get("outcome")
+        expected_sha = chk.get("evidence_sha256")
+
+        if actual_outcome != rec_outcome or actual_sha != expected_sha:
+            print(
+                f"[run_all_checks] FAILED: solve_check {cid} ({name}) result changed on re-run "
+                f"(expected outcome={rec_outcome} sha={expected_sha}, got outcome={actual_outcome} sha={actual_sha})",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"[run_all_checks] MATCH: solve_check {cid} ({name}, evidence_sha256={actual_sha[:12]})")
+        passed += 1
+
+    print(f"[run_all_checks] replayed {passed} solve check(s)")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verify-only", action="store_true", help="check bundle hashes without executing calculations")
     parser.add_argument("--worker", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--solve-checks", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     manifest_path = ROOT / "replay_manifest.json"
+    solve_checks = []
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest["schema_version"] != 1:
             raise ValueError("unsupported replay manifest version")
         workers = [group["steps"] for group in manifest["workers"]]
-        if args.worker is None:
+        solve_checks = manifest.get("solve_checks") or []
+        if args.worker is None and not args.solve_checks:
             hashed_files = manifest["runtime_files"] + manifest.get("document_files", []) + [
                 source for source in manifest["source_files"] if source.get("sha256")
             ] + [step for steps in workers for step in steps]
             for entry in hashed_files:
                 archived_bytes(entry)
+            verify_solve_check_handles(solve_checks)
             for source in manifest["source_files"]:
                 if source["status"] in ("hash_mismatch", "unavailable"):
                     print(f"[run_all_checks] omitted source: {source['path']} ({source['status']})")
             if args.verify_only:
-                print(f"[run_all_checks] verified {len(hashed_files)} archived file hash(es)")
+                print(
+                    f"[run_all_checks] verified {len(hashed_files)} archived file hash(es)"
+                    + (f" and {len(solve_checks)} solve check handle set(s)" if solve_checks else "")
+                )
                 return 0
     else:
         if args.verify_only:
@@ -108,6 +185,8 @@ def main():
         ]
     if args.worker is not None:
         return replay_worker(workers[args.worker])
+    if args.solve_checks:
+        return replay_solve_checks(solve_checks)
 
     for index in range(len(workers)):
         # A fresh process also resets globals in imported modules after a worker restarts.
@@ -118,6 +197,16 @@ def main():
         )
         if result.returncode != 0:
             return 1
+    if solve_checks:
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "run_all_checks.py"), "--solve-checks"],
+            cwd=ROOT,
+            check=False,
+        )
+        if result.returncode != 0:
+            return 1
+        print(f"[run_all_checks] passed {sum(map(len, workers))} worker step(s) and {len(solve_checks)} solve check(s)")
+        return 0
     print(f"[run_all_checks] passed {sum(map(len, workers))} check(s)")
     return 0
 
