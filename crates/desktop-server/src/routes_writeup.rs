@@ -112,6 +112,7 @@ fn map_writeup_error(err: String) -> (u16, String) {
 
 fn safe_download_filename(raw: &str) -> String {
     let cleaned: String = raw
+        .trim_start_matches('.')
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
@@ -122,9 +123,22 @@ fn safe_download_filename(raw: &str) -> String {
         })
         .take(128)
         .collect();
-    if cleaned.is_empty() || matches!(cleaned.as_str(), "." | "..") {
+    let trimmed = cleaned.trim_start_matches('.');
+    if trimmed.is_empty() {
         "writeup.tex".to_string()
     } else {
-        cleaned
+        trimmed.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_download_filename;
+
+    #[test]
+    fn safe_download_filename_strips_leading_dots() {
+        assert_eq!(safe_download_filename(".hidden.tex"), "hidden.tex");
+        assert_eq!(safe_download_filename(".."), "writeup.tex");
+        assert_eq!(safe_download_filename("s-1-writeup.tex"), "s-1-writeup.tex");
     }
 }
