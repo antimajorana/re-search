@@ -374,15 +374,16 @@ fn auto_checkpoint_60_percent_d6_repair_and_worker_restart_restage() {
     cfg4.hooks = Some(&seam);
     let tr4 = MockTransport::new(vec![
         tool_resp("d0", "review_steps", json!({})),
-        tool_resp("d1", "step_record", json!({ "entry_type": "final_answer", "summary": "s", "details": "d", "depends_on": [] })),
-        tool_resp("d2", "solve_finish", json!({ "final_entry_id": "e-1", "summary_markdown": "Answer", "outcome": "finished" })),
-        tool_resp("d3", "solve_finish", json!({ "final_entry_id": "e-1", "summary_markdown": "Answer", "outcome": "finished" })),
+        tool_resp("d1", "step_record", json!({ "entry_type": "assumption", "summary": "given", "details": "d", "depends_on": [] })),
+        tool_resp("d1b", "step_record", json!({ "entry_type": "final_answer", "summary": "s", "details": "d", "depends_on": ["e-1"] })),
+        tool_resp("d2", "solve_finish", json!({ "final_entry_id": "e-2", "summary_markdown": "Answer", "outcome": "finished" })),
+        tool_resp("d3", "solve_finish", json!({ "final_entry_id": "e-2", "summary_markdown": "Answer", "outcome": "finished" })),
         end_resp("Settled with open items."),
     ]);
     let out4 = run_solve_loop(&tr4, &router4, &ledger4, &cfg4, &mut NoopSink).unwrap();
-    assert_eq!(out4, SessionOutcome::Completed { turns: 5, stop_reason: "end_turn".into() });
+    assert_eq!(out4, SessionOutcome::Completed { turns: 6, stop_reason: "end_turn".into() });
     assert!(hook_called.load(Ordering::SeqCst));
-    assert!(tr4.seen_requests.lock().unwrap()[3].messages.iter().any(|m| format!("{:?}", m.content).contains("solve_repair_round")));
+    assert!(tr4.seen_requests.lock().unwrap()[4].messages.iter().any(|m| format!("{:?}", m.content).contains("solve_repair_round")));
 
     // Cancel & explicit approval denial
     let cancel = CancelToken::new();
