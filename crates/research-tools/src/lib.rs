@@ -74,6 +74,8 @@ mod solve_exprs_show;
 pub mod solve_model;
 mod solve_model_records;
 mod solve_own_tier;
+pub mod solve_artifacts;
+mod solve_artifacts_sniff;
 pub mod solve_setup;
 mod solve_setup_prefill;
 pub mod solve_state;
