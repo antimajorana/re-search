@@ -141,6 +141,52 @@ pub enum ReviewIndependence {
     SameModel,
 }
 
+fn canonical_provider_family(raw: &str) -> String {
+    let norm = raw.trim().to_ascii_lowercase();
+    match norm.as_str() {
+        "anthropic" | "claude-cli" | "claude" => "anthropic".to_string(),
+        "openai" | "chatgpt" => "openai".to_string(),
+        "gemini" | "google" | "antigravity" => "gemini".to_string(),
+        _ => norm,
+    }
+}
+
+fn canonical_model_id(raw: &str) -> String {
+    let norm = raw.trim().to_ascii_lowercase();
+    if let Some(rest) = norm.strip_prefix("models/") {
+        return rest.trim().to_string();
+    }
+    for prefix in ["anthropic/", "openai/", "chatgpt/", "gemini/", "google/"] {
+        if let Some(rest) = norm.strip_prefix(prefix) {
+            return rest.trim().to_string();
+        }
+    }
+    norm
+}
+
+/// Shared host-computed review independence (`00-overview.md` 2.9 & 9; `solve.md` 4.1, 4.4 rule 4,
+/// rules R3 & R13). Never trusts model-supplied labels and fails closed to
+/// [`ReviewIndependence::SameModel`] whenever either role has an empty or ambiguous provider/model.
+pub fn compute_review_independence(
+    solver: &RoleModel,
+    reviewer: &RoleModel,
+) -> ReviewIndependence {
+    let sp = canonical_provider_family(&solver.provider);
+    let rp = canonical_provider_family(&reviewer.provider);
+    let sm = canonical_model_id(&solver.model);
+    let rm = canonical_model_id(&reviewer.model);
+    if sp.is_empty() || rp.is_empty() || sm.is_empty() || rm.is_empty() {
+        return ReviewIndependence::SameModel;
+    }
+    if sp != rp {
+        return ReviewIndependence::DifferentProvider;
+    }
+    if sm != rm {
+        return ReviewIndependence::DifferentModel;
+    }
+    ReviewIndependence::SameModel
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewVerdict {
@@ -408,3 +454,7 @@ pub struct GuardrailBlocked {
     pub call_id: String,
     pub message: String,
 }
+
+#[cfg(test)]
+#[path = "solve_model_records_tests.rs"]
+mod tests;
