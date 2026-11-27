@@ -315,3 +315,33 @@
 @media (max-width: 900px) {
   .inv-shell { grid-template-columns: 1fr; }
 }
+
+/* V9 read-side legacy sections ("Earlier map", "Unplaced (older map)", fallback view) */
+.inv-legacy-earlier-map,
+.inv-legacy-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px dashed var(--border-strong, #c4c7c5);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--bg-surface, #f8fafd);
+}
+.inv-legacy-section-header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.inv-legacy-heading { margin: 0; font-size: 0.9rem; font-weight: 600; color: var(--ink-primary, #1f1f1f); }
+.inv-legacy-count { font-size: 0.78rem; color: var(--ink-muted, #606569); }
+.inv-legacy-node-card,
+.inv-legacy-subsection { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px dashed var(--border-strong, #c4c7c5); border-radius: var(--radius-sm, 8px); background: var(--bg-elevated, #ffffff); }
+.inv-legacy-node-head,
+.inv-legacy-edges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.inv-legacy-sentence,
+.inv-legacy-correction-text { margin: 0; font-size: 0.86rem; line-height: 1.45; color: var(--ink-primary, #1f1f1f); }
+.inv-legacy-anchors,
+.inv-legacy-conventions-list { margin: 0; padding-left: 18px; font-size: 0.8rem; color: var(--ink-secondary, #444746); }
+.inv-legacy-edge { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 3px 6px; border: 1px dashed var(--border-strong, #c4c7c5); border-radius: var(--radius-sm, 8px); font-size: 0.78rem; }
+.inv-legacy-jump-btn { appearance: none; background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
+.inv-legacy-correction { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border: 1px solid var(--border-subtle, #dfe4ec); border-radius: var(--radius-sm, 8px); background: var(--bg-subtle, #f1f4f9); }
+.inv-legacy-fallback-banner { padding: 8px 10px; border: 1px solid var(--status-warn-border, #f6d57a); border-radius: var(--radius-sm, 8px); background: var(--bg-elevated, #ffffff); font-size: 0.84rem; color: var(--ink-primary, #1f1f1f); }
+.inv-legacy-history-item { padding-top: 6px; border-top: 1px solid var(--border-subtle, #dfe4ec); font-size: 0.83rem; }
+.inv-legacy-history-q { font-weight: 600; }

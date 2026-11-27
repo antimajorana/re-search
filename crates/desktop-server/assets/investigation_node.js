@@ -6,6 +6,7 @@ import { renderInvestigationBadges } from './investigation_badges.js';
 import { findLatestNodeTask, renderInvestigationNodeModel } from './investigation_node_model.js';
 import { extractNodeNotes, renderInvestigationNotes } from './investigation_notes_ui.js';
 import { mountInvestigationNodeHandoff } from './investigation_handoff_ui.js';
+import { mountLegacyEarlierMap } from './investigation_legacy.js';
 
 // Named wording constants (00-overview.md §2.6, §3.2, investigate.md §3).
 export const NODE_BLOCK_A_LABEL = 'From source (by code)';
@@ -359,6 +360,15 @@ export function renderInvestigationNodeCard(host, mapview, tag, opts = {}) {
     blockAContent.appendChild(notesSlot);
   }
 
+  let legacyCtrl = null;
+  const legacyNodes = Array.isArray(opts.legacyNodes) ? opts.legacyNodes : node.earlier_map;
+  if (Array.isArray(legacyNodes) && legacyNodes.length > 0) {
+    const legacySlot = document.createElement('div');
+    legacySlot.className = 'inv-node-legacy-slot';
+    legacyCtrl = mountLegacyEarlierMap(legacySlot, legacyNodes, { onSelectNode: opts.onSelectNode });
+    blockAContent.appendChild(legacySlot);
+  }
+
   // 9. V8 Block B model explanation (when not explicitly overridden by caller).
   let modelCtrl = null;
   let modelContent = opts.modelContent ?? null;
@@ -416,5 +426,5 @@ export function renderInvestigationNodeCard(host, mapview, tag, opts = {}) {
   });
 
   if (host) host.replaceChildren(card);
-  return { card, relations, toggleProof, badgesCtrl, modelCtrl, notesCtrl, handoffSlot, handoffCtrl };
+  return { card, relations, toggleProof, badgesCtrl, modelCtrl, notesCtrl, legacyCtrl, handoffSlot, handoffCtrl };
 }

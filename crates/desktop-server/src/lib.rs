@@ -10,6 +10,8 @@ mod investigation_cites;
 pub mod investigation_finish;
 pub mod investigation_handoff;
 pub mod investigation_handoff_receive;
+mod investigation_legacy_model;
+pub mod investigation_legacy_view;
 pub mod investigation_mapview;
 pub mod investigation_mapview_v7;
 mod investigation_mapview_v8;
