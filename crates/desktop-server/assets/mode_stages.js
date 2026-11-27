@@ -4,6 +4,7 @@
 import * as api from './api.js';
 import { createExploreSessionController } from './idea.js';
 import { EXPLORE_VISIBILITY_STORAGE_KEY } from './idea_state.js';
+import { mountUsedLessonsDisclosure } from './lesson_remember.js';
 import {
   SOLVE_ARTIFACTS_TAB,
   mountSolveArtifactsSection,
@@ -184,6 +185,9 @@ export function createModeStagesController(deps = {}) {
       ...(deps.solveOpts || {}),
     });
     if (viewData) view.applyView(viewData);
+    if (viewData?.lessons_supplied?.count > 0) {
+      mountUsedLessonsDisclosure(solveHost, viewData.lessons_supplied, deps);
+    }
     activeSolveArtifacts = mountSolveArtifactsSection(solveHost, viewData, {
       sessionId,
       fetchFn: deps.fetchArtifact || deps.fetch || (typeof fetch === 'function' ? fetch : null),

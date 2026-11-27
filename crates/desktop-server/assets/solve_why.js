@@ -4,6 +4,7 @@
 import { SOLVE_TIER_LABELS, createSolveBadgeGroup, normalizeSolveTier } from './solve_badges.js';
 import { BORDER_DASHED, BORDER_SOLID, createBadge } from './ui_badge.js';
 import { createQuoteChip } from './quote_chip.js';
+import { createRememberThisCard } from './lesson_remember.js';
 
 export const SOLVE_CHECK_NAMES = Object.freeze([
   'identity_symbolic', 'identity_numeric', 'series_match', 'vanishes_to_order',
@@ -196,7 +197,7 @@ export function createSolveWhyPopover(host, props = {}) {
   let currentProps = { ...props };
   const doc = currentProps.document || host?.ownerDocument || document;
   const root = el(doc, 'section', 'solve-why-popover', null, { role: 'dialog', 'data-testid': 'solve-why-popover' });
-  let activeForm = null, recheckWarning = null, errorMessage = null, lastEntryId = currentProps.step?.entry_id ?? null;
+  let activeForm = null, recheckWarning = null, errorMessage = null, rememberContext = null, lastEntryId = currentProps.step?.entry_id ?? null;
   const expandedCodes = new Set();
   if (host && typeof host.appendChild === 'function') host.appendChild(root);
 
@@ -359,7 +360,23 @@ export function createSolveWhyPopover(host, props = {}) {
           sessionId: currentProps.sessionId, session: currentProps.sessionId,
           entryId: step.entry_id, entrySha256: step.entry_sha256,
           step, correctionText, text: correctionText, originalSummary: step.summary,
-        }), () => { activeForm = null; render(); });
+        }), () => {
+          activeForm = null;
+          rememberContext = {
+            from: {
+              session: String(currentProps.sessionId || 'session'),
+              mode: String(currentProps.mode || 'solve'),
+              id: String(step.entry_id || 'step'),
+            },
+            mode: String(currentProps.mode || 'solve'),
+            field: currentProps.field || currentProps.view?.setup?.field || '',
+            paperKey: step.source_ref?.paper_key || '',
+            userWords: correctionText,
+            targetSummary: step.summary || '',
+            sourceKind: 'step_correction',
+          };
+          render();
+        });
       });
       return form;
     }
@@ -481,6 +498,16 @@ export function createSolveWhyPopover(host, props = {}) {
     root.appendChild(actionsBar);
     const formEl = renderInlineForm(step);
     if (formEl) root.appendChild(formEl);
+    if (rememberContext) {
+      const remCard = createRememberThisCard(doc, rememberContext, {
+        fetchJson: currentProps.fetchJson,
+        onSave: currentProps.onSaveLesson,
+        onDraftSummary: currentProps.onDraftLessonSummary,
+        onSaved: (res) => { rememberContext = null; currentProps.onLessonSaved?.(res); render(); },
+        onDismiss: () => { rememberContext = null; currentProps.onLessonDismissed?.(); render(); },
+      });
+      root.appendChild(remCard.element);
+    }
   }
 
   render();
@@ -491,7 +518,7 @@ export function createSolveWhyPopover(host, props = {}) {
       currentProps = { ...currentProps, ...nextProps };
       const nextId = currentProps.step?.entry_id ?? null;
       if (nextId !== lastEntryId) {
-        lastEntryId = nextId; activeForm = null; recheckWarning = null; errorMessage = null; expandedCodes.clear();
+        lastEntryId = nextId; activeForm = null; recheckWarning = null; errorMessage = null; rememberContext = null; expandedCodes.clear();
       }
       render();
     },
