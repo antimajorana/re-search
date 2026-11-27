@@ -135,4 +135,26 @@ fn writeup_session_bytes_and_to_path_emit_tex_sidecar_bib_and_md() {
     assert!(!disk_tex.contains("[Verified]"));
     assert!(disk_tex.contains(writeup_wording::CHECK_TABLE_HEADING));
     assert!(disk_bib.contains("@article{voss2024seam,"));
+
+    // Hostile `bib_stem` is sanitized before entering `\bibliography{...}`.
+    let (_, hostile_tex_bytes) = writeup_session_bytes(
+        &data_dir,
+        sid,
+        WriteupFormat::Tex,
+        &WriteupOptions { include_inline_badges: true, bib_stem: "evil,a%b{c}".into() },
+    )
+    .unwrap();
+    let hostile_tex = String::from_utf8(hostile_tex_bytes).unwrap();
+    assert!(hostile_tex.contains(r"\bibliography{evil_a_b_c}"));
+
+    // Passing a `.bib` output path for `WriteupFormat::Tex` is refused (no self-clobber).
+    let collide_err = writeup_session_to_path(
+        &data_dir,
+        sid,
+        WriteupFormat::Tex,
+        &opts,
+        &out_dir.join("refs.bib"),
+    )
+    .unwrap_err();
+    assert!(collide_err.contains(".bib"), "unexpected err: {collide_err}");
 }

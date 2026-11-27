@@ -196,6 +196,26 @@ fn build_session_writeup(data_dir: &Path, session: &str) -> Result<writeup::Writ
     }
 }
 
+fn sanitize_bib_stem(raw: &str) -> String {
+    let cleaned: String = raw
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim_start_matches('.').trim_matches('_');
+    if trimmed.is_empty() {
+        "references".to_string()
+    } else {
+        trimmed.chars().take(120).collect()
+    }
+}
+
 /// Build and render a verified session write-up to bytes in `format` (`tex`, `md`, or `bib`).
 pub fn writeup_session_bytes(
     data_dir: &Path,
@@ -206,10 +226,15 @@ pub fn writeup_session_bytes(
     let doc = build_session_writeup(data_dir, session)?;
     match format {
         WriteupFormat::Tex => {
-            let mut tex_opts = opts.clone();
-            if tex_opts.bib_stem.trim().is_empty() {
-                tex_opts.bib_stem = format!("{session}-writeup");
-            }
+            let raw_stem = if opts.bib_stem.trim().is_empty() {
+                format!("{session}-writeup")
+            } else {
+                opts.bib_stem.clone()
+            };
+            let tex_opts = writeup::WriteupOptions {
+                include_inline_badges: opts.include_inline_badges,
+                bib_stem: sanitize_bib_stem(&raw_stem),
+            };
             let tex = writeup_tex::render_writeup_tex(&doc, &tex_opts)?;
             Ok((format!("{session}-writeup.tex"), tex.into_bytes()))
         }
@@ -236,6 +261,17 @@ pub fn writeup_session_to_path(
     opts: &writeup::WriteupOptions,
     out_path: &Path,
 ) -> Result<Vec<u8>, String> {
+    if format == WriteupFormat::Tex
+        && out_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("bib"))
+    {
+        return Err(
+            "TeX write-up output path must not end with `.bib` (collides with sidecar `.bib`)"
+                .to_string(),
+        );
+    }
     let doc = build_session_writeup(data_dir, session)?;
     if let Some(parent) = out_path.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(parent)
@@ -243,19 +279,24 @@ pub fn writeup_session_to_path(
     }
     let bytes = match format {
         WriteupFormat::Tex => {
-            let bib_stem = out_path
+            let raw_stem = out_path
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .filter(|s| !s.is_empty())
-                .unwrap_or("references")
-                .to_string();
+                .unwrap_or("references");
+            let bib_stem = sanitize_bib_stem(raw_stem);
             let tex_opts = writeup::WriteupOptions {
                 include_inline_badges: opts.include_inline_badges,
-                bib_stem,
+                bib_stem: bib_stem.clone(),
             };
             let tex_bytes = writeup_tex::render_writeup_tex(&doc, &tex_opts)?.into_bytes();
             let bib_text = writeup_bib::render_bibtex(&doc.bibliography);
-            let bib_path = out_path.with_extension("bib");
+            let bib_path = match out_path.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p.join(format!("{bib_stem}.bib")),
+                _ => Path::new(&format!("{bib_stem}.bib")).to_path_buf(),
+            };
+            if bib_path == out_path {
+                return Err("TeX write-up output path collides with its sidecar `.bib`".to_string());
+            }
             fs::write(&bib_path, bib_text.as_bytes()).map_err(|e| {
                 format!(
                     "failed to write sidecar `.bib` `{}`: {e}",
