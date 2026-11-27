@@ -308,6 +308,14 @@ fn string_vec(p: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+pub(crate) fn extract_exprs_out(p: &Value) -> Vec<String> {
+    match p.get("exprs_out") {
+        Some(Value::Array(arr)) => arr.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        Some(Value::Object(map)) => map.keys().cloned().collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn parse_proof_entry(seq: u64, p: &Value) -> Option<SolveEntry> {
     let entry_id = p.get("entry_id").and_then(Value::as_str)?.trim().to_string();
     if entry_id.is_empty() {
@@ -437,7 +445,7 @@ fn parse_tool_result(
         .get("process")
         .or_else(|| p.get("process"))
         .and_then(|v| serde_json::from_value(v.clone()).ok());
-    let exprs_out = string_vec(meta, "exprs_out");
+    let exprs_out = extract_exprs_out(meta);
     let env = meta.get("env").or_else(|| p.get("env")).cloned();
 
     let sympy_succeeded = ok

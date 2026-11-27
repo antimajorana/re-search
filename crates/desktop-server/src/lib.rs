@@ -71,6 +71,8 @@ mod session_summary;
 mod session_view;
 pub mod solve;
 pub mod solve_artifacts_route;
+pub mod solve_check_routes;
+pub mod solve_routes_ext;
 pub mod solve_view;
 pub mod sse;
 pub mod state;

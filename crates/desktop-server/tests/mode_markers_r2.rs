@@ -407,8 +407,13 @@ fn tool_handler_sources_do_not_append_host_mode_markers() {
         "crates/research-tools/src/sanity.rs",
         "crates/research-tools/src/lean_check.rs",
         "crates/research-tools/src/solve_defs.rs",
+        "crates/research-tools/src/solve_checks.rs",
+        "crates/research-tools/src/solve_done.rs",
         "crates/research-tools/src/solve_exprs.rs",
         "crates/research-tools/src/solve_exprs_show.rs",
+        "crates/research-tools/src/solve_gates.rs",
+        "crates/research-tools/src/solve_steps.rs",
+        "crates/research-tools/src/solve_steps_parse.rs",
     ];
 
     for rel in tool_files {

@@ -31,6 +31,8 @@ pub const STAGED_HELPER_FILES: &[&str] = &[
 pub const STAGED_CHECK_FILES: &[&str] = &[
     "checks/__init__.py",
     "checks/srepr_safe.py",
+    "checks/algebra.py",
+    "checks/algebra_probe.py",
 ];
 
 /// Process role of a spawned `worker.py` instance (`solve.md` 4.3).
@@ -395,6 +397,8 @@ mod tests {
         assert!(names.contains(&"solver_calc.py"));
         assert!(names.contains(&"checks/__init__.py"));
         assert!(names.contains(&"checks/srepr_safe.py"));
+        assert!(names.contains(&"checks/algebra.py"));
+        assert!(names.contains(&"checks/algebra_probe.py"));
 
         let dst = std::env::temp_dir().join(format!("worker-stage-proto-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dst);
@@ -402,6 +406,8 @@ mod tests {
         assert!(dst.join("worker.py").is_file());
         assert!(dst.join("checks").join("__init__.py").is_file());
         assert!(dst.join("checks").join("srepr_safe.py").is_file());
+        assert!(dst.join("checks").join("algebra.py").is_file());
+        assert!(dst.join("checks").join("algebra_probe.py").is_file());
         let _ = fs::remove_dir_all(&dst);
     }
 
