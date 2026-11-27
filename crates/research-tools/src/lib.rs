@@ -2,6 +2,7 @@
 
 pub mod archive;
 pub mod arxiv;
+pub mod budget_pool;
 pub mod formal_library;
 pub mod fs_tools;
 pub mod http_client;
