@@ -43,6 +43,8 @@ pub enum PageBasis {
     TextLayer,
     /// Full-page scan image with a publisher/OCR text layer behind it (or uncertain scan).
     ScanTextLayer,
+    /// Text extracted from a scanned page via local OCR (package F14b, 00-overview.md 2.12).
+    Ocr,
     /// No usable text layer (blank, image-only, or too little text for its page size).
     None,
 }
@@ -52,6 +54,7 @@ impl PageBasis {
         match self {
             Self::TextLayer => "text_layer",
             Self::ScanTextLayer => "scan_text_layer",
+            Self::Ocr => "ocr",
             Self::None => "none",
         }
     }

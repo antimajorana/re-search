@@ -117,3 +117,15 @@ fn unknown_extractor_id_and_precancelled_job_fail_cleanly() {
     assert_eq!(first, second);
     assert_eq!(PdfExtractOptions::user_supplied().max_bytes, MAX_USER_PDF_BYTES);
 }
+
+#[test]
+fn page_basis_ocr_is_scan_and_does_not_need_ocr() {
+    assert_eq!(PageBasis::Ocr.as_str(), "ocr");
+    assert!(PageBasis::Ocr.is_scan());
+    assert!(!PageBasis::Ocr.needs_ocr());
+    let serialized = serde_json::to_string(&PageBasis::Ocr).unwrap();
+    assert_eq!(serialized, "\"ocr\"");
+    let parsed: PageBasis = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(parsed, PageBasis::Ocr);
+}
+

@@ -180,9 +180,7 @@ pub fn measure_extractor<E: PdfExtractor>(
                             empty_pages_correct += 1;
                         }
                     }
-                    if matches!(expected_basis, PageBasis::None | PageBasis::ScanTextLayer)
-                        && actual == Some(PageBasis::TextLayer)
-                    {
+                    if expected_basis.is_scan() && actual == Some(PageBasis::TextLayer) {
                         scans_reported_as_text_layer += 1;
                     }
                 }
