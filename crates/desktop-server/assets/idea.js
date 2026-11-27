@@ -6,7 +6,9 @@ import { getExploreSession, postIdeaOp } from './api_idea.js';
 import { renderCandidateCards, renderCandidateList, renderWhereILooked } from './idea_search.js';
 import {
   NO_MODEL_NOTICE,
+  SHARPENED_IDEA_TITLE,
   createInitialIdeaState,
+  highlightSubclaimQuotes,
   ideaReducer,
   selectEmptyState,
   selectFilteredCandidates,
@@ -158,8 +160,9 @@ export function renderExploreSession(hostEl, state, callbacks = {}) {
     shell.append(banner);
   }
 
-  // 5. Verbatim Idea card (`explore.md` 3 & 4.1).
+  // 5. Verbatim Idea card with highlighted subclaim `idea_quote` spans (`explore.md` 3 & 4.1).
   const stmt = view.statement;
+  const sharpened = view.sharpened_idea || view.brief || null;
   const ideaCard = el('section', 'idea-verbatim-card');
   ideaCard.setAttribute('data-idea-section', 'idea-card');
   const ideaHead = el('div', 'idea-card-head');
@@ -168,11 +171,38 @@ export function renderExploreSession(hostEl, state, callbacks = {}) {
     createBadge({ text: 'you', icon: 'user', tone: 'neutral' }),
   );
   ideaCard.append(ideaHead);
-  ideaCard.append(el('p', 'idea-verbatim-text', stmt?.text || 'No idea statement recorded.'));
+  const ideaTextEl = el('p', 'idea-verbatim-text');
+  const rawIdeaText = stmt?.text || 'No idea statement recorded.';
+  const quoteSegments = highlightSubclaimQuotes(rawIdeaText, sharpened?.subclaims);
+  for (const seg of quoteSegments) {
+    if (seg.subclaimId) {
+      const mark = document.createElement('mark');
+      mark.className = 'idea-quote-mark';
+      mark.setAttribute('data-subclaim-id', seg.subclaimId);
+      mark.title = seg.subclaimId;
+      mark.textContent = seg.text;
+      ideaTextEl.appendChild(mark);
+    } else {
+      const span = document.createElement('span');
+      span.textContent = seg.text;
+      ideaTextEl.appendChild(span);
+    }
+  }
+  ideaCard.append(ideaTextEl);
   if (view.map_stale) {
     ideaCard.append(createBadge({ text: 'Map stale after revision', icon: 'warn', tone: 'warn' }));
   }
   shell.append(ideaCard);
+
+  // 5b. "Sharpened idea" card (NEVER the word "brief" on screen — `00-overview.md` 3.2 row 18).
+  if (sharpened) {
+    const sharpenedCard = renderSharpenedIdeaCard(sharpened, {
+      answers: view.question_answers,
+      onSave: callbacks.onSaveAnswer,
+      onPlan: callbacks.onPlan,
+    });
+    if (sharpenedCard) shell.append(sharpenedCard);
+  }
 
   // 6. Candidate list (`idea_search.js`).
   const candidates = selectFilteredCandidates(state);
@@ -249,6 +279,8 @@ export function createExploreSessionController(hostEl, deps = {}) {
       onStop: () => void invokeOp('stop'),
       onContinue: () => void handleContinueClick(),
       onRetry: () => void handleRetryClick(),
+      onSaveAnswer: (payload) => void invokeOp('answer', payload),
+      onPlan: () => void invokeOp('plan', {}),
     });
   }
 
@@ -343,3 +375,157 @@ export function createExploreSessionController(hostEl, deps = {}) {
     getState: () => state,
   };
 }
+
+/**
+ * Render the `"Sharpened idea"` card (`00-overview.md` 3.2 row 18 — never show `"brief"` on
+ * screen): restatement, assumptions, checkable parts, terms/aliases, editable perspective queries,
+ * and clarifying questions with defaults. Zero `innerHTML`.
+ */
+export function renderSharpenedIdeaCard(sharpened, opts = {}) {
+  if (!sharpened || typeof sharpened !== 'object') return null;
+  const answersMap = { ...(sharpened.answers || {}), ...(opts.answers || {}) };
+  const onSave = typeof opts.onSave === 'function' ? opts.onSave : null;
+  const onPlan = typeof opts.onPlan === 'function' ? opts.onPlan : null;
+
+  const section = el('section', 'idea-setup-card');
+  section.setAttribute('data-idea-section', 'sharpened-idea');
+  section.setAttribute('aria-label', SHARPENED_IDEA_TITLE);
+
+  const head = el('div', 'idea-card-head');
+  head.append(
+    el('h3', 'idea-card-title', SHARPENED_IDEA_TITLE),
+    createBadge({ text: '(model)', icon: 'info', tone: 'info', border: 'dashed' }),
+  );
+  section.append(head);
+
+  const restateInput = el('textarea', 'idea-textarea');
+  restateInput.rows = 2;
+  restateInput.value = String(sharpened.restatement || '');
+  restateInput.setAttribute('aria-label', 'Restatement');
+  restateInput.setAttribute('data-sharpen-field', 'restatement');
+  section.append(el('span', 'idea-field-label', 'Restatement (model)'), restateInput);
+
+  const assumptions = Array.isArray(sharpened.assumptions) ? sharpened.assumptions : [];
+  if (assumptions.length > 0) {
+    const ul = el('ul', 'idea-not-searched');
+    for (const a of assumptions) ul.append(el('li', '', String(a)));
+    section.append(el('span', 'idea-field-label', 'Assumptions'), ul);
+  }
+
+  const subclaims = Array.isArray(sharpened.subclaims) ? sharpened.subclaims : [];
+  if (subclaims.length > 0) {
+    const list = el('div', 'idea-query-list');
+    list.setAttribute('data-sharpen-section', 'subclaims');
+    for (const sc of subclaims) {
+      const row = el('div', 'idea-query-chip');
+      row.setAttribute('data-subclaim-id', String(sc.id || ''));
+      row.append(
+        createBadge({ text: String(sc.id || 'sc'), icon: 'quote', tone: 'info' }),
+        el('span', '', String(sc.text || '')),
+        el('span', 'idea-card-meta', sc.idea_quote ? `"${sc.idea_quote}"` : ''),
+      );
+      list.append(row);
+    }
+    section.append(el('span', 'idea-field-label', 'Checkable parts'), list);
+  }
+
+  const terms = Array.isArray(sharpened.terms) ? sharpened.terms : [];
+  if (terms.length > 0) {
+    const row = el('div', 'idea-chip-row');
+    for (const tg of terms) {
+      const aliases = Array.isArray(tg.aliases) && tg.aliases.length > 0
+        ? ` (${tg.aliases.join(', ')})`
+        : '';
+      row.append(el('span', 'idea-chip', `${tg.term || ''}${aliases}`));
+    }
+    section.append(el('span', 'idea-field-label', 'Terms and aliases'), row);
+  }
+
+  const perspectives = Array.isArray(sharpened.perspectives) ? sharpened.perspectives : [];
+  const editedPerspectives = perspectives.map((p) => ({
+    id: String(p.id || ''),
+    kind: String(p.kind || 'exact'),
+    question: String(p.question || ''),
+    queries: (Array.isArray(p.queries) ? p.queries : []).map((q) => ({
+      provider: String(q.provider || 'arxiv'),
+      q: String(q.q || ''),
+    })),
+  }));
+  if (editedPerspectives.length > 0) {
+    const pWrap = el('div', 'idea-query-list');
+    pWrap.setAttribute('data-sharpen-section', 'perspectives');
+    for (const p of editedPerspectives) {
+      const card = el('div', 'idea-preview-box');
+      card.setAttribute('data-perspective-id', p.id);
+      card.append(el('strong', '', `${p.id} · ${p.kind}: ${p.question}`));
+      for (const q of p.queries) {
+        const qRow = el('div', 'idea-query-chip');
+        const qInput = el('input', 'text-input');
+        qInput.type = 'text';
+        qInput.value = q.q;
+        qInput.setAttribute('aria-label', `${p.id} ${q.provider} query`);
+        qInput.addEventListener('input', () => { q.q = qInput.value; });
+        qRow.append(el('span', 'idea-query-provider', q.provider), qInput);
+        card.append(qRow);
+      }
+      pWrap.append(card);
+    }
+    section.append(el('span', 'idea-field-label', 'Search perspectives and editable queries'), pWrap);
+  }
+
+  const questions = Array.isArray(sharpened.questions) ? sharpened.questions : [];
+  const currentAnswers = { ...answersMap };
+  if (questions.length > 0) {
+    const qWrap = el('div', 'idea-query-list');
+    qWrap.setAttribute('data-sharpen-section', 'questions');
+    for (const q of questions) {
+      const qid = String(q.id || '');
+      const selected = currentAnswers[qid] ?? String(q.default || '');
+      currentAnswers[qid] = selected;
+      const qRow = el('div', 'idea-query-chip');
+      const sel = el('select', 'text-input');
+      sel.setAttribute('aria-label', String(q.question || qid));
+      sel.setAttribute('data-question-id', qid);
+      for (const opt of Array.isArray(q.options) ? q.options : []) {
+        const o = el('option', '', String(opt));
+        o.value = String(opt);
+        if (String(opt) === selected) o.selected = true;
+        sel.append(o);
+      }
+      sel.value = selected;
+      sel.addEventListener('change', () => { currentAnswers[qid] = sel.value; });
+      qRow.append(el('span', '', String(q.question || '')), sel);
+      qWrap.append(qRow);
+    }
+    section.append(el('span', 'idea-field-label', 'Clarifying questions (defaults applied)'), qWrap);
+  }
+
+  if (onSave || onPlan) {
+    const actions = el('div', 'idea-controls-row');
+    if (onSave) {
+      const saveBtn = el('button', 'pill-btn sm', 'Save edits');
+      saveBtn.type = 'button';
+      saveBtn.setAttribute('data-action', 'save-sharpen-edits');
+      saveBtn.addEventListener('click', () => {
+        const payload = {};
+        const trimmedRestate = String(restateInput.value || '').trim();
+        if (trimmedRestate) payload.restatement = trimmedRestate;
+        if (editedPerspectives.length > 0) payload.perspectives = editedPerspectives;
+        if (Object.keys(currentAnswers).length > 0) payload.answers = currentAnswers;
+        onSave(payload);
+      });
+      actions.append(saveBtn);
+    }
+    if (onPlan) {
+      const planBtn = el('button', 'pill-btn sm primary', 'Prepare search plan');
+      planBtn.type = 'button';
+      planBtn.setAttribute('data-action', 'prepare-plan');
+      planBtn.addEventListener('click', () => onPlan());
+      actions.append(planBtn);
+    }
+    section.append(actions);
+  }
+
+  return section;
+}
+
