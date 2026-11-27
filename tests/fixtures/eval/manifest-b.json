@@ -1,0 +1,466 @@
+{
+  "format_version": 1,
+  "set": "B",
+  "tier": "fixed",
+  "cases": [
+    {
+      "id": "B-eval-vault",
+      "mode": "library",
+      "input": {
+        "kind": "library_fixture",
+        "source_kind": "kandinsky_vault",
+        "path": "b/vault",
+        "auxiliary_paths": [
+          "b/shared_pdfs"
+        ]
+      },
+      "answer_key": {
+        "items": [
+          {
+            "external_id": "b2025p01",
+            "citekey": "b2025p01",
+            "expected_key": "doi:10.9999/setb.vault.001",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p02",
+            "citekey": "b2025p02",
+            "expected_key": "doi:10.9999/setb.vault.002",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p03",
+            "citekey": "b2025p03",
+            "expected_key": "doi:10.9999/setb.vault.003",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p04",
+            "citekey": "b2025p04",
+            "expected_key": "doi:10.9999/setb.vault.004",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p05",
+            "citekey": "b2025p05",
+            "expected_key": "doi:10.9999/setb.vault.005",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p06",
+            "citekey": "b2025p06",
+            "expected_key": "doi:10.9999/setb.vault.006",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p07",
+            "citekey": "b2025p07",
+            "expected_key": "doi:10.9999/setb.vault.007",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p08",
+            "citekey": "b2025p08",
+            "expected_key": "doi:10.9999/setb.vault.008",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p09",
+            "citekey": "b2025p09",
+            "expected_key": "doi:10.9999/setb.vault.009",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p10",
+            "citekey": "b2025p10",
+            "expected_key": "doi:10.9999/setb.vault.010",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p11",
+            "citekey": "b2025p11",
+            "expected_key": "doi:10.9999/setb.vault.011",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p12",
+            "citekey": "b2025p12",
+            "expected_key": "doi:10.9999/setb.vault.012",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p13",
+            "citekey": "b2025p13",
+            "expected_key": "doi:10.9999/setb.vault.013",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p14",
+            "citekey": "b2025p14",
+            "expected_key": "doi:10.9999/setb.vault.014",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p15",
+            "citekey": "b2025p15",
+            "expected_key": "doi:10.9999/setb.vault.015",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p16",
+            "citekey": "b2025p16",
+            "expected_key": "doi:10.9999/setb.vault.016",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p17",
+            "citekey": "b2025p17",
+            "expected_key": "doi:10.9999/setb.vault.017",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p18",
+            "citekey": "b2025p18",
+            "expected_key": "doi:10.9999/setb.vault.018",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p19",
+            "citekey": "b2025p19",
+            "expected_key": "doi:10.9999/setb.vault.019",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p20",
+            "citekey": "b2025p20",
+            "expected_key": "doi:10.9999/setb.vault.020",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p21",
+            "citekey": "b2025p21",
+            "expected_key": "doi:10.9999/setb.vault.021",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025p22",
+            "citekey": "b2025p22",
+            "expected_key": "doi:10.9999/setb.vault.022",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025dupdoi_a",
+            "citekey": "b2025dupdoi_a",
+            "expected_key": "doi:10.9999/setb.dup.doi",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025dupdoi_b",
+            "citekey": "b2025dupdoi_b",
+            "expected_key": "doi:10.9999/setb.dup.doi",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025duphash_a",
+            "citekey": "b2025duphash_a",
+            "expected_key": "file:b02f236e9dd6f105",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025duphash_b",
+            "citekey": "b2025duphash_b",
+            "expected_key": "file:b02f236e9dd6f105",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025preprint",
+            "citekey": "b2025preprint",
+            "expected_key": "arxiv:2403.08801",
+            "expected_initial_state": "possible_duplicate"
+          },
+          {
+            "external_id": "b2025journal",
+            "citekey": "b2025journal",
+            "expected_key": "doi:10.9999/setb.jour.028",
+            "expected_initial_state": "possible_duplicate"
+          },
+          {
+            "external_id": "b2025texpref",
+            "citekey": "b2025texpref",
+            "expected_key": "arxiv:2501.00029",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "b2025escape",
+            "citekey": "b2025escape",
+            "expected_key": "doi:10.9999/setb.escape.030",
+            "expected_initial_state": "present"
+          }
+        ],
+        "planted_cases": [
+          {
+            "kind": "edited_note",
+            "target": "b2025p01",
+            "expected": "updated_title"
+          },
+          {
+            "kind": "deleted_file",
+            "target": "b2025p02",
+            "expected": "missing"
+          },
+          {
+            "kind": "duplicate_doi",
+            "targets": [
+              "b2025dupdoi_a",
+              "b2025dupdoi_b"
+            ],
+            "expected": "exact_merge"
+          },
+          {
+            "kind": "duplicate_hash",
+            "targets": [
+              "b2025duphash_a",
+              "b2025duphash_b"
+            ],
+            "expected": "exact_merge"
+          },
+          {
+            "kind": "preprint_and_journal_fuzzy",
+            "targets": [
+              "b2025preprint",
+              "b2025journal"
+            ],
+            "expected": "possible_duplicate"
+          },
+          {
+            "kind": "path_escape_rejected",
+            "target": "b2025escape",
+            "expected": "refused_no_pdf"
+          }
+        ],
+        "expected_total_items": 30,
+        "expected_exact_duplicates": 2,
+        "expected_possible_duplicates": 1,
+        "expected_with_tex": 1,
+        "quote_check_target": {
+          "paper_key": "doi:10.9999/setb.vault.003",
+          "quote": "Theorem 3.1: Synthetic dispersion relation omega^2 = c^2 k^2 + m^2."
+        }
+      },
+      "notes": "Fixed-tier Set B evaluation case: self-made 30-entry Kandinsky vault with refs.bib, external PDF root, unpacked arXiv TeX, and planted cases."
+    },
+    {
+      "id": "B-eval-folder",
+      "mode": "library",
+      "input": {
+        "kind": "library_fixture",
+        "source_kind": "folder",
+        "path": "b/folder"
+      },
+      "answer_key": {
+        "items": [
+          {
+            "external_id": "archive/fuzzy_journal.pdf",
+            "expected_key": "doi:10.9999/setb.folder.jour",
+            "expected_initial_state": "possible_duplicate"
+          },
+          {
+            "external_id": "archive/hash_b.pdf",
+            "expected_key": "file:8ae5a056bd5de3bd",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "condensed/deletable_note.pdf",
+            "expected_key": "doi:10.9999/setb.folder.del",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "condensed/fuzzy_preprint.pdf",
+            "expected_key": "arxiv:2307.01101",
+            "expected_initial_state": "possible_duplicate"
+          },
+          {
+            "external_id": "condensed/hash_a.pdf",
+            "expected_key": "file:8ae5a056bd5de3bd",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "quantum/movable_study.pdf",
+            "expected_key": "arxiv:2404.05501",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "quantum/tex_bundle.tex",
+            "expected_key": "arxiv:2405.05502",
+            "expected_initial_state": "present"
+          }
+        ],
+        "planted_cases": [
+          {
+            "kind": "moved_file",
+            "target": "quantum/movable_study.pdf",
+            "moved_to": "archive/movable_relocated.pdf",
+            "expected": "moved_by_sha256"
+          },
+          {
+            "kind": "deleted_file",
+            "target": "condensed/deletable_note.pdf",
+            "expected": "missing"
+          },
+          {
+            "kind": "duplicate_hash",
+            "targets": [
+              "condensed/hash_a.pdf",
+              "archive/hash_b.pdf"
+            ],
+            "expected": "exact_merge"
+          },
+          {
+            "kind": "preprint_and_journal_fuzzy",
+            "targets": [
+              "condensed/fuzzy_preprint.pdf",
+              "archive/fuzzy_journal.pdf"
+            ],
+            "expected": "possible_duplicate"
+          }
+        ],
+        "expected_total_items": 7,
+        "expected_exact_duplicates": 1,
+        "expected_possible_duplicates": 1,
+        "expected_with_tex": 1
+      },
+      "notes": "Fixed-tier Set B evaluation case: self-made plain folder of synthetic PDFs and TeX bundle covering moved file (SHA-256), deleted file, hash duplicate, and fuzzy preprint/journal pair."
+    },
+    {
+      "id": "B-eval-bibtex",
+      "mode": "library",
+      "input": {
+        "kind": "library_fixture",
+        "source_kind": "bibtex",
+        "path": "b/standalone/refs.bib",
+        "auxiliary_paths": [
+          "b/standalone/pdfs"
+        ]
+      },
+      "answer_key": {
+        "items": [
+          {
+            "external_id": "bibmain2025",
+            "citekey": "bibmain2025",
+            "expected_key": "doi:10.9999/setb.bib.main",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "bibmove2025",
+            "citekey": "bibmove2025",
+            "expected_key": "file:643019e09be3690f",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "bibdel2025",
+            "citekey": "bibdel2025",
+            "expected_key": "doi:10.9999/setb.bib.del",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "bibdupdoi_a",
+            "citekey": "bibdupdoi_a",
+            "expected_key": "doi:10.9999/setb.bibdup.01",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "bibdupdoi_b",
+            "citekey": "bibdupdoi_b",
+            "expected_key": "doi:10.9999/setb.bibdup.01",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "bibduphash_a",
+            "citekey": "bibduphash_a",
+            "expected_key": "file:7ee12e95e9b602d6",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "bibduphash_b",
+            "citekey": "bibduphash_b",
+            "expected_key": "file:7ee12e95e9b602d6",
+            "expected_initial_state": "present"
+          },
+          {
+            "external_id": "bibpre2024",
+            "citekey": "bibpre2024",
+            "expected_key": "arxiv:2406.04401",
+            "expected_initial_state": "possible_duplicate"
+          },
+          {
+            "external_id": "bibjour2025",
+            "citekey": "bibjour2025",
+            "expected_key": "doi:10.9999/setb.bib.jour",
+            "expected_initial_state": "possible_duplicate"
+          },
+          {
+            "external_id": "bibescape2025",
+            "citekey": "bibescape2025",
+            "expected_key": null,
+            "expected_initial_state": "present"
+          }
+        ],
+        "planted_cases": [
+          {
+            "kind": "moved_file",
+            "target": "bibmove2025",
+            "moved_to": "pdfs/moved/bib_move_relocated.pdf",
+            "expected": "moved_by_sha256"
+          },
+          {
+            "kind": "edited_note",
+            "target": "bibmain2025",
+            "expected": "updated_title"
+          },
+          {
+            "kind": "deleted_file",
+            "target": "bibdel2025",
+            "expected": "missing"
+          },
+          {
+            "kind": "duplicate_doi",
+            "targets": [
+              "bibdupdoi_a",
+              "bibdupdoi_b"
+            ],
+            "expected": "exact_merge"
+          },
+          {
+            "kind": "duplicate_hash",
+            "targets": [
+              "bibduphash_a",
+              "bibduphash_b"
+            ],
+            "expected": "exact_merge"
+          },
+          {
+            "kind": "preprint_and_journal_fuzzy",
+            "targets": [
+              "bibpre2024",
+              "bibjour2025"
+            ],
+            "expected": "possible_duplicate"
+          },
+          {
+            "kind": "path_escape_rejected",
+            "target": "bibescape2025",
+            "expected": "refused_no_file"
+          }
+        ],
+        "expected_total_items": 10,
+        "expected_exact_duplicates": 2,
+        "expected_possible_duplicates": 1,
+        "quote_check_target": {
+          "paper_key": "doi:10.9999/setb.bib.main",
+          "quote": "Lemma 2.4: Synthetic standalone BibTeX quote check."
+        }
+      },
+      "notes": "Fixed-tier Set B evaluation case: self-made standalone .bib library covering all 7 planted cases and session quote independence."
+    }
+  ]
+}

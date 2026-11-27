@@ -8,6 +8,8 @@
 
 #[allow(dead_code)]
 mod eval_support;
+#[path = "eval_support/f8_expansion_tests.rs"]
+mod f8_expansion_tests;
 #[path = "eval_support/solve_q_tests.rs"]
 mod solve_q_tests;
 #[allow(dead_code)]
@@ -37,7 +39,11 @@ use support::{default_cfg, make_router, MockApprover, MockEpoch, RecordingSink, 
 fn fixed_tier_manifests_load_and_validate() {
     let set = load_manifests(&fixtures_dir(), Tier::Fixed).unwrap_or_else(|e| panic!("fixed tier is invalid:\n{}", e.join("\n")));
     let sets: Vec<Set> = set.manifests.iter().map(|m| m.set).collect();
-    assert_eq!(sets, [Set::P, Set::Q], "fixed tier ships manifests for P and Q");
+    let unique_sets: BTreeSet<Set> = sets.iter().copied().collect();
+    assert_eq!(unique_sets.len(), sets.len(), "each fixed set has at most one manifest");
+    for required in [Set::P, Set::Q, Set::B, Set::P5] {
+        assert!(unique_sets.contains(&required), "fixed tier must ship manifest for set {}", required.letter());
+    }
     let p_cases = set.cases_of(Set::P);
     let p_selftests = p_cases.iter().filter(|c| c.id.starts_with("P-selftest-")).count();
     let p_evals = p_cases.iter().filter(|c| c.id.starts_with("P-eval-")).count();
@@ -45,6 +51,11 @@ fn fixed_tier_manifests_load_and_validate() {
     assert_eq!(p_evals, 10);
     assert_eq!(p_cases.len(), p_selftests + p_evals);
     assert_eq!(set.cases_of(Set::Q).len(), 17, "2 Q self-tests + 15 fixed Q evaluation cases");
+    let b_cases = set.cases_of(Set::B);
+    assert_eq!(b_cases.len(), 3, "vault + folder + bibtex fixed Set B evaluation cases");
+    let (_, b_vault) = set.case("B-eval-vault").unwrap();
+    assert_eq!(b_vault.answer_key["items"].as_array().unwrap().len(), 30);
+    assert_eq!(set.cases_of(Set::P5).len(), 10, "10 fixed Set P5 cited-statement evaluation cases");
     for (s, case) in set.cases() {
         assert_eq!(case.mode, s.mode());
         let is_selftest = case.id.starts_with("P-selftest-") || case.id.starts_with("Q-selftest-");
@@ -185,7 +196,7 @@ fn manifests_are_checked_together() {
     assert!(errs.iter().any(|e| e.contains("from set Q to set P is not one of")), "{errs:?}");
 
     let mut twice = fixed.manifests.clone();
-    twice.push(fixed.manifests[0].clone());
+    twice.push(fixed.manifests.iter().find(|m| m.set == Set::P).unwrap().clone());
     let errs = validate_manifests(&twice);
     assert!(errs.iter().any(|e| e.contains("more than one fixed manifest for set P")), "{errs:?}");
 }
@@ -211,9 +222,17 @@ fn measure_table_is_the_table_of_section_7_3() {
         ("wrong_carry_overs", Rule::MustBeZero),
         ("judged_same_key_different_unreviewed", Rule::MustBeZero),
         ("wrong_statement_located", Rule::MustBeZero),
+        ("pdf_wrong_page_chip", Rule::MustBeZero),
+        ("pdf_scanned_reported_plain_text", Rule::MustBeZero),
+        ("sync_second_changes", Rule::MustBeZero),
+        ("sync_planted_case_mismatches", Rule::MustBeZero),
+        ("sync_source_folder_diffs", Rule::MustBeZero),
+        ("sync_removed_source_quote_breaks", Rule::MustBeZero),
         (solve_wording::ID_PLANTED_ERROR_ENDS_FAILED_PCT, Rule::MustEqual(100.0)),
         (solve_wording::ID_PLANTED_ERROR_ENDS_VERIFIED, Rule::MustBeZero),
         (solve_wording::ID_PLANTED_ERROR_ENDS_CHECKED_NUMERICALLY, Rule::MustBeZero),
+        ("writeup_failures", Rule::MustBeZero),
+        ("lessons_gate_drift", Rule::MustBeZero),
         ("quotes_surviving_handover_pct", Rule::MustEqual(100.0)),
         ("old_ledgers_not_resuming", Rule::MustBeZero),
         ("old_ledgers_view_differs", Rule::MustBeZero),
