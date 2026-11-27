@@ -268,10 +268,7 @@ impl TesseractCliEngine {
         let spawn_err = |e: std::io::Error| OcrHelperError::Spawn(e.to_string());
         for lang in langs {
             if !self.config.tessdata_dir.join(format!("{lang}.traineddata")).is_file() {
-                return Err(OcrHelperError::Unavailable(format!(
-                    "missing Tesseract language data `{lang}.traineddata` in {}",
-                    self.config.tessdata_dir.display()
-                )));
+                return Err(OcrHelperError::Unavailable("Install Tesseract to enable OCR".into()));
             }
         }
 

@@ -262,7 +262,7 @@ fn summarize_pages(page_map: &PageMap) -> (Vec<PdfPageAvailability>, Vec<usize>,
     for rec in &page_map.pages {
         if rec.basis == PageBasis::None {
             image_only.push(rec.page);
-        } else if rec.basis == PageBasis::ScanTextLayer {
+        } else if matches!(rec.basis, PageBasis::ScanTextLayer | PageBasis::Ocr) {
             scan_text.push(rec.page);
         }
         pages.push(PdfPageAvailability {
