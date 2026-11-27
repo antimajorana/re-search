@@ -14,6 +14,8 @@ use crate::idea::{
     EVENT_IDEA_NOTE, EVENT_IDEA_PAPER, EVENT_IDEA_SEARCH_FINISHED, EVENT_IDEA_SEARCH_PLANNED,
     EVENT_IDEA_STARTED, EVENT_IDEA_STATED, EVENT_IDEA_TRIAGE, EVENT_IDEA_VERDICT, PIPELINE_VERSION,
 };
+use crate::idea_view_coverage::{build_map_graph_view, build_where_i_looked, fold_answers};
+pub use crate::idea_view_coverage::NOT_SEARCHED_ITEMS;
 use ledger::Event;
 use research_tools::run_budget::{
     ExploreStageState, RunState, RunStateAction, RUN_STATE_LABEL_DONE, RUN_STATE_LABEL_RUNNING,
@@ -33,23 +35,6 @@ pub const BADGE_NOT_READ: &str = "not read";
 pub const BADGE_IN_LIBRARY: &str = "in your library";
 pub const STAGE_IDLE_LABEL: &str = "Idle";
 
-/// Fixed app-authored scope caveats shown under "Where I looked" (`explore.md` 4.1 Coverage).
-pub const NOT_SEARCHED_ITEMS: &[&str] = &[
-    "books and monographs",
-    "theses not on arXiv",
-    "talks and unpublished notes",
-    "non-English literature",
-    "most work before 1991 without a DOI unless it is in your library",
-    "paywalled full text that is not in your library",
-];
-
-const KNOWN_PROVIDERS: &[(&str, &str)] = &[
-    ("arxiv", "arXiv"),
-    ("inspire", "INSPIRE-HEP"),
-    ("crossref", "Crossref"),
-    ("semantic_scholar", "Semantic Scholar"),
-];
-
 /// Pure projection of an Explore session's ledger events into the JSON payload attached
 /// under `"idea"` on `GET /api/sessions/{id}` (`explore.md` 5.4).
 pub fn view(events: &[Event], running: bool) -> Value {
@@ -67,6 +52,7 @@ pub fn view(events: &[Event], running: bool) -> Value {
     let mut candidates_round = 0u64;
 
     let mut latest_brief: Option<Value> = None;
+    let mut latest_brief_seq = 0u64;
     let mut latest_triage: Option<Value> = None;
     let mut latest_map: Option<Value> = None;
     let mut latest_map_seq = 0u64;
@@ -94,6 +80,8 @@ pub fn view(events: &[Event], running: bool) -> Value {
             EVENT_IDEA_STATED => {
                 statement_revisions += 1;
                 latest_statement_seq = ev.seq;
+                latest_brief = None;
+                latest_brief_seq = 0;
                 latest_statement = Some(json!({
                     "seq": ev.seq,
                     "rev": ev.payload.get("rev").and_then(Value::as_u64).unwrap_or(statement_revisions),
@@ -133,7 +121,10 @@ pub fn view(events: &[Event], running: bool) -> Value {
                     paper_statuses.insert(k.to_string(), st.to_string());
                 }
             }
-            EVENT_IDEA_BRIEF => latest_brief = Some(ev.payload.clone()),
+            EVENT_IDEA_BRIEF => {
+                latest_brief_seq = ev.seq;
+                latest_brief = Some(ev.payload.clone());
+            }
             EVENT_IDEA_TRIAGE => latest_triage = Some(ev.payload.clone()),
             EVENT_IDEA_MAP => {
                 latest_map_seq = ev.seq;
@@ -166,6 +157,13 @@ pub fn view(events: &[Event], running: bool) -> Value {
     let budget = budget_snapshot(events, running);
     let next = next_stage(events);
 
+    let applied = fold_answers(
+        events,
+        latest_statement_seq,
+        latest_brief.as_ref(),
+        latest_brief_seq,
+    );
+
     let candidates = annotate_candidate_views(latest_candidates, &paper_statuses);
     let library_matches: Vec<Value> = candidates
         .iter()
@@ -173,7 +171,8 @@ pub fn view(events: &[Event], running: bool) -> Value {
         .cloned()
         .collect();
 
-    let where_i_looked = build_where_i_looked(
+    let (where_i_looked, coverage) = build_where_i_looked(
+        events,
         offline,
         latest_plan.as_ref(),
         latest_search_finished.as_ref(),
@@ -208,8 +207,14 @@ pub fn view(events: &[Event], running: bool) -> Value {
         "candidates": candidates,
         "library_matches": library_matches,
         "where_i_looked": where_i_looked,
+        "coverage": coverage,
         "empty_state": empty_state,
-        "brief": latest_brief,
+        "brief": applied.sharpened_idea,
+        "sharpened_idea": applied.sharpened_idea,
+        "question_answers": applied.question_answers,
+        "reading_list_override": applied.reading_list_override,
+        "pause_before_reading": applied.pause_before_reading,
+        "search_plan": latest_plan,
         "triage": latest_triage,
         "verdicts": latest_verdicts,
         "map": map_view,
@@ -362,116 +367,6 @@ fn annotate_candidate_views(
         .collect()
 }
 
-fn build_where_i_looked(
-    offline: bool,
-    plan: Option<&Value>,
-    finished: Option<&Value>,
-    candidates: &[Value],
-) -> Value {
-    let mut by_provider: BTreeMap<String, (u64, u64, u64, u64)> = BTreeMap::new();
-    for &(id, _) in KNOWN_PROVIDERS {
-        by_provider.insert(id.to_string(), (0, 0, 0, 0));
-    }
-
-    let mut query_rows: Vec<Value> = Vec::new();
-    let results_arr = finished
-        .and_then(|f| f.get("results"))
-        .and_then(Value::as_array);
-
-    if let Some(results) = results_arr {
-        for r in results {
-            let prov = r.get("provider").and_then(Value::as_str).unwrap_or("unknown");
-            let status = r.get("status").and_then(Value::as_str).unwrap_or("unknown");
-            let count = r.get("count").and_then(Value::as_u64).unwrap_or(0);
-            let entry = by_provider.entry(prov.to_string()).or_insert((0, 0, 0, 0));
-            match status {
-                "ok" => {
-                    entry.0 += 1;
-                    entry.3 += count;
-                }
-                "rate_limited" => entry.2 += 1,
-                "skipped_budget" | "not_configured" | "disabled" => {}
-                _ => entry.1 += 1,
-            }
-            query_rows.push(json!({
-                "qid": r.get("qid").and_then(Value::as_str).unwrap_or(""),
-                "provider": prov,
-                "q": r.get("q").and_then(Value::as_str).unwrap_or(""),
-                "status": status,
-                "http_status": r.get("http_status").cloned().unwrap_or(Value::Null),
-                "count": count,
-                "error": r.get("error").cloned().unwrap_or(Value::Null),
-            }));
-        }
-    } else if let Some(planned_qs) = plan.and_then(|p| p.get("queries")).and_then(Value::as_array) {
-        for q in planned_qs {
-            query_rows.push(json!({
-                "qid": q.get("qid").and_then(Value::as_str).unwrap_or(""),
-                "provider": q.get("provider").and_then(Value::as_str).unwrap_or(""),
-                "q": q.get("q").and_then(Value::as_str).unwrap_or(""),
-                "status": if offline { "offline" } else { "planned" },
-                "http_status": Value::Null,
-                "count": 0,
-                "error": Value::Null,
-            }));
-        }
-    }
-
-    let providers: Vec<Value> = KNOWN_PROVIDERS
-        .iter()
-        .map(|&(id, label)| {
-            let (ok, failed, rate_limited, hits) = by_provider.get(id).copied().unwrap_or((0, 0, 0, 0));
-            let state = if offline {
-                "offline"
-            } else if ok == 0 && failed == 0 && rate_limited == 0 {
-                // arXiv, INSPIRE-HEP, and Crossref are keyless free-core services (`explore.md` 10).
-                if matches!(id, "arxiv" | "inspire" | "crossref") {
-                    "not_attempted"
-                } else {
-                    "not_configured"
-                }
-            } else if failed == 0 && rate_limited == 0 {
-                "ok"
-            } else if ok > 0 {
-                "partial"
-            } else if rate_limited > 0 && failed == 0 {
-                "rate_limited"
-            } else {
-                "failed"
-            };
-            json!({
-                "name": id,
-                "label": label,
-                "state": state,
-                "queries_ok": ok,
-                "queries_failed": failed,
-                "queries_rate_limited": rate_limited,
-                "hits": hits,
-            })
-        })
-        .collect();
-
-    let lib_hits = candidates
-        .iter()
-        .filter(|c| c.get("in_library").and_then(Value::as_bool).unwrap_or(false))
-        .count();
-    let owned_hits = candidates
-        .iter()
-        .filter(|c| c.get("owned").and_then(Value::as_bool).unwrap_or(false))
-        .count();
-
-    json!({
-        "offline": offline,
-        "providers": providers,
-        "queries": query_rows,
-        "library": {
-            "hits": lib_hits,
-            "owned_hits": owned_hits,
-        },
-        "not_searched": NOT_SEARCHED_ITEMS,
-    })
-}
-
 fn compute_empty_state(
     offline: bool,
     stages: &[StageRecord],
@@ -507,7 +402,7 @@ fn compute_empty_state(
     }
 
     let results = finished
-        .and_then(|f| f.get("results"))
+        .and_then(|f| f.get("results").or_else(|| f.get("queries")))
         .and_then(Value::as_array);
     if let Some(arr) = results {
         let attempted = arr
@@ -538,56 +433,4 @@ fn compute_empty_state(
     }
 
     Value::Null
-}
-
-/// Returns a `GraphView`-shaped payload (`00-overview.md` 2.6: `{ nodes, edges, legend }`)
-/// translating `explore.md` 4.1 edge direction (`from`/`to` -> `src`/`dst`) and `basis`.
-fn build_map_graph_view(latest_map: Option<&Value>) -> Value {
-    let Some(map_val) = latest_map else {
-        return json!({ "nodes": [], "edges": [], "legend": [] });
-    };
-    let nodes = map_val
-        .get("nodes")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let edges: Vec<Value> = map_val
-        .get("edges")
-        .and_then(Value::as_array)
-        .map(|arr| arr.iter().map(translate_map_edge).collect())
-        .unwrap_or_default();
-    let legend = map_val
-        .get("legend")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    json!({
-        "nodes": nodes,
-        "edges": edges,
-        "legend": legend,
-    })
-}
-
-fn translate_map_edge(raw: &Value) -> Value {
-    let kind = raw.get("kind").and_then(Value::as_str).unwrap_or("");
-    let from = raw.get("src").or_else(|| raw.get("from")).and_then(Value::as_str).unwrap_or("");
-    let to = raw.get("dst").or_else(|| raw.get("to")).and_then(Value::as_str).unwrap_or("");
-    let (src, dst, symmetric) = match kind {
-        "uses" | "special_case_of" | "answers" | "cites" => (to, from, false),
-        "contradicts" | "same_as" => (from, to, true),
-        _ => (from, to, false),
-    };
-    let basis = match raw.get("basis").and_then(Value::as_str).unwrap_or("model") {
-        "metadata" | "code" => "code",
-        "evidence" => "evidence",
-        _ => "model",
-    };
-    json!({
-        "src": src,
-        "dst": dst,
-        "kind": kind,
-        "role": raw.get("role").and_then(Value::as_str).unwrap_or(kind),
-        "basis": basis,
-        "symmetric": symmetric,
-    })
 }
