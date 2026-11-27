@@ -12,6 +12,7 @@ import { filterResultNodes, renderInvestigationResults } from '/assets/investiga
 import { lookupNearestSymbol, renderReadingPlanStrip, renderSymbolPopover } from '/assets/investigation_skip.js';
 import { createInvestigateWholeMap, VIEW_MODES } from '/assets/investigation_wholemap.js';
 import { buildTaskPayload, mountOrientControls } from '/assets/investigation_orient_ui.js';
+import '/assets/investigation_share_ui.js';
 import { syncContextCardsDrawer } from '/assets/investigation_context_cards.js';
 import { mountLegacyPanel } from '/assets/investigation_legacy.js';
 

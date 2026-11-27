@@ -300,6 +300,33 @@ pub(crate) fn dispatch_api(
         ("POST", ["api", "sessions", id, "investigation", "cited"]) => {
             write_api_res(&mut stream, crate::investigation_cited::handle(state, id, &req.body));
         }
+        ("GET", ["api", "sessions", id, "investigation", "export"]) => {
+            match crate::investigation_share::handle_export(state, id, &req.query) {
+                Ok((filename, ct, bytes)) => {
+                    let disp = format!("attachment; filename=\"{filename}\"");
+                    let csp = if ct.starts_with("text/html") {
+                        "default-src 'none'; style-src 'unsafe-inline'"
+                    } else {
+                        "sandbox"
+                    };
+                    write_bytes(
+                        &mut stream,
+                        200,
+                        ct,
+                        &bytes,
+                        &[
+                            ("Content-Disposition", disp.as_str()),
+                            ("Cache-Control", "no-store"),
+                            ("Content-Security-Policy", csp),
+                        ],
+                    );
+                }
+                Err((st, msg)) => write_json(&mut stream, st, json!({ "error": msg }), &[]),
+            }
+        }
+        ("POST", ["api", "sessions", id, "investigation", "import"]) => {
+            write_api_res(&mut stream, crate::investigation_share::handle_import(state, id, &req.body));
+        }
         ("POST", ["api", "sessions", id, "investigation", "handoff-packet"]) => {
             write_api_res(
                 &mut stream,
