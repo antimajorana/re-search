@@ -1,9 +1,9 @@
 # Report: solve-s21-migrate — Fork Earlier Research Session Into Solve (S21)
 
 - **Brief:** `docs/design/modes-2026-11/agents/solve-s21-migrate.md`
-- **Base commit (`origin/gemini/work/fixed`):** `24be58e6797679cfa423dcc16ea2073b54288714`
+- **Base commit (`origin/gemini/work/fixed`):** `24be58e6797679cfa423dcc16ea2073b54288714` (merged forward with `origin/gemini/work/fixed` `eb0eb63` on follow-up hardening pass)
 - **Branch:** `gemini/modes/solve-s21-migrate`
-- **Package:** `S21` (Checkpoint `S21a`)
+- **Package:** `S21` (Checkpoint `S21a` + post-audit hardening)
 - **Date:** 2026-11-27
 
 ---
@@ -14,8 +14,8 @@
 
 | File | Change | Line Count | Purpose |
 | --- | --- | ---: | --- |
-| `crates/desktop-server/src/solve_migrate.rs` | New | 571 | Host handler `handle_open_in_solve(state, session_id, body)` and deterministic Research-to-Solve migration helpers |
-| `crates/desktop-server/tests/solve_migrate.rs` | New | 585 | End-to-end integration tests for D19 tier mapping, `AuthGuard` 401/403 + `Origin`, pre-fork fail-closed validation, `at_seq` prefix forks, legacy `investigation.handoff` Research sessions, and intact parent `research/1` resume (`eval_set_r`) |
+| `crates/desktop-server/src/solve_migrate.rs` | New | 583 | Host handler `handle_open_in_solve(state, session_id, body)` and deterministic Research-to-Solve migration helpers |
+| `crates/desktop-server/tests/solve_migrate.rs` | New | 595 | End-to-end integration tests for D19 tier mapping, B1 solver-override rejection, `AuthGuard` 401/403 + `Origin`, pre-fork fail-closed validation, `at_seq` prefix forks, legacy `investigation.handoff` Research sessions, post-F1 `research/1` migration + Rule R2 `Drift`, and intact parent `research/1` resume (`eval_set_r`) |
 | `crates/desktop-server/src/lib.rs` | Small edit (+1 line) | 251 | Export `pub mod solve_migrate;` |
 | `crates/desktop-server/src/api_dispatch.rs` | Small edit (+3 lines) | 484 | Register `("POST", ["api", "sessions", id, "open-in-solve"])` behind `AuthGuard::authorize_api` and loopback `Origin` enforcement |
 
@@ -25,7 +25,7 @@
 
 1. **Authentication, origin, and preconditions:**
    - Routed through `http_srv.rs` -> `AuthGuard::authorize_api` -> `api_dispatch::dispatch_api`: missing/invalid `X-ReSearch-Token` or cookie-only requests answer `401`; foreign `Origin` headers answer `403` before any body is read or session is created.
-   - Validates `session_id` (`400`), checks `state.session_exists(session_id)` (`404`), requires a JSON object body with only allowed keys (`at_seq`, `statement`, `conventions`, `task_kind`, `solver`, `verifier`; unknown keys return `400`), checks `is_turn_running` inside `state.ledger_write_lock` (`409`), and rejects empty Research ledgers or non-Research sessions (`Mode::Investigate`, `Mode::Explore`, `Mode::Solve`) with `400`.
+   - Validates `session_id` (`400`), checks `state.session_exists(session_id)` (`404`), requires a JSON object body with only allowed keys (`at_seq`, `statement`, `conventions`, `task_kind`, `verifier`; `"solver"` is explicitly rejected with `400` to protect D19 legacy same-model review tiers from spoofing, unknown keys return `400`, and explicit `"verifier"` requires non-empty `provider` and `model`), checks `is_turn_running` inside `state.ledger_write_lock` (`409`), verifies the parent ledger fail-closed via `ledger.read_verified_session(session_id)` before building setup, and rejects empty Research ledgers or non-Research sessions (`Mode::Investigate`, `Mode::Explore`, `Mode::Solve`) with `400`.
    - Validates `at_seq` bounds (`1..=events.len()`), checks that BOTH the full session and the selected prefix `1..=at_seq` have `session_mode == Mode::Research`, and builds + validates + serializes `SolveSetup` **before** calling `export::fork_session` so validation failures never commit an orphan fork in SQLite or `sessions/<child>/sources/`.
 2. **Fork, mode marker, and prefilled `solve.setup`:**
    - Calls `export::fork_session(&state.cfg.data_dir, &ForkOptions { parent_session, at_seq, modified_assumption: None })`, verifying the parent hash chain, blobs, and copied `source.ingested` file SHA-256 digests fail-closed while leaving the parent Research ledger completely untouched.
@@ -64,7 +64,13 @@
 
 ## 3. Independent Audit Summary (Gemini 4 Carbon)
 
-An independent adversarial audit (`Model: pro`) reviewed the initial implementation and flagged 3 blockers (`B1` unused helper warning in `tests/solve_migrate.rs` breaking workspace clippy `-D warnings`, `B2` `fork_session` running before `validate_and_build_setup` allowing orphan forks on >200-char role overrides, `B3` missing report) and 5 high findings (`H1` verifier role keys/fields, `H2` solver role fallback coverage, `H3` cleared conventions resurrection, `H4` `at_seq` prefix mode check, `H5` blob-unaware `legacy_receipts` reporting `"ok": true` on failed `sympy_eval`/`lean_check`). All code findings (`B1`, `B2`, `H1`–`H5`, `M1`–`M3`, `M5`) were fixed and re-audited by Carbon with **zero BLOCKER and zero HIGH findings remaining**.
+1. Initial independent adversarial audit (`Model: pro`) reviewed the first S21 draft and flagged 3 blockers (`B1` unused helper warning in `tests/solve_migrate.rs`, `B2` `fork_session` running before `validate_and_build_setup` allowing orphan forks, `B3` missing report) and 5 high findings (`H1` verifier role keys/fields, `H2` solver role fallback coverage, `H3` cleared conventions resurrection, `H4` `at_seq` prefix mode check, `H5` blob-unaware `legacy_receipts` reporting `"ok": true` on failed `sympy_eval`/`lean_check`); all were fixed in `c4330a5` / `fdcd647`.
+2. A second independent read-only audit (`7a01ce388c918f9e1c9b62f6bcf36a30`) flagged an additional D19 integrity flaw: allowing a request-supplied `"solver"` override on `POST /api/sessions/{id}/open-in-solve` enabled silently upgrading legacy same-model `proof.verification` rows from `Tier::ModelAgreedSameModel` to `Tier::ModelAgreed` via `solve_own_tier.rs:492-498`. Follow-up hardening commits (`629fb52`, `65a990d`) closed this by:
+   - Explicitly rejecting `"solver"` in `open-in-solve` requests (`400`) and always preserving `solver` from the parent Research session.
+   - Requiring non-empty `provider` and `model` for explicit `"verifier"` overrides (`400`).
+   - Calling `ledger.read_verified_session(session_id)` fail-closed before constructing `SolveSetup`.
+   - Ignoring transport route `"api"` in `extract_solver_role` so `provider` never leaks `"api"`.
+   - Adding regression tests for B1 solver-override rejection, blank/oversized verifier rejection, post-F1 `research/1` migration, and Rule R2 `ResumeRejectKind::Drift` on replay-resume of migrated Solve children.
 
 ---
 
@@ -74,7 +80,9 @@ An independent adversarial audit (`Model: pro`) reviewed the initial implementat
   - `crates/desktop-server/src/lib.rs`: added `pub mod solve_migrate;` at line 76.
   - `crates/desktop-server/src/api_dispatch.rs`: added `("POST", ["api", "sessions", id, "open-in-solve"])` arm at lines 342–344, right below `("POST", ["api", "sessions", id, "fork"])`.
 - **Cross-lane integration notes:**
-  - **`solve-s12-loop`:** `session_mode.rs` keeps `DESKTOP_MODE_SOLVE_ENABLED = false` here; once S12 flips it to `true` and enables brief-mode resume, migrated Solve sessions are immediately resumable via Solve's resume-brief loop (`solve.started` + `solve.setup` already present, `tool_profile: "solve/1"`). Note also that `solve_view.rs:84-91,142` reports `run_state.state = "interrupted"` for migrated sessions containing historical `session.start`/`model.request`/`tool.request` events before `solve.started`; S12/S13 may want `has_leg_activity` to consider only events after `solve.started` if migrated sessions should initially show `"ready"`.
+  - **`solve-s12-loop`:** `session_mode.rs` keeps `DESKTOP_MODE_SOLVE_ENABLED = false` here; once S12 flips it to `true` and enables brief-mode resume, migrated Solve sessions are immediately resumable via Solve's resume-brief loop (`solve.started` + `solve.setup` already present, `tool_profile: "solve/1"`). Note two important seams for S12:
+    1. `crates/agent/src/resume_profile.rs:59-75` (`resolve_session_profile`): for **post-F1** Research sessions whose `session.start` carries `"tool_profile": "research/1"`, `resolve_session_profile` currently returns `research/1` even after `solve.started` is appended (whereas pre-F1 sessions fall through to `legacy_profile_name_for_events` -> `solve/1`). S12's `resume_mode: "brief"` dispatcher should key off `session_mode_from_events` / `solve.started` rather than `session.start["tool_profile"]`.
+    2. `crates/desktop-server/src/solve_view.rs:84-91,142` reports `run_state.state = "interrupted"` for migrated sessions containing historical `session.start`/`model.request`/`tool.request` events before `solve.started`; S12/S13 may want `has_leg_activity` to consider only events after `solve.started` so freshly migrated sessions report `"ready"`.
   - **`solve-s13-s17-ui-intake` / `solve_view.rs`:** `GET /api/sessions/{id}/solve/view` currently serializes `SolveReceipt` directly (`solve_view.rs:458-462`) without attaching `LEGACY_LEAN_CHECK_RECEIPT_LABEL` on `lean_check` receipts; UI or a small follow-up in `solve_view.rs` can read `tool == "lean_check"` (or reuse `solve_migrate::LEGACY_LEAN_CHECK_RECEIPT_LABEL`) to display `"Lean check recorded in the earlier session"` on subsequent view reloads.
 
 ---
@@ -82,26 +90,25 @@ An independent adversarial audit (`Model: pro`) reviewed the initial implementat
 ## 5. Bugs / Gaps Noticed Outside Owned Files (Not Fixed Here)
 
 1. **`crates/research-tools/src/solve_state.rs:377` (`parse_proof_verification`):** Reads only `p.get("verifier_model")` on `proof.verification`. Real Research verifiers in `crates/agent/src/verifiers.rs:579,680` write `"model"` (on-demand reviews) or record `"model"` only on the preceding `verifier.request` event (autonomous reviews). Consequently, for real historical Research ledgers written by `agent::verifiers`, `SolveReview.verifier_model` parses as `None` and `review_accepted_tier` conservatively falls back to `Tier::ModelAgreedSameModel` even when a different model verified the step.
-2. **`crates/research-tools/src/solve_own_tier.rs:492-498` (`review_accepted_tier`):** Compares legacy `review.verifier_model` against the current `setup.roles.solver.model`. If `setup.roles.solver.model` is empty (`""`) or later changed via a setup revision or explicit `solver` override, `vm != sm` can misclassify a historical same-model review as `ModelAgreed` (or downgrade a different-model review).
-3. **`crates/desktop-server/src/solve_routes_ext.rs:184` (`handle_ack`):** Requires `entry.entry_sha256.as_deref() == Some(entry_sha256.as_str())`. Legacy Research `proof.entry` events written by `ledger_append` do not store `entry_sha256` (`None`), so `POST /api/sessions/{id}/solve/ack` currently rejects acknowledging migrated `AssumedByModel` assumptions or `hand_checked` legacy steps with `409 Conflict`.
-4. **`crates/desktop-server/src/solve.rs:202-275` (`sync_setup_given_steps`):** When a migrated Solve session later submits `POST /api/sessions/{id}/solve/setup` (revision 2), `sync_setup_given_steps` creates new `StepOrigin::Setup` `Given` steps (`e-K`) for entries in `setup.assumptions` without superseding or linking the forked legacy `e-1` `AssumedByModel` step.
+2. **`crates/research-tools/src/solve_own_tier.rs:492-498` (`review_accepted_tier`):** Compares legacy `review.verifier_model` against the current `setup.roles.solver.model`. While `open-in-solve` now refuses `"solver"` overrides at migration time, if `setup.roles.solver.model` is empty (`""`) or later changed via a `POST /solve/setup` revision, `vm != sm` can still misclassify a historical same-model review as `ModelAgreed` (or downgrade a different-model review).
+3. **`crates/research-tools/src/solve_state.rs:199-201` (`SolveState::apply`):** Pushes pre-fork Research `sympy_eval` tool results into `pending_runs`, so migrated sessions can inherit historical Research SymPy calls in gate G1's pending-runs list unless scoped to events after `solve.started`.
+4. **`crates/desktop-server/src/solve_view.rs:115` (`build_run_state_json`):** Calls `count_model_calls(events, RunScope::All)`, counting historical Research `model.request` events before `solve.started` against the Solve session's `model_calls_used` budget.
+5. **`crates/desktop-server/src/solve_routes_ext.rs:184` (`handle_ack`):** Requires `entry.entry_sha256.as_deref() == Some(entry_sha256.as_str())`. Legacy Research `proof.entry` events written by `ledger_append` do not store `entry_sha256` (`None`), so `POST /api/sessions/{id}/solve/ack` currently rejects acknowledging migrated `AssumedByModel` assumptions or `hand_checked` legacy steps with `409 Conflict`.
+6. **`crates/desktop-server/src/solve.rs:202-275` (`sync_setup_given_steps`):** When a migrated Solve session later submits `POST /api/sessions/{id}/solve/setup` (revision 2), `sync_setup_given_steps` creates new `StepOrigin::Setup` `Given` steps (`e-K`) for entries in `setup.assumptions` without superseding or linking the forked legacy `e-1` `AssumedByModel` step.
 
 ---
 
 ## 6. Verification Results (Non-Root Linux, `RE_SEARCH_PYTHON` Unset)
 
-Environment: `uid=1001(antigravity)`, `rustc 1.100.0`, `cargo 1.100.0`, `node v22.23.5`.
+Environment: `uid=1001(antigravity)`, `rustc 1.100.0 (0ef1bc386 2026-11-09)`, `node v22.23.5`.
 
 | Command | Result | Exact Counts |
 | --- | --- | --- |
-| `python3 scripts/check_file_length.py --base origin/gemini/work/fixed` | PASS (exit 0) | `No touched source file is over 600 lines.` (`solve_migrate.rs`: 571, `tests/solve_migrate.rs`: 585, `lib.rs`: 251, `api_dispatch.rs`: 484) |
+| `python3 scripts/check_file_length.py --base origin/gemini/work/fixed` | PASS (exit 0) | `No touched source file is over 600 lines.` (`solve_migrate.rs`: 583, `tests/solve_migrate.rs`: 595, `lib.rs`: 251, `api_dispatch.rs`: 484) |
 | `unset RE_SEARCH_PYTHON && cargo clippy --workspace --all-targets --locked -- -D warnings -A clippy::manual_unwrap_or` | PASS (exit 0) | 0 errors, 0 warnings across all workspace targets |
-| `unset RE_SEARCH_PYTHON && cargo test -p research-tools --test tool_def_golden --locked` | PASS (exit 0) | 3 passed, 0 failed, 0 ignored |
 | `unset RE_SEARCH_PYTHON && cargo test -p desktop-server --test solve_migrate --locked` | PASS (exit 0) | 3 passed, 0 failed, 0 ignored |
-| `unset RE_SEARCH_PYTHON && cargo test -p desktop-server --test eval_set_r --locked` | PASS (exit 0) | 5 passed, 0 failed, 0 ignored |
-| `unset RE_SEARCH_PYTHON && cargo test -p desktop-server --test mode_markers_r2 --locked` | PASS (exit 0) | 3 passed, 0 failed, 0 ignored |
-| `unset RE_SEARCH_PYTHON && cargo test --workspace --locked --no-fail-fast` | PASS (exit 0) | 151 test blocks: **1,198 passed, 0 failed, 2 ignored** (pre-existing live-tier `eval_harness` tests `file_sheet_from_json` and `live_manifests_validate`) |
-| `for f in crates/desktop-server/assets/*.js; do node --check "$f"; done` | PASS (exit 0) | All desktop JS assets syntactically valid |
+| `unset RE_SEARCH_PYTHON && cargo test --workspace --locked --no-fail-fast` | PASS (exit 0) | 152 test suites (including `tool_def_golden`, `eval_set_r`, `mode_markers_r2`, `solve_migrate`): **1,198 passed, 0 failed, 2 ignored** (pre-existing live-tier `eval_harness` tests `file_sheet_from_json` and `live_manifests_validate`) |
+| `for f in crates/desktop-server/assets/*.js; do node --check "$f" \|\| exit 1; done` | PASS (exit 0) | All desktop JS assets syntactically valid |
 | `node --test crates/desktop-server/tests/*.test.mjs` | PASS (exit 0) | **226 passed, 0 failed, 0 skipped** |
 
 ### Pre-existing Failures & What Could Not Run on Linux
