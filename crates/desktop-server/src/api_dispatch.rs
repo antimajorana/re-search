@@ -468,6 +468,15 @@ pub(crate) fn dispatch_api(
         ("POST", ["api", "sessions", id, "idea", op]) => {
             write_api_res(&mut stream, crate::routes_idea::handle_idea_op(state, id, op, &req.body));
         }
+        ("GET", ["api", "sessions", id, "workers"]) => {
+            write_api_res(&mut stream, crate::routes_worker_activity::handle_list_workers(state, id));
+        }
+        ("GET", ["api", "sessions", id, "workers", job_id]) => {
+            write_api_res(&mut stream, crate::routes_worker_activity::handle_get_worker_detail(state, id, job_id));
+        }
+        ("POST", ["api", "sessions", id, "run-control"]) => {
+            write_api_res(&mut stream, crate::routes_worker_activity::handle_post_run_control(state, id, &req.body));
+        }
         _ => write_json(
             &mut stream,
             404,

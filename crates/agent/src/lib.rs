@@ -29,6 +29,7 @@ pub mod responses;
 pub mod resume;
 pub mod resume_brief;
 pub mod resume_profile;
+pub mod role_routing;
 pub mod runner;
 pub mod sidetalk;
 pub mod solve_loop;
@@ -37,6 +38,7 @@ pub mod strategist;
 pub(crate) mod stream_codecs;
 pub(crate) mod stream_http;
 pub mod transport;
+pub mod usage;
 pub mod verifiers;
 pub(crate) mod wire;
 
