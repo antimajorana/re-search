@@ -110,6 +110,7 @@ pub fn enrich_mapview_with_v7(
     mv["main_result_tags"] = json!(main_result_tags);
     mv["skip_plan"] = json!(plan);
     mv["orient_auto_start"] = json!(orient_auto_start);
+    crate::investigation_context_tasks::project_folded_context_cards(mv, folded);
 }
 
 fn enrich_one_skeleton_node(
@@ -323,58 +324,54 @@ pub fn attach_v7_pdf_quote_pages(mv: &mut Value, pdf: &IngestedPdfSource) {
             continue;
         };
         for q in quotes {
-            let Some(obj) = q.as_object_mut() else { continue };
-            if obj.get("source_id").and_then(Value::as_str) != Some(pdf.source_id.as_str())
-                || obj.get("path").and_then(Value::as_str) != Some(pdf.primary_path.as_str())
-            {
-                continue;
-            }
-            let Some(start) = obj
-                .get("start_line")
-                .and_then(Value::as_u64)
-                .and_then(|n| usize::try_from(n).ok())
-                .filter(|&n| n >= 1)
-            else {
-                continue;
-            };
-            let end = obj
-                .get("end_line")
-                .and_then(Value::as_u64)
-                .and_then(|n| usize::try_from(n).ok())
-                .unwrap_or(start)
-                .max(start);
-            let mut min_p: Option<usize> = None;
-            let mut max_p: Option<usize> = None;
-            let mut has_scan = false;
-            let mut valid = true;
-            for line in start..=end {
-                let Some(rec) = pdf.page_map.record_of_line(line) else {
-                    valid = false;
-                    break;
-                };
-                if rec.basis == PageBasis::None {
-                    valid = false;
-                    break;
-                }
-                if rec.basis == PageBasis::ScanTextLayer {
-                    has_scan = true;
-                }
-                min_p = Some(min_p.map_or(rec.page, |m| m.min(rec.page)));
-                max_p = Some(max_p.map_or(rec.page, |m| m.max(rec.page)));
-            }
-            if !valid {
-                continue;
-            }
-            if let (Some(sp), Some(ep)) = (min_p, max_p) {
-                obj.insert("page".into(), json!(sp));
-                if ep > sp {
-                    obj.insert("end_page".into(), json!(ep));
-                }
-                if has_scan {
-                    obj.insert("ocr".into(), json!(true));
-                    obj.insert("page_basis".into(), json!("scan_text_layer"));
-                }
-            }
+            attach_pdf_pages_to_anchor_obj(q, pdf);
+        }
+    }
+}
+
+pub(crate) fn attach_pdf_pages_to_anchor_obj(q: &mut Value, pdf: &IngestedPdfSource) {
+    let Some(obj) = q.as_object_mut() else { return };
+    if obj.get("source_id").and_then(Value::as_str) != Some(pdf.source_id.as_str())
+        || obj.get("path").and_then(Value::as_str) != Some(pdf.primary_path.as_str())
+    {
+        return;
+    }
+    let Some(start) = obj
+        .get("start_line")
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .filter(|&n| n >= 1)
+    else {
+        return;
+    };
+    let end = obj
+        .get("end_line")
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(start)
+        .max(start);
+    let mut min_p: Option<usize> = None;
+    let mut max_p: Option<usize> = None;
+    let mut has_scan = false;
+    for line in start..=end {
+        let Some(rec) = pdf.page_map.record_of_line(line) else { return };
+        if rec.basis == PageBasis::None {
+            return;
+        }
+        if rec.basis == PageBasis::ScanTextLayer {
+            has_scan = true;
+        }
+        min_p = Some(min_p.map_or(rec.page, |m| m.min(rec.page)));
+        max_p = Some(max_p.map_or(rec.page, |m| m.max(rec.page)));
+    }
+    if let (Some(sp), Some(ep)) = (min_p, max_p) {
+        obj.insert("page".into(), json!(sp));
+        if ep > sp {
+            obj.insert("end_page".into(), json!(ep));
+        }
+        if has_scan {
+            obj.insert("ocr".into(), json!(true));
+            obj.insert("page_basis".into(), json!("scan_text_layer"));
         }
     }
 }
@@ -461,6 +458,7 @@ mod tests {
             anchors: FieldSlot::default(),
             authors_claim: slot,
             notes: vec![],
+            context_cards: vec![],
             pin: None,
             effective_is_main_result: false,
             any_stale: false,

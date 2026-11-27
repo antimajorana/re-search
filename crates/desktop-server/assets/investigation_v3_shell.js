@@ -12,6 +12,7 @@ import { filterResultNodes, renderInvestigationResults } from '/assets/investiga
 import { lookupNearestSymbol, renderReadingPlanStrip, renderSymbolPopover } from '/assets/investigation_skip.js';
 import { createInvestigateWholeMap, VIEW_MODES } from '/assets/investigation_wholemap.js';
 import { buildTaskPayload, mountOrientControls } from '/assets/investigation_orient_ui.js';
+import { syncContextCardsDrawer } from '/assets/investigation_context_cards.js';
 import { mountLegacyPanel } from '/assets/investigation_legacy.js';
 
 function el(tag, className, text) {
@@ -329,18 +330,14 @@ export function createInvestigationV3Controller(deps = {}) {
           ? (res) => st.liveHooks?.openPaperInNewSession?.(res)
           : undefined,
       });
-      if (st.pendingSections) {
-        for (const [secId, secEl] of st.pendingSections.entries()) {
-          st.contextDrawer.mountContextSection(secId, secEl);
-        }
-        st.pendingSections.clear();
-      }
+      st.pendingSections?.forEach((secEl, secId) => st.contextDrawer.mountContextSection(secId, secEl)); st.pendingSections?.clear();
       if (st.citedResult) st.contextDrawer.renderResult(st.citedResult);
     } else if (st.fetchBudget) {
       st.contextDrawer.setFetchBudget(st.fetchBudget);
     }
     const contextDrawer = st.contextDrawer;
     contextHost.replaceChildren(contextDrawer.element);
+    syncContextCardsDrawer(contextDrawer, { sessionId, mv, selectedTag: st.selectedTag, modelConnected, apiMod, hooks, refreshMv });
 
     const startOpenTag = (tag) => apiMod.startInvestigationTask?.(sessionId, buildTaskPayload(hooks, { task: 'open', tags: [tag] }))?.then(refreshMv)?.catch((err) => hooks?.showStatus?.(err?.message || 'Could not open node.'));
 

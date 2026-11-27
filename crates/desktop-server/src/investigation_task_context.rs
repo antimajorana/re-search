@@ -11,8 +11,8 @@ use research_tools::lines_sent::{
 };
 use research_tools::sandbox::WorkspaceSandbox;
 use research_tools::skeleton::{
-    load_ingested_pdf_source, load_ingested_tex_source, PaperSkeleton, SkEdgeKind, SkNode,
-    SkNodeKind, SkeletonBuilder, Span,
+    load_ingested_html_source, load_ingested_pdf_source, load_ingested_tex_source, PaperSkeleton,
+    SkEdgeKind, SkNode, SkNodeKind, SkeletonBuilder, Span,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -89,6 +89,13 @@ pub fn build_task_context_with_events(
                 BTreeMap::from([(pdf.primary_path, pdf.text)]),
                 pdf.files_sha256,
             )
+        } else if skeleton.builder == SkeletonBuilder::Html1 {
+            let html = load_ingested_html_source(sandbox, session_id, receipt)?;
+            (
+                html.source_id,
+                BTreeMap::from([(html.primary_path, html.html)]),
+                html.files_sha256,
+            )
         } else {
             let tex = load_ingested_tex_source(sandbox, session_id, receipt)?;
             (tex.source_id, tex.files, tex.files_sha256)
@@ -147,6 +154,21 @@ pub fn build_task_context_with_events(
             start_line: start,
             end_line: delivered_end,
         });
+    }
+
+    if task == InvestigationTaskKind::Context
+        && crate::investigation_context_tasks::is_compare_hypotheses(focus)
+    {
+        crate::investigation_context_tasks::append_compare_hypotheses_context(
+            sandbox,
+            session_id,
+            events,
+            skeleton,
+            tags,
+            max_chars,
+            &mut instructions,
+            &mut raw_ranges,
+        )?;
     }
 
     let supplied_ranges = normalize_supplied_ranges(raw_ranges);
@@ -331,7 +353,7 @@ fn push_node_spans(out: &mut Vec<SelectedBlock>, covered: &mut Vec<Span>, node: 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_quoted_block(
+pub(crate) fn render_quoted_block(
     heading: &str,
     source_id: &str,
     path: &str,

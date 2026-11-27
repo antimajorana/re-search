@@ -433,10 +433,13 @@ fn investigation_v1_may_gain_v6_tools_while_research_v1_forbids_them() {
     let r1 = research_v1();
     let i1 = investigation_v1();
     let i2 = investigation_v2();
+    let cc = research_tools::map_context_defs::record_context_cards_def();
 
-    assert_eq!(i2.defs.len(), r1.defs.len() + 2);
+    assert_eq!(i2.defs.len(), r1.defs.len() + 3);
     assert!(i1.allows_gain(&read_map_node_def()));
     assert!(i1.allows_gain(&record_map_reading_def()));
+    assert!(i1.allows_gain(&cc));
     assert!(!r1.allows_gain(&read_map_node_def()));
     assert!(!r1.allows_gain(&record_map_reading_def()));
+    assert!(!r1.allows_gain(&cc));
 }

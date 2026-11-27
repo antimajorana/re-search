@@ -36,7 +36,7 @@ pub fn build_user_task_prompt(
             tags.join(", ")
         ),
         InvestigationTaskKind::Context => {
-            format!("Gather grounded context for Investigate node(s): {}.", tags.join(", "))
+            return crate::investigation_context_tasks::build_context_user_prompt(tags, focus);
         }
         InvestigationTaskKind::PriorWork => "Check prior work on pinned paper.".to_string(),
     };
@@ -132,11 +132,13 @@ pub fn build_task_preamble(
             );
         }
         InvestigationTaskKind::Context => {
-            let _ = writeln!(
-                out,
-                "Tools: Use `read_map_node` to inspect additional definitions or prerequisites \
-                 as needed; record matched, source-anchored readings with `record_map_reading` \
-                 when applicable, always citing verbatim anchors from the numbered lines below."
+            crate::investigation_context_tasks::append_context_task_instructions(
+                &mut out,
+                source_id,
+                request_seq,
+                tags,
+                focus,
+                cap,
             );
         }
         InvestigationTaskKind::PriorWork => {

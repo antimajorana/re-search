@@ -26,6 +26,7 @@ mod investigation_system_prompt;
 pub mod investigation_task_context;
 pub mod investigation_task_prompts;
 pub mod investigation_tasks;
+mod investigation_context_tasks;
 mod investigation_title;
 mod investigation_view;
 pub mod antigravity;
