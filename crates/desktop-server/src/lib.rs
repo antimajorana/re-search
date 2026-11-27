@@ -17,6 +17,7 @@ pub mod investigation_open_html;
 mod investigation_question;
 mod investigation_scope;
 pub mod investigation_settings;
+mod investigation_share;
 pub mod investigation_skeleton;
 mod investigation_system_prompt;
 pub mod investigation_task_context;

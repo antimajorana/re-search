@@ -12,6 +12,7 @@ import { filterResultNodes, renderInvestigationResults } from '/assets/investiga
 import { lookupNearestSymbol, renderReadingPlanStrip, renderSymbolPopover } from '/assets/investigation_skip.js';
 import { createInvestigateWholeMap, VIEW_MODES } from '/assets/investigation_wholemap.js';
 import { buildTaskPayload, mountOrientControls } from '/assets/investigation_orient_ui.js';
+import '/assets/investigation_share_ui.js';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
