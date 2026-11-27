@@ -175,6 +175,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/solve_artifacts.js"),
         }),
+        "/assets/writeup_btn.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/writeup_btn.js"),
+        }),
         "/assets/solve.css" => Some(StaticAsset {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../assets/solve.css"),
