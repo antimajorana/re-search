@@ -85,14 +85,27 @@ pub fn start_for_caller(
     expected_caller: String,
     decider: Arc<dyn RelayDecider + Send + Sync>,
 ) -> io::Result<RelayServer> {
-    start_inner(ledger, session, token, Some(expected_caller), decider)
+    start_inner(ledger, session, token, Some(vec![expected_caller]), decider)
+}
+
+/// Bind `127.0.0.1` on a free port like [`start`], and require every request's `caller`
+/// to appear in `expected_callers` (for example, the vendor CLI caller plus `host:check`
+/// for Solve S9 auto-checks).
+pub fn start_for_callers(
+    ledger: Ledger,
+    session: String,
+    token: String,
+    expected_callers: Vec<String>,
+    decider: Arc<dyn RelayDecider + Send + Sync>,
+) -> io::Result<RelayServer> {
+    start_inner(ledger, session, token, Some(expected_callers), decider)
 }
 
 fn start_inner(
     ledger: Ledger,
     session: String,
     token: String,
-    expected_caller: Option<String>,
+    expected_callers: Option<Vec<String>>,
     decider: Arc<dyn RelayDecider + Send + Sync>,
 ) -> io::Result<RelayServer> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
@@ -105,7 +118,14 @@ fn start_inner(
                 break;
             }
             let Ok(stream) = stream else { continue };
-            if let Err(e) = handle_stream_checked(stream, &token, &session, expected_caller.as_deref(), &ledger, &*decider) {
+            if let Err(e) = handle_stream_checked_callers(
+                stream,
+                &token,
+                &session,
+                expected_callers.as_deref(),
+                &ledger,
+                &*decider,
+            ) {
                 eprintln!("[supervisor] approval request failed: {e}");
             }
         }
@@ -160,6 +180,20 @@ pub fn handle_stream_checked(
     ledger: &Ledger,
     decider: &dyn RelayDecider,
 ) -> Result<(), String> {
+    let callers = expected_caller.map(|c| vec![c.to_string()]);
+    handle_stream_checked_callers(stream, token, session, callers.as_deref(), ledger, decider)
+}
+
+/// Like [`handle_stream`], and when `expected_callers` is `Some`, require
+/// `request["caller"]` to equal one of the listed callers.
+pub fn handle_stream_checked_callers(
+    stream: TcpStream,
+    token: &str,
+    session: &str,
+    expected_callers: Option<&[String]>,
+    ledger: &Ledger,
+    decider: &dyn RelayDecider,
+) -> Result<(), String> {
     stream.set_read_timeout(Some(SOCKET_TIMEOUT)).map_err(|e| e.to_string())?;
     stream.set_write_timeout(Some(SOCKET_TIMEOUT)).map_err(|e| e.to_string())?;
 
@@ -179,6 +213,12 @@ pub fn handle_stream_checked(
     let valid_scope = matches!(scope, "once" | "worker-session");
     let contained = message["contained"] == json!(true);
 
+    let caller_ok = expected_callers.is_none_or(|allowed| {
+        request["caller"]
+            .as_str()
+            .is_some_and(|c| allowed.iter().any(|a| a == c))
+    });
+
     let refuse = |by: &str| RelayDecision::Answered { approved: false, by: by.to_string() };
     let decision = if message["v"] != json!(APPROVAL_CHANNEL_VERSION) {
         refuse("supervisor: unknown channel version")
@@ -186,7 +226,7 @@ pub fn handle_stream_checked(
         refuse("supervisor: wrong session token")
     } else if request["session"].as_str() != Some(session) {
         refuse("supervisor: request is for another session")
-    } else if expected_caller.is_some_and(|expected| request["caller"].as_str() != Some(expected)) {
+    } else if !caller_ok {
         refuse("supervisor: caller identity mismatch")
     } else if !valid_scope {
         refuse("supervisor: unknown or missing approval scope")
@@ -398,5 +438,41 @@ mod tests {
         assert_eq!(reply["approved"], false);
         assert_eq!(reply["by"], "supervisor: caller identity mismatch");
         assert_eq!(*d.0.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn handle_stream_checked_callers_allows_solve_host_check_and_rejects_others() {
+        let d = Counting(Mutex::new(0), RelayDecisionKind::Yes);
+        let allowed = vec!["claude-code-cli:s1".to_string(), "host:check".to_string()];
+        let run_one = |caller: &str| -> Value {
+            let dir = std::env::temp_dir().join(format!("cli-route-relay-multi-{}-{}", std::process::id(), rand_tag()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let ledger = Ledger::open(&dir).unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let mut req = request("s1");
+            req["caller"] = json!(caller);
+            let msg = json!({ "v": APPROVAL_CHANNEL_VERSION, "token": "tok", "request": req });
+            let client = std::thread::spawn(move || {
+                let mut c = TcpStream::connect(addr).unwrap();
+                writeln!(c, "{msg}").unwrap();
+                let mut reply = String::new();
+                BufReader::new(&mut c).read_line(&mut reply).unwrap();
+                writeln!(c, "{}", json!({ "v": APPROVAL_CHANNEL_VERSION, "ack": true })).unwrap();
+                serde_json::from_str::<Value>(&reply).unwrap()
+            });
+            let (server_stream, _) = listener.accept().unwrap();
+            handle_stream_checked_callers(server_stream, "tok", "s1", Some(&allowed), &ledger, &d).unwrap();
+            let reply = client.join().unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+            reply
+        };
+
+        assert_eq!(run_one("claude-code-cli:s1")["approved"], true);
+        assert_eq!(run_one("host:check")["approved"], true);
+        let bad = run_one("spoofed:s1");
+        assert_eq!(bad["approved"], false);
+        assert_eq!(bad["by"], "supervisor: caller identity mismatch");
+        assert_eq!(*d.0.lock().unwrap(), 2);
     }
 }

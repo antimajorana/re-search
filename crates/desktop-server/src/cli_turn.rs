@@ -16,15 +16,20 @@
 use crate::cli_relay::UiRelay;
 pub use crate::cli_turn_setup::{session_route, CliRouteKind, DEFAULT_CLI_MODEL};
 pub(crate) use crate::cli_turn_setup::wants_cli_route;
-use crate::cli_turn_setup::{core_env, path_str, pick_model, resolve_core_exe, route_of_first_start};
+use crate::cli_turn_setup::{
+    build_cli_prompt, core_env_for_profile, path_str, pick_model, resolve_cli_turn_profile,
+    resolve_core_exe, route_of_first_start,
+};
 use crate::routes_session::ApiResult;
 use crate::state::{DesktopState, SessionMeta};
 use crate::turn_runner::SseEventSink;
 use cli_route::antigravity::Antigravity;
 use cli_route::claude::ClaudeCode;
-use cli_route::core_tools::core_tool_set;
-use cli_route::history::{build_session_prompt, DEFAULT_HISTORY_BUDGET};
+use cli_route::core_tools::core_tool_set_for_profile;
 use cli_route::{run_turn, CoreLaunch, Recorder, SessionGuard, StopHandle, TurnEnd, TurnSpec, VendorCli};
+use research_tools::paper_key::Mode;
+use research_tools::policy_preset::SOLVE_CHECK_CALLER;
+use research_tools::tool_profile::TOOL_PROFILE_FIELD;
 use research_tools::{strip_verbatim_prefix, validate_session_id};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -122,35 +127,24 @@ pub(crate) fn run_cli_turn(
     if !existing.is_empty() {
         ledger.verify_session(session_id).map_err(|e| format!("cannot continue session `{session_id}`: {e}"))?;
     }
-    let mut eff_msg = match &subagent {
+    let (mode, profile) = resolve_cli_turn_profile(&existing)?;
+    let eff_msg = match &subagent {
         Some(sa) => crate::subagents::apply_subagent_to_turn_prompt(sa, message),
         None => message.to_string(),
     };
-    let needs_title = allow_model_title && crate::routes_session::model_session_title(&existing).is_none()
-        && !crate::investigation::is_investigation(&existing);
-    if needs_title {
-        eff_msg = format!("Once you can state the main research question, use set_session_title once with a concise title in the user's language.\n\n{eff_msg}");
-    }
-    if let Some(text) = conventions.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
-        eff_msg = format!("Pinned research conventions\n{text}\n\n{eff_msg}");
-    }
-    eff_msg = format!(
-        "Use `search_paper_passages` to locate exact passages in ingested papers and \
-         `search_formal_library` to discover Lean declarations in the attached workspace. \
-         Cite recorded source locations, and type-check any intended formal application.\n\n{eff_msg}"
+    let needs_title = allow_model_title
+        && crate::routes_session::model_session_title(&existing).is_none()
+        && mode != Mode::Investigate;
+    let prompt_build = build_cli_prompt(
+        mode,
+        &existing,
+        Some(&ledger),
+        &eff_msg,
+        conventions.as_deref(),
+        project_context.as_deref(),
+        needs_title,
+        state.cfg.python.is_some(),
     );
-    if state.cfg.python.is_some() {
-        eff_msg = format!(
-            "The re:Search compute worker exposes `check_symbolic_identity(lhs, rhs, variable=x, domain=...)` \
-             and `check_convergence(run, levels, axis=..., atol=..., rtol=..., reference=...)` in `sympy_eval`. \
-             Return the report as the final Python expression and record its `tool_call_ref` with the proof entry. \
-             Report excluded points, counterexamples, and the scope of numerical evidence. \n\n{eff_msg}"
-        );
-    }
-    if let Some(context) = &project_context {
-        eff_msg = format!("{context}\n\nCurrent user request\n{eff_msg}");
-    }
-    let replay = build_session_prompt(&existing, &eff_msg, DEFAULT_HISTORY_BUDGET);
 
     validate_session_id(session_id).map_err(|e| e.to_string())?;
     let sdir = state.session_dir(session_id)?;
@@ -161,41 +155,81 @@ pub(crate) fn run_cli_turn(
         CliRouteKind::Antigravity => "agy",
     });
     let (scratch, pycache) = (sdir.join("scratch"), sdir.join("pycache"));
+    let (check_scratch, check_pycache) = (sdir.join("check_scratch"), sdir.join("check_pycache"));
     for d in [&work, &scratch, &pycache] {
         std::fs::create_dir_all(d).map_err(|e| format!("could not create {}: {e}", d.display()))?;
     }
+    let check_dirs = if mode == Mode::Solve {
+        for d in [&check_scratch, &check_pycache] {
+            std::fs::create_dir_all(d).map_err(|e| format!("could not create {}: {e}", d.display()))?;
+        }
+        Some((check_scratch.as_path(), check_pycache.as_path()))
+    } else {
+        None
+    };
     let _session_guard = SessionGuard::create(&state.cfg.data_dir, &sdir, session_id)?;
 
     let token = random_hex(32);
-    let relay = cli_route::relay::start_for_caller(
-        state.open_ledger()?,
-        session_id.to_string(),
-        token.clone(),
-        vendor.caller(session_id),
-        Arc::new(UiRelay { state: Arc::clone(state) }),
-    )
+    let relay_decider = Arc::new(UiRelay { state: Arc::clone(state) });
+    let relay = if mode == Mode::Solve {
+        cli_route::relay::start_for_callers(
+            state.open_ledger()?,
+            session_id.to_string(),
+            token.clone(),
+            vec![vendor.caller(session_id), SOLVE_CHECK_CALLER.to_string()],
+            relay_decider,
+        )
+    } else {
+        cli_route::relay::start_for_caller(
+            state.open_ledger()?,
+            session_id.to_string(),
+            token.clone(),
+            vendor.caller(session_id),
+            relay_decider,
+        )
+    }
     .map_err(|e| format!("could not start the approval relay: {e}"))?;
     let workspace = research.workspace_root.clone();
     let mut core = CoreLaunch {
         exe: core_exe,
-        env: core_env(&state.cfg, session_id, &token, &relay.addr, &scratch, &pycache, workspace.as_deref()),
+        env: core_env_for_profile(
+            &state.cfg,
+            session_id,
+            &token,
+            &relay.addr,
+            &scratch,
+            &pycache,
+            workspace.as_deref(),
+            mode,
+            profile.name,
+            check_dirs,
+        ),
     };
     core.env.insert("CORE_CALLER_ROUTE".into(), kind.ledger_route().into());
-    let tools = core_tool_set(Some(Arc::clone(&research)));
+    let tools = core_tool_set_for_profile(Arc::clone(&research), profile.name)?;
 
+    let start_kind = if !existing.iter().any(|e| e.kind == "session.start") {
+        "session.start"
+    } else {
+        "session.resume"
+    };
     let mut start_fields = json!({
         "prompt": message,
         "provider": kind.provider_id(),
         "surface": "desktop",
         "allow_model_title": needs_title,
-        "history_replayed": replay.replayed,
-        "history_chars": replay.history_chars,
-        "history_turns": replay.turns_included,
-        "history_turns_dropped": replay.turns_dropped,
+        "history_replayed": prompt_build.replayed,
+        "history_chars": prompt_build.history_chars,
+        "history_turns": prompt_build.turns_included,
+        "history_turns_dropped": prompt_build.turns_dropped,
         "workspace_root": workspace.as_deref().map(|w| path_str(&strip_verbatim_prefix(w))),
         "workspace_revision": workspace.as_deref().and_then(agent::workspace_revision),
         "project_context": project_context,
+        TOOL_PROFILE_FIELD: profile.name,
     });
+    if mode == Mode::Solve && start_kind == "session.resume" {
+        start_fields["resume_mode"] = json!("brief");
+    }
     if kind == CliRouteKind::Antigravity {
         start_fields["confinement"] = json!(cli_route::antigravity::CONFINEMENT);
         start_fields["route_label"] = json!(crate::antigravity::AGY_LABEL);
@@ -217,10 +251,10 @@ pub(crate) fn run_cli_turn(
         core: &core,
         model: &model,
         reasoning_effort: reasoning_effort.as_deref(),
-        prompt: &replay.prompt,
+        prompt: &prompt_build.prompt,
         tool_defs: &tools.defs,
         policy_version: &tools.policy_version,
-        start_kind: if !existing.iter().any(|e| e.kind == "session.start") { "session.start" } else { "session.resume" },
+        start_kind,
         start_fields,
         inherit_stderr: false,
         allow_env_auth,

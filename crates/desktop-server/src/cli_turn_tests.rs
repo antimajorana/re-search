@@ -91,3 +91,187 @@ fn connection_env_cannot_supply_claude_env_auth_opt_in_for_turns() {
     let err = run_cli_turn(&state, "s-env01", &json!({}), "hi", &StopHandle::new(), CliRouteKind::Claude).unwrap_err();
     assert!(err.contains("ANTHROPIC_API_KEY") && !err.contains("sk-ant-dummy"), "{err}");
 }
+
+#[test]
+fn prompt_gating_keeps_research_instructions_strictly_out_of_solve_and_investigate() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let ledger = ledger::Ledger::open(tmp.path()).unwrap();
+    let sid = "s-solve-prompt";
+    ledger.append_with_hash(sid, "solve.started", 1, &json!({})).unwrap();
+    ledger
+        .append_with_hash(
+            sid,
+            "solve.setup",
+            1,
+            &json!({
+                "revision": 1,
+                "statement": "Compute integral of x^2 from 0 to 1",
+                "task_kind": "calculate",
+                "target": { "description": "closed form", "form": "closed_form" },
+                "done": [],
+                "conventions": "real x",
+                "symbols": [{ "name": "x", "assumptions": ["real"] }],
+                "dimensions": {},
+                "assumptions": [],
+                "sources": [],
+                "roles": {
+                    "solver": { "provider": "claude-cli", "model": "sonnet" },
+                    "verifier": { "provider": "", "model": "" }
+                },
+                "budgets": {
+                    "max_model_calls": 60,
+                    "max_wall_minutes": 30,
+                    "max_model_calls_per_leg": 48,
+                    "max_review_loops": 6,
+                    "max_gate_bounces": 3
+                },
+                "review": "prose_only",
+                "tool_profile": "solve/1",
+                "math_sha256": "0".repeat(64)
+            }),
+        )
+        .unwrap();
+    let events = ledger.read_session(sid).unwrap();
+
+    let solve_a = crate::cli_turn_setup::build_cli_prompt(
+        research_tools::paper_key::Mode::Solve,
+        &events,
+        Some(&ledger),
+        "Continue derivation",
+        Some("real x"),
+        None,
+        false,
+        true,
+    );
+    let solve_b = crate::cli_turn_setup::build_cli_prompt(
+        research_tools::paper_key::Mode::Solve,
+        &events,
+        Some(&ledger),
+        "Continue derivation",
+        Some("real x"),
+        None,
+        false,
+        true,
+    );
+    assert_eq!(solve_a.prompt, solve_b.prompt, "Solve CLI prompt must be byte-deterministic");
+    assert!(!solve_a.replayed);
+    assert!(solve_a.prompt.contains("Compute integral of x^2 from 0 to 1"));
+    assert!(solve_a.prompt.contains(crate::cli_turn_setup::SOLVE_HANDLE_SURVIVAL_LINE));
+    assert!(solve_a.prompt.contains("`step_record`") && solve_a.prompt.contains("`solve_finish`"));
+    for forbidden in ["search_formal_library", "check_symbolic_identity", "lean_check", "tool_call_ref"] {
+        assert!(!solve_a.prompt.contains(forbidden), "Solve prompt leaked `{forbidden}`:\n{}", solve_a.prompt);
+    }
+
+    let research = crate::cli_turn_setup::build_cli_prompt(
+        research_tools::paper_key::Mode::Research,
+        &[],
+        None,
+        "Hello",
+        None,
+        None,
+        false,
+        true,
+    );
+    assert!(research.prompt.contains("search_formal_library"));
+    assert!(research.prompt.contains("check_symbolic_identity"));
+
+    let inv = crate::cli_turn_setup::build_cli_prompt(
+        research_tools::paper_key::Mode::Investigate,
+        &[],
+        None,
+        "Inspect theorem",
+        None,
+        None,
+        false,
+        true,
+    );
+    assert!(!inv.prompt.contains("search_formal_library"));
+    assert!(!inv.prompt.contains("check_symbolic_identity"));
+}
+
+#[test]
+fn solve_core_env_propagates_profile_check_dirs_and_matches_antigravity_tool_ids() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cfg = DesktopConfig {
+        port: 0,
+        data_dir: tmp.path().to_path_buf(),
+        workspace_root: None,
+        python: None,
+        worker_script: None,
+        api_base_override: None,
+        literature_endpoints: LiteratureEndpoints::default(),
+        open_window: false,
+        print_url_json: false,
+        eval_timeout_s: 30,
+        core_exe: None,
+        claude_exe: None,
+        agy_exe: None,
+        connection_env: None,
+        chatgpt_test: None,
+    };
+    let scratch = tmp.path().join("scratch");
+    let pycache = tmp.path().join("pycache");
+    let cscratch = tmp.path().join("check_scratch");
+    let cpycache = tmp.path().join("check_pycache");
+
+    let solve_env = crate::cli_turn_setup::core_env_for_profile(
+        &cfg,
+        "s-solve-env",
+        "tok",
+        "127.0.0.1:9",
+        &scratch,
+        &pycache,
+        None,
+        research_tools::paper_key::Mode::Solve,
+        research_tools::tool_profile::PROFILE_SOLVE_V1,
+        Some((&cscratch, &cpycache)),
+    );
+    assert_eq!(solve_env.get("CORE_TOOL_PROFILE").map(String::as_str), Some("solve/1"));
+    assert!(!solve_env.contains_key("CORE_ENABLE_RESEARCH_TOOLS"));
+    assert_eq!(solve_env.get("CORE_CHECK_TIMEOUT_S").map(String::as_str), Some("10"));
+    assert!(solve_env.contains_key("CORE_CHECK_SCRATCH"));
+    assert!(solve_env.contains_key("CORE_CHECK_PYCACHE"));
+
+    let ids = cli_route::core_tools::core_tool_ids_for(&solve_env);
+    assert_eq!(ids.len(), 17);
+    assert!(ids.iter().any(|id| id == "step_record"));
+    assert!(ids.iter().any(|id| id == "solve_finish"));
+    assert!(ids.iter().any(|id| id == "set_session_title"));
+    assert!(!ids.iter().any(|id| id == "fs_write"));
+
+    let res_env = crate::cli_turn_setup::core_env_for_profile(
+        &cfg,
+        "s-res-env",
+        "tok",
+        "127.0.0.1:9",
+        &scratch,
+        &pycache,
+        None,
+        research_tools::paper_key::Mode::Research,
+        research_tools::tool_profile::PROFILE_RESEARCH_V1,
+        None,
+    );
+    assert_eq!(res_env.get("CORE_TOOL_PROFILE").map(String::as_str), Some("research/1"));
+    assert_eq!(res_env.get("CORE_ENABLE_RESEARCH_TOOLS").map(String::as_str), Some("1"));
+}
+
+#[test]
+fn resolve_cli_turn_profile_maps_modes_and_rejects_unbuilt_explore() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let ledger = ledger::Ledger::open(tmp.path()).unwrap();
+
+    ledger.append_with_hash("s-solve", "solve.started", 1, &json!({})).unwrap();
+    let (mode, profile) =
+        crate::cli_turn_setup::resolve_cli_turn_profile(&ledger.read_session("s-solve").unwrap()).unwrap();
+    assert_eq!(mode, research_tools::paper_key::Mode::Solve);
+    assert_eq!(profile.name, research_tools::tool_profile::PROFILE_SOLVE_V1);
+
+    let (mode_r, profile_r) = crate::cli_turn_setup::resolve_cli_turn_profile(&[]).unwrap();
+    assert_eq!(mode_r, research_tools::paper_key::Mode::Research);
+    assert_eq!(profile_r.name, research_tools::tool_profile::PROFILE_RESEARCH_V1);
+
+    ledger.append_with_hash("s-exp", "idea.started", 1, &json!({})).unwrap();
+    let err = crate::cli_turn_setup::resolve_cli_turn_profile(&ledger.read_session("s-exp").unwrap())
+        .unwrap_err();
+    assert!(err.contains("profile not built yet"), "{err}");
+}

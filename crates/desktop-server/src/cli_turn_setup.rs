@@ -6,13 +6,33 @@
 
 use crate::state::{DesktopState, SessionMeta, ANTIGRAVITY_ROUTE, CLAUDE_CLI_ROUTE};
 use crate::DesktopConfig;
+use cli_route::core_tools::CORE_TOOL_PROFILE_ENV;
+use cli_route::history::{build_session_prompt, DEFAULT_HISTORY_BUDGET};
+use ledger::Ledger;
+use research_tools::paper_key::Mode;
+use research_tools::solve_model::{CheckOutcome, ReviewVerdict, StepOrigin};
+use research_tools::solve_state::SolveState;
+use research_tools::solve_status::Tier;
+use research_tools::tool_profile::{
+    profile_for_session_events, session_mode_from_events, ToolProfile,
+};
 use research_tools::{strip_verbatim_prefix, LiteratureEndpoints};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// Model alias used when neither the request nor the session names one.
 pub const DEFAULT_CLI_MODEL: &str = "sonnet";
+
+/// Solve check-process environment variable names passed to `core.exe` (`solve.md` 5.1, S15).
+pub const CORE_CHECK_SCRATCH_ENV: &str = "CORE_CHECK_SCRATCH";
+pub const CORE_CHECK_PYCACHE_ENV: &str = "CORE_CHECK_PYCACHE";
+pub const CORE_CHECK_TIMEOUT_ENV: &str = "CORE_CHECK_TIMEOUT_S";
+/// Default host auto-check timeout in seconds (`solve.md` 5.1).
+pub const DEFAULT_SOLVE_CHECK_TIMEOUT_S: u64 = 10;
+/// Fixed Solve resume-brief reminder (`solve.md` 5.5).
+pub const SOLVE_HANDLE_SURVIVAL_LINE: &str = "Python variables do not survive; only handles do.";
 
 /// Which subscription CLI a session runs on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,9 +266,19 @@ pub(crate) fn path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
-/// Environment for `core.exe`: session, token, relay, data, worker, workspace and research
-/// tools (always on for desktop sessions, as on the API route).
-pub(crate) fn core_env(
+/// Detect the session's mode and active frozen [`ToolProfile`] from its ledger events.
+pub fn resolve_cli_turn_profile(events: &[ledger::Event]) -> Result<(Mode, ToolProfile), String> {
+    let mode = session_mode_from_events(events);
+    let profile = profile_for_session_events(events)?;
+    Ok((mode, profile))
+}
+
+/// Mode-aware environment for `core.exe`: always propagates `CORE_TOOL_PROFILE` (shared seam
+/// with Explore X18), sets Solve check-worker scratch/pycache/timeout vars for `Mode::Solve`
+/// without requiring `CORE_ENABLE_RESEARCH_TOOLS`, and keeps `CORE_ENABLE_RESEARCH_TOOLS=1`
+/// for Research/Investigate sessions.
+#[allow(clippy::too_many_arguments)]
+pub fn core_env_for_profile(
     cfg: &DesktopConfig,
     session: &str,
     token: &str,
@@ -256,6 +286,9 @@ pub(crate) fn core_env(
     scratch: &Path,
     pycache: &Path,
     workspace: Option<&Path>,
+    mode: Mode,
+    profile_name: &str,
+    check_dirs: Option<(&Path, &Path)>,
 ) -> BTreeMap<String, String> {
     let mut env: BTreeMap<String, String> = [
         ("CORE_SESSION", session.to_string()),
@@ -264,12 +297,21 @@ pub(crate) fn core_env(
         ("CORE_APPROVAL_ADDR", relay_addr.to_string()),
         ("CORE_SCRATCH", path_str(scratch)),
         ("CORE_PYCACHE", path_str(pycache)),
-        ("CORE_ENABLE_RESEARCH_TOOLS", "1".to_string()),
+        (CORE_TOOL_PROFILE_ENV, profile_name.to_string()),
         ("CORE_EVAL_TIMEOUT_S", cfg.eval_timeout_s.max(30).to_string()),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect();
+    if mode != Mode::Solve {
+        env.insert("CORE_ENABLE_RESEARCH_TOOLS".into(), "1".into());
+    } else {
+        env.insert(CORE_CHECK_TIMEOUT_ENV.into(), DEFAULT_SOLVE_CHECK_TIMEOUT_S.to_string());
+        if let Some((check_scratch, check_pycache)) = check_dirs {
+            env.insert(CORE_CHECK_SCRATCH_ENV.into(), path_str(check_scratch));
+            env.insert(CORE_CHECK_PYCACHE_ENV.into(), path_str(check_pycache));
+        }
+    }
     if let (Some(py), Some(script)) = (&cfg.python, &cfg.worker_script) {
         env.insert("CORE_PYTHON".into(), path_str(py));
         env.insert("CORE_WORKER_SCRIPT".into(), path_str(script));
@@ -290,4 +332,229 @@ pub(crate) fn core_env(
         }
     }
     env
+}
+
+/// Constructed CLI prompt and history-replay metadata recorded on `session.start`/`session.resume`.
+#[derive(Debug, Clone)]
+pub struct CliPromptBuild {
+    pub prompt: String,
+    pub replayed: bool,
+    pub history_chars: usize,
+    pub turns_included: usize,
+    pub turns_dropped: usize,
+}
+
+/// Build the mode-specific prompt sent to a subscription CLI on stdin.
+///
+/// Research `search_formal_library` and `sympy_eval` instructions are strictly gated to
+/// `Mode::Research` so Solve/Investigate/Explore turns never receive Research or Lean guidance.
+#[allow(clippy::too_many_arguments)]
+pub fn build_cli_prompt(
+    mode: Mode,
+    existing: &[ledger::Event],
+    ledger: Option<&Ledger>,
+    eff_msg: &str,
+    conventions: Option<&str>,
+    project_context: Option<&str>,
+    needs_title: bool,
+    has_python: bool,
+) -> CliPromptBuild {
+    if mode == Mode::Solve {
+        let prompt = build_solve_cli_prompt(
+            existing,
+            ledger,
+            eff_msg,
+            conventions,
+            project_context,
+            needs_title,
+        );
+        return CliPromptBuild {
+            prompt,
+            replayed: false,
+            history_chars: 0,
+            turns_included: 0,
+            turns_dropped: 0,
+        };
+    }
+
+    let mut msg = eff_msg.to_string();
+    if needs_title {
+        msg = format!(
+            "Once you can state the main research question, use set_session_title once with a concise title in the user's language.\n\n{msg}"
+        );
+    }
+    if let Some(text) = conventions.map(str::trim).filter(|t| !t.is_empty()) {
+        msg = format!("Pinned research conventions\n{text}\n\n{msg}");
+    }
+    if mode == Mode::Research {
+        msg = format!(
+            "Use `search_paper_passages` to locate exact passages in ingested papers and \
+             `search_formal_library` to discover Lean declarations in the attached workspace. \
+             Cite recorded source locations, and type-check any intended formal application.\n\n{msg}"
+        );
+        if has_python {
+            msg = format!(
+                "The re:Search compute worker exposes `check_symbolic_identity(lhs, rhs, variable=x, domain=...)` \
+                 and `check_convergence(run, levels, axis=..., atol=..., rtol=..., reference=...)` in `sympy_eval`. \
+                 Return the report as the final Python expression and record its `tool_call_ref` with the proof entry. \
+                 Report excluded points, counterexamples, and the scope of numerical evidence. \n\n{msg}"
+            );
+        }
+    }
+    if let Some(context) = project_context {
+        msg = format!("{context}\n\nCurrent user request\n{msg}");
+    }
+    let replay = build_session_prompt(existing, &msg, DEFAULT_HISTORY_BUDGET);
+    CliPromptBuild {
+        prompt: replay.prompt,
+        replayed: replay.replayed,
+        history_chars: replay.history_chars,
+        turns_included: replay.turns_included,
+        turns_dropped: replay.turns_dropped,
+    }
+}
+
+/// Pure deterministic Solve CLI prompt synthesized from `SolveState` (setup + active steps +
+/// open items + handles + frozen `lessons.supplied` notes), never replaying Research transcripts.
+///
+/// Merge seam (S12): once `agent::resume_brief::build_resume_brief` lands, the state summary
+/// section below can delegate directly to it.
+pub fn build_solve_cli_prompt(
+    events: &[ledger::Event],
+    ledger: Option<&Ledger>,
+    user_message: &str,
+    conventions: Option<&str>,
+    project_context: Option<&str>,
+    needs_title: bool,
+) -> String {
+    let state = SolveState::from_events(events);
+    let mut out = String::new();
+    out.push_str(
+        "Solve mode (`solve/1`): use `sympy_eval` (`save_expr`/`expr`), `expr_show`, `step_record`, \
+         `check_run`, `solve_finish`, `ledger_note`, `ledger_query`, and `ledger_supersede`. \
+         Formulas come from saved handles; host auto-checks run after `step_record`. \
+         If a tool returns `GATE <id>: ...`, follow the gate instruction (record via `step_record` \
+         or discard via `ledger_note` starting with `discard:`). Call `solve_finish` when done.\n",
+    );
+    if needs_title {
+        out.push_str("Use `set_session_title` once with a concise title in the user's language.\n");
+    }
+    if let Some(ctx) = project_context.map(str::trim).filter(|s| !s.is_empty()) {
+        let _ = writeln!(out, "\nProject context\n{ctx}");
+    }
+
+    if let Some(setup) = &state.setup {
+        let _ = writeln!(out, "\n## Solve setup (rev {}, kind: {:?})", setup.revision, setup.task_kind);
+        let _ = writeln!(out, "Statement: {}", setup.statement);
+        if !setup.target.description.trim().is_empty() {
+            let _ = writeln!(out, "Target ({:?}): {}", setup.target.form, setup.target.description);
+        }
+        if !setup.conventions.trim().is_empty() {
+            let _ = writeln!(out, "Conventions: {}", setup.conventions);
+        }
+        if !setup.symbols.is_empty() {
+            let syms: Vec<String> = setup
+                .symbols
+                .iter()
+                .map(|s| {
+                    if s.assumptions.is_empty() {
+                        s.name.clone()
+                    } else {
+                        format!("{} ({})", s.name, s.assumptions.join(", "))
+                    }
+                })
+                .collect();
+            let _ = writeln!(out, "Symbols: {}", syms.join("; "));
+        }
+        if !setup.done.is_empty() {
+            let ids: Vec<&str> = setup.done.iter().map(|c| c.id.as_str()).collect();
+            let _ = writeln!(out, "Done criteria: {}", ids.join(", "));
+        }
+    } else if let Some(conv) = conventions.map(str::trim).filter(|s| !s.is_empty()) {
+        let _ = writeln!(out, "\nPinned conventions\n{conv}");
+    }
+
+    let active = state.active_entries();
+    if !active.is_empty() {
+        out.push_str("\n## Active steps\n");
+        for e in &active {
+            let tier = state.tier(&e.entry_id);
+            let own = tier.map_or("Unchecked", |t| t.own.label());
+            let eff = tier.map_or("Unchecked", |t| t.effective.label());
+            let deps = if e.depends_on.is_empty() { "-".to_string() } else { e.depends_on.join(",") };
+            let _ = writeln!(out, "- {} [{}] own={own} eff={eff} deps=[{deps}]: {}", e.entry_id, e.entry_type.as_str(), e.summary);
+        }
+    }
+
+    let mut open_items: Vec<String> = Vec::new();
+    for chk in &state.checks {
+        if chk.outcome == CheckOutcome::Fail {
+            let eid = chk.entry_id.as_deref().unwrap_or("unknown");
+            open_items.push(format!("failed check `{}` on `{eid}`: {}", chk.name, chk.evidence));
+        }
+    }
+    for rev in &state.reviews {
+        if rev.verdict == ReviewVerdict::Rejected {
+            let detail = serde_json::to_string(&rev.issues).unwrap_or_default();
+            open_items.push(format!("rejected review on `{}`: {detail}", rev.target_entry_id));
+        }
+    }
+    for e in &active {
+        if state.tier(&e.entry_id).is_some_and(|t| t.stale || t.effective == Tier::Stale) {
+            open_items.push(format!("stale step `{}` needs re-check", e.entry_id));
+        }
+        if e.origin == Some(StepOrigin::Solver)
+            && state.tier(&e.entry_id).is_some_and(|t| t.own == Tier::AssumedByModel)
+        {
+            open_items.push(format!("unacknowledged model assumption `{}`", e.entry_id));
+        }
+    }
+    if !state.pending_runs.is_empty() {
+        open_items.push(format!("uninterpreted sympy_eval runs: {}", state.pending_runs.join(", ")));
+    }
+    if !open_items.is_empty() {
+        out.push_str("\n## Open items\n");
+        for item in &open_items {
+            let _ = writeln!(out, "- {item}");
+        }
+    }
+
+    if !state.handles.is_empty() {
+        out.push_str("\n## Handles\n");
+        for (h, expr) in &state.handles {
+            if expr.portable {
+                let _ = writeln!(out, "- {h}: {}", expr.str_preview);
+            } else {
+                let _ = writeln!(out, "- {h} (non-portable)");
+            }
+        }
+    }
+
+    // Rule R24: read frozen `lessons.supplied` events from the ledger only (never live lessons.db).
+    if let Some(l) = ledger {
+        let mut supplied_blocks = Vec::new();
+        for ev in events.iter().filter(|e| e.kind == "lessons.supplied") {
+            if let Some(blob_hash) = ev.payload.get("blob").and_then(Value::as_str) {
+                if let Ok(bytes) = l.get_blob(blob_hash) {
+                    if let Ok(text) = String::from_utf8(bytes) {
+                        if !text.trim().is_empty() {
+                            supplied_blocks.push(text);
+                        }
+                    }
+                }
+            }
+        }
+        if !supplied_blocks.is_empty() {
+            out.push_str("\n## Notes from the user's earlier corrections\n");
+            for block in supplied_blocks {
+                let _ = writeln!(out, "> {}", block.replace('\n', "\n> "));
+            }
+        }
+    }
+
+    let _ = writeln!(out, "\n{SOLVE_HANDLE_SURVIVAL_LINE}");
+    if !user_message.trim().is_empty() {
+        let _ = write!(out, "\n## Current request\n{user_message}");
+    }
+    out
 }
