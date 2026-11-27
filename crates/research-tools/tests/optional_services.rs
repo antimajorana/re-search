@@ -423,11 +423,13 @@ fn openalex_cross_origin_redirect_strips_bearer_header_and_redacts_errors() {
     let fake_key = "fake-oa-redirect-secret-5591";
     let srv_b = MockServer::spawn(1, |_| MockReply::ok(OPENALEX_SEARCH_JSON));
     let redirect_target = format!("{}/openalex/works?redirected=1", srv_b.base_url);
-    let srv_a = MockServer::spawn(4, move |req| {
+    let srv_a = MockServer::spawn(5, move |req| {
         if req.path.contains("doredirect") {
             MockReply::status("302 Found", vec![("Location", &redirect_target)], "")
         } else if req.path.contains("echoerror") {
             MockReply::status("401 Unauthorized", vec![], format!("bad key {fake_key}"))
+        } else if req.path.contains("ratelimited") {
+            MockReply::status("429 Too Many Requests", vec![("Retry-After", "7")], "slow down")
         } else if req.path.starts_with("/openalex/works") {
             MockReply::ok(OPENALEX_SEARCH_JSON)
         } else {
@@ -462,6 +464,12 @@ fn openalex_cross_origin_redirect_strips_bearer_header_and_redacts_errors() {
     assert_eq!(r_err.status, QueryStatus::Failed);
     assert_eq!(r_err.http_status, Some(401));
     assert!(!r_err.error.as_deref().unwrap().contains(fake_key));
+
+    // HTTP 429 parses `Retry-After` and returns `QueryStatus::RateLimited`.
+    let r_429 = run_query_with_gate(&ep, &LitQuery::search(LitProvider::OpenAlex, "ratelimited"), &cfg, &gate);
+    assert_eq!(r_429.status, QueryStatus::RateLimited);
+    assert_eq!(r_429.http_status, Some(429));
+    assert_eq!(r_429.retry_after_secs, Some(7));
 
     let a_reqs = srv_a.captured();
     assert_eq!(

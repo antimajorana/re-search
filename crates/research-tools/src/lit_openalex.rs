@@ -19,9 +19,12 @@ use crate::paper_key::{canonical_doi, split_arxiv_id, PaperIds, PaperKey, PaperK
 use crate::LiteratureEndpoints;
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde_json::Value;
+use std::collections::{BinaryHeap, HashSet};
 
-/// Safety cap on token positions extracted from a single `abstract_inverted_index`.
+/// Safety cap on token positions retained from a single `abstract_inverted_index`.
 const MAX_INVERTED_INDEX_TOKENS: usize = 16_384;
+/// Safety cap on total position entries scanned from a single `abstract_inverted_index`.
+const MAX_INVERTED_INDEX_SCAN: usize = 262_144;
 
 /// Attach optional OpenAlex API key strictly as an `Authorization: Bearer <key>` header.
 ///
@@ -53,7 +56,8 @@ pub fn build_request_url(
     max_results: usize,
 ) -> Result<String, (QueryStatus, String)> {
     let base = endpoints.openalex_api_base.trim_end_matches('/');
-    let page = (query.offset / max_results.max(1)).saturating_add(1);
+    let per_page = max_results.clamp(1, 200);
+    let page = (query.offset / per_page).saturating_add(1);
     match &query.relation {
         QueryRelation::None => {
             let q = query.query.trim();
@@ -72,12 +76,12 @@ pub fn build_request_url(
                 }
                 let enc = utf8_percent_encode(expr, NON_ALPHANUMERIC).to_string();
                 return Ok(format!(
-                    "{base}/works?filter={enc}&per-page={max_results}&page={page}"
+                    "{base}/works?filter={enc}&per-page={per_page}&page={page}"
                 ));
             }
             let enc = utf8_percent_encode(q, NON_ALPHANUMERIC).to_string();
             Ok(format!(
-                "{base}/works?search={enc}&per-page={max_results}&page={page}"
+                "{base}/works?search={enc}&per-page={per_page}&page={page}"
             ))
         }
         QueryRelation::Cites { key } => {
@@ -85,7 +89,7 @@ pub fn build_request_url(
             let filter = format!("cited_by:{target}");
             let enc = utf8_percent_encode(&filter, NON_ALPHANUMERIC).to_string();
             Ok(format!(
-                "{base}/works?filter={enc}&per-page={max_results}&page={page}"
+                "{base}/works?filter={enc}&per-page={per_page}&page={page}"
             ))
         }
         QueryRelation::CitedBy { key } => {
@@ -93,7 +97,7 @@ pub fn build_request_url(
             let filter = format!("cites:{target}");
             let enc = utf8_percent_encode(&filter, NON_ALPHANUMERIC).to_string();
             Ok(format!(
-                "{base}/works?filter={enc}&per-page={max_results}&page={page}"
+                "{base}/works?filter={enc}&per-page={per_page}&page={page}"
             ))
         }
     }
@@ -115,9 +119,10 @@ fn openalex_filter_target(key: &PaperKey) -> Result<String, (QueryStatus, String
 /// Deterministically reconstruct plain text from an OpenAlex `abstract_inverted_index` JSON
 /// object (`{ "<token>": [pos0, pos1, ...], ... }`).
 ///
-/// Sorts collected `(position, token)` pairs without allocating by `max_pos`, and stops
-/// appending as soon as [`crate::lit_abstracts::MAX_ABSTRACT_CHARS`] folded characters are
-/// reached so neither sparse positions nor repeated oversized tokens can trigger OOM.
+/// Uses a bounded max-heap of at most [`MAX_INVERTED_INDEX_TOKENS`] `(position, token)` pairs
+/// so earliest positions are always preserved regardless of alphabetical key order and without
+/// allocating by `max_pos`, and stops appending as soon as
+/// [`crate::lit_abstracts::MAX_ABSTRACT_CHARS`] folded characters are reached.
 /// Always accompanied by `AbstractRef { verbatim: false, .. }` so Rule C3 prevents rebuilt
 /// abstracts from ever becoming `evidence.abstract`.
 pub fn reconstruct_abstract_inverted_index(val: &Value) -> Option<String> {
@@ -125,8 +130,9 @@ pub fn reconstruct_abstract_inverted_index(val: &Value) -> Option<String> {
     if map.is_empty() {
         return None;
     }
-    let mut pairs: Vec<(u64, &str)> = Vec::new();
-    for (token, positions) in map {
+    let mut heap: BinaryHeap<(u64, &str)> = BinaryHeap::new();
+    let mut scanned = 0usize;
+    'outer: for (token, positions) in map {
         let word = token.trim();
         if word.is_empty() {
             continue;
@@ -135,22 +141,26 @@ pub fn reconstruct_abstract_inverted_index(val: &Value) -> Option<String> {
             continue;
         };
         for pos_val in arr {
+            if scanned >= MAX_INVERTED_INDEX_SCAN {
+                break 'outer;
+            }
+            scanned += 1;
             let Some(pos) = pos_val.as_u64() else {
                 continue;
             };
-            if pairs.len() >= MAX_INVERTED_INDEX_TOKENS {
-                break;
+            let entry = (pos, word);
+            if heap.len() < MAX_INVERTED_INDEX_TOKENS {
+                heap.push(entry);
+            } else if heap.peek().is_some_and(|max| entry < *max) {
+                heap.pop();
+                heap.push(entry);
             }
-            pairs.push((pos, word));
-        }
-        if pairs.len() >= MAX_INVERTED_INDEX_TOKENS {
-            break;
         }
     }
-    if pairs.is_empty() {
+    if heap.is_empty() {
         return None;
     }
-    pairs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+    let pairs = heap.into_sorted_vec();
     let max_chars = crate::lit_abstracts::MAX_ABSTRACT_CHARS;
     let mut joined = String::with_capacity(max_chars.min(pairs.len().saturating_mul(6)));
     let mut chars_written = 0usize;
@@ -210,12 +220,19 @@ pub fn parse_openalex_json(
     let items: Vec<&Value> = if let Some(arr) = obj.get("results").and_then(Value::as_array) {
         arr.iter().collect()
     } else if obj.get("id").and_then(Value::as_str).is_some() {
-        if let QueryRelation::Cites { key } = relation {
-            if let Some(refs) = obj.get("referenced_works").and_then(Value::as_array) {
-                return parse_referenced_works(refs, key, offset, max_results);
+        match relation {
+            QueryRelation::None => vec![&root],
+            QueryRelation::Cites { key } => match obj.get("referenced_works").and_then(Value::as_array) {
+                Some(refs) => return parse_referenced_works(refs, key, offset, max_results),
+                None => Vec::new(),
+            },
+            QueryRelation::CitedBy { .. } => {
+                return Err(
+                    "malformed OpenAlex JSON: single-work object cannot answer `cited_by` without `results`"
+                        .into(),
+                );
             }
         }
-        vec![&root]
     } else if total_results == Some(0) {
         Vec::new()
     } else {
@@ -272,7 +289,11 @@ pub fn parse_openalex_json(
         let url = w["primary_location"]["landing_page_url"]
             .as_str()
             .map(str::trim)
-            .filter(|s| !s.is_empty())
+            .filter(|s| {
+                !s.is_empty()
+                    && (s.starts_with("https://") || s.starts_with("http://"))
+                    && !s.bytes().any(|b| b <= 0x20 || b == 0x7f)
+            })
             .map(str::to_string)
             .or_else(|| paper_ref.ids.doi.as_ref().map(|d| format!("https://doi.org/{d}")))
             .or_else(|| {
@@ -324,12 +345,16 @@ fn parse_referenced_works(
     offset: usize,
     max_results: Option<usize>,
 ) -> Result<ParsedProviderPage, String> {
+    let mut seen = HashSet::new();
     let mut all_papers = Vec::new();
     for entry in refs {
         let Some(raw) = entry.as_str() else { continue };
         let Ok(oa_key) = PaperKey::from_openalex(raw) else {
             continue;
         };
+        if !seen.insert(oa_key.clone()) {
+            continue;
+        }
         let provider_id = oa_key.value().to_string();
         let url = Some(format!("https://openalex.org/{provider_id}"));
         let Ok(paper_ref) = PaperRef::from_ids_or(PaperIds::default(), None, Some(oa_key)) else {
@@ -425,3 +450,93 @@ fn extract_openalex_authors(w: &Value) -> Vec<String> {
         })
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn inverted_index_keeps_earliest_positions_even_when_early_key_overflows_cap() {
+        let mut high_positions = Vec::with_capacity(MAX_INVERTED_INDEX_TOKENS + 64);
+        for i in 100..(100 + MAX_INVERTED_INDEX_TOKENS + 64) {
+            high_positions.push(json!(i));
+        }
+        let idx = json!({
+            "aaa": high_positions,
+            "zero": [0],
+            "one": [1],
+        });
+        let text = reconstruct_abstract_inverted_index(&idx).expect("reconstructed");
+        assert!(text.starts_with("zero one "), "earliest tokens dropped: {text:.40}");
+        assert!(text.chars().count() <= crate::lit_abstracts::MAX_ABSTRACT_CHARS);
+    }
+
+    #[test]
+    fn single_work_relation_safety_ref_dedupe_and_landing_url_scheme() {
+        let src = PaperKey::parse("openalex:W111").unwrap();
+        let single_with_refs = br#"{
+          "id": "https://openalex.org/W111",
+          "referenced_works": [
+            "https://openalex.org/W222",
+            "https://openalex.org/W222",
+            "https://openalex.org/W333"
+          ]
+        }"#;
+        let page = parse_openalex_json(
+            single_with_refs,
+            "blob",
+            &QueryRelation::Cites { key: src.clone() },
+            0,
+            Some(10),
+        )
+        .unwrap();
+        assert_eq!(page.papers.len(), 2);
+        assert_eq!(page.edges.len(), 2);
+        assert_eq!(page.papers[0].paper_ref.key.as_str(), "openalex:W222");
+        assert_eq!(page.papers[1].paper_ref.key.as_str(), "openalex:W333");
+
+        // Single work without `referenced_works` must never emit a self-loop edge.
+        let single_no_refs = br#"{"id": "https://openalex.org/W111", "title": "Self"}"#;
+        let empty_cites = parse_openalex_json(
+            single_no_refs,
+            "blob",
+            &QueryRelation::Cites { key: src.clone() },
+            0,
+            Some(10),
+        )
+        .unwrap();
+        assert!(empty_cites.papers.is_empty() && empty_cites.edges.is_empty());
+        assert!(parse_openalex_json(
+            single_no_refs,
+            "blob",
+            &QueryRelation::CitedBy { key: src },
+            0,
+            Some(10),
+        )
+        .is_err());
+
+        // `javascript:` landing_page_url is rejected in favor of canonical openalex.org URL.
+        let bad_url_json = br#"{
+          "meta": {"count": 1},
+          "results": [{
+            "id": "https://openalex.org/W444",
+            "title": "Scheme Check",
+            "primary_location": {"landing_page_url": "javascript:alert(1)"}
+          }]
+        }"#;
+        let parsed = parse_openalex_json(bad_url_json, "blob", &QueryRelation::None, 0, Some(5)).unwrap();
+        assert_eq!(parsed.papers[0].url.as_deref(), Some("https://openalex.org/W444"));
+    }
+
+    #[test]
+    fn build_request_url_clamps_per_page_and_rejects_empty_filter() {
+        let ep = LiteratureEndpoints::default();
+        let q0 = LitQuery::search(LitProvider::OpenAlex, "lattice").with_paging(0, 0);
+        let url = build_request_url(&ep, &q0, 0).unwrap();
+        assert!(url.contains("per-page=1&page=1"), "got {url}");
+        let empty_filter = LitQuery::search(LitProvider::OpenAlex, "filter:   ");
+        assert!(build_request_url(&ep, &empty_filter, 5).is_err());
+    }
+}
+

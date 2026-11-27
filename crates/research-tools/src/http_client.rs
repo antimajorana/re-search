@@ -96,7 +96,10 @@ fn validate_extra_headers(headers: &[(String, String)]) -> Result<(), String> {
         if trimmed.eq_ignore_ascii_case("user-agent") {
             return Err("overriding User-Agent via extra_headers is not permitted".into());
         }
-        if value.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
+        if value
+            .bytes()
+            .any(|b| (b < 0x20 && b != b'\t') || b >= 0x7f)
+        {
             return Err(format!("invalid HTTP header value for `{trimmed}`"));
         }
     }

@@ -186,7 +186,7 @@ fn parse_loopback_port(base: &str) -> Option<u16> {
 ///    (used by `arxiv.rs`, `literature.rs`, `paper_fetch.rs`); a unique logical service in
 ///    `endpoints` bound to that loopback port; a known service URL path prefix
 ///    (`Service::from_loopback_path`), which separates services even when
-///    `LiteratureEndpoints::loopback_mock` points all five endpoints at one port; and
+///    `LiteratureEndpoints::loopback_mock` points all six endpoints at one port; and
 ///    finally `RateBucket::LoopbackGeneric(port)` for generic HTTP-allowlist test paths.
 pub fn resolve_bucket(
     uri: &Uri,
