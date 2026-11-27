@@ -79,6 +79,7 @@ fn tool_emitted_event_kinds() -> BTreeMap<&'static str, &'static [&'static str]>
         ("note_evidence", &[EVIDENCE_EVENT][..]),
         ("read_map_node", &[][..]),
         ("read_paper_lines", &[][..]),
+        ("record_context_cards", &["investigation.context"][..]),
         ("record_map_reading", &["investigation.reading"][..]),
         ("record_paper_branch", &["investigation.branch"][..]),
         ("record_paper_conventions", &["investigation.conventions"][..]),
@@ -401,12 +402,18 @@ fn tool_handler_sources_do_not_append_host_mode_markers() {
         "crates/research-tools/src/paper_passages.rs",
         "crates/research-tools/src/investigation.rs",
         "crates/research-tools/src/investigation_evidence.rs",
+        "crates/research-tools/src/map_context.rs",
         "crates/research-tools/src/proof_dag.rs",
         "crates/research-tools/src/sanity.rs",
         "crates/research-tools/src/lean_check.rs",
         "crates/research-tools/src/solve_defs.rs",
+        "crates/research-tools/src/solve_checks.rs",
+        "crates/research-tools/src/solve_done.rs",
         "crates/research-tools/src/solve_exprs.rs",
         "crates/research-tools/src/solve_exprs_show.rs",
+        "crates/research-tools/src/solve_gates.rs",
+        "crates/research-tools/src/solve_steps.rs",
+        "crates/research-tools/src/solve_steps_parse.rs",
     ];
 
     for rel in tool_files {

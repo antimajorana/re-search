@@ -18,8 +18,9 @@ use crate::state::DesktopState;
 use ledger::{Event, Ledger};
 use research_tools::paper_key::{split_arxiv_id, PaperKey};
 use research_tools::skeleton::{
-    build_pdf_skeleton_from_ingested, build_tex_skeleton_from_ingested, load_ingested_pdf_source,
-    BuildTiming, PaperSkeleton, SkNodeKind, SkeletonBuilder,
+    build_html_skeleton_from_ingested, build_pdf_skeleton_from_ingested,
+    build_tex_skeleton_from_ingested, is_html_receipt, load_ingested_pdf_source, BuildTiming,
+    PaperSkeleton, SkNodeKind, SkeletonBuilder,
 };
 use research_tools::validate_session_id;
 use serde_json::{json, Value};
@@ -72,9 +73,9 @@ pub fn is_pdf_receipt(receipt: &Event) -> bool {
             || p.get("pdf_pages").is_some_and(Value::is_array))
 }
 
-/// True iff `receipt` supports deterministic skeleton building (`tex-1` or `pdf-1`).
+/// True iff `receipt` supports deterministic skeleton building (`tex-1`, `html-1`, or `pdf-1`).
 pub fn is_skeleton_receipt(receipt: &Event) -> bool {
-    is_tex_receipt(receipt) || is_pdf_receipt(receipt)
+    is_tex_receipt(receipt) || is_html_receipt(receipt) || is_pdf_receipt(receipt)
 }
 
 /// Derives `(PaperKey, version)` from overrides, `arxiv_cover_id`, `origin`, `raw_blob`, or `source_id`.
@@ -226,6 +227,19 @@ pub fn handle_with_etag(
                     None,
                     Some(&folded),
                 );
+                let orient_auto_start = crate::investigation_settings::orient_auto_start_enabled(state);
+                crate::investigation_mapview_v7::enrich_mapview_with_v7(
+                    &mut mv,
+                    &rec.skeleton,
+                    &folded,
+                    orient_auto_start,
+                );
+                crate::investigation_context_tasks::enrich_context_cards_metadata(
+                    &mut mv,
+                    state,
+                    session_id,
+                    &events,
+                );
                 if rec.skeleton.builder == SkeletonBuilder::Pdf1 {
                     if let Some(receipt) = find_source_receipt(&events, &rec.skeleton.source_id, Some(rec.skeleton.source_seq))
                         .or_else(|| find_source_receipt(&events, &rec.skeleton.source_id, None))
@@ -233,16 +247,21 @@ pub fn handle_with_etag(
                         if let Ok(env) = state.research_env_for_session(session_id) {
                             if let Ok(pdf) = load_ingested_pdf_source(&env.sandbox(), session_id, receipt) {
                                 attach_pdf_page_metadata(&mut mv, &rec.skeleton, &pdf);
+                                crate::investigation_mapview_v7::attach_v7_pdf_quote_pages(&mut mv, &pdf);
                             }
                         }
                     }
                 }
+                crate::investigation_handoff::attach_child_statuses_to_mapview(&ledger, &events, &mut mv);
+                crate::investigation_legacy_view::embed_legacy_into_mapview(&mut mv, &events, Some(&rec.skeleton));
                 return Ok((200, Some(head), mv));
             }
-            Ok((200, Some(head.clone()), json!({
-                "etag": head, "skeleton_seq": Value::Null, "nodes": [], "edges": [],
+            let mut mv = json!({
+                "etag": head.clone(), "skeleton_seq": Value::Null, "nodes": [], "edges": [],
                 "legend": [], "fallback_note": fallback_note(&events),
-            })))
+            });
+            crate::investigation_legacy_view::embed_legacy_into_mapview(&mut mv, &events, None);
+            Ok((200, Some(head), mv))
         }
         ("GET", "node-text") => {
             let tag = query.get("tag").map(String::as_str).map(str::trim).filter(|s| !s.is_empty())
@@ -293,11 +312,14 @@ pub(crate) fn build_skeleton_from_receipt(
     if is_tex_receipt(receipt) {
         let (out, timing) = build_tex_skeleton_from_ingested(sandbox, session_id, receipt, paper_key, version)?;
         Ok((out.skeleton, timing))
+    } else if is_html_receipt(receipt) {
+        let (out, timing) = build_html_skeleton_from_ingested(sandbox, session_id, receipt, paper_key, version)?;
+        Ok((out.skeleton, timing))
     } else if is_pdf_receipt(receipt) {
         let (out, timing) = build_pdf_skeleton_from_ingested(sandbox, session_id, receipt, paper_key, version)?;
         Ok((out.skeleton, timing))
     } else {
-        Err("source is neither TeX nor PDF with an extracted page map".to_string())
+        Err("source is neither TeX, LaTeXML HTML, nor PDF with an extracted page map".to_string())
     }
 }
 
@@ -376,7 +398,7 @@ fn load_or_repair_skeleton(
     })
 }
 
-fn open_and_read(state: &DesktopState, session_id: &str) -> Result<(Ledger, Vec<Event>), (u16, String)> {
+pub(crate) fn open_and_read(state: &DesktopState, session_id: &str) -> Result<(Ledger, Vec<Event>), (u16, String)> {
     validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
     let ledger = state.open_ledger().map_err(internal)?;
     let events = ledger.read_session(session_id).map_err(storage)?;
@@ -387,7 +409,7 @@ fn non_empty(v: &Value) -> Option<&str> { v.as_str().map(str::trim).filter(|s| !
 fn is_lower_hex_prefix(s: &str, n: usize) -> bool {
     s.len() >= n && s.as_bytes()[..n].iter().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
-fn find_source_receipt<'a>(events: &'a [Event], source_id: &str, seq: Option<u64>) -> Option<&'a Event> {
+pub(crate) fn find_source_receipt<'a>(events: &'a [Event], source_id: &str, seq: Option<u64>) -> Option<&'a Event> {
     events.iter().rev().find(|e| {
         e.kind == EVENT_SOURCE_INGESTED && e.payload["source_id"].as_str() == Some(source_id) && seq.is_none_or(|s| e.seq == s)
     })
@@ -418,7 +440,7 @@ fn etag_matches(if_none_match: Option<&str>, etag: &str) -> bool {
         t == "*" || t.strip_prefix("W/").or_else(|| t.strip_prefix("w/")).unwrap_or(t).trim().trim_matches('"') == etag
     })
 }
-fn fallback_note(events: &[Event]) -> &'static str {
+pub(crate) fn fallback_note(events: &[Event]) -> &'static str {
     let Some(sid) = latest(events, EVENT_INVESTIGATION_PAPER).and_then(|e| e.payload["source_id"].as_str()) else {
         return "No primary paper is pinned to this Investigation yet.";
     };

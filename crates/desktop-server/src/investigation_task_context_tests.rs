@@ -353,7 +353,12 @@ fn carbon_audit_guards_profile_cli_cites_and_mapview_excerpts() {
     ).unwrap();
     drop(ledger_m);
     fx.state.open_ledger().unwrap().append(v1_sid, "investigation.paper", 1, &json!({ "source_id": ing.source_id })).unwrap();
-    let (v1_st, v1_body) = investigation_tasks::handle(&fx.state, v1_sid, br#"{"task":"orient"}"#).unwrap();
+    let missing_p = investigation_tasks::handle(&fx.state, v1_sid, br#"{"task":"orient"}"#).unwrap_err();
+    assert_eq!(missing_p.0, 400);
+    assert!(missing_p.1.contains("Choose a provider"), "{}", missing_p.1);
+    assert!(!fx.state.open_ledger().unwrap().read_session(v1_sid).unwrap()
+        .iter().any(|e| e.kind == MARKER_TASK_REQUESTED));
+    let (v1_st, v1_body) = investigation_tasks::handle(&fx.state, v1_sid, br#"{"task":"orient","provider":"anthropic"}"#).unwrap();
     assert_eq!(v1_st, 202);
     assert_eq!(v1_body["status"], "running");
     for _ in 0..100 {

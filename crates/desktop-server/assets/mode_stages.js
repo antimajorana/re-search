@@ -4,6 +4,11 @@
 import * as api from './api.js';
 import { createExploreSessionController } from './idea.js';
 import { EXPLORE_VISIBILITY_STORAGE_KEY } from './idea_state.js';
+import {
+  SOLVE_ARTIFACTS_TAB,
+  mountSolveArtifactsSection,
+  registerSolveTab,
+} from './solve_artifacts.js';
 import { createSolveSetupView } from './solve_setup.js';
 
 function resolveAuthToken(apiMod) {
@@ -69,10 +74,13 @@ export function createModeStagesController(deps = {}) {
     ? deps.fetchJson
     : (method, path, body) => defaultFetchJson(apiMod, method, path, body);
   const modeBySession = new Map();
+  const solveTabs = new Map();
+  registerSolveTab(solveTabs, SOLVE_ARTIFACTS_TAB);
   let syncSeq = 0;
   let mountedSessionId = null;
   let mountedMode = null;
   let activeSolveView = null;
+  let activeSolveArtifacts = null;
   let activeExploreCtrl = null;
 
   const getEl = (id) => (typeof deps.getElementById === 'function'
@@ -126,11 +134,21 @@ export function createModeStagesController(deps = {}) {
       : fetchJson('POST', `/api/sessions/${encSid}/approvals/${encodeURIComponent(callId)}`, payload);
   }
 
+  function destroySolveArtifacts() {
+    if (!activeSolveArtifacts) return;
+    try {
+      activeSolveArtifacts.destroy();
+    } finally {
+      activeSolveArtifacts = null;
+    }
+  }
+
   function resetStages(nextSessionId = null, nextMode = null) {
     mountedSessionId = nextSessionId;
     mountedMode = nextMode;
     activeSolveView = null;
     activeExploreCtrl = null;
+    destroySolveArtifacts();
     setShellStageAttr(null);
     clearStage(getEl('solve-session-stage'));
     clearStage(getEl('explore-session-stage'));
@@ -140,6 +158,7 @@ export function createModeStagesController(deps = {}) {
   async function mountSolveStage(sessionId, seq) {
     const solveHost = getEl('solve-session-stage');
     if (!solveHost) return null;
+    destroySolveArtifacts();
     clearStage(getEl('explore-session-stage'));
     const homeCard = getEl('home-explore-card');
     if (homeCard) homeCard.hidden = true;
@@ -153,12 +172,25 @@ export function createModeStagesController(deps = {}) {
     const view = createSolveSetupView(solveHost, {
       initial: { modelConnected: detectModelConnected(deps) },
       onPrefill: (body) => (seq === syncSeq ? fetchJson('POST', `/api/sessions/${encSid}/solve/prefill`, body) : Promise.resolve(null)),
-      onSubmitSetup: (body) => fetchJson('POST', `/api/sessions/${encSid}/solve/setup`, body),
+      onSubmitSetup: async (body) => {
+        const res = await fetchJson('POST', `/api/sessions/${encSid}/solve/setup`, body);
+        if (activeSolveArtifacts && (res?.view || res?.artifacts)) {
+          activeSolveArtifacts.update(res.view || res);
+        }
+        return res;
+      },
       onAllowGrant: (grant) => resolveGrant(sessionId, grant, true),
       onDenyGrant: (grant) => resolveGrant(sessionId, grant, false),
       ...(deps.solveOpts || {}),
     });
     if (viewData) view.applyView(viewData);
+    activeSolveArtifacts = mountSolveArtifactsSection(solveHost, viewData, {
+      sessionId,
+      fetchFn: deps.fetchArtifact || deps.fetch || (typeof fetch === 'function' ? fetch : null),
+      getToken: () => (typeof deps.getToken === 'function' ? deps.getToken() : resolveAuthToken(apiMod)),
+      urlApi: deps.urlApi,
+      scheduleRevoke: deps.scheduleRevoke,
+    });
     activeSolveView = view;
     mountedSessionId = sessionId;
     mountedMode = 'solve';
@@ -169,6 +201,7 @@ export function createModeStagesController(deps = {}) {
     const exploreHost = getEl('explore-session-stage');
     if (!exploreHost) return null;
     ensureIdeaStylesheet();
+    destroySolveArtifacts();
     clearStage(getEl('solve-session-stage'));
     const homeCard = getEl('home-explore-card');
     if (homeCard) homeCard.hidden = true;
@@ -230,6 +263,8 @@ export function createModeStagesController(deps = {}) {
     syncFromRail, openExploreCreated,
     getActiveMode: () => mountedMode, getActiveSessionId: () => mountedSessionId,
     getSolveView: () => activeSolveView, getExploreController: () => activeExploreCtrl,
+    getSolveArtifacts: () => activeSolveArtifacts,
+    getSolveTabs: () => Array.from(solveTabs.values()),
   };
 }
 

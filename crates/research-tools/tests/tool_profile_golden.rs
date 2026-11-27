@@ -123,6 +123,7 @@ fn every_built_profile_def_hash_agrees_with_tool_defs_golden() {
                     def.id.as_str(),
                     research_tools::map_defs::READ_MAP_NODE
                         | research_tools::map_defs::RECORD_MAP_READING
+                        | research_tools::map_defs::RECORD_CONTEXT_CARDS
                 )
             {
                 assert_eq!(def.effect, policy::EffectClass::ReadWorkspace);

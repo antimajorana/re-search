@@ -54,12 +54,14 @@ Never print, copy or store a credential. Your result goes back by pushing your b
   description, schema, effect class or approval scope of an existing tool.
   `cargo test -p research-tools --test tool_def_golden` must pass with
   `crates/research-tools/tests/golden/tool_defs.txt` unchanged. Never regenerate that file.
-  For `inv-v6-tasks` (two new V6 definitions in `investigation/2`), `solve-s7-exprs` (four new
-  Solve definitions `expr_show`, `step_record`, `check_run`, `solve_finish` and `solve_policy()` in
-  `solve/1`), and `exp-x6-x7-x8` (two new Explore definitions `idea_search`, `idea_fetch_papers` in
-  `explore/1`) only, those scoped profile definitions and `[profile ...]` registrations in
-  `tool_profiles.txt` are authorized. Keep the research registry, `research/1`, `investigation/1`,
-  `investigation/2`, `solve/1`, `tool_defs.txt`, and every existing definition unchanged.
+  For `inv-v6-tasks` (two new V6 definitions in `investigation/2`), `inv-v12-context` (adding
+  `record_context_cards` to `investigation/2` and `investigation/{1,2}.may_gain` in `tool_profile.rs`
+  and `tool_profiles.txt` without removing or altering any existing V6 definition), `solve-s7-exprs`
+  (four new Solve definitions `expr_show`, `step_record`, `check_run`, `solve_finish` and
+  `solve_policy()` in `solve/1`), and `exp-x6-x7-x8` (two new Explore definitions `idea_search`,
+  `idea_fetch_papers` in `explore/1`) only, those scoped profile definitions and `[profile ...]`
+  registrations in `tool_profiles.txt` are authorized. Keep the research registry, `research/1`,
+  `investigation/1`, `solve/1`, `tool_defs.txt`, and every existing definition unchanged.
 - Do not weaken the sandbox, the approval flow, the policy engine (deny > ask > allow), the ledger's
   fail-closed behaviour or its hash chain. No auto-approve path of any kind.
 - Never weaken, delete, skip (`#[ignore]`) or loosen an existing test or assertion. If a test is truly
@@ -81,6 +83,10 @@ Never print, copy or store a credential. Your result goes back by pushing your b
   The `draft-next-lanes` assignment may also add its own new `agents/draft-*.md` brief drafts.
   The `eval-solve-badges` and `f8-harness-sets` assignments may regenerate `docs/design/eval-2026-11/sheet-template.md` (`EVAL_BLESS=1`) after adding approved §7.2/§7.3 sets or measures; additionally, `f8-harness-sets` is explicitly authorized to extend `crates/agent/tests/eval_support/{manifest,measures}.rs` (plus a sibling `measures_catalog.rs` split if needed for the 600-line rule) and `crates/agent/tests/eval_harness.rs` for Sets `P6`, `B`, `W`, `K` and `P4 -> C` while keeping every existing Set `P`/`Q` test assertion and pass rule strict.
   Per the owner decisions of 2026-11-26, `exp-x19-openalex` is explicitly authorized to add `"api.openalex.org"` to `ALLOWLISTED_HTTPS_HOSTS` (`crates/research-tools/src/http_client.rs`) and document OpenAlex in `THREAT-MODEL.md` (TheoremSearch remains skipped/unallowlisted).
+- **Scoped Solve seam authorizations (`2026-11-26`, kept per-commit and disclosed in PR bodies):**
+  - `solve-s12-loop`: authorized for isolated commits adding `resume_mode: "brief"` (rule R2) in `crates/agent/src/resume_profile.rs`, matching `SessionOutcome::Paused` + Solve dispatch in `crates/desktop-server/src/turn_runner.rs`, and enabling `DESKTOP_MODE_SOLVE_ENABLED = true` in `crates/desktop-server/src/session_mode.rs` (keeping `Research`/`Investigate` paths untouched, `resume.rs` untouched, and `eval_set_r` / `resume_loop` / `resume_drift_tests` green).
+  - `solve-s14-s20-review-blind`: authorized to extract inline tests out of `crates/desktop-server/src/agent_models.rs` (`509` lines) into `agent_models_tests.rs` and add the Solve verifier role resolver (D2: same-model review still executes and records `SameModel`, leaving Research helpers unchanged).
+  - `assets.rs` ceiling (`546` lines): any lane adding static assets that would exceed 580 lines must first split KaTeX font arms into `crates/desktop-server/src/assets_fonts.rs` in a standalone zero-behaviour-change commit before registering new `/assets/*.js` routes.
 - Do not invent facts. A number, a format or a behaviour of an outside service that you did not read
   in this repository or its design documents is marked as an assumption in a comment and in your
   report.

@@ -432,11 +432,9 @@ export function showInvestigationSession(id, data) {
       const src = data.sources?.find(s => s.source_id === anchor.source_id && s.format === 'pdf');
       if (src) openOriginalPdf({ sessionId: id, sourceId: src.source_id, path: anchor.path, startLine: anchor.start_line, label: anchor.label || src.title || src.origin });
     },
-    isModelConnected: () => {
-      const m = byId('composer-model');
-      return Boolean(m && !m.hidden && m.value && byId('composer-connect')?.hidden);
-    },
-    refresh: refreshInvestigation, showStatus,
+    isModelConnected: () => { const m = byId('composer-model'); return Boolean(m && !m.hidden && m.value && m.value !== '__none__' && byId('composer-connect')?.hidden); },
+    getTaskModelOptions: () => { try { const o = callbacks.requestOptions?.(); return o?.provider && o?.model && !['claude-cli', 'claude-code-cli', 'antigravity'].includes(o.provider) ? { provider: o.provider, model: o.model } : null; } catch { return null; } },
+    refresh: refreshInvestigation, showStatus, openSession: callbacks?.open,
   });
 }
 
