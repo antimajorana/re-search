@@ -39,6 +39,22 @@ pub struct SuppliedRange {
     pub end_line: usize,
 }
 
+/// One hash-pinned PDF page-image range recorded inside a [`ContextSuppliedPayload`] (package F14c).
+///
+/// Records which PDF page/crop images were supplied to a vision model. Never credits
+/// [`SentLines::covers`]: matched quotes always require pinned text lines in `ranges`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SuppliedPageRange {
+    pub source_id: String,
+    pub raw_blob_sha256: String,
+    pub start_page: usize,
+    pub end_page: usize,
+    /// Optional `[x, y, width, height]` pixel crop rectangle (`width > 0 && height > 0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<[u32; 4]>,
+}
+
 /// Payload of a [`CONTEXT_SUPPLIED_EVENT`] (`context.supplied`) ledger event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,16 +62,30 @@ pub struct ContextSuppliedPayload {
     pub run_id: String,
     pub caller: String,
     pub ranges: Vec<SuppliedRange>,
+    /// Optional PDF page/crop image ranges supplied to a vision model (F14c).
+    /// Omitted when empty so existing line-only `context.supplied` JSON stays unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub page_ranges: Vec<SuppliedPageRange>,
 }
 
 impl ContextSuppliedPayload {
-    /// Construct and validate a `context.supplied` payload.
+    /// Construct and validate a line-only `context.supplied` payload.
     pub fn new(
         run_id: impl Into<String>,
         caller: impl Into<String>,
         ranges: Vec<SuppliedRange>,
     ) -> Result<Self, String> {
-        let payload = Self { run_id: run_id.into(), caller: caller.into(), ranges };
+        Self::new_with_pages(run_id, caller, ranges, Vec::new())
+    }
+
+    /// Construct and validate a `context.supplied` payload carrying line and/or page-image ranges.
+    pub fn new_with_pages(
+        run_id: impl Into<String>,
+        caller: impl Into<String>,
+        ranges: Vec<SuppliedRange>,
+        page_ranges: Vec<SuppliedPageRange>,
+    ) -> Result<Self, String> {
+        let payload = Self { run_id: run_id.into(), caller: caller.into(), ranges, page_ranges };
         payload.validate()?;
         Ok(payload)
     }
@@ -85,6 +115,24 @@ impl ContextSuppliedPayload {
             }
             if r.start_line == 0 || r.end_line < r.start_line {
                 return Err(format!("ranges[{idx}] must satisfy 1 <= start_line <= end_line"));
+            }
+        }
+        for (idx, p) in self.page_ranges.iter().enumerate() {
+            if !valid_id(&p.source_id, 64) {
+                return Err(format!("page_ranges[{idx}] has invalid source_id"));
+            }
+            if !is_sha256_hex(&p.raw_blob_sha256) {
+                return Err(format!(
+                    "page_ranges[{idx}] raw_blob_sha256 must be 64 lower-case hex characters"
+                ));
+            }
+            if p.start_page == 0 || p.end_page < p.start_page {
+                return Err(format!("page_ranges[{idx}] must satisfy 1 <= start_page <= end_page"));
+            }
+            if let Some([_, _, w, h]) = p.crop {
+                if w == 0 || h == 0 {
+                    return Err(format!("page_ranges[{idx}] crop must have width > 0 and height > 0"));
+                }
             }
         }
         Ok(())
