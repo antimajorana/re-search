@@ -148,29 +148,41 @@ fn harvest_and_stage_reject_traversal_absolute_paths_and_symlinks() {
     fs::write(&secret, b"top-secret\n").unwrap();
 
     #[cfg(unix)]
-    std::os::unix::fs::symlink(&secret, art_dir.join("leak.txt")).unwrap();
+    let file_link_created = std::os::unix::fs::symlink(&secret, art_dir.join("leak.txt")).is_ok();
     #[cfg(windows)]
-    let _ = std::os::windows::fs::symlink_file(&secret, art_dir.join("leak.txt"));
+    let file_link_created = std::os::windows::fs::symlink_file(&secret, art_dir.join("leak.txt")).is_ok();
 
-    #[cfg(unix)]
-    {
+    if file_link_created {
         let rep = harvest_scratch_artifacts(&ledger, sid, &scratch, "call-sym", None).unwrap();
         assert!(rep.harvested.is_empty());
         assert_eq!(rep.warnings.len(), 1);
         assert!(rep.warnings[0].reason.contains("symlink"));
+    } else {
+        #[cfg(unix)]
+        panic!("unix symlink creation must succeed");
+        #[cfg(not(unix))]
+        let _ = (&ledger, sid);
     }
 
-    // Also refuse symlinked `scratch/artifacts` directory itself.
+    // Also refuse symlinked/junction `scratch/artifacts` directory itself.
     let (_tmp2, ledger2, scratch2, sid2) = open_solve_session();
     let outside_dir = tmp.path().join("outside");
     fs::create_dir_all(&outside_dir).unwrap();
     fs::write(outside_dir.join("x.txt"), b"x\n").unwrap();
     #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside_dir, scratch2.join("artifacts")).unwrap();
+    #[cfg(windows)]
     {
-        std::os::unix::fs::symlink(&outside_dir, scratch2.join("artifacts")).unwrap();
-        let err = harvest_scratch_artifacts(&ledger2, sid2, &scratch2, "call-symdir", None).unwrap_err();
-        assert!(err.contains("symlink"), "{err}");
+        let out = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(scratch2.join("artifacts"))
+            .arg(&outside_dir)
+            .output()
+            .expect("mklink /J failed to launch");
+        assert!(out.status.success(), "mklink /J failed: {:?}", out);
     }
+    let err = harvest_scratch_artifacts(&ledger2, sid2, &scratch2, "call-symdir", None).unwrap_err();
+    assert!(err.contains("symlink"), "{err}");
 }
 
 #[test]
