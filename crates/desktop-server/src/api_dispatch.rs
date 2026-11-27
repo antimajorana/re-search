@@ -50,6 +50,7 @@ pub(crate) fn dispatch_api(
                 Err(e) => write_api_res(&mut stream, Err(e)),
             }
         }
+        ("POST", ["api", "sessions", sid, "sources", source, "transcribe-equations"]) => write_api_res(&mut stream, crate::routes_pdf_vision::handle_transcribe_equations(state, sid, source, &req.body)),
         ("GET", ["api", "projects"]) => write_api_res(&mut stream, crate::projects::handle_list(state)),
         ("POST", ["api", "projects"]) => {
             write_api_res(&mut stream, crate::projects::handle_create(state, &req.body));
