@@ -251,3 +251,35 @@ test('fetchWriteup rejects missing sessionId and assets.rs registers /assets/wri
   );
   assert.ok(!authRs.includes('writeup'), 'writeup route must NEVER be added to auth.rs cookie routes');
 });
+
+test('mountWriteupButton drops stale in-flight download when update switches sessionId', async () => {
+  const { doc, clickedLinks } = createMockDom();
+  const host = doc.createElement('div');
+  let resolveSlowFetch;
+  const mockFetch = () => new Promise((resolve) => { resolveSlowFetch = resolve; });
+  const mockUrlApi = { createObjectURL: () => 'blob:stale', revokeObjectURL: () => {} };
+
+  const ctrl = mountWriteupButton(host, {
+    sessionId: 's-old',
+    document: doc,
+    getToken: () => 'tok-123',
+    fetchFn: mockFetch,
+    urlApi: mockUrlApi,
+  });
+
+  const pending = ctrl.download();
+  assert.equal(ctrl.button.disabled, true);
+  ctrl.update({ sessionId: 's-new' });
+  assert.equal(ctrl.button.disabled, false);
+  assert.equal(ctrl.statusEl.textContent, '');
+
+  resolveSlowFetch({
+    ok: true,
+    status: 200,
+    headers: { get: () => 'attachment; filename="s-old-writeup.tex"' },
+    blob: async () => new Blob(['old'], { type: 'application/x-tex' }),
+  });
+  await pending;
+  assert.equal(clickedLinks.length, 0, 'stale download must not trigger browser save');
+  assert.equal(ctrl.statusEl.textContent, '', 'stale completion must not overwrite new session status');
+});

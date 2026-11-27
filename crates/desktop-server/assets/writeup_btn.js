@@ -178,6 +178,7 @@ export function mountWriteupButton(container, opts = {}) {
   let currentSessionId = String(opts.sessionId || '').trim();
   let busy = false;
   let destroyed = false;
+  let reqSeq = 0;
   const trackedUrls = new Set();
 
   const existing = container.querySelector?.('[data-testid="writeup-btn-bar"]');
@@ -263,30 +264,34 @@ export function mountWriteupButton(container, opts = {}) {
       setStatus('Select a session first.', true);
       return;
     }
+    const seq = ++reqSeq;
+    const targetSession = currentSessionId;
     busy = true;
     button.disabled = true;
     setStatus('Building write-up...');
     try {
-      const result = await fetchWriteup(currentSessionId, {
+      const result = await fetchWriteup(targetSession, {
         format: formatSelect.value,
         inlineMarks: Boolean(inlineCheckbox.checked),
         fetchFn: opts.fetchFn,
         getToken: opts.getToken,
         token: opts.token,
       });
-      if (destroyed) return;
+      if (destroyed || seq !== reqSeq || targetSession !== currentSessionId) return;
       triggerDownload(result.blob, result.filename);
       setStatus(`Saved ${result.filename}`);
       opts.onStatus?.(result);
     } catch (err) {
-      if (destroyed) return;
+      if (destroyed || seq !== reqSeq || targetSession !== currentSessionId) return;
       const msg = err?.message || 'Could not generate write-up.';
       setStatus(msg, true);
       opts.onError?.(err);
     } finally {
-      busy = false;
-      if (!destroyed) {
-        button.disabled = Boolean(opts.disabled) || !currentSessionId;
+      if (seq === reqSeq) {
+        busy = false;
+        if (!destroyed) {
+          button.disabled = Boolean(opts.disabled) || !currentSessionId;
+        }
       }
     }
   }
@@ -313,7 +318,13 @@ export function mountWriteupButton(container, opts = {}) {
     update(next = {}) {
       if (destroyed) return;
       if (next.sessionId !== undefined) {
-        currentSessionId = String(next.sessionId || '').trim();
+        const nextId = String(next.sessionId || '').trim();
+        if (nextId !== currentSessionId) {
+          currentSessionId = nextId;
+          reqSeq += 1;
+          busy = false;
+          setStatus('');
+        }
       }
       if (next.format !== undefined) {
         formatSelect.value = normalizeWriteupFormat(next.format);
@@ -328,6 +339,7 @@ export function mountWriteupButton(container, opts = {}) {
     },
     destroy() {
       destroyed = true;
+      reqSeq += 1;
       revokeTracked();
       root.remove?.();
     },
