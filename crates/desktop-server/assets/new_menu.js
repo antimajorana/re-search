@@ -209,9 +209,80 @@ export function mountExploreCard(containerEl, opts = {}) {
   });
 }
 
+// Solve menu enablement hook (package S13b; default stays disabled while S12's
+// `DESKTOP_MODE_SOLVE_ENABLED` is `false` on the server so existing F5/S5 tests remain intact).
+export const SOLVE_ENABLED_STORAGE_KEY = 're-search.solve.enabled';
+
+export function isSolveMenuEnabled(opts = {}) {
+  if (typeof opts.solveEnabled === 'boolean') return opts.solveEnabled;
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage) {
+      return localStorage.getItem(SOLVE_ENABLED_STORAGE_KEY) === '1';
+    }
+  } catch {
+    // Storage unavailable; stay disabled until S12 enables Solve server-side.
+  }
+  return false;
+}
+
+export function buildModeMenuEntries({ solveBuilt = false, exploreBuilt = false } = {}) {
+  return MODE_MENU_ENTRIES.map((entry) => {
+    if (entry.id === 'solve' && solveBuilt) {
+      return Object.freeze({
+        ...entry,
+        built: true,
+        title: 'Solve a problem',
+      });
+    }
+    if (entry.id === 'explore' && exploreBuilt) {
+      return Object.freeze({
+        ...entry,
+        built: true,
+        title: 'Explore an idea',
+      });
+    }
+    return entry;
+  });
+}
+
+export function enableSolveButton(rootEl, onSelect) {
+  if (!rootEl || typeof rootEl.querySelector !== 'function') return null;
+  const btn = rootEl.querySelector('#new-solve-btn');
+  if (!btn) return null;
+  btn.disabled = false;
+  if (typeof btn.removeAttribute === 'function') {
+    btn.removeAttribute('disabled');
+    btn.removeAttribute('aria-disabled');
+  }
+  if (btn.classList && typeof btn.classList.remove === 'function') {
+    btn.classList.remove('mode-disabled');
+  }
+  btn.title = 'Solve a problem';
+  btn.replaceChildren();
+  const labelEl = document.createElement('span');
+  labelEl.textContent = 'Solve';
+  btn.append(labelEl);
+  const entry = buildModeMenuEntries({ solveBuilt: true }).find((e) => e.id === 'solve');
+  btn.addEventListener('click', () => {
+    if (typeof onSelect === 'function') {
+      onSelect('solve', entry);
+    } else if (typeof CustomEvent === 'function' && typeof document !== 'undefined' && typeof document.dispatchEvent === 'function') {
+      document.dispatchEvent(new CustomEvent('re-search:new-mode', { detail: { mode: 'solve', entry } }));
+    }
+  });
+  return btn;
+}
+
 if (typeof document !== 'undefined' && typeof document.getElementById === 'function') {
   const mount = document.getElementById('rail-new-menu');
-  if (mount) bindNewMenu(mount);
+  if (mount) {
+    if (isSolveMenuEnabled()) {
+      bindNewMenu(mount, { entries: buildModeMenuEntries({ solveBuilt: true }) });
+      enableSolveButton(mount);
+    } else {
+      bindNewMenu(mount);
+    }
+  }
   const exploreHost = document.getElementById('home-explore-card');
   if (exploreHost) mountExploreCard(exploreHost);
 }

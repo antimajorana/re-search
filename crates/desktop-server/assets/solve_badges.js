@@ -132,11 +132,16 @@ export function resolveBorderStyle(stepBadge) {
 
 export function resolveSafeBadgeLabel(stepBadge) {
   const effective = normalizeSolveTier(stepBadge?.effective);
-  const canonical = SOLVE_TIER_LABELS[effective];
+  const stale = Boolean(stepBadge?.stale) || effective === 'stale';
+  const canonical = stale ? SOLVE_TIER_LABELS.stale : SOLVE_TIER_LABELS[effective];
   const rawLabel = String(stepBadge?.label || '').trim();
   if (!rawLabel) return canonical;
-  // Rule R22 fail-closed guard: never show "verified" on a badge whose effective tier is not `verified`.
-  if (effective !== 'verified' && /\bverified\b/i.test(rawLabel)) {
+  // Rule R22 fail-closed guard: never show "verified" when stale or effective != verified,
+  // and never allow "proved", "new", or "novel" on Solve step badges.
+  if ((stale || effective !== 'verified') && /\bverified\b/i.test(rawLabel)) {
+    return canonical;
+  }
+  if (/\b(proved|new|novel)\b/i.test(rawLabel)) {
     return canonical;
   }
   return rawLabel;
@@ -145,8 +150,9 @@ export function resolveSafeBadgeLabel(stepBadge) {
 export function resolveSafeOwnCheckLine(stepBadge) {
   const own = normalizeSolveTier(stepBadge?.own);
   const effective = normalizeSolveTier(stepBadge?.effective);
-  if (own === 'verified' && effective !== 'verified') {
-    return String(stepBadge?.own_check_line || '').trim() || OWN_CHECK_VERIFIED_LINE;
+  const stale = Boolean(stepBadge?.stale) || effective === 'stale';
+  if (!stale && own === 'verified' && effective !== 'verified') {
+    return OWN_CHECK_VERIFIED_LINE;
   }
   return null;
 }
@@ -244,13 +250,15 @@ export function createSolveBadgeGroup(stepBadge = {}, opts = {}) {
   wrap.appendChild(topRow);
 
   const restsOnText = String(stepBadge?.rests_on_line || '').trim();
-  if (restsOnText) {
+  const depIds = Array.isArray(stepBadge?.lowered_by) && stepBadge.lowered_by.length
+    ? stepBadge.lowered_by
+    : (Array.isArray(stepBadge?.broken_by) ? stepBadge.broken_by : []);
+  if (restsOnText || (typeof opts.onSelectStep === 'function' && depIds.length > 0)) {
     const restsEl = makeEl(doc, 'div', 'solve-rests-on-line');
     restsEl.setAttribute('data-badge-role', 'rests-on');
-    restsEl.appendChild(makeEl(doc, 'span', 'solve-rests-on-text', restsOnText));
-    const depIds = Array.isArray(stepBadge?.lowered_by) && stepBadge.lowered_by.length
-      ? stepBadge.lowered_by
-      : (Array.isArray(stepBadge?.broken_by) ? stepBadge.broken_by : []);
+    if (restsOnText) {
+      restsEl.appendChild(makeEl(doc, 'span', 'solve-rests-on-text', restsOnText));
+    }
     if (typeof opts.onSelectStep === 'function' && depIds.length) {
       const links = makeEl(doc, 'span', 'solve-rests-on-links');
       for (const depId of depIds) {
@@ -295,8 +303,10 @@ export function hasAnyVerifiedStep(steps = []) {
 
 export function createSolveLegend(graphLegend = [], steps = [], opts = {}) {
   const doc = opts.document || document;
-  const includeVerified = hasAnyVerifiedStep(steps)
-    || (Array.isArray(graphLegend) && graphLegend.some((e) => String(e?.tier || '') === 'verified'));
+  const hasSteps = Array.isArray(steps) && steps.length > 0;
+  const includeVerified = hasSteps
+    ? hasAnyVerifiedStep(steps)
+    : (Array.isArray(graphLegend) && graphLegend.some((e) => String(e?.tier || '') === 'verified'));
 
   const items = Array.isArray(graphLegend) && graphLegend.length > 0
     ? graphLegend.filter((e) => includeVerified || String(e?.tier || '') !== 'verified')
