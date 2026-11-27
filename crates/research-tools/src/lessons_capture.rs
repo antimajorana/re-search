@@ -10,33 +10,33 @@
 
 use crate::paper_key::{Mode, NodeRef, PaperKey};
 use crate::quote_core::clip_to_chars;
-use ledger::{canonical_json, sha256_hex, LessonsDb, UserLessonRow, LESSONS_DB_NAME};
+use ledger::{LessonsDb, UserLessonRow, LESSONS_DB_NAME};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub use crate::lessons_backup::{
+    compute_lessons_backup_checksum, export_lessons_backup, restore_lessons_backup,
+    OptInLessonsExport, UserLessonsBackup, LESSONS_B_BACKUP_SCHEMA_VERSION,
+    MAX_LESSONS_B_BACKUP_BYTES,
+};
+pub use crate::lessons_draft::{
+    build_remember_draft, build_summary_prompt, finalize_model_summary_draft,
+    CorrectionOriginContext, RememberPromptDraft, DRAFT_SUMMARY_SYSTEM_PROMPT,
+};
+
 /// Hard Unicode scalar cap for every stored user lesson (`00-overview.md` 2.14 & Set K).
 pub const MAX_LESSON_CHARS: usize = 300;
 /// Suffix appended to opt-in model-drafted lesson summaries.
 pub const MODEL_SUMMARY_TAG: &str = "(model)";
-/// Version of the portable F16b lessons backup envelope.
-pub const LESSONS_B_BACKUP_SCHEMA_VERSION: u32 = 1;
-/// Hard ceiling on restored F16b backup JSON payloads (16 MiB).
-pub const MAX_LESSONS_B_BACKUP_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum normalized field label length.
 pub const MAX_FIELD_NAME_CHARS: usize = 120;
 
-/// System prompt used ONLY when the user clicks `"Draft summary (model)"`.
-pub const DRAFT_SUMMARY_SYSTEM_PROMPT: &str = "\
-Rewrite the user's correction into one concise, reusable physics/research note \
-of at most 260 characters. Keep strictly to what the user corrected; do not invent \
-equations, claims, or instructions. Return plain text only with no markdown fence.";
-
 static ID_SEQ: AtomicU64 = AtomicU64::new(1);
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
@@ -361,120 +361,6 @@ impl UserLesson {
     }
 }
 
-/// Event emitted into a correction path to prefill the `"Remember this?"` UI card.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct CorrectionOriginContext {
-    pub from: NodeRef,
-    #[serde(default)]
-    pub source_kind: LessonSourceKind,
-    pub user_words: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub field: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub paper_key: Option<PaperKey>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_summary: Option<String>,
-}
-
-/// Zero-model `"Remember this?"` card prefill payload (`00-overview.md` 8.2 #5, 8.3 #7).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RememberPromptDraft {
-    pub prefilled_text: String,
-    pub clipped_from_user_words: bool,
-    pub default_scope: LessonScope,
-    pub allowed_scopes: Vec<LessonScope>,
-    pub from: NodeRef,
-    pub source_kind: LessonSourceKind,
-    pub max_chars: usize,
-    pub model_summary: bool,
-}
-
-/// Build `"Remember this?"` prefill purely from the user's own words (**0 model calls**).
-pub fn build_remember_draft(ctx: &CorrectionOriginContext) -> Result<RememberPromptDraft, String> {
-    validate_node_ref(&ctx.from)?;
-    let cleaned = normalize_lesson_input(&ctx.user_words);
-    if cleaned.is_empty() {
-        return Err("Cannot prefill lesson from an empty correction.".to_string());
-    }
-    let clipped = clip_to_chars(&cleaned, MAX_LESSON_CHARS).trim().to_string();
-    let clipped_from_user_words = clipped.chars().count() < cleaned.chars().count();
-
-    let norm_field = normalize_field_name(ctx.field.as_deref());
-    let default_scope = LessonScope::default_for_correction(ctx.from.mode, norm_field.as_deref());
-    let mut allowed_scopes = vec![default_scope.clone()];
-    let candidates = [
-        Some(LessonScope::mode(ctx.from.mode)),
-        norm_field.as_deref().map(LessonScope::field),
-        ctx.paper_key.clone().map(LessonScope::paper),
-        Some(LessonScope::global()),
-    ];
-    for c in candidates.into_iter().flatten() {
-        if !allowed_scopes.contains(&c) {
-            allowed_scopes.push(c);
-        }
-    }
-
-    Ok(RememberPromptDraft {
-        prefilled_text: clipped,
-        clipped_from_user_words,
-        default_scope,
-        allowed_scopes,
-        from: ctx.from.clone(),
-        source_kind: ctx.source_kind,
-        max_chars: MAX_LESSON_CHARS,
-        model_summary: false,
-    })
-}
-
-/// Build a single-turn user prompt ONLY when the user explicitly clicks `"Draft summary (model)"`.
-pub fn build_summary_prompt(
-    user_words: &str,
-    mode: Mode,
-    field: Option<&str>,
-    target_summary: Option<&str>,
-) -> Result<String, String> {
-    let cleaned = normalize_lesson_input(user_words);
-    if cleaned.is_empty() {
-        return Err("Cannot draft summary from empty correction text.".to_string());
-    }
-    let field_txt = normalize_field_name(field).unwrap_or_else(|| "general".to_string());
-    let target_txt = target_summary
-        .map(normalize_lesson_input)
-        .filter(|s| !s.is_empty())
-        .map(|s| format!("\nCorrected step summary: {}", clip_to_chars(&s, 200)))
-        .unwrap_or_default();
-    Ok(format!(
-        "Mode: {}\nField: {}{}\nUser's correction: {}\n\nWrite one reusable note <= 260 characters.",
-        mode.as_str(),
-        field_txt,
-        target_txt,
-        clip_to_chars(&cleaned, 600),
-    ))
-}
-
-/// Normalize a model-generated draft summary, enforce `<= 300` Unicode chars including `" (model)"`.
-pub fn finalize_model_summary_draft(raw_model_output: &str) -> Result<String, String> {
-    let mut cleaned = normalize_lesson_input(raw_model_output);
-    cleaned = cleaned
-        .trim_matches(|c: char| c == '"' || c == '\'' || c == '`')
-        .trim()
-        .to_string();
-    if let Some(stripped) = cleaned.strip_suffix(MODEL_SUMMARY_TAG) {
-        cleaned = stripped.trim().to_string();
-    }
-    if cleaned.is_empty() {
-        return Err("Model summary draft was empty.".to_string());
-    }
-    let suffix = format!(" {MODEL_SUMMARY_TAG}");
-    let body_cap = MAX_LESSON_CHARS.saturating_sub(suffix.chars().count());
-    let body = clip_to_chars(&cleaned, body_cap).trim();
-    if body.is_empty() {
-        return Err("Model summary draft body was empty.".to_string());
-    }
-    let final_text = format!("{body}{suffix}");
-    validate_lesson_text(&final_text)
-}
-
 /// Explicit request payload to save an F16b lesson after user confirmation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SaveLessonRequest {
@@ -600,85 +486,6 @@ impl UserLessonsStore {
             .increment_user_lesson_uses(ids)
             .map_err(|e| format!("Failed to update lesson usage counters: {e}"))
     }
-}
-
-/// Opt-in flag controlling portable lesson export (`00-overview.md` 2.14 & `draft-f16b-lessons.md`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OptInLessonsExport {
-    #[serde(default)]
-    pub include_lessons: bool,
-}
-
-/// Checksummed portable backup envelope for F16b user lessons.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UserLessonsBackup {
-    pub schema_version: u32,
-    pub exported_ms: i64,
-    pub checksum_sha256: String,
-    pub lessons: Vec<UserLesson>,
-}
-
-pub fn compute_lessons_backup_checksum(lessons: &[UserLesson]) -> Result<String, String> {
-    let val = serde_json::to_value(lessons)
-        .map_err(|e| format!("Failed to serialize lessons for checksum: {e}"))?;
-    let canon = canonical_json(&val);
-    Ok(sha256_hex(canon.as_bytes()))
-}
-
-/// Export user lessons as SHA-256 checksummed JSON ONLY when `opt_in.include_lessons == true`.
-pub fn export_lessons_backup(
-    store: &UserLessonsStore,
-    opt_in: OptInLessonsExport,
-) -> Result<Option<Vec<u8>>, String> {
-    if !opt_in.include_lessons {
-        return Ok(None);
-    }
-    let mut lessons = store.list_lessons()?;
-    lessons.sort_by(|a, b| a.created_ms.cmp(&b.created_ms).then_with(|| a.id.cmp(&b.id)));
-    let checksum_sha256 = compute_lessons_backup_checksum(&lessons)?;
-    let env = UserLessonsBackup {
-        schema_version: LESSONS_B_BACKUP_SCHEMA_VERSION,
-        exported_ms: now_ms(),
-        checksum_sha256,
-        lessons,
-    };
-    let bytes = serde_json::to_vec_pretty(&env)
-        .map_err(|e| format!("Failed to encode lessons backup: {e}"))?;
-    Ok(Some(bytes))
-}
-
-/// Verify checksum and validate every lesson before restoring into `store`.
-pub fn restore_lessons_backup(
-    store: &UserLessonsStore,
-    bytes: &[u8],
-    replace: bool,
-) -> Result<usize, String> {
-    if bytes.len() > MAX_LESSONS_B_BACKUP_BYTES {
-        return Err(format!(
-            "Lessons backup exceeds max size ({} bytes).",
-            MAX_LESSONS_B_BACKUP_BYTES
-        ));
-    }
-    let parsed: UserLessonsBackup =
-        serde_json::from_slice(bytes).map_err(|e| format!("Invalid lessons backup JSON: {e}"))?;
-    if parsed.schema_version != LESSONS_B_BACKUP_SCHEMA_VERSION {
-        return Err(format!(
-            "Unsupported lessons backup schema version: {}",
-            parsed.schema_version
-        ));
-    }
-    let expected = compute_lessons_backup_checksum(&parsed.lessons)?;
-    if expected != parsed.checksum_sha256 {
-        return Err("Lessons backup checksum mismatch (corrupted or tampered file).".to_string());
-    }
-    let mut rows = Vec::with_capacity(parsed.lessons.len());
-    for lesson in &parsed.lessons {
-        rows.push(lesson.to_row()?);
-    }
-    store
-        .db()
-        .restore_user_lessons(&rows, replace)
-        .map_err(|e| format!("Failed to restore user lessons: {e}"))
 }
 
 mod hex {
