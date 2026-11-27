@@ -188,6 +188,11 @@ pub fn view(events: &[Event], running: bool) -> Value {
 
     let run_bar = build_run_bar(&stage_records, &budget, running);
     let stages_json: Vec<Value> = stage_records.iter().map(stage_record_to_json).collect();
+    let search_awaiting_approval = stage_records.iter().any(|r| {
+        r.stage == IdeaStage::Search && r.stored_state == Some(ExploreStageState::PlanApproval)
+    });
+    let plan_approval =
+        crate::idea_view_coverage::build_plan_approval(latest_plan.as_ref(), search_awaiting_approval);
     let map_view = build_map_graph_view(latest_map.as_ref());
     let map_stale = latest_map_seq > 0 && latest_statement_seq > latest_map_seq;
 
@@ -215,6 +220,7 @@ pub fn view(events: &[Event], running: bool) -> Value {
         "reading_list_override": applied.reading_list_override,
         "pause_before_reading": applied.pause_before_reading,
         "search_plan": latest_plan,
+        "plan_approval": plan_approval,
         "triage": latest_triage,
         "verdicts": latest_verdicts,
         "map": map_view,

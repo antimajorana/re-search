@@ -307,6 +307,7 @@ where
                 "status": res.status,
                 "http_status": res.http_status,
                 "count": res.papers.len(),
+                "hits": res.papers.len(),
                 "error": res.error,
                 "retry_after_secs": res.retry_after_secs,
             });
@@ -336,7 +337,18 @@ where
     let mut candidates = merge_and_rank(&ranked_lists);
     annotate_and_record_library(data_dir, session_id, &stmt.seeds, &mut candidates);
 
-    let finished_payload = json!({ "round": round, "offline": offline, "results": query_outcomes });
+    let (lib_papers, lib_ft) = Library::open(data_dir)
+        .and_then(|l| l.search(&LibraryQuery::default()))
+        .map(|all| (all.len(), all.iter().filter(|p| p.has_fulltext).count()))
+        .unwrap_or((0, 0));
+    let lib_hits = candidates.iter().filter(|c| c.in_library).count();
+    let finished_payload = json!({
+        "round": round,
+        "offline": offline,
+        "results": query_outcomes,
+        "queries": query_outcomes,
+        "library": { "papers": lib_papers, "with_full_text": lib_ft, "hits": lib_hits },
+    });
     ledger
         .append(session_id, EVENT_IDEA_SEARCH_FINISHED, EVENT_SCHEMA_VERSION, &finished_payload)
         .map_err(|e| e.to_string())?;
@@ -392,7 +404,7 @@ where
     )
 }
 
-fn lit_paper_to_raw_hit(p: &LitPaper) -> RawHit {
+pub(crate) fn lit_paper_to_raw_hit(p: &LitPaper) -> RawHit {
     RawHit {
         paper: p.paper_ref.clone(),
         title: p.title.clone(),
@@ -435,7 +447,7 @@ fn summary_to_raw_hit(s: PaperSummary) -> RawHit {
 
 /// Annotate candidates with existing F10 `in_library` / `owned` status (resolving all canonical
 /// aliases and F13a `source_items`) BEFORE recording `SeenRole::Candidate`.
-fn annotate_and_record_library(
+pub(crate) fn annotate_and_record_library(
     data_dir: &Path,
     session_id: &str,
     seeds: &[PaperKey],

@@ -322,10 +322,8 @@ pub fn handle_idea_op(
         "continue" => handle_continue(state, &ledger, session_id, body),
         "sharpen" => crate::idea_exchanges::handle_sharpen_op(state, &ledger, session_id, body),
         "answer" => crate::idea_answer::handle_answer_op(state, &ledger, session_id, body),
-        "plan" => Err(not_implemented("Explore `plan` is not built yet (owned by package X7).")),
-        "search" => Err(not_implemented(
-            "Explore follow-up `search` is not built yet (owned by package X7; model-composed queries require approval via Router::try_call).",
-        )),
+        "plan" => crate::idea_plan_search::handle_plan_op(state, &ledger, session_id, body),
+        "search" => crate::idea_plan_search::handle_search_op(state, &ledger, session_id, body),
         "triage" => Err(not_implemented("Explore `triage` is not built yet (owned by package X8).")),
         "read" => Err(not_implemented("Explore `read` is not built yet (owned by packages X9–X10).")),
         "map" => Err(not_implemented("Explore `map` is not built yet (owned by package X11).")),
@@ -445,6 +443,7 @@ fn handle_stop(
             tok.cancel();
         }
     }
+    state.deny_pending(session_id, None, "supervisor: turn stopped by the user");
     let _lock = state.ledger_write_lock.lock().map_err(|_| internal("ledger lock poisoned"))?;
     let events = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
     // Pass `running = true` so `Requested` stages are inspected raw rather than masked as Interrupted.
@@ -532,8 +531,11 @@ fn handle_continue(
         Some(crate::idea::IdeaStage::Sharpen) => {
             crate::idea_exchanges::handle_sharpen_op(state, ledger, session_id, body)
         }
+        Some(crate::idea::IdeaStage::Search) => {
+            crate::idea_plan_search::handle_search_op(state, ledger, session_id, body)
+        }
         other => Err(not_implemented(format!(
-            "Explore `continue` for stage `{}` is not built yet (owned by packages X7–X13); pass `extra_queries`/`extra_papers`/`extra_model_calls` to record a budget increase.",
+            "Explore `continue` for stage `{}` is not built yet (owned by packages X8–X13); pass `extra_queries`/`extra_papers`/`extra_model_calls` to record a budget increase.",
             other.map_or("done", crate::idea::IdeaStage::as_str),
         ))),
     }

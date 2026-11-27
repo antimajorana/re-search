@@ -29,6 +29,8 @@ const KNOWN_PROVIDERS: &[(&str, &str)] = &[
     ("inspire", "INSPIRE-HEP"),
     ("crossref", "Crossref"),
     ("semantic_scholar", "Semantic Scholar"),
+    ("openalex", "OpenAlex"),
+    ("theoremsearch", "TheoremSearch"),
 ];
 
 /// Effective sharpened-idea state after applying subsequent `idea.answer` events.
@@ -136,101 +138,114 @@ pub fn build_where_i_looked(
     events: &[Event],
     offline: bool,
     plan: Option<&Value>,
-    finished: Option<&Value>,
+    _finished: Option<&Value>,
     candidates: &[Value],
 ) -> (Value, SearchCoverage) {
     let coverage = compute_coverage_from_events(events);
-    let mut by_provider: BTreeMap<String, (u64, u64, u64, u64)> = BTreeMap::new();
-    for &(id, _) in KNOWN_PROVIDERS {
-        by_provider.insert(id.to_string(), (0, 0, 0, 0));
-    }
+    let latest_stmt_seq = events
+        .iter()
+        .rev()
+        .find(|e| e.kind == "idea.stated")
+        .map(|e| e.seq)
+        .unwrap_or(0);
 
-    let mut query_rows: Vec<Value> = Vec::new();
-    let results_arr = finished
-        .and_then(|f| f.get("results").or_else(|| f.get("queries")))
-        .and_then(Value::as_array);
-
-    if let Some(results) = results_arr {
-        for r in results {
-            let prov = r.get("provider").and_then(Value::as_str).unwrap_or("unknown");
-            let status = r.get("status").and_then(Value::as_str).unwrap_or("unknown");
+    // Accumulate latest query outcome per `qid` across all rounds since the latest statement
+    // so single-provider retries update their own rows without erasing other services' rows.
+    let mut query_order: Vec<String> = Vec::new();
+    let mut by_qid: BTreeMap<String, Value> = BTreeMap::new();
+    for ev in events.iter().filter(|e| e.seq > latest_stmt_seq) {
+        if ev.kind != "idea.search_finished" {
+            continue;
+        }
+        let Some(arr) = ev
+            .payload
+            .get("queries")
+            .or_else(|| ev.payload.get("results"))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for r in arr {
+            let qid = r.get("qid").and_then(Value::as_str).unwrap_or("").to_string();
+            let key = if qid.is_empty() {
+                format!("seq-{}-{}", ev.seq, query_order.len())
+            } else {
+                qid.clone()
+            };
+            if !by_qid.contains_key(&key) {
+                query_order.push(key.clone());
+            }
             let count = r
                 .get("count")
                 .or_else(|| r.get("hits"))
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
-            let entry = by_provider.entry(prov.to_string()).or_insert((0, 0, 0, 0));
-            match status {
-                "ok" => {
-                    entry.0 += 1;
-                    entry.3 += count;
-                }
-                "rate_limited" => entry.2 += 1,
-                "skipped_budget" | "not_configured" | "disabled" => {}
-                _ => entry.1 += 1,
-            }
-            query_rows.push(json!({
-                "qid": r.get("qid").and_then(Value::as_str).unwrap_or(""),
-                "provider": prov,
-                "q": r.get("q").and_then(Value::as_str).unwrap_or(""),
-                "status": status,
-                "http_status": r.get("http_status").cloned().unwrap_or(Value::Null),
-                "count": count,
-                "error": r.get("error").cloned().unwrap_or(Value::Null),
-            }));
+            by_qid.insert(
+                key,
+                json!({
+                    "qid": qid,
+                    "provider": r.get("provider").and_then(Value::as_str).unwrap_or("unknown"),
+                    "q": r.get("q").and_then(Value::as_str).unwrap_or(""),
+                    "status": r.get("status").and_then(Value::as_str).unwrap_or("unknown"),
+                    "http_status": r.get("http_status").cloned().unwrap_or(Value::Null),
+                    "count": count,
+                    "error": r.get("error").cloned().unwrap_or(Value::Null),
+                }),
+            );
         }
-    } else if let Some(planned_qs) = plan.and_then(|p| p.get("queries")).and_then(Value::as_array) {
-        for q in planned_qs {
-            query_rows.push(json!({
-                "qid": q.get("qid").and_then(Value::as_str).unwrap_or(""),
-                "provider": q.get("provider").and_then(Value::as_str).unwrap_or(""),
-                "q": q.get("q").and_then(Value::as_str).unwrap_or(""),
-                "status": if offline { "offline" } else { "planned" },
-                "http_status": Value::Null,
-                "count": 0,
-                "error": Value::Null,
-            }));
+    }
+
+    let mut query_rows: Vec<Value> = query_order
+        .into_iter()
+        .filter_map(|k| by_qid.remove(&k))
+        .collect();
+    if query_rows.is_empty() {
+        if let Some(planned_qs) = plan.and_then(|p| p.get("queries")).and_then(Value::as_array) {
+            for q in planned_qs {
+                query_rows.push(json!({
+                    "qid": q.get("qid").and_then(Value::as_str).unwrap_or(""),
+                    "provider": q.get("provider").and_then(Value::as_str).unwrap_or(""),
+                    "q": q.get("q").and_then(Value::as_str).unwrap_or(""),
+                    "status": if offline { "offline" } else { "planned" },
+                    "http_status": Value::Null,
+                    "count": 0,
+                    "error": Value::Null,
+                }));
+            }
         }
     }
 
     let providers: Vec<Value> = KNOWN_PROVIDERS
         .iter()
         .map(|&(id, label)| {
-            let (ok, failed, rate_limited, hits) =
-                by_provider.get(id).copied().unwrap_or((0, 0, 0, 0));
             let cov_prov = coverage.providers.iter().find(|p| p.provider.as_str() == id);
+            let (ok, failed, rate_limited, hits) = cov_prov
+                .map(|cp| (cp.queries_ok, cp.queries_failed, cp.queries_rate_limited, cp.hits))
+                .unwrap_or((0, 0, 0, 0));
             let state = if offline {
                 "offline"
-            } else if ok == 0 && failed == 0 && rate_limited == 0 {
-                if let Some(cp) = cov_prov {
-                    match cp.state {
-                        ProviderCoverageState::Ok => "ok",
-                        ProviderCoverageState::Partial => "partial",
-                        ProviderCoverageState::Failed => "failed",
-                        ProviderCoverageState::RateLimited => "rate_limited",
-                        ProviderCoverageState::NotConfigured => "not_configured",
-                        ProviderCoverageState::Disabled => "disabled",
-                        ProviderCoverageState::NotAttempted => {
-                            if matches!(id, "arxiv" | "inspire" | "crossref") {
-                                "not_attempted"
-                            } else {
-                                "not_configured"
-                            }
+            } else if matches!(id, "openalex" | "theoremsearch") {
+                "disabled"
+            } else if let Some(cp) = cov_prov {
+                match cp.state {
+                    ProviderCoverageState::Ok => "ok",
+                    ProviderCoverageState::Partial => "partial",
+                    ProviderCoverageState::Failed => "failed",
+                    ProviderCoverageState::RateLimited => "rate_limited",
+                    ProviderCoverageState::NotConfigured => "not_configured",
+                    ProviderCoverageState::Disabled => "disabled",
+                    ProviderCoverageState::NotAttempted => {
+                        if matches!(id, "arxiv" | "inspire" | "crossref") {
+                            "not_attempted"
+                        } else {
+                            "not_configured"
                         }
                     }
-                } else if matches!(id, "arxiv" | "inspire" | "crossref") {
-                    "not_attempted"
-                } else {
-                    "not_configured"
                 }
-            } else if failed == 0 && rate_limited == 0 {
-                "ok"
-            } else if ok > 0 {
-                "partial"
-            } else if rate_limited > 0 && failed == 0 {
-                "rate_limited"
+            } else if matches!(id, "arxiv" | "inspire" | "crossref") {
+                "not_attempted"
             } else {
-                "failed"
+                "not_configured"
             };
             let retryable = !offline && matches!(state, "partial" | "failed" | "rate_limited");
             let summary = cov_prov.map(format_provider_coverage);
@@ -274,6 +289,49 @@ pub fn build_where_i_looked(
         "not_searched": NOT_SEARCHED_ITEMS,
     });
     (where_val, coverage)
+}
+
+/// Build the batched-approval descriptor for the shared `approval_card.js` component when
+/// `Search` is awaiting `plan_approval` (`explore.md` 3 & 5.2, `00-overview.md` 3.1 row 13).
+pub fn build_plan_approval(
+    latest_plan: Option<&Value>,
+    search_awaiting_approval: bool,
+) -> Value {
+    let Some(plan) = latest_plan.filter(|_| search_awaiting_approval) else {
+        return Value::Null;
+    };
+    let queries = plan
+        .get("queries")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if queries.is_empty() {
+        return Value::Null;
+    }
+    let mut services: Vec<String> = Vec::new();
+    for q in &queries {
+        if let Some(p) = q.get("provider").and_then(Value::as_str) {
+            if !services.iter().any(|s| s == p) {
+                services.push(p.to_string());
+            }
+        }
+    }
+    let svc_list = services.join(", ");
+    json!({
+        "round": plan.get("round").and_then(Value::as_u64).unwrap_or(1),
+        "queries": queries,
+        "services": services,
+        "grants": [{
+            "id": "explore-network-read",
+            "kind": "session_capability",
+            "label": format!("Allow literature search ({svc_list}) for this session"),
+            "tool_id": "idea_search",
+            "effect": "network-read",
+            "granted": false,
+            "status": "required",
+            "note": "Covers the listed search batch through Router::try_call."
+        }]
+    })
 }
 
 /// Returns a `GraphView`-shaped payload (`00-overview.md` 2.6: `{ nodes, edges, legend }`)

@@ -5,7 +5,7 @@
 //! `explore.md` 3/4.1/4.2/4.4/5.3/6 (P1, P3, P4, P6, S3, S7, S8).
 
 #[path = "idea_search.rs"]
-mod search;
+pub(crate) mod search;
 pub use search::*;
 
 use ledger::{sha256_hex, Event, Ledger};
@@ -281,7 +281,12 @@ pub fn budget_snapshot(events: &[Event], running: bool) -> IdeaBudgetSnapshot {
                 if let Some(list) = ev.payload.get("results").and_then(Value::as_array) {
                     let attempted = list
                         .iter()
-                        .filter(|r| r.get("status").and_then(Value::as_str) != Some("skipped_budget"))
+                        .filter(|r| {
+                            !matches!(
+                                r.get("status").and_then(Value::as_str),
+                                Some("skipped_budget" | "disabled" | "not_configured")
+                            )
+                        })
                         .count() as u64;
                     queries_used = queries_used.saturating_add(attempted);
                 }

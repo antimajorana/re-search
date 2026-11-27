@@ -312,3 +312,248 @@ fn x6_rule_p1_stage_gate_revise_reset_and_cli_session_route_consistency() {
     srv.shutdown();
 }
 
+fn spawn_mock_lit_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let hits_clone = Arc::clone(&hits);
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut stream = stream;
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            hits_clone.fetch_add(1, Ordering::SeqCst);
+            let (ct, body) = if req.contains("/api/query") {
+                (
+                    "application/atom+xml",
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2501.01234v1</id>
+    <title>Synthetic Krylov Complexity in Monitored Majorana Chains</title>
+    <summary>We show that b_n grows linearly in the volume-law phase and saturates in the area-law phase.</summary>
+    <published>2025-01-10T00:00:00Z</published>
+    <author><name>A. Author</name></author>
+  </entry>
+</feed>"#
+                        .to_string(),
+                )
+            } else {
+                (
+                    "application/json",
+                    json!({
+                        "hits": {
+                            "total": 1,
+                            "hits": [{
+                                "id": "9900001",
+                                "metadata": {
+                                    "titles": [{ "title": "Synthetic Spread Complexity and Entanglement" }],
+                                    "authors": [{ "full_name": "B. Author" }],
+                                    "earliest_date": "2024-06-01",
+                                    "arxiv_eprints": [{ "value": "2406.05432" }],
+                                    "abstracts": [{ "value": "Spread complexity diagnoses measurement-induced transitions in free-fermion chains." }],
+                                    "citation_count": 12
+                                }
+                            }]
+                        }
+                    })
+                    .to_string(),
+                )
+            };
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+        }
+    });
+    (format!("http://127.0.0.1:{}", addr.port()), hits)
+}
+
+fn wait_for_pending_approval(port: u16, token: &str, sid: &str) -> (String, String) {
+    let auth = [("X-ReSearch-Token", token)];
+    for _ in 0..100 {
+        let (st, _, raw) = raw_http(port, "GET", &format!("/api/sessions/{sid}/approvals"), &auth, b"");
+        if st == 200 {
+            let v: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
+            if let Some(first) = v["pending"].as_array().and_then(|a| a.first()) {
+                return (
+                    first["call_id"].as_str().unwrap().to_string(),
+                    first["digest"].as_str().unwrap().to_string(),
+                );
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("timed out waiting for UiApprover pending approval on {sid}");
+}
+
+#[test]
+fn x7_plan_search_enforces_router_approval_denial_session_grant_rule_p5_p7_and_f12_coverage() {
+    use std::sync::atomic::Ordering;
+    let (lit_base, lit_hits) = spawn_mock_lit_server();
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let srv = start_desktop_server(test_cfg(&data_dir, None, None, Some(&lit_base))).unwrap();
+    let port = srv.addr.port();
+    let token = srv.info.token.clone();
+    let auth = [
+        ("X-ReSearch-Token", token.as_str()),
+        ("Content-Type", "application/json"),
+    ];
+
+    // Disable desktop auto-approve so real interactive UiApprover prompts + denial + session grant run.
+    let settings_body = serde_json::to_vec(&json!({ "auto_approve_tools": false })).unwrap();
+    let (st, _, raw) = raw_http(port, "PUT", "/api/settings/providers", &auth, &settings_body);
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&raw));
+
+    // 1. Preview & create online Explore session with a known seed paper (for F12 recall).
+    let prev_body = serde_json::to_vec(&json!({
+        "text": IDEA_TEXT,
+        "seeds": ["arxiv:2501.01234"]
+    }))
+    .unwrap();
+    let (st, _, raw) = raw_http(port, "POST", "/api/idea/preview", &auth, &prev_body);
+    assert_eq!(st, 200);
+    let preview: Value = serde_json::from_slice(&raw).unwrap();
+    let first_q = &preview["first_queries"].as_array().unwrap()[0];
+    let create_body = serde_json::to_vec(&json!({
+        "id": "s-x7-flow",
+        "mode": "explore",
+        "text": IDEA_TEXT,
+        "seeds": ["arxiv:2501.01234"],
+        "preset": "standard",
+        "offline": false,
+        "queries": [{ "provider": first_q["provider"], "q": first_q["q"] }]
+    }))
+    .unwrap();
+    let (st, _, raw) = raw_http(port, "POST", "/api/sessions", &auth, &create_body);
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&raw));
+
+    // 2. Run Sharpen, then call `/idea/plan` -> SearchPlan + plan_approval grant descriptor.
+    let ledger = Ledger::open(&data_dir).unwrap();
+    let t = ScriptedTransport::new(vec![tool_resp("tu-1", "record_idea_brief", valid_sharpen_input())]);
+    run_sharpen_with_transport(&ledger, "s-x7-flow", &t, "m", None, |_, _| {}).unwrap();
+
+    let (st, _, raw) = raw_http(port, "POST", "/api/sessions/s-x7-flow/idea/plan", &auth, b"{}");
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&raw));
+    let plan_resp: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(plan_resp["idea"]["plan_approval"]["grants"][0]["kind"], "session_capability");
+    assert_eq!(plan_resp["idea"]["plan_approval"]["grants"][0]["effect"], "network-read");
+
+    // 3. Rule P5: `/idea/search` blocks on UiApprover; DENYING executes zero literature hits.
+    let hits_before_deny = lit_hits.load(Ordering::SeqCst);
+    let tok_bg = token.clone();
+    let bg_deny = std::thread::spawn(move || {
+        let a = [("X-ReSearch-Token", tok_bg.as_str()), ("Content-Type", "application/json")];
+        raw_http(port, "POST", "/api/sessions/s-x7-flow/idea/search", &a, b"{}")
+    });
+    let (call_id, digest) = wait_for_pending_approval(port, &token, "s-x7-flow");
+    let deny_body = serde_json::to_vec(&json!({ "digest": digest, "approved": false })).unwrap();
+    let (st, _, _) = raw_http(
+        port,
+        "POST",
+        &format!("/api/sessions/s-x7-flow/approvals/{call_id}"),
+        &auth,
+        &deny_body,
+    );
+    assert_eq!(st, 200);
+    let (st_deny, _, raw_deny) = bg_deny.join().unwrap();
+    assert_eq!(st_deny, 200, "{}", String::from_utf8_lossy(&raw_deny));
+    let deny_json: Value = serde_json::from_slice(&raw_deny).unwrap();
+    assert_eq!(deny_json["ok"], false);
+    assert_eq!(deny_json["denied"], true);
+    assert_eq!(lit_hits.load(Ordering::SeqCst), hits_before_deny);
+
+    // 4. APPROVING with `approve_for_session: true` runs `idea_search` through Router::try_call,
+    // updates F12 coverage + known_paper_recall, and binds session network-read grant.
+    let tok_bg2 = token.clone();
+    let bg_ok = std::thread::spawn(move || {
+        let a = [("X-ReSearch-Token", tok_bg2.as_str()), ("Content-Type", "application/json")];
+        raw_http(port, "POST", "/api/sessions/s-x7-flow/idea/search", &a, b"{}")
+    });
+    let (call_id2, digest2) = wait_for_pending_approval(port, &token, "s-x7-flow");
+    let ok_body = serde_json::to_vec(&json!({
+        "digest": digest2,
+        "approved": true,
+        "approve_for_session": true
+    }))
+    .unwrap();
+    let (st, _, _) = raw_http(
+        port,
+        "POST",
+        &format!("/api/sessions/s-x7-flow/approvals/{call_id2}"),
+        &auth,
+        &ok_body,
+    );
+    assert_eq!(st, 200);
+    let (st_ok, _, raw_ok) = bg_ok.join().unwrap();
+    assert_eq!(st_ok, 200, "{}", String::from_utf8_lossy(&raw_ok));
+    let ok_json: Value = serde_json::from_slice(&raw_ok).unwrap();
+    assert_eq!(ok_json["ok"], true);
+    assert!(ok_json["idea"]["candidates"].as_array().unwrap().len() >= 2);
+    assert!(ok_json["idea"]["coverage"]["gate"]["answered_external_services"].as_u64().unwrap() >= 2);
+    assert_eq!(ok_json["idea"]["where_i_looked"]["known_paper_recall"]["given"], json!(["arxiv:2501.01234"]));
+    assert_eq!(ok_json["idea"]["where_i_looked"]["known_paper_recall"]["found_by_search"], json!(["arxiv:2501.01234"]));
+    assert_eq!(ok_json["idea"]["where_i_looked"]["known_paper_recall"]["missed"], json!([]));
+
+    // 5. Session network-read grant is active: retrying one provider executes immediately without
+    // prompting, preserves original qids, keeps INSPIRE coverage intact, and never corrupts abstract_ref.
+    let retry_body = serde_json::to_vec(&json!({ "provider": "arxiv" })).unwrap();
+    let (st_retry, _, raw_retry) =
+        raw_http(port, "POST", "/api/sessions/s-x7-flow/idea/search", &auth, &retry_body);
+    assert_eq!(st_retry, 200, "{}", String::from_utf8_lossy(&raw_retry));
+    let retry_json: Value = serde_json::from_slice(&raw_retry).unwrap();
+    assert_eq!(retry_json["ok"], true);
+    let inspire_prov = retry_json["idea"]["where_i_looked"]["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "inspire")
+        .unwrap();
+    assert_eq!(inspire_prov["state"], "ok");
+    assert!(inspire_prov["queries_ok"].as_u64().unwrap() >= 1);
+    for c in retry_json["idea"]["candidates"].as_array().unwrap() {
+        if let Some(aref) = c.get("abstract_ref").and_then(Value::as_object) {
+            assert_ne!(aref.get("provider").and_then(Value::as_str), Some("prior"));
+        }
+    }
+
+    // 6. Calling `/idea/stop` while a fresh session's `/idea/search` is waiting on UiApprover
+    // immediately unblocks UiApprover (Carbon Finding 4).
+    let stop_create = serde_json::to_vec(&json!({
+        "id": "s-x7-stop",
+        "mode": "explore",
+        "text": IDEA_TEXT,
+        "offline": false,
+        "queries": [{ "provider": first_q["provider"], "q": first_q["q"] }]
+    }))
+    .unwrap();
+    assert_eq!(raw_http(port, "POST", "/api/sessions", &auth, &stop_create).0, 200);
+    let plan_q = serde_json::to_vec(&json!({
+        "queries": [{ "qid": "q-stop-1", "provider": "arxiv", "q": "Krylov Majorana" }]
+    }))
+    .unwrap();
+    assert_eq!(raw_http(port, "POST", "/api/sessions/s-x7-stop/idea/plan", &auth, &plan_q).0, 200);
+    let tok_stop = token.clone();
+    let bg_stop = std::thread::spawn(move || {
+        let a = [("X-ReSearch-Token", tok_stop.as_str()), ("Content-Type", "application/json")];
+        raw_http(port, "POST", "/api/sessions/s-x7-stop/idea/search", &a, b"{}")
+    });
+    let _ = wait_for_pending_approval(port, &token, "s-x7-stop");
+    let (st_stop, _, _) = raw_http(port, "POST", "/api/sessions/s-x7-stop/idea/stop", &auth, b"{}");
+    assert_eq!(st_stop, 200);
+    let (st_bg, _, raw_bg) = bg_stop.join().unwrap();
+    assert_eq!(st_bg, 200, "{}", String::from_utf8_lossy(&raw_bg));
+    let bg_json: Value = serde_json::from_slice(&raw_bg).unwrap();
+    assert_eq!(bg_json["ok"], false);
+
+    srv.shutdown();
+}
+
+
