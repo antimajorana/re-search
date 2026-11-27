@@ -109,3 +109,42 @@ fn compute_review_independence_fails_closed_when_ambiguous() {
         ReviewIndependence::SameModel
     );
 }
+
+#[test]
+fn compute_review_independence_normalizes_wire_ids_and_anthropic_aliases() {
+    assert_eq!(
+        compute_review_independence(
+            &role("anthropic", "haiku"),
+            &role("anthropic-messages", "claude-haiku-4-5"),
+        ),
+        ReviewIndependence::SameModel
+    );
+    assert_eq!(
+        compute_review_independence(
+            &role("openai", "gpt-4.1"),
+            &role("openai-chat", "gpt-4.1"),
+        ),
+        ReviewIndependence::SameModel
+    );
+    assert_eq!(
+        compute_review_independence(
+            &role("chatgpt-responses", "gpt-5"),
+            &role("openai", "gpt-5"),
+        ),
+        ReviewIndependence::SameModel
+    );
+    assert_eq!(
+        compute_review_independence(
+            &role("gemini-generate-content", "gemini-2.5-pro"),
+            &role("gemini", "gemini-2.5-pro"),
+        ),
+        ReviewIndependence::SameModel
+    );
+    assert_eq!(
+        compute_review_independence(
+            &role("ollama-chat", "qwen2.5:7b"),
+            &role("ollama", "qwen2.5:7b"),
+        ),
+        ReviewIndependence::SameModel
+    );
+}

@@ -23,6 +23,8 @@ use std::collections::BTreeMap;
 pub struct InFlightTool {
     pub tool: String,
     pub request_seq: u64,
+    #[serde(default)]
+    pub caller: Option<String>,
 }
 
 /// Derived in-memory Solve session state (`solve.md` 4.2). Never stored in the ledger.
@@ -181,9 +183,14 @@ impl SolveState {
                     p.get("call_id").and_then(Value::as_str),
                     p.get("tool").and_then(Value::as_str),
                 ) {
+                    let caller = p.get("caller").and_then(Value::as_str).map(str::to_string);
                     self.in_flight_tools.insert(
                         call_id.to_string(),
-                        InFlightTool { tool: tool.to_string(), request_seq: ev.seq },
+                        InFlightTool {
+                            tool: tool.to_string(),
+                            request_seq: ev.seq,
+                            caller,
+                        },
                     );
                 }
             }
@@ -192,11 +199,19 @@ impl SolveState {
                     let call_id = receipt.call_id.clone();
                     let ok = receipt.ok;
                     let is_sympy = receipt.tool == "sympy_eval";
+                    let is_verifier_or_check = matches!(
+                        receipt.process,
+                        Some(ReceiptProcess::Verifier | ReceiptProcess::Check)
+                    );
                     self.receipts.insert(call_id.clone(), receipt);
-                    if ok {
+                    if ok && !is_verifier_or_check {
                         self.gate_bounces = 0;
                     }
-                    if is_sympy && sympy_succeeded && !self.pending_runs.contains(&call_id) {
+                    if is_sympy
+                        && sympy_succeeded
+                        && !is_verifier_or_check
+                        && !self.pending_runs.contains(&call_id)
+                    {
                         self.pending_runs.push(call_id);
                     }
                     tiers_dirty = true;
@@ -418,6 +433,7 @@ fn parse_tool_result(
         .map(|f| f.tool.clone())
         .or_else(|| p.get("tool").and_then(Value::as_str).map(str::to_string))
         .unwrap_or_default();
+    let caller = inflight.as_ref().and_then(|f| f.caller.clone());
     let request_seq = inflight.map(|f| f.request_seq);
 
     let result = p.get("result");
@@ -444,7 +460,12 @@ fn parse_tool_result(
     let process: Option<ReceiptProcess> = meta
         .get("process")
         .or_else(|| p.get("process"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .or(match caller.as_deref() {
+            Some("verifier:solve") => Some(ReceiptProcess::Verifier),
+            Some("host:check") => Some(ReceiptProcess::Check),
+            _ => None,
+        });
     let exprs_out = extract_exprs_out(meta);
     let env = meta.get("env").or_else(|| p.get("env")).cloned();
 
