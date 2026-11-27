@@ -30,6 +30,8 @@ pub mod lit_abstracts;
 pub mod lit_providers;
 pub mod literature;
 pub mod map_authors_claim;
+pub mod map_context;
+pub mod map_context_defs;
 pub mod map_defs;
 pub mod map_fold;
 pub mod map_model_nodes;

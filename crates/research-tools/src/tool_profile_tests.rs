@@ -87,16 +87,20 @@ fn investigation_v1_and_v2_encode_may_gain_and_earlier_defs_as_data_while_resear
     }
     assert!(p.allows_gain(&read_map_node_def()), "investigation/1 must allow gaining read_map_node");
     assert!(p.allows_gain(&record_map_reading_def()), "investigation/1 must allow gaining record_map_reading");
+    assert!(
+        p.allows_gain(&crate::map_context_defs::record_context_cards_def()),
+        "investigation/1 must allow gaining record_context_cards"
+    );
     let mut bad_v6 = read_map_node_def();
     bad_v6.effect = EffectClass::WriteWorkspace;
     assert!(!p.allows_gain(&bad_v6), "WriteWorkspace V6 tool must never be gained");
 
     let v2 = investigation_v2();
     assert_eq!(v2.name, PROFILE_INVESTIGATION_V2);
-    assert_eq!(v2.defs.len(), r1.defs.len() + 2);
+    assert_eq!(v2.defs.len(), r1.defs.len() + 3);
     assert!(v2.def_for(crate::map_defs::READ_MAP_NODE).is_some());
     assert!(v2.def_for(crate::map_defs::RECORD_MAP_READING).is_some());
-    assert!(v2.def_for(crate::map_defs::RECORD_CONTEXT_CARDS).is_none());
+    assert!(v2.def_for(crate::map_defs::RECORD_CONTEXT_CARDS).is_some());
     assert!(v2.def_for(crate::map_defs::RECORD_PRIOR_WORK_CHECK).is_none());
     for pair in v2.defs.windows(2) {
         assert!(pair[0].id < pair[1].id, "investigation/2 not sorted");
