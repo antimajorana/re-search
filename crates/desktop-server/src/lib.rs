@@ -83,6 +83,7 @@ pub mod solve_routes_ext;
 pub(crate) mod solve_runtime;
 pub mod solve_turn_routes;
 pub mod solve_view;
+pub mod solve_workers;
 pub mod sse;
 pub mod state;
 pub mod subagents;
