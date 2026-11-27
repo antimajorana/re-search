@@ -246,6 +246,7 @@ pub fn handle_with_etag(
                         }
                     }
                 }
+                crate::investigation_handoff::attach_child_statuses_to_mapview(&ledger, &events, &mut mv);
                 crate::investigation_legacy_view::embed_legacy_into_mapview(&mut mv, &events, Some(&rec.skeleton));
                 return Ok((200, Some(head), mv));
             }

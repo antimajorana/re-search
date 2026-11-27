@@ -17,6 +17,7 @@ use crate::state::{now_ms, DesktopState};
 use export::handoff::{
     build_prefill, execute_handoff, read_session_handoffs, HandoffRequest,
 };
+use research_tools::paper_key::Mode;
 use research_tools::validate_session_id;
 use serde_json::json;
 
@@ -43,9 +44,7 @@ pub fn handle_create_handoff(state: &DesktopState, session_id: &str, body: &[u8]
         )));
     }
 
-    let receipt = execute_handoff(&state.cfg.data_dir, &req).map_err(bad)?;
-    let prefill = build_prefill(&receipt.packet, receipt.quotes_dropped).map_err(internal)?;
-
+    let mut receipt = execute_handoff(&state.cfg.data_dir, &req).map_err(bad)?;
     let mut meta = state.load_meta(session_id).unwrap_or_default();
     meta.id = receipt.child_session.clone();
     meta.title = receipt.packet.title.chars().take(80).collect();
@@ -59,6 +58,19 @@ pub fn handle_create_handoff(state: &DesktopState, session_id: &str, body: &[u8]
         crate::projects::attach_session(state, &project.id, &receipt.child_session)?;
     }
 
+    let investigate = if receipt.target_mode == Mode::Investigate {
+        Some(crate::investigation_handoff_receive::receive_investigate_handoff(
+            state,
+            session_id,
+            &req,
+            &mut receipt,
+        )?)
+    } else {
+        None
+    };
+
+    let prefill = build_prefill(&receipt.packet, receipt.quotes_dropped).map_err(internal)?;
+
     Ok((
         201,
         json!({
@@ -68,6 +80,7 @@ pub fn handle_create_handoff(state: &DesktopState, session_id: &str, body: &[u8]
             "target_mode_built": is_mode_built(receipt.target_mode),
             "receipt": receipt,
             "prefill": prefill,
+            "investigate": investigate,
         }),
     ))
 }
@@ -79,8 +92,13 @@ pub fn handle_get_handoffs(state: &DesktopState, session_id: &str) -> ApiResult 
     if !state.session_exists(session_id).map_err(internal)? {
         return Err(not_found(format!("session `{session_id}` not found")));
     }
-    let ledger = state.open_ledger().map_err(internal)?;
+    let ledger = state.open_ledger().map_err(|e| internal(e.to_string()))?;
+    let events = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
     let view = read_session_handoffs(&ledger, session_id).map_err(internal)?;
-    let value = serde_json::to_value(&view).map_err(|e| internal(e.to_string()))?;
+    let child_statuses =
+        crate::investigation_handoff::child_handoff_statuses(&ledger, &events).map_err(internal)?;
+    let mut value = serde_json::to_value(&view).map_err(|e| internal(e.to_string()))?;
+    value["child_statuses"] =
+        serde_json::to_value(&child_statuses).map_err(|e| internal(e.to_string()))?;
     Ok((200, value))
 }
