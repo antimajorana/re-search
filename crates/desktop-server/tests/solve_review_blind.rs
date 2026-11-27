@@ -210,5 +210,106 @@ fn solve_review_route_enforces_auth_mode_and_runs_d2_same_model_end_to_end() {
     assert_eq!(tier.own, Tier::ModelAgreedSameModel);
     assert_eq!(tier.effective, Tier::ModelAgreedSameModel);
 
+    // 5. Explicit invalid `verifier` override in request body must return 400 (never silently fall back).
+    let (st_bad_v, _, _) = raw_http(
+        port,
+        "POST",
+        "/api/sessions/s-solve-d2/solve/review",
+        &auth,
+        br#"{"entry_id":"e-1","verifier":{"provider":"claude-cli","model":"opus"}}"#,
+    );
+    assert_eq!(st_bad_v, 400);
+
+    mock.finish();
+}
+
+#[test]
+fn solve_blind_compute_g3_and_desktop_worker_factory_integration() {
+    use agent::delegate_blind::{handle_compute_blind, BlindComputeConfig, BlindComputeRunCtx};
+    use agent::verifier_tools::IsolatedWorkerFactory;
+    use desktop_server::auth::AuthGuard;
+    use desktop_server::chatgpt::ChatGptHub;
+    use desktop_server::solve_workers::DesktopIsolatedWorkerFactory;
+    use desktop_server::sse::SseHub;
+    use desktop_server::state::DesktopState;
+    use research_tools::ResearchEnv;
+    use std::sync::Arc;
+
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    // Zero HTTP replies: G3 must block before touching the network!
+    let mock = MockHttp::start(vec![]);
+    let mut store = ProviderKeyStore::default();
+    store.providers.insert(
+        "openai".into(),
+        ProviderEntry {
+            api_key: Some("test-fake-openai-key".into()),
+            base_url: Some(mock.base_url.clone()),
+            default_model: None,
+        },
+    );
+    store.save_to_data_dir(&data_dir).unwrap();
+
+    let role = RoleModel {
+        provider: "openai".into(),
+        model: "gpt-4.1".into(),
+    };
+    seed_solve_session(&data_dir, "s-blind-desk", role.clone(), role.clone());
+
+    let cfg = test_cfg(&data_dir, None, None, None);
+    let auth = AuthGuard::new(cfg.port).unwrap();
+    let sse = Arc::new(SseHub::new());
+    let chatgpt = ChatGptHub::new(&cfg).unwrap();
+    let state = Arc::new(DesktopState::new(cfg, auth, sse, chatgpt));
+    let factory: Arc<dyn IsolatedWorkerFactory> =
+        Arc::new(DesktopIsolatedWorkerFactory::new(Arc::clone(&state)));
+
+    let transport = state
+        .build_transport(agent::ProviderKind::OpenAi, "gpt-4.1")
+        .unwrap();
+    let ledger = Ledger::open(&data_dir).unwrap();
+    let env = Arc::new(ResearchEnv::new(&data_dir));
+    let bcfg = BlindComputeConfig::new(role);
+    let ctx = BlindComputeRunCtx {
+        transport: transport.as_ref(),
+        ledger: &ledger,
+        env,
+        session: "s-blind-desk",
+        config: &bcfg,
+        factory: &factory,
+        cancel: None,
+    };
+
+    // Gate G3 blocks compare_with leak in operation before any transport or worker call.
+    let err = handle_compute_blind(
+        &ctx,
+        "cb-desk-1",
+        &json!({
+            "inputs": ["x_in@1"],
+            "operation": "Verify that x_in matches ans@1.",
+            "compare_with": "ans@1"
+        }),
+    )
+    .unwrap_err();
+    assert!(err.starts_with("GATE G3:"), "expected G3 refusal, got: {err}");
+
+    let evs = ledger.read_session("s-blind-desk").unwrap();
+    assert!(evs.iter().any(|e| {
+        e.kind == event_kinds::GUARDRAIL_BLOCKED && e.payload["gate"] == json!("G3")
+    }));
+
+    // Non-Windows DesktopIsolatedWorkerFactory fails closed gracefully without panicking.
+    #[cfg(not(windows))]
+    {
+        assert!(!factory.isolated_workers_contained());
+        let w_err = factory
+            .spawn_isolated_python_worker("s-blind-desk", "blind_compute")
+            .err()
+            .expect("non-Windows isolated worker must report AppContainer requirement");
+        assert!(w_err.contains("AppContainer"), "unexpected worker err: {w_err}");
+    }
+
     mock.finish();
 }
