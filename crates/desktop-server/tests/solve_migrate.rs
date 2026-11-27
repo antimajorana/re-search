@@ -7,7 +7,8 @@ mod eval_set_r_support;
 
 use agent::{
     inspect_session_for_resume, inspect_session_with_profile, resume_autonomous_research_loop,
-    AutonomousConfig, AutonomousRoles, NoopSink, SessionOutcome, DEFAULT_MAX_TOKENS,
+    AutonomousConfig, AutonomousRoles, NoopSink, ResumeRejectKind, SessionOutcome,
+    DEFAULT_MAX_TOKENS,
 };
 use common::{launch_cookie, raw_http, test_cfg};
 use desktop_server::solve_migrate::{LEGACY_LEAN_CHECK_RECEIPT_LABEL, LEGACY_SYMPY_RECEIPT_LABEL};
@@ -22,8 +23,9 @@ use research_tools::solve_model::event_kinds;
 use research_tools::solve_state::SolveState;
 use research_tools::solve_status::{compute_all_tiers, wording, Tier};
 use research_tools::tool_profile::{
-    research_v1, session_mode_from_events, MARKER_IDEA_STARTED, MARKER_INVESTIGATION_HANDOFF,
-    MARKER_INVESTIGATION_STARTED, MARKER_SOLVE_STARTED, PROFILE_RESEARCH_V1, TOOL_PROFILE_FIELD,
+    research_v1, session_mode_from_events, solve_v1, MARKER_IDEA_STARTED,
+    MARKER_INVESTIGATION_HANDOFF, MARKER_INVESTIGATION_STARTED, MARKER_SOLVE_STARTED,
+    PROFILE_RESEARCH_V1, TOOL_PROFILE_FIELD,
 };
 use research_tools::{research_policy, ResearchEnv};
 use serde_json::{json, Value};
@@ -340,6 +342,7 @@ fn open_in_solve_migrates_legacy_research_with_d19_tiers_sources_and_intact_pare
     assert_eq!(resolved.profile.name, PROFILE_RESEARCH_V1);
     assert_eq!(insp.tool_profile, PROFILE_RESEARCH_V1);
     inspect_session_for_resume(&ledger, parent, &research_policy().version, &research_v1().defs).unwrap();
+    assert_eq!(inspect_session_with_profile(&ledger, &child).unwrap_err().kind, ResumeRejectKind::Drift);
 
     let env = Arc::new(ResearchEnv::new(&data_dir));
     let router = build_profile_router(&data_dir, env, parent, PROFILE_RESEARCH_V1);
@@ -392,11 +395,7 @@ fn open_in_solve_enforces_auth_origin_and_refuses_non_research_or_invalid_reques
     assert_eq!(ledger.sessions().unwrap().len(), sessions_before);
 
     let (st, _, _) = raw_http(
-        port,
-        "POST",
-        &path,
-        &[("X-ReSearch-Token", tok.as_str()), ("Origin", "http://evil.invalid")],
-        b"{}",
+        port, "POST", &path, &[("X-ReSearch-Token", tok.as_str()), ("Origin", "http://evil.invalid")], b"{}",
     );
     assert_eq!(st, 403);
     assert_eq!(ledger.sessions().unwrap().len(), sessions_before);
@@ -422,18 +421,17 @@ fn open_in_solve_enforces_auth_origin_and_refuses_non_research_or_invalid_reques
         assert_eq!(st, 400, "non-research session {sid} must be refused");
     }
 
-    // Invalid JSON, non-object, unknown key, out-of-bounds at_seq, oversized role -> 400 with ZERO orphan sessions!
+    // Invalid JSON, unknown key, solver override (B1 D19 guard), blank/oversized verifier -> 400 + ZERO orphans.
     let count_before_invalid = ledger.sessions().unwrap().len();
-    let long_model = serde_json::to_vec(&json!({
-        "solver": { "provider": "openai", "model": "m".repeat(201) }
-    })).unwrap();
+    let (st_solver, _, solver_raw) =
+        raw_http(port, "POST", &path, &auth, br#"{"solver":{"provider":"openai","model":"gpt-5"}}"#);
+    assert_eq!(st_solver, 400);
+    assert!(String::from_utf8_lossy(&solver_raw).contains("D19"), "{}", String::from_utf8_lossy(&solver_raw));
+    let long_model = serde_json::to_vec(&json!({"solver": {"provider": "openai", "model": "m".repeat(201)}})).unwrap();
+    let long_ver = serde_json::to_vec(&json!({"verifier": {"provider": "openai", "model": "m".repeat(201)}})).unwrap();
     for bad_body in [
-        b"{not json" as &[u8],
-        b"[]",
-        br#"{"atSeq":1}"#,
-        br#"{"at_seq":0}"#,
-        br#"{"at_seq":99}"#,
-        long_model.as_slice(),
+        b"{not json" as &[u8], b"[]", br#"{"atSeq":1}"#, br#"{"at_seq":0}"#, br#"{"at_seq":99}"#,
+        br#"{"verifier":{"provider":"","model":"gpt-5"}}"#, long_model.as_slice(), long_ver.as_slice(),
     ] {
         let (st, _, _) = raw_http(port, "POST", &path, &auth, bad_body);
         assert_eq!(st, 400);
@@ -480,11 +478,7 @@ fn open_in_solve_enforces_auth_origin_and_refuses_non_research_or_invalid_reques
     // Valid token + loopback Origin succeeds on untampered Research session.
     let origin = format!("http://127.0.0.1:{port}");
     let (st, _, ok_raw) = raw_http(
-        port,
-        "POST",
-        &path,
-        &[("X-ReSearch-Token", tok.as_str()), ("Origin", origin.as_str())],
-        b"{}",
+        port, "POST", &path, &[("X-ReSearch-Token", tok.as_str()), ("Origin", origin.as_str())], b"{}",
     );
     assert_eq!(st, 201, "{}", String::from_utf8_lossy(&ok_raw));
     assert_eq!(serde_json::from_slice::<Value>(&ok_raw).unwrap()["mode"], "solve");
@@ -562,23 +556,39 @@ fn open_in_solve_supports_at_seq_prefix_and_legacy_investigation_handoff_researc
     assert_eq!(session_mode_from_events(&handoff_events), Mode::Research);
     assert!(handoff_events.iter().any(|e| e.kind == MARKER_INVESTIGATION_HANDOFF));
 
-    let (st_h, _, raw_h) = raw_http(
-        port,
-        "POST",
-        &format!("/api/sessions/{handoff_child}/open-in-solve"),
-        &auth,
-        b"{}",
-    );
+    let (st_h, _, raw_h) = raw_http(port, "POST", &format!("/api/sessions/{handoff_child}/open-in-solve"), &auth, b"{}");
     assert_eq!(st_h, 201, "{}", String::from_utf8_lossy(&raw_h));
     let h_res: Value = serde_json::from_slice(&raw_h).unwrap();
     assert_eq!(h_res["mode"], "solve");
-    assert_eq!(
-        h_res["setup"]["statement"],
-        "Extend Theorem T1 to a quartic anharmonic perturbation."
-    );
+    assert_eq!(h_res["setup"]["statement"], "Extend Theorem T1 to a quartic anharmonic perturbation.");
     assert_eq!(h_res["setup"]["sources"], json!([source_id]));
     let solve_child = h_res["session_id"].as_str().unwrap();
     assert!(data_dir.join("sessions").join(solve_child).join("sources").join(&primary_path).is_file());
+
+    // (c) Post-F1 Research session (`tool_profile: "research/1"`, `route: "api"` without `provider`):
+    // migrates cleanly, does not leak `"api"` into `solver.provider`, honors `verifier` override,
+    // and fails closed with Rule R2 `Drift` on replay-resume under `solve/1`.
+    let pf1 = "s-postf1-research";
+    ledger.append_with_hash(pf1, "session.start", 1, &json!({
+        "route": "api", "model": "gpt-5", "prompt": "Post-F1 Research problem.",
+        TOOL_PROFILE_FIELD: PROFILE_RESEARCH_V1,
+        "policy_version": research_policy().version,
+        "tool_defs": defs_json(&research_v1().defs),
+    })).unwrap();
+    let (st_p, _, raw_p) = raw_http(
+        port, "POST", &format!("/api/sessions/{pf1}/open-in-solve"), &auth,
+        br#"{"verifier":{"provider":"anthropic-messages","model":"claude-sonnet-4-6"}}"#,
+    );
+    assert_eq!(st_p, 201, "{}", String::from_utf8_lossy(&raw_p));
+    let p_res: Value = serde_json::from_slice(&raw_p).unwrap();
+    assert_eq!(p_res["setup"]["roles"]["solver"], json!({ "provider": "", "model": "gpt-5" }));
+    assert_eq!(p_res["setup"]["roles"]["verifier"], json!({ "provider": "anthropic", "model": "claude-sonnet-4-6" }));
+    let pf1_child = p_res["session_id"].as_str().unwrap();
+    let sv1 = solve_v1();
+    assert_eq!(
+        inspect_session_for_resume(&ledger, pf1_child, &sv1.policy.version, &sv1.defs).unwrap_err().kind,
+        ResumeRejectKind::Drift,
+    );
     assert_eq!(ledger.verify_all().unwrap().unreferenced_blobs, 0);
 
     srv.shutdown();
