@@ -66,6 +66,7 @@ pub mod routes_sources_ext;
 pub mod routes_subagents;
 pub mod routes_tools;
 pub mod routes_worker_activity;
+pub mod routes_writeup;
 pub mod session_lifecycle;
 pub mod session_mode;
 mod session_folders;
