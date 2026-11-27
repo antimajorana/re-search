@@ -447,6 +447,14 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/worker_activity.js"),
         }),
+        "/assets/ocr_settings.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/ocr_settings.js"),
+        }),
+        "/assets/page_image_viewer.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/page_image_viewer.js"),
+        }),
         "/assets/app.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/app.js"),
