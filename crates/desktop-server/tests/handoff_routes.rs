@@ -235,7 +235,7 @@ fn handoff_end_to_end_across_modes_projects_quote_reverification_and_readonly_st
     let solve_res: Value = serde_json::from_slice(&raw).unwrap();
     let solve_child = solve_res["session_id"].as_str().unwrap().to_string();
     assert_eq!(solve_res["mode"], "solve");
-    assert_eq!(solve_res["target_mode_built"], false);
+    assert_eq!(solve_res["target_mode_built"], true);
     assert_eq!(solve_res["receipt"]["quotes_matched"], 1);
     assert_eq!(solve_res["receipt"]["quotes_dropped"], 1);
     assert_eq!(solve_res["prefill"]["steps"][0]["kind"], "cited");
@@ -260,8 +260,8 @@ fn handoff_end_to_end_across_modes_projects_quote_reverification_and_readonly_st
         &auth,
         &msg_body,
     );
-    assert_eq!(st, 400, "unbuilt Solve child must refuse turns");
-    assert!(String::from_utf8_lossy(&msg_raw).contains("not built yet"));
+    assert_eq!(st, 400, "unconfigured Solve child must refuse turns before setup");
+    assert!(String::from_utf8_lossy(&msg_raw).contains("setup"));
     assert_eq!(ledger.read_session(&solve_child).unwrap().len(), child_len_before);
 
     // 2. Investigate -> Explore (PriorWork) with origin_paper excluded.

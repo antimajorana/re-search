@@ -50,6 +50,7 @@ pub mod http_srv;
 pub mod idea;
 pub mod idea_view;
 pub mod launcher;
+pub mod lit_settings;
 mod manuscript_drafts;
 pub mod model_catalog;
 mod original_pdf;
@@ -76,8 +77,11 @@ mod session_view;
 pub mod solve;
 pub mod solve_artifacts_route;
 pub mod solve_check_routes;
+pub mod solve_intake;
 pub mod solve_migrate;
 pub mod solve_routes_ext;
+pub(crate) mod solve_runtime;
+pub mod solve_turn_routes;
 pub mod solve_view;
 pub mod sse;
 pub mod state;
@@ -221,6 +225,7 @@ pub fn start_desktop_server(cfg: DesktopConfig) -> Result<RunningDesktopServer, 
     let state = Arc::new(DesktopState::new(cfg.clone(), auth, Arc::clone(&sse), chatgpt));
     // `mcp.json` files (they hold a turn's session token) left by a killed earlier run.
     cli_turn::sweep_all_tool_configs(&state);
+    solve_turn_routes::reconcile_interrupted_solve_sessions(&state);
 
     let loop_state = Arc::clone(&state);
     let loop_shutdown = Arc::clone(&shutdown);

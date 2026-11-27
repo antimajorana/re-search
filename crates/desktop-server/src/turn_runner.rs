@@ -50,6 +50,25 @@ fn spawn_turn_thread_inner(
     if let Err(err) = crate::session_mode::profile_for_session(&pre_events) {
         return Err((400, err));
     }
+    let is_solve = crate::session_mode::session_mode(&pre_events) == research_tools::paper_key::Mode::Solve;
+    if is_solve {
+        if research_tools::solve_state::SolveState::from_events(&pre_events)
+            .setup
+            .is_none()
+        {
+            return Err((400, "Solve session requires setup before running a turn".to_string()));
+        }
+        let req_prov = req_json.get("provider").and_then(Value::as_str).map(str::trim);
+        let bound_route = state.load_meta(&session_id).and_then(|m| m.route);
+        if matches!(req_prov, Some("claude-cli" | "antigravity"))
+            || matches!(bound_route.as_deref(), Some("claude-cli" | "antigravity"))
+        {
+            return Err((
+                400,
+                "Solve mode requires an API or ChatGPT provider.".to_string(),
+            ));
+        }
+    }
 
     let activity = crate::session_lifecycle::reserve_turn(&state, &session_id)?;
     {
@@ -138,7 +157,7 @@ fn spawn_turn_thread_inner(
     } else {
         false
     };
-    if !is_v6_task {
+    if !is_v6_task && !is_solve {
         if let Err(error) =
             crate::investigation::prepare(&state, &session_id, &mut req_json, &prompt, paper_route)
         {
@@ -240,6 +259,11 @@ fn run_session_turn(
 ) -> Result<String, String> {
     if cancel.is_cancelled() {
         return Err("stopped by user".into());
+    }
+    let pre_ledger = state.open_ledger()?;
+    let pre_events = pre_ledger.read_session(session_id).map_err(|e| e.to_string())?;
+    if crate::session_mode::session_mode(&pre_events) == research_tools::paper_key::Mode::Solve {
+        return crate::solve_turn_routes::run_desktop_solve_turn(state, session_id, req, prompt, cancel);
     }
     let meta = state.load_meta(session_id);
     let ui = state.load_ui_settings();
@@ -549,6 +573,8 @@ fn run_session_turn(
 
     match outcome {
         SessionOutcome::Aborted { reason, .. } => Err(reason),
-        SessionOutcome::Completed { .. } | SessionOutcome::Refusal { .. } => Ok(sink.final_text().to_string()),
+        SessionOutcome::Completed { .. }
+        | SessionOutcome::Refusal { .. }
+        | SessionOutcome::Paused { .. } => Ok(sink.final_text().to_string()),
     }
 }

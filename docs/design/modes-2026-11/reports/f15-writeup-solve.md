@@ -214,3 +214,20 @@ All commands were executed as non-root (`uid=1001(antigravity)`) with `RE_SEARCH
 
 - `Mode::Explore` and `Mode::Investigate` write-up adapters are intentionally not implemented in this brief and return `"write-up adapter not built yet"` (CLI error / HTTP `501`) until their respective F15 adapter lanes merge.
 - `writeup_btn.js` is served at `/assets/writeup_btn.js` and unit-tested, but is not yet mounted into the live Solve UI because S13 (`solve_steps.js`) is not yet merged on `origin/gemini/work/fixed` (see §5 **Merge notes**).
+
+---
+
+## 11. Post-Push Carbon (`pro`) Independent Audit Hardening
+
+An independent Carbon (`pro`) audit identified two additional correctness/read-only edge cases that were fixed on top of `de44a2a` without rewriting history:
+
+1. **Commit `95d76ef` (`crates/export/src/writeup_solve.rs` `577`L, `crates/export/tests/writeup_solve.rs` `396`L):** Live `harvest_exprs_out` stores `owner_entry: None` on `solve.expr` events; `build_step_formulas` now matches `entry.tool_call_ref` / `entry.tool_call_refs` via `research_tools::proof_dag::tool_reference_matches` when `owner_entry` is `None` (mirroring `solve_steps.rs::handles_with_effective_owners`), with regression test `claimless_step_resolves_live_owner_entry_none_handles_via_tool_call_refs`.
+2. **Commit `64773bc` (`crates/desktop-server/src/routes_writeup.rs` `157`L, `crates/desktop-server/tests/writeup_solve_routes.rs` `262`L):** Replaced `state.session_exists` (which opens `Ledger::open` and creates `ledger.db` / `blobs/` on disk) with a read-only `Ledger::open_existing` existence check so `GET /api/sessions/{id}/writeup` performs zero disk writes on `404`, and mapped `"ledger verification failed"` to `409 Conflict`, with regression test `writeup_route_404_is_strictly_readonly_before_ledger_exists`.
+3. **Additional out-of-scope note:** `crates/research-tools/src/library.rs:37` / `crates/ledger/src/library_db.rs:31` (`Library::open`) currently lacks a read-only opener (`Library::open_existing_readonly`), so when `library.db` already exists on disk, SQLite opens it read-write (WAL/migrations). `writeup_solve.rs` avoids creating `library.db` when absent; adding a read-only opener is left for the library lane.
+
+**Final non-root verification after `64773bc` (`uid=1001(antigravity)`, `RE_SEARCH_PYTHON` unset):**
+- `cargo clippy --workspace --all-targets --locked -- -D warnings -A clippy::manual_unwrap_or`: **Passed (`exit 0`, 0 warnings/errors)**
+- `cargo test --workspace --locked --no-fail-fast`: **Passed (`exit 0`) across 155 test binaries: `1210 passed; 0 failed; 2 ignored`** (`export/writeup_solve`: `5 passed`, `desktop-server/writeup_solve_routes`: `2 passed`)
+- `for f in crates/desktop-server/assets/*.js; do node --check "$f" || exit 1; done && node --test crates/desktop-server/tests/*.test.mjs`: **Passed (`exit 0`, `231 passed; 0 failed; 0 skipped`)**
+- `python3 scripts/check_file_length.py --base origin/gemini/work/fixed`: **Passed (`No touched source file is over 600 lines.`)**
+

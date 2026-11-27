@@ -352,6 +352,12 @@ pub(crate) fn dispatch_api(
         ("GET", ["api", "sessions", id, "solve", "artifacts", artifact_id]) => {
             crate::solve_artifacts_route::serve_solve_artifact(&mut stream, state, id, artifact_id);
         }
+        ("POST", ["api", "sessions", id, "solve", "continue"]) => {
+            write_api_res(&mut stream, crate::solve_turn_routes::handle_continue(state, id, &req.body));
+        }
+        ("POST", ["api", "sessions", id, "solve", "reconcile"]) => {
+            write_api_res(&mut stream, crate::solve_turn_routes::handle_reconcile(state, id, &req.body));
+        }
         (method, ["api", "sessions", id, "solve", rest @ ..]) => {
             write_api_res(&mut stream, crate::solve::handle_solve(state, method, id, rest, &req.body));
         }
@@ -394,6 +400,9 @@ pub(crate) fn dispatch_api(
         }
         ("PUT", ["api", "settings", "investigate"]) => {
             write_api_res(&mut stream, crate::investigation_settings::handle_put(state, &req.body));
+        }
+        ("GET" | "PUT", ["api", "settings", "literature"]) => {
+            write_api_res(&mut stream, crate::lit_settings::handle(state, method, &req.body));
         }
         ("GET", ["api", "connections"]) => {
             write_api_res(&mut stream, crate::connections::handle_connections(state, &req.query));

@@ -333,6 +333,13 @@ pub fn extract_abstract_from_blob(
         .iter()
         .find(|p| p.paper_ref.key == *paper_key)
         .or_else(|| parsed.papers.iter().find(|p| paper_matches_key(&p.paper_ref, paper_key)))
+        .or_else(|| {
+            (paper_key.kind() == PaperKeyKind::Openalex).then(|| {
+                parsed.papers.iter().find(|p| {
+                    p.provider == LitProvider::OpenAlex && p.provider_id == paper_key.value()
+                })
+            })?
+        })
         .ok_or_else(|| {
             format!("paper `{paper_key}` not found in raw `{provider}` response blob")
         })?;

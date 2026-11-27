@@ -10,6 +10,7 @@ pub mod anthropic;
 pub mod autonomous;
 pub(crate) mod autonomous_prompts;
 pub mod delegate;
+pub(crate) mod dispatch;
 pub mod explore;
 pub mod gemini;
 pub mod guardrails;
@@ -26,10 +27,13 @@ pub use provenance::workspace_revision;
 pub mod provider_config;
 pub mod responses;
 pub mod resume;
+pub mod resume_brief;
 pub mod resume_profile;
 pub mod role_routing;
 pub mod runner;
 pub mod sidetalk;
+pub mod solve_loop;
+pub mod solve_prompts;
 pub mod strategist;
 pub(crate) mod stream_codecs;
 pub(crate) mod stream_http;
@@ -76,6 +80,7 @@ pub use resume::{
     inspect_session_for_resume, inspect_session_for_resume_with_profile, resume_agent_loop,
     ResumeConfig, ResumeInspection, ResumeReject, ResumeRejectKind,
 };
+pub use resume_brief::{build_resume_brief, LESSONS_HEADING, NO_SURVIVING_PYTHON_VARS_LINE};
 pub use resume_profile::{
     check_tool_defs_drift_for_profile, inspect_session_with_profile, resolve_session_profile,
     ResolvedSessionProfile,
@@ -85,6 +90,12 @@ pub use runner::{
     DEFAULT_SYSTEM_PROMPT, EVENT_VERSION,
 };
 pub use sidetalk::{ask_sidetalk, read_sidetalk_thread, sidetalk_session_key, SideTalkTurn};
+pub use solve_loop::{
+    resume_solve_loop, run_solve_loop, NoopSolveHostHooks, SolveHostHooks, SolveLoopConfig,
+    SolveWorkerRuntime, DEFAULT_SOLVE_BRIEF_BUDGET_CHARS, DEFAULT_SOLVE_CONTEXT_WINDOW_CHARS,
+    SOLVE_CALLER, SOLVE_ROUTER_CALLER,
+};
+pub use solve_prompts::{build_solve_system_prompt, task_kind_instructions, task_kind_label};
 pub use strategist::{
     consult_strategist, consult_strategist_cancellable, count_strategist_consultations, mandatory_strategist_required,
     StrategistAdvice, MAX_STRATEGIST_CONSULTATIONS,
