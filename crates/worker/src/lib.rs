@@ -224,6 +224,9 @@ impl Worker {
         env.insert("MPLCONFIGDIR".into(), s(&scratch.join("mpl")));
         env.insert("PYTHONNOUSERSITE".into(), "1".into());
         env.insert("PYTHONIOENCODING".into(), "utf-8".into());
+        // Cap OpenBLAS/OpenMP worker pools so multi-core startup does not commit ~410 MiB before math runs.
+        env.insert("OPENBLAS_NUM_THREADS".into(), "1".into());
+        env.insert("OMP_NUM_THREADS".into(), "1".into());
 
         let mut args = vec![
             "-u".to_string(),
