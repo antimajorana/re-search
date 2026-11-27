@@ -232,6 +232,11 @@ pub fn supports_vision(provider: ProviderKind, model: &str) -> bool {
                 || raw.starts_with("o1-preview-")
                 || raw == "o3-mini"
                 || raw.starts_with("o3-mini-")
+                || raw.contains("-audio")
+                || raw.contains("-realtime")
+                || raw.contains("-tts")
+                || raw.contains("-transcribe")
+                || raw.contains("-search")
             {
                 return false;
             }
@@ -240,7 +245,7 @@ pub fn supports_vision(provider: ProviderKind, model: &str) -> bool {
                 || raw == "chatgpt-4o"
                 || raw.starts_with("chatgpt-4o-")
                 || raw == "gpt-4-turbo"
-                || raw.starts_with("gpt-4-turbo-")
+                || raw == "gpt-4-turbo-2024-04-09"
                 || raw.starts_with("gpt-4-vision")
                 || raw == "gpt-4.1"
                 || raw.starts_with("gpt-4.1-")
@@ -268,7 +273,15 @@ pub fn supports_vision(provider: ProviderKind, model: &str) -> bool {
                 || m.starts_with("gemini-exp-")
         }
         ProviderKind::Ollama => {
-            let base = raw.split(':').next().unwrap_or(&raw);
+            let (base, tag) = match raw.split_once(':') {
+                Some((b, t)) => (b, Some(t)),
+                None => (raw.as_str(), None),
+            };
+            if (base == "gemma3" && tag.is_some_and(|t| t == "1b" || t.starts_with("1b-")))
+                || base.starts_with("gemma3-1b")
+            {
+                return false;
+            }
             base == "llava"
                 || base.starts_with("llava-")
                 || base == "bakllava"

@@ -282,15 +282,31 @@ fn non_vision_models_fail_closed_across_all_providers_without_dropping_images() 
         "TEST",
     )
     .unwrap();
-    for bad in ["gpt-3.5-turbo", "o1-mini", "o3-mini", "unknown-text-model"] {
+    for bad in [
+        "gpt-3.5-turbo",
+        "o1-mini",
+        "o3-mini",
+        "unknown-text-model",
+        "gpt-4o-audio-preview",
+        "gpt-4o-realtime-preview",
+        "gpt-4o-mini-tts",
+        "gpt-4o-transcribe",
+        "gpt-4o-search-preview",
+        "gpt-4-turbo-preview",
+        "gpt-4-turbo-0125-preview",
+    ] {
         let err = openai.prepare_request(&vision_request(bad, "image/png", &png)).unwrap_err();
         assert_eq!(err.kind, TransportErrorKind::Config, "expected Config rejection for {bad}");
     }
+    assert!(supports_vision(ProviderKind::OpenAi, "gpt-4-turbo-2024-04-09"));
 
-    // Ollama default code model (`qwen2.5-coder:7b`) fails closed for images.
+    // Ollama default code model (`qwen2.5-coder:7b`) and text-only `gemma3:1b` fail closed for images.
     let ollama = OpenAiTransport::new(OpenAiConfig::ollama_default(), None, "none").unwrap();
-    let err = ollama.prepare_request(&vision_request("qwen2.5-coder:7b", "image/png", &png)).unwrap_err();
-    assert_eq!(err.kind, TransportErrorKind::Config);
+    for bad in ["qwen2.5-coder:7b", "gemma3:1b", "gemma3:1b-instruct-q4_0"] {
+        let err = ollama.prepare_request(&vision_request(bad, "image/png", &png)).unwrap_err();
+        assert_eq!(err.kind, TransportErrorKind::Config, "expected Config rejection for {bad}");
+    }
+    assert!(supports_vision(ProviderKind::Ollama, "gemma3:4b"));
 
     // Gemini non-vision (`gemini-1.0-pro`) fails closed.
     let gemini = GeminiTransport::new(
