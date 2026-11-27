@@ -58,7 +58,11 @@ pub fn handle_solve(
         ("POST", ["prefill"]) => handle_prefill(state, session_id, body),
         ("POST", ["setup"]) => handle_setup(state, session_id, body),
         ("GET", ["view"]) => handle_view(state, session_id, &events),
-        // Downstream seams: S8 (attach-source, ack), S9 (check, recheck), S17 (transcribe).
+        ("POST", ["attach-source"]) => crate::solve_routes_ext::handle_attach_source(state, session_id, body),
+        ("POST", ["ack"]) => crate::solve_routes_ext::handle_ack(state, session_id, body),
+        ("POST", ["check"]) => crate::solve_check_routes::handle_check(state, session_id, body),
+        ("POST", ["recheck"]) => crate::solve_check_routes::handle_recheck(state, session_id, body),
+        // Downstream seam: S17 (transcribe).
         _ => Err(not_found(format!("unknown solve endpoint: {method} /{}", rest.join("/")))),
     }
 }
