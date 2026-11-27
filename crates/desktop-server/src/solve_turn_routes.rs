@@ -10,9 +10,8 @@ use crate::solve_runtime::build_solve_router;
 use crate::state::DesktopState;
 use crate::turn_control::ApiTurnGuard;
 use agent::{
-    resume_solve_loop, run_solve_loop, CancelToken, NoopSolveHostHooks, SolveLoopConfig,
-    SolveWorkerRuntime, DEFAULT_MAX_TOKENS, DEFAULT_SOLVE_BRIEF_BUDGET_CHARS,
-    DEFAULT_SOLVE_CONTEXT_WINDOW_CHARS,
+    resume_solve_loop, run_solve_loop, CancelToken, SolveLoopConfig, SolveWorkerRuntime,
+    DEFAULT_MAX_TOKENS, DEFAULT_SOLVE_BRIEF_BUDGET_CHARS, DEFAULT_SOLVE_CONTEXT_WINDOW_CHARS,
 };
 use ledger::{Event, Ledger};
 use research_tools::paper_key::Mode;
@@ -53,12 +52,21 @@ pub(crate) fn run_desktop_solve_turn(
         .filter(|&n| n >= 1)
         .unwrap_or(DEFAULT_MAX_TOKENS);
     let env = Arc::new(state.research_env_for_session(session_id)?);
+    let solver_fallback = research_tools::solve_model::RoleModel {
+        provider: provider.cli_name().to_string(),
+        model: model.clone(),
+    };
     let transport = state.build_transport(provider, &model)?;
     let bundle = build_solve_router(Arc::clone(state), Arc::clone(&env), session_id)?;
     let ledger = state.open_ledger()?;
     let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
     let mut sink = SseEventSink::new(Arc::clone(&state.sse), session_id).with_model_title(false);
-    let hooks = NoopSolveHostHooks;
+    let hooks = crate::solve_host_hooks::DesktopSolveHostHooks::new(
+        Arc::clone(state),
+        Arc::clone(&env),
+        req.clone(),
+        solver_fallback,
+    );
     let cfg = SolveLoopConfig {
         model_requested,
         model,

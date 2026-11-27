@@ -22,6 +22,7 @@ pub const AGENT_ROLE_KEYS: &[&str] = &[
     "lean_worker",
     "explorer_worker",
     "paper_reader",
+    "verifier",
     "step_verifier",
     "full_verifier",
     "strategist",
@@ -447,100 +448,140 @@ pub fn orchestrator_cli_override(state: &DesktopState) -> Option<(CliRouteKind, 
     Some((kind, spec.model.clone()))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn patch_validates_roles_providers_and_models() {
-        let mut map = BTreeMap::new();
-        assert!(parse_agent_models_patch(&json!([]), &mut map).is_err());
-        assert!(parse_agent_models_patch(&json!({ "unknown_role": null }), &mut map).is_err());
-        // Helper and worker roles forbid CLI routes.
-        let err = parse_agent_models_patch(
-            &json!({ "narrator": { "provider": "claude-cli", "model": "sonnet" } }),
-            &mut map,
-        )
-        .unwrap_err();
-        assert_eq!(err.0, 400);
-        let w_err = parse_agent_models_patch(
-            &json!({ "compute_worker": { "provider": "antigravity", "model": "gemini" } }),
-            &mut map,
-        )
-        .unwrap_err();
-        assert_eq!(w_err.0, 400);
-        // Orchestrator permits CLI routes; worker roles accept API providers.
-        parse_agent_models_patch(
-            &json!({
-                "orchestrator": { "provider": "claude-cli", "model": "sonnet" },
-                "explain": { "provider": "OpenAI", "model": "gpt-4.1-mini" },
-                "compute_worker": { "provider": "anthropic", "model": "haiku" },
-                "literature_worker": { "provider": "openai", "model": "gpt-4.1-mini" },
-                "lean_worker": { "provider": "openai", "model": "gpt-4.1-mini" },
-                "explorer_worker": { "provider": "gemini", "model": "gemini-2.5-flash" }
-            }),
-            &mut map,
-        )
-        .unwrap();
-        assert_eq!(map["orchestrator"].provider, "claude-cli");
-        assert_eq!(map["explain"].provider, "openai");
-        assert_eq!(map["compute_worker"].provider, "anthropic");
-        assert_eq!(map["explorer_worker"].provider, "gemini");
-        // Model starting with '-' or containing whitespace fails.
-        assert!(parse_agent_models_patch(
-            &json!({ "explain": { "provider": "openai", "model": "-bad" } }),
-            &mut map,
-        )
-        .is_err());
-        assert!(parse_agent_models_patch(
-            &json!({ "explain": { "provider": "openai", "model": "gpt 4" } }),
-            &mut map,
-        )
-        .is_err());
-        // Null or blank removes role.
-        parse_agent_models_patch(
-            &json!({
-                "orchestrator": null,
-                "explain": { "provider": "", "model": "" },
-                "compute_worker": null,
-                "literature_worker": null,
-                "lean_worker": null,
-                "explorer_worker": null
-            }),
-            &mut map,
-        )
-        .unwrap();
-        assert!(map.is_empty());
-    }
-
-    #[test]
-    fn orchestrator_precedence_respects_subagent_and_agent_models() {
-        let mut ui = UiSettings::default();
-        ui.agent_models.insert(
-            "orchestrator".into(),
-            AgentModelSpec { provider: "openai".into(), model: "gpt-4.1".into() },
-        );
-        ui.default_provider = Some("gemini".into());
-        ui.default_model = Some("gemini-2.5-pro".into());
-
-        let (p, req_m, m) = resolve_orchestrator_model(None, &json!({}), None, &ui).unwrap();
-        assert_eq!((p, req_m.as_str(), m.as_str()), (ProviderKind::OpenAi, "gpt-4.1", "gpt-4.1"));
-
-        let sa = SubagentDef {
-            id: "qft".into(),
-            name: "QFT".into(),
-            description: String::new(),
-            system_prompt: "test".into(),
-            provider: Some("anthropic".into()),
-            model: Some("haiku".into()),
-            reasoning_effort: None,
-            rigor: None,
-            tools_profile: "full_research".into(),
-            created_ms: 0,
-        };
-        let (p2, _, m2) = resolve_orchestrator_model(Some(&sa), &json!({ "provider": "openai", "model": "gpt-4.1" }), None, &ui).unwrap();
-        assert_eq!(p2, ProviderKind::Anthropic);
-        assert_ne!(m2, "gpt-4.1");
-    }
+/// Resolved Solve verifier target (`solve.md` 5.3, D2, R13).
+///
+/// Unlike legacy Research's `resolve_optional_role_transport`, Solve verification ALWAYS runs
+/// even when `verifier == solver`, stamping [`ReviewIndependence::SameModel`] on the host.
+pub struct SolveVerifierTarget {
+    pub transport: Box<dyn Transport>,
+    pub role: research_tools::solve_model::RoleModel,
+    pub independence: research_tools::solve_model::ReviewIndependence,
+    pub routing_reason: String,
 }
+
+fn parse_solve_role_pair(
+    role: &research_tools::solve_model::RoleModel,
+) -> Option<(ProviderKind, String)> {
+    let p_raw = role.provider.trim();
+    if p_raw.is_empty() || CliRouteKind::from_provider(&p_raw.to_ascii_lowercase()).is_some() {
+        return None;
+    }
+    let pk = ProviderKind::parse(p_raw).ok()?;
+    let m_raw = role.model.trim();
+    let m = if m_raw.is_empty() {
+        pk.default_model().to_string()
+    } else {
+        pk.resolve_model(m_raw)
+    };
+    Some((pk, m))
+}
+
+fn parse_explicit_req_verifier(req: &Value) -> Result<Option<(ProviderKind, String)>, (u16, String)> {
+    let Some(v) = req.get("verifier") else {
+        return Ok(None);
+    };
+    if v.is_null() {
+        return Ok(None);
+    }
+    let obj = v.as_object().ok_or_else(|| {
+        (
+            400,
+            "`verifier` must be an object { provider, model } or null".to_string(),
+        )
+    })?;
+    let p_raw = obj
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| (400, "`verifier.provider` must be a non-empty string".to_string()))?;
+    if CliRouteKind::from_provider(&p_raw.to_ascii_lowercase()).is_some() {
+        return Err((
+            400,
+            format!(
+                "`verifier.provider` cannot use subscription CLI route `{p_raw}`; Solve verifier requires an in-core API, ChatGPT, or Ollama provider"
+            ),
+        ));
+    }
+    let pk = ProviderKind::parse(p_raw)
+        .map_err(|e| (400, format!("invalid `verifier.provider`: {e}")))?;
+    let m_raw = obj
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| (400, "`verifier.model` must be a non-empty string".to_string()))?;
+    let validated = validate_model_id(m_raw, "verifier")?;
+    Ok(Some((pk, pk.resolve_model(&validated))))
+}
+
+/// Resolve the Solve verifier transport obeying Decision D2:
+/// - Checks explicit request override (`req.verifier` or `req.{provider,model}`),
+///   then `setup_roles.verifier`, then Settings `agent_models.{verifier,full_verifier,step_verifier}`,
+///   then falls back to the solver role or connected in-core provider.
+/// - Never skips or returns `None` when `verifier == solver`: builds a live transport and
+///   computes `independence` strictly on the host via `compute_review_independence`.
+pub fn resolve_solve_verifier_transport(
+    state: &DesktopState,
+    ui: &UiSettings,
+    setup_roles: Option<&research_tools::solve_model::SolveRoles>,
+    req: Option<&Value>,
+    solver_fallback: Option<&research_tools::solve_model::RoleModel>,
+) -> Result<SolveVerifierTarget, (u16, String)> {
+    use research_tools::solve_model::{compute_review_independence, RoleModel};
+
+    let solver_role = setup_roles
+        .map(|r| r.solver.clone())
+        .or_else(|| solver_fallback.cloned())
+        .unwrap_or_else(|| RoleModel {
+            provider: ui.default_provider.clone().unwrap_or_default(),
+            model: ui.default_model.clone().unwrap_or_default(),
+        });
+    let normalized_solver = parse_solve_role_pair(&solver_role)
+        .map(|(pk, m)| RoleModel {
+            provider: pk.cli_name().to_string(),
+            model: m,
+        })
+        .unwrap_or_else(|| solver_role.clone());
+
+    let explicit_verifier = match req {
+        Some(r) => parse_explicit_req_verifier(r)?,
+        None => None,
+    };
+    let req_override = explicit_verifier.or_else(|| req_in_core_model(req));
+    let (provider, model, routing_reason) = if let Some((p, m)) = req_override {
+        (p, m, "request_override")
+    } else if let Some((p, m)) = setup_roles.and_then(|r| parse_solve_role_pair(&r.verifier)) {
+        (p, m, "setup_verifier_role")
+    } else if let Some((p, m)) = role_in_core_model(ui, "verifier") {
+        (p, m, "assigned_in_settings")
+    } else if let Some((p, m)) = role_in_core_model(ui, "full_verifier")
+        .or_else(|| role_in_core_model(ui, "step_verifier"))
+    {
+        (p, m, "assigned_legacy_verifier")
+    } else if let Some((p, m)) = parse_solve_role_pair(&solver_role) {
+        (p, m, "same_model_fallback")
+    } else {
+        let (p, m) = resolve_in_core_role_model(state, "verifier", req, true)?;
+        (p, m, "connected_default_fallback")
+    };
+
+    let transport = state
+        .build_transport(provider, &model)
+        .map_err(|e| (400, format!("failed to build Solve verifier transport: {e}")))?;
+    let verifier_role = RoleModel {
+        provider: provider.cli_name().to_string(),
+        model,
+    };
+    let independence = compute_review_independence(&normalized_solver, &verifier_role);
+    Ok(SolveVerifierTarget {
+        transport,
+        role: verifier_role,
+        independence,
+        routing_reason: routing_reason.to_string(),
+    })
+}
+
+#[cfg(test)]
+#[path = "agent_models_tests.rs"]
+mod tests;

@@ -358,6 +358,9 @@ pub(crate) fn dispatch_api(
         ("POST", ["api", "sessions", id, "solve", "reconcile"]) => {
             write_api_res(&mut stream, crate::solve_turn_routes::handle_reconcile(state, id, &req.body));
         }
+        ("POST", ["api", "sessions", id, "solve", "review"]) => {
+            write_api_res(&mut stream, crate::solve_workers::handle_solve_review(state, id, &req.body));
+        }
         (method, ["api", "sessions", id, "solve", rest @ ..]) => {
             write_api_res(&mut stream, crate::solve::handle_solve(state, method, id, rest, &req.body));
         }

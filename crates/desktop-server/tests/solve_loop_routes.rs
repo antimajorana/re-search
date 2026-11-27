@@ -5,7 +5,7 @@ mod common;
 use common::{raw_http, test_cfg, MockHttp, MockReply};
 use desktop_server::start_desktop_server;
 use ledger::Ledger;
-use research_tools::solve_model::{compute_math_sha256, event_kinds};
+use research_tools::solve_model::{compute_entry_sha256, compute_math_sha256, event_kinds};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -206,6 +206,179 @@ fn solve_post_messages_dispatches_to_solve_loop_and_pauses_on_transport_error_r1
     assert!(evs.iter().any(|e| e.kind == "session.start" && e.payload["tool_profile"] == "solve/1"));
     assert!(evs.iter().any(|e| e.kind == "model.request" && e.payload["caller"] == "solver"));
     assert!(evs.iter().any(|e| e.kind == event_kinds::SOLVE_PAUSED && e.payload["reason"] == "transport_error"));
+    assert!(!evs.iter().any(|e| e.kind == "session.abort"));
+    srv.shutdown();
+    mock.finish();
+}
+
+fn anthropic_tool_reply(id: &str, tool_id: &str, name: &str, input: Value) -> MockReply {
+    MockReply {
+        status: 200,
+        content_type: "application/json",
+        body: serde_json::to_vec(&json!({
+            "id": id,
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "stop_reason": "tool_use",
+            "content": [{ "type": "tool_use", "id": tool_id, "name": name, "input": input }],
+            "usage": { "input_tokens": 30, "output_tokens": 20 }
+        }))
+        .unwrap(),
+    }
+}
+
+fn openai_tool_reply(id: &str, call_id: &str, name: &str, args: Value) -> MockReply {
+    MockReply {
+        status: 200,
+        content_type: "application/json",
+        body: serde_json::to_vec(&json!({
+            "id": id,
+            "object": "chat.completion",
+            "model": "gpt-4.1",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": call_id,
+                        "type": "function",
+                        "function": { "name": name, "arguments": args.to_string() }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": { "prompt_tokens": 40, "completion_tokens": 18, "total_tokens": 58 }
+        }))
+        .unwrap(),
+    }
+}
+
+#[test]
+fn solve_finish_runs_desktop_verifier_before_done_criteria_evaluation() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let ledger = Ledger::open(&data_dir).unwrap();
+    let mut setup = setup_payload();
+    setup["done"] = json!([
+        { "id": "d1", "kind": "closure_tier_at_least", "params": { "tier": "model_agreed" } },
+        { "id": "d2", "kind": "no_open_flags", "params": {} }
+    ]);
+    ledger
+        .append_with_hash("s-solve-s14-hook", event_kinds::SOLVE_STARTED, 1, &json!({ "origin": "new" }))
+        .unwrap();
+    ledger
+        .append_with_hash("s-solve-s14-hook", event_kinds::SOLVE_SETUP, 1, &setup)
+        .unwrap();
+    let e1_sha = compute_entry_sha256(None, "Given summands", "Summands are 1 and 1.");
+    ledger
+        .append_with_hash(
+            "s-solve-s14-hook",
+            event_kinds::PROOF_ENTRY,
+            1,
+            &json!({
+                "entry_id": "e-1",
+                "entry_type": "assumption",
+                "summary": "Given summands",
+                "details": "Summands are 1 and 1.",
+                "depends_on": [],
+                "entry_sha256": e1_sha,
+                "origin": "given"
+            }),
+        )
+        .unwrap();
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::write(
+        data_dir.join("providers.json"),
+        serde_json::to_vec(&json!({
+            "providers": {
+                "anthropic": { "api_key": "sk-test-solve-s14" },
+                "openai": { "api_key": "sk-test-verifier-s14" }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mock = MockHttp::start(vec![
+        anthropic_tool_reply(
+            "msg_1",
+            "tu_step",
+            "step_record",
+            json!({
+                "entry_type": "result",
+                "depends_on": ["e-1"],
+                "summary": "Sum equals two",
+                "details": "Adding 1 and 1 gives 2."
+            }),
+        ),
+        anthropic_tool_reply(
+            "msg_2",
+            "tu_finish",
+            "solve_finish",
+            json!({
+                "final_entry_id": "e-2",
+                "summary_markdown": "Step e-2 concludes the sum is 2."
+            }),
+        ),
+        openai_tool_reply(
+            "chatcmpl_1",
+            "call_v1",
+            "report_verdict",
+            json!({
+                "verdicts": [{
+                    "entry_id": "e-2",
+                    "verdict": "accepted",
+                    "summary": "Prose arithmetic is valid.",
+                    "checks_cited": []
+                }]
+            }),
+        ),
+        anthropic_json_reply("msg_3", "Finished."),
+    ]);
+
+    let srv = start_desktop_server(test_cfg(&data_dir, None, Some(mock.base_url.clone()), None)).unwrap();
+    let port = srv.addr.port();
+    let auth = [("X-ReSearch-Token", srv.info.token.as_str()), ("Content-Type", "application/json")];
+
+    let msg_body = serde_json::to_vec(&json!({
+        "prompt": "Compute sum",
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5"
+    }))
+    .unwrap();
+    let (st, _, raw) = raw_http(port, "POST", "/api/sessions/s-solve-s14-hook/messages", &auth, &msg_body);
+    assert_eq!(st, 202, "{}", String::from_utf8_lossy(&raw));
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let evs = ledger.read_session("s-solve-s14-hook").unwrap();
+        if evs.iter().any(|e| e.kind == "session.end" || e.kind == event_kinds::SOLVE_PAUSED) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    let evs = ledger.read_session("s-solve-s14-hook").unwrap();
+    let review_ev = evs
+        .iter()
+        .find(|e| {
+            e.kind == event_kinds::PROOF_VERIFICATION
+                && e.payload["target_entry_id"] == "e-2"
+                && e.payload["verdict"] == "accepted"
+        })
+        .unwrap_or_else(|| panic!("expected finish-time PROOF_VERIFICATION in {evs:#?}"));
+    assert_eq!(review_ev.payload["independence"], "different_provider");
+
+    let done_ev = evs
+        .iter()
+        .find(|e| e.kind == event_kinds::SOLVE_DONE)
+        .unwrap_or_else(|| panic!("expected SOLVE_DONE in {evs:#?}"));
+    assert!(review_ev.seq < done_ev.seq, "verifier review must precede solve.done");
+    assert_eq!(done_ev.payload["final_entry_id"], "e-2");
+    assert_eq!(done_ev.payload["status"], "finished");
+    assert!(evs.iter().any(|e| e.kind == "session.end"));
     assert!(!evs.iter().any(|e| e.kind == "session.abort"));
     srv.shutdown();
     mock.finish();
