@@ -210,6 +210,41 @@ test('ocr_settings: XSS payloads in path/message/version write zero innerHTML an
     assert.ok(panel.element.textContent.includes(OCR_INSTALL_PROMPT));
     assert.ok(panel.element.textContent.includes(xss1));
     assert.ok(panel.element.textContent.includes(xss2));
+
+    // Nested GET /api/settings/ocr contract: auto-detected status must NOT overwrite configured null/eng inputs.
+    panel.update({
+      enabled: true,
+      tesseract_path: null,
+      tessdata_dir: null,
+      langs: ['eng'],
+      status: {
+        available: true,
+        tesseract_path: '/usr/bin/tesseract',
+        tessdata_dir: '/usr/share/tesseract-ocr/5/tessdata',
+        langs: ['deu', 'eng', 'osd'],
+        missing_langs: [],
+        version: 'tesseract 5.3.4',
+        message: 'Local Tesseract ready (3 language model(s)).',
+      },
+    });
+    assert.deepEqual(panel.getValues(), {
+      enabled: true,
+      tesseract_path: '',
+      tessdata_dir: '',
+      langs: ['eng'],
+    });
+    assert.equal(panel.element.querySelector('[data-ocr-detected="tesseract_path"]').textContent, '/usr/bin/tesseract');
+    assert.equal(panel.element.querySelector('[data-ocr-detected="langs"]').textContent, 'deu, eng, osd');
+
+    // Unavailable status with empty status.langs must preserve user-configured langs.
+    panel.update({
+      enabled: true,
+      tesseract_path: null,
+      tessdata_dir: null,
+      langs: ['eng', 'deu'],
+      status: { available: false, langs: [], missing_langs: ['eng', 'deu'], message: OCR_INSTALL_PROMPT },
+    });
+    assert.deepEqual(panel.getValues().langs, ['eng', 'deu']);
   } finally {
     dom.restore();
   }
@@ -219,14 +254,15 @@ test('page_image_viewer: URL encoding/validation, auth header, Blob URL lifecycl
   const dom = makeFakeDom();
   try {
     assert.equal(
-      buildPageImageUrl('sess/1', 'src 2', { page: 3, dpi: 150, crop: [10, 20, 300, 400] }),
-      '/api/sessions/sess%2F1/sources/src%202/page-image?page=3&dpi=150&crop=10,20,300,400',
+      buildPageImageUrl('sess/1', 'src 2', { page: 3, dpi: 150, crop: [0.1, 0.2, 0.3, 0.4] }),
+      '/api/sessions/sess%2F1/sources/src%202/page-image?page=3&dpi=150&crop=0.1,0.2,0.3,0.4',
     );
     assert.throws(() => buildPageImageUrl('s1', 'src1', { page: 0 }), RangeError);
     assert.throws(() => buildPageImageUrl('s1', 'src1', { page: 1.5 }), RangeError);
     assert.throws(() => buildPageImageUrl('s1', 'src1', { page: 1, dpi: -10 }), RangeError);
-    assert.throws(() => buildPageImageUrl('s1', 'src1', { page: 1, crop: [0, 0, NaN, 10] }), RangeError);
-    assert.throws(() => buildPageImageUrl('s1', 'src1', { page: 1, crop: [0, 0, 0, 10] }), RangeError);
+    assert.throws(() => buildPageImageUrl('s1', 'src1', { page: 1, crop: [0, 0, NaN, 0.5] }), RangeError);
+    assert.throws(() => buildPageImageUrl('s1', 'src1', { page: 1, crop: [0, 0, 0, 0.5] }), RangeError);
+    assert.throws(() => buildPageImageUrl('s1', 'src1', { page: 1, crop: [10, 20, 300, 400] }), RangeError);
 
     const requests = [];
     let failNext = false;

@@ -185,7 +185,7 @@ function renderQuoteList(anchors, pageBasis, opts) {
       start_line: a.start_line,
       end_line: a.end_line,
       page: a.page,
-      ocr: pageBasis === 'scan_text_layer',
+      ocr: Boolean(a.ocr || pageBasis === 'scan_text_layer' || pageBasis === 'ocr'),
     }, {
       onOpen: opts.onOpenQuote,
       onOpenPageImage: opts.onOpenPageImage,
@@ -325,7 +325,7 @@ export function renderInvestigationNodeModel(host, initialProps = {}) {
             start_line: h.anchor.start_line,
             end_line: h.anchor.end_line,
             page: h.anchor.page,
-            ocr: node.page_basis === 'scan_text_layer',
+            ocr: Boolean(h.anchor.ocr || node.page_basis === 'scan_text_layer' || node.page_basis === 'ocr'),
           }, {
             onOpen: props.onOpenQuote,
             onOpenPageImage: props.onOpenPageImage,

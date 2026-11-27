@@ -36,22 +36,31 @@ function parseLangList(value) {
 
 export function normalizeOcrStatus(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
+  const hasNestedStatus = Boolean(src.status && typeof src.status === 'object');
   const cfg = src.settings && typeof src.settings === 'object' ? src.settings : src;
-  const st = src.status && typeof src.status === 'object' ? src.status : src;
+  const st = hasNestedStatus ? src.status : src;
 
   const enabled = typeof cfg.enabled === 'boolean'
     ? cfg.enabled
     : (typeof st.enabled === 'boolean' ? st.enabled : DEFAULT_OCR_ENABLED);
   const available = Boolean(st.available);
-  const tesseract_path = String(st.tesseract_path ?? cfg.tesseract_path ?? '').trim();
-  const tessdata_dir = String(st.tessdata_dir ?? cfg.tessdata_dir ?? '').trim();
-  const langs = parseLangList(st.langs ?? cfg.langs);
+  const tesseract_path = String(st.tesseract_path ?? (!hasNestedStatus ? (cfg.tesseract_path ?? '') : '')).trim();
+  const tessdata_dir = String(st.tessdata_dir ?? (!hasNestedStatus ? (cfg.tessdata_dir ?? '') : '')).trim();
+  const langs = parseLangList(st.langs ?? (!hasNestedStatus ? cfg.langs : []));
+  const configured_tesseract_path = String(cfg.tesseract_path ?? (!hasNestedStatus ? tesseract_path : '')).trim();
+  const configured_tessdata_dir = String(cfg.tessdata_dir ?? (!hasNestedStatus ? tessdata_dir : '')).trim();
+  const cfgLangs = parseLangList(cfg.langs);
+  const configured_langs = cfgLangs.length > 0 ? cfgLangs : (!hasNestedStatus && langs.length > 0 ? langs : [DEFAULT_LANG]);
   const missing_langs = parseLangList(st.missing_langs);
   const version = String(st.version ?? '').trim();
   const rawMessage = String(st.message ?? cfg.message ?? '').trim();
   const message = rawMessage || (!available ? OCR_INSTALL_PROMPT : '');
 
-  return { enabled, available, tesseract_path, tessdata_dir, langs, missing_langs, version, message };
+  return {
+    enabled, available, tesseract_path, tessdata_dir, langs,
+    configured_tesseract_path, configured_tessdata_dir, configured_langs,
+    missing_langs, version, message,
+  };
 }
 
 export function createOcrStatusBanner(status) {
@@ -166,9 +175,9 @@ export function createOcrSettingsPanel(options = {}) {
     panel.setAttribute('data-ocr-available', s.available ? 'true' : 'false');
     bannerSlot.replaceChildren(createOcrStatusBanner(s));
     enabledInput.checked = s.enabled;
-    pathField.input.value = s.tesseract_path;
-    tessdataField.input.value = s.tessdata_dir;
-    langsField.input.value = s.langs.length > 0 ? s.langs.join(', ') : DEFAULT_LANG;
+    pathField.input.value = s.configured_tesseract_path;
+    tessdataField.input.value = s.configured_tessdata_dir;
+    langsField.input.value = s.configured_langs.length > 0 ? s.configured_langs.join(', ') : DEFAULT_LANG;
     detPath.dd.textContent = s.tesseract_path || 'Not detected';
     detTessdata.dd.textContent = s.tessdata_dir || 'Default';
     detLangs.dd.textContent = s.langs.length > 0 ? s.langs.join(', ') : 'None';

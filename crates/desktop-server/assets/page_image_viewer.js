@@ -55,7 +55,14 @@ function parseCropRect(crop) {
     if (!Number.isFinite(n)) throw new RangeError('crop coordinates must be finite numbers');
     return n;
   });
-  if (nums[2] <= 0 || nums[3] <= 0) throw new RangeError('crop width and height must be positive');
+  const [x, y, w, h] = nums;
+  if (x < 0 || y < 0 || x >= 1 || y >= 1) {
+    throw new RangeError('crop origin (x, y) must satisfy 0 <= x, y < 1');
+  }
+  if (w <= 0 || h <= 0) throw new RangeError('crop width and height must be positive');
+  if (x + w > 1.001 || y + h > 1.001) {
+    throw new RangeError('crop rectangle must lie within normalized [0, 1] page bounds');
+  }
   return nums;
 }
 
