@@ -77,7 +77,19 @@ pub fn session_solve_view(
     let toolbox = probe_toolbox(state);
     let approval_grants = build_solve_approval_grants(state, session_id);
     let model_connected = has_connected_model(state);
-    build_solve_view(events, running, toolbox, approval_grants, model_connected)
+    let mut view = build_solve_view(events, running, toolbox, approval_grants, model_connected);
+    let folded = SolveState::from_events(events);
+    let cli_review = crate::cli_turn_solve::resolve_cli_verifier_status(
+        state,
+        session_id,
+        folded.setup.as_ref(),
+        None,
+        None,
+    );
+    if let Some(obj) = view.as_object_mut() {
+        obj.insert("cli_review".into(), cli_review);
+    }
+    view
 }
 
 fn handle_view(state: &DesktopState, session_id: &str, events: &[Event]) -> ApiResult {
@@ -141,6 +153,13 @@ fn handle_prefill(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRes
         task_kind_override,
         allow_numeric_target,
     });
+    let cli_review = crate::cli_turn_solve::resolve_cli_verifier_status(
+        state,
+        session_id,
+        None,
+        solver.as_ref(),
+        verifier.as_ref(),
+    );
 
     Ok((
         200,
@@ -150,6 +169,7 @@ fn handle_prefill(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRes
             "toolbox": probe_toolbox(state),
             "approval_grants": build_solve_approval_grants(state, session_id),
             "model_connected": has_connected_model(state),
+            "cli_review": cli_review,
         }),
     ))
 }

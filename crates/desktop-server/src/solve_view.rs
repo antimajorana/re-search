@@ -487,6 +487,7 @@ pub fn build_solve_view(
         "checks": state.checks,
         "artifacts": state.artifacts,
         "done": state.done,
+        "result_sheet": crate::cli_turn_solve::build_ledger_result_sheet(&state),
         "plan": state.plan,
         "toolbox": toolbox,
         "approval_grants": approval_grants,
