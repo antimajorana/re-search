@@ -40,7 +40,8 @@ pub(crate) fn writeup_command(
     };
     let bytes = writeup_session_to_path(&abs_data, &session, format, &opts, &out)?;
     eprintln!(
-        "[re-search] wrote session {session} write-up ({fmt_raw}, {} bytes) -> {}",
+        "[re-search] wrote session {session} write-up ({}, {} bytes) -> {}",
+        format.extension(),
         bytes.len(),
         out.display()
     );
@@ -188,6 +189,19 @@ mod tests {
         assert!(g7_err.contains("Gate G7"), "{g7_err}");
         let exp_err = run_cli(&["writeup", "s-cli-exp", "--format", "tex", "--out", &tex_s, "--data-dir", &data_s]).unwrap_err();
         assert!(exp_err.contains("write-up adapter not built yet"), "{exp_err}");
+
+        // `--no-inline-marks=false` explicitly preserves inline badges.
+        let md_keep = out_dir.join("paper-keep.md");
+        let md_keep_s = md_keep.to_string_lossy().into_owned();
+        assert_eq!(
+            run_cli(&[
+                "writeup", "s-cli-ok", "--no-inline-marks=false", "--format", "md",
+                "--out", &md_keep_s, "--data-dir", &data_s
+            ]),
+            Ok(0)
+        );
+        let md_kept = fs::read_to_string(&md_keep).unwrap();
+        assert!(md_kept.contains("[Verified]"));
 
         // `--no-inline-marks` is still rejected on unrelated commands.
         let bad_flag = run_cli(&["export", "s-cli-ok", "--format", "tex", "--out", &tex_s, "--data-dir", &data_s, "--no-inline-marks"]).unwrap_err();

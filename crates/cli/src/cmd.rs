@@ -409,6 +409,10 @@ where
             Some("no-inline-marks") => {
                 flags.insert("no-inline-marks".to_string(), "true".to_string());
             }
+            Some(rest) if rest.starts_with("no-inline-marks=") => {
+                let val = rest.trim_start_matches("no-inline-marks=");
+                flags.insert("no-inline-marks".to_string(), val.to_string());
+            }
             Some(name) => {
                 let value = args.next().ok_or(format!("--{name} needs a value\n{USAGE}"))?;
                 flags.insert(name.to_string(), value);
