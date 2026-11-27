@@ -189,8 +189,14 @@ mod tests {
         .unwrap();
         assert_eq!(s1.defs.len(), 17);
         assert_eq!(s1.policy_version, research_tools::SOLVE_POLICY_VERSION);
-        let err = core_tool_set_for_profile(env, research_tools::tool_profile::PROFILE_EXPLORE_V1)
-            .unwrap_err();
-        assert!(err.contains("profile not built yet"), "{err}");
+        let e1 = core_tool_set_for_profile(
+            Arc::clone(&env),
+            research_tools::tool_profile::PROFILE_EXPLORE_V1,
+        )
+        .unwrap();
+        assert_eq!(e1.defs.len(), 5);
+        assert_eq!(e1.policy_version, research_tools::RESEARCH_POLICY_VERSION);
+        let err = core_tool_set_for_profile(env, "unknown/99").unwrap_err();
+        assert!(err.contains("unknown tool profile"), "{err}");
     }
 }

@@ -171,14 +171,39 @@ fn every_built_profile_def_hash_agrees_with_tool_defs_golden() {
             );
         }
     }
+    // Verify every reused tool in `explore/1` matches its frozen hash in `tool_defs.txt` byte for byte.
+    let e1 = lookup(PROFILE_EXPLORE_V1).unwrap();
+    for pair in e1.defs.windows(2) {
+        assert!(pair[0].id < pair[1].id, "profile `{PROFILE_EXPLORE_V1}` out of id order");
+    }
+    let explore_only = [
+        research_tools::idea_tools::IDEA_FETCH_PAPERS,
+        research_tools::idea_tools::IDEA_SEARCH,
+    ];
+    for def in &e1.defs {
+        if explore_only.contains(&def.id.as_str()) {
+            assert!(
+                !pinned.contains_key(&def.id),
+                "new Explore tool `{}` must not exist in frozen tool_defs.txt",
+                def.id
+            );
+        } else {
+            let expected = pinned
+                .get(&def.id)
+                .unwrap_or_else(|| panic!("profile `explore/1` reused tool `{}` missing from tool_defs.txt", def.id));
+            assert_eq!(
+                &def.def_hash(),
+                expected,
+                "profile `explore/1` reused tool `{}` hash differs from tool_defs.txt",
+                def.id
+            );
+        }
+    }
 }
 
 #[test]
 fn reserved_profiles_return_clear_not_built_yet_error() {
-    assert_eq!(
-        RESERVED_PROFILE_NAMES,
-        &[PROFILE_EXPLORE_V1]
-    );
+    assert!(RESERVED_PROFILE_NAMES.is_empty());
     for name in RESERVED_PROFILE_NAMES {
         let err = lookup(name).expect_err("reserved profile must return Err");
         assert_eq!(err, ProfileError::NotBuiltYet { name: (*name).to_string() });

@@ -10,6 +10,7 @@ pub mod idea_brief;
 pub mod idea_queries;
 pub mod idea_rank;
 pub mod idea_terms;
+pub mod idea_tools;
 pub mod ingest;
 pub mod investigation;
 pub mod investigation_evidence;

@@ -10,8 +10,8 @@ use crate::map_defs::{
 };
 use crate::paper_key::Mode;
 use crate::{
-    all_research_tool_defs, investigation, register_research_tools, research_policy, solve_defs,
-    solve_exprs, solve_policy, ResearchEnv,
+    all_research_tool_defs, idea_tools, investigation, register_research_tools, research_policy,
+    solve_defs, solve_exprs, solve_policy, ResearchEnv,
 };
 use ledger::Event;
 use policy::{EffectClass, Policy};
@@ -30,7 +30,7 @@ pub const PROFILE_RESEARCH_V1: &str = "research/1";
 pub const PROFILE_INVESTIGATION_V1: &str = "investigation/1";
 /// Built profile for Investigate v2 (package V6; `00-overview.md` 2.2, 8.2 decision 1).
 pub const PROFILE_INVESTIGATION_V2: &str = "investigation/2";
-/// Reserved profile for Explore conversation turns (`00-overview.md` 2.2, 8.2 decision 1).
+/// Frozen profile for Explore (`00-overview.md` 2.2, `explore.md` 5.2, 8.2 decision 1, package X7).
 pub const PROFILE_EXPLORE_V1: &str = "explore/1";
 /// Frozen profile for Solve (`00-overview.md` 2.2, `solve.md` 5.1, 8.2 decision 1, package S7).
 pub const PROFILE_SOLVE_V1: &str = "solve/1";
@@ -41,11 +41,10 @@ pub const BUILT_PROFILE_NAMES: &[&str] = &[
     PROFILE_INVESTIGATION_V1,
     PROFILE_INVESTIGATION_V2,
     PROFILE_SOLVE_V1,
-];
-/// Known future profiles whose tools are not implemented yet.
-pub const RESERVED_PROFILE_NAMES: &[&str] = &[
     PROFILE_EXPLORE_V1,
 ];
+/// Known future profiles whose tools are not implemented yet.
+pub const RESERVED_PROFILE_NAMES: &[&str] = &[];
 
 /// Host-written mode marker events (`00-overview.md` 3.1 row 3, 5.2, 8.2 decision 1).
 pub const MARKER_INVESTIGATION_STARTED: &str = "investigation.started";
@@ -305,24 +304,33 @@ pub fn solve_v1() -> ToolProfile {
     }
 }
 
-/// Look up a profile by name. Reserved future profiles (`explore/1`)
-/// return `Err(ProfileError::NotBuiltYet)` with a clear error message, never panicking.
+/// Profile `explore/1`: frozen 4-tool Explore tool list (`idea_fetch_papers`, `idea_search`,
+/// `read_paper_lines`, `search_paper_passages`) and `research_policy()` (`explore.md` 5.2, X7).
+pub fn explore_v1() -> ToolProfile {
+    ToolProfile {
+        name: PROFILE_EXPLORE_V1,
+        defs: idea_tools::explore_v1_defs(),
+        may_gain: Vec::new(),
+        earlier_defs: BTreeMap::new(),
+        policy: research_policy(),
+    }
+}
+
+/// Look up a profile by name.
 pub fn lookup(name: &str) -> Result<ToolProfile, ProfileError> {
     match name {
         PROFILE_RESEARCH_V1 => Ok(research_v1()),
         PROFILE_INVESTIGATION_V1 => Ok(investigation_v1()),
         PROFILE_INVESTIGATION_V2 => Ok(investigation_v2()),
         PROFILE_SOLVE_V1 => Ok(solve_v1()),
-        PROFILE_EXPLORE_V1 => {
-            Err(ProfileError::NotBuiltYet { name: name.to_string() })
-        }
+        PROFILE_EXPLORE_V1 => Ok(explore_v1()),
         _ => Err(ProfileError::Unknown { name: name.to_string() }),
     }
 }
 
 /// All profiles built in this binary, in canonical order.
 pub fn built_profiles() -> Vec<ToolProfile> {
-    vec![research_v1(), investigation_v1(), investigation_v2(), solve_v1()]
+    vec![research_v1(), investigation_v1(), investigation_v2(), solve_v1(), explore_v1()]
 }
 
 /// Detect session mode from the latest host-written mode marker (`00-overview.md` 1, 3.1 row 3).
@@ -480,6 +488,12 @@ pub fn register_profile(
             );
             registry.register(solve_defs::step_record_def(), step_record_handler);
             registry.register(solve_defs::solve_finish_def(), solve_finish_handler);
+        }
+        PROFILE_EXPLORE_V1 => {
+            if let Some(title_handler) = host.session_title_handler {
+                registry.register(builtin::session_title_def(), title_handler);
+            }
+            idea_tools::register_explore_v1_tools(registry, env, None);
         }
         other => {
             return Err(format!(
