@@ -475,3 +475,81 @@ fn contained_check_worker_loads_staged_modules_and_reports_its_role() {
     assert!(inspect_process_token(worker.worker_pid().unwrap()).unwrap().is_appcontainer);
     assert!(matches!(worker.evaluate("1 + 1", Duration::from_secs(5)), Err(WorkerError::Protocol(_))));
 }
+
+#[test]
+fn contained_scipy_quad_and_matplotlib_agg_render_in_scratch() {
+    let Some(python) = python_exe() else {
+        eprintln!("SKIPPED: set RE_SEARCH_PYTHON to run AppContainer probes");
+        return;
+    };
+    let mut fixture = TempSandboxFixture::new("scipy-mpl-ac");
+    let (scratch, pycache) = fixture.prepare_session("s-scipy-mpl");
+    let python = PathBuf::from(python);
+    let script = repo_root().join("python/worker.py");
+    let sandbox = AppContainerSandbox::new(
+        fixture.data_dir.clone(),
+        "s-scipy-mpl",
+        python.clone(),
+        script.clone(),
+        scratch.clone(),
+        pycache.clone(),
+    )
+    .unwrap();
+    let config = WorkerConfig {
+        python,
+        script,
+        scratch: scratch.clone(),
+        pycache,
+        startup_timeout: Duration::from_secs(60),
+        job_memory_limit_bytes: None,
+    };
+    let mut worker = Worker::new(config, Box::new(sandbox));
+
+    // Startup and pure SymPy evaluation must not import SciPy or Matplotlib eagerly.
+    let lazy = py_json(
+        &mut worker,
+        "import json, sys\nprint(json.dumps({'scipy': 'scipy' in sys.modules, 'mpl': 'matplotlib' in sys.modules}))",
+        Duration::from_secs(30),
+    );
+    assert_eq!(lazy["scipy"], json!(false));
+    assert_eq!(lazy["mpl"], json!(false));
+
+    // Offline SciPy quadrature + Matplotlib Agg PNG render inside zero-network AppContainer.
+    let res = py_json(
+        &mut worker,
+        r#"import json, os, pathlib
+from scipy import integrate
+val, err = integrate.quad(lambda t: t * t, 0.0, 1.0)
+import matplotlib
+import matplotlib.pyplot as plt
+out_dir = pathlib.Path('artifacts')
+out_dir.mkdir(parents=True, exist_ok=True)
+fig, ax = plt.subplots()
+ax.plot([0.0, 1.0, 2.0], [0.0, 1.0, 4.0], label='y=x^2')
+ax.set_title('AppContainer Agg Smoke')
+ax.legend()
+png_path = out_dir / 'quad_curve.png'
+fig.savefig(png_path)
+plt.close(fig)
+mpl_dir = pathlib.Path(os.environ['MPLCONFIGDIR'])
+cache_files = [p.name for p in mpl_dir.iterdir()] if mpl_dir.is_dir() else []
+print(json.dumps({
+    'quad': val,
+    'quad_err': err,
+    'backend': matplotlib.get_backend(),
+    'mplconfigdir': str(mpl_dir),
+    'cache_files': cache_files,
+    'png_bytes': png_path.stat().st_size,
+}))"#,
+        Duration::from_secs(60),
+    );
+    let quad = res["quad"].as_f64().unwrap();
+    assert!((quad - (1.0 / 3.0)).abs() < 1e-12, "unexpected quad result: {res}");
+    assert_eq!(res["backend"].as_str().unwrap().to_ascii_lowercase(), "agg");
+    assert!(res["png_bytes"].as_u64().unwrap() > 1000, "unexpected PNG size: {res}");
+    let png = fs::read(scratch.join("artifacts").join("quad_curve.png")).unwrap();
+    assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"), "output file is not a valid PNG");
+    let cache_files = res["cache_files"].as_array().unwrap();
+    assert!(!cache_files.is_empty(), "expected matplotlib font cache inside scratch MPLCONFIGDIR: {res}");
+    assert!(inspect_process_token(worker.worker_pid().unwrap()).unwrap().is_appcontainer);
+}

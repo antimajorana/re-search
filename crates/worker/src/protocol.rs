@@ -24,6 +24,7 @@ pub const STAGED_HELPER_FILES: &[&str] = &[
     "solver_calc.py",
     "symbolic_validation.py",
     "numerical_validation.py",
+    "physics.py",
 ];
 
 /// Host-shipped check modules under `python/checks/` staged into the runtime.
@@ -33,6 +34,7 @@ pub const STAGED_CHECK_FILES: &[&str] = &[
     "checks/srepr_safe.py",
     "checks/algebra.py",
     "checks/algebra_probe.py",
+    "checks/physics.py",
 ];
 
 /// Process role of a spawned `worker.py` instance (`solve.md` 4.3).

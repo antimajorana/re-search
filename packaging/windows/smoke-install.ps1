@@ -214,10 +214,17 @@ try {
     }
 
     $savedPython = $env:RE_SEARCH_PYTHON
+    $savedMplConfig = $env:MPLCONFIGDIR
+    $savedMplBackend = $env:MPLBACKEND
     $savedNativeError = $PSNativeCommandUseErrorActionPreference
     try {
         $python = Join-Path $installDir 'runtime\python.exe'
-        & $python -c "import sys, sympy, mpmath, numpy; assert sys.maxsize > 2**32"
+        $mplSmokeDir = Join-Path $smokeRoot.FullName 'installed-mpl'
+        New-Item -ItemType Directory -Path $mplSmokeDir -Force | Out-Null
+        $env:MPLCONFIGDIR = $mplSmokeDir
+        $env:MPLBACKEND = 'Agg'
+        & $python -I -B -c "import math, os, pathlib, sys, sympy, mpmath, numpy, scipy.integrate, matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; assert sys.maxsize > 2**32; val, _ = scipy.integrate.quad(math.sin, 0.0, math.pi); assert abs(val - 2.0) < 1e-9; fig, ax = plt.subplots(); ax.plot([0, 1], [0, 1]); out = pathlib.Path(os.environ['MPLCONFIGDIR']) / 'smoke.png'; fig.savefig(out); plt.close(fig); assert out.read_bytes().startswith(b'\x89PNG\r\n\x1a\n')"
+        if ($LASTEXITCODE -ne 0) { throw "Bundled Python SciPy/Matplotlib smoke check exited with code $LASTEXITCODE." }
         $env:RE_SEARCH_PYTHON = $python
         $PSNativeCommandUseErrorActionPreference = $false
         $testOutput = @(& cargo test --locked --release --target $Target -p worker --test appcontainer_sandbox 2>&1)
@@ -232,6 +239,8 @@ try {
     } finally {
         $PSNativeCommandUseErrorActionPreference = $savedNativeError
         $env:RE_SEARCH_PYTHON = $savedPython
+        $env:MPLCONFIGDIR = $savedMplConfig
+        $env:MPLBACKEND = $savedMplBackend
     }
     if ($failures.Count) { throw ($failures -join "`n") }
 } finally {
