@@ -23,13 +23,10 @@ pub(crate) fn build_request_url(
     max_results: usize,
 ) -> Result<String, (QueryStatus, String)> {
     match query.provider {
-        LitProvider::OpenAlex => Err((
-            QueryStatus::Disabled,
-            "OpenAlex (`api.openalex.org`) is not in http_client.rs ALLOWLISTED_HTTPS_HOSTS yet (deferred to package X19)".into(),
-        )),
+        LitProvider::OpenAlex => crate::lit_openalex::build_request_url(endpoints, query, max_results),
         LitProvider::TheoremSearch => Err((
             QueryStatus::Disabled,
-            "TheoremSearch is disabled by default and not allowlisted yet (deferred to package X19)".into(),
+            "TheoremSearch is disabled by default and not allowlisted (skipped per owner decision 2026-11-26)".into(),
         )),
         LitProvider::Arxiv => build_arxiv_url(endpoints, query, max_results),
         LitProvider::Inspire => build_inspire_url(endpoints, query, max_results),

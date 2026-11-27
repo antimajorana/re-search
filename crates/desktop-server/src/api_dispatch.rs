@@ -401,6 +401,9 @@ pub(crate) fn dispatch_api(
         ("PUT", ["api", "settings", "investigate"]) => {
             write_api_res(&mut stream, crate::investigation_settings::handle_put(state, &req.body));
         }
+        ("GET" | "PUT", ["api", "settings", "literature"]) => {
+            write_api_res(&mut stream, crate::lit_settings::handle(state, method, &req.body));
+        }
         ("GET", ["api", "connections"]) => {
             write_api_res(&mut stream, crate::connections::handle_connections(state, &req.query));
         }

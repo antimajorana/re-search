@@ -100,6 +100,7 @@ fn loopback_mock_classifies_logical_services_separately() {
     let arxiv_pdf: Uri = "http://127.0.0.1:18080/pdf/2103.01234.pdf".parse().unwrap();
     let inspire: Uri = "http://127.0.0.1:18080/api/literature?q=test".parse().unwrap();
     let crossref: Uri = "http://127.0.0.1:18080/works?query=test".parse().unwrap();
+    let openalex: Uri = "http://127.0.0.1:18080/openalex/works?search=test".parse().unwrap();
     let s2: Uri = "http://127.0.0.1:18080/graph/v1/paper/search?query=test".parse().unwrap();
     let generic: Uri = "http://127.0.0.1:18080/ok0".parse().unwrap();
 
@@ -108,6 +109,7 @@ fn loopback_mock_classifies_logical_services_separately() {
     assert_eq!(resolve_bucket(&arxiv_pdf, &ep, None), RateBucket::Service(Service::Arxiv));
     assert_eq!(resolve_bucket(&inspire, &ep, None), RateBucket::Service(Service::Inspire));
     assert_eq!(resolve_bucket(&crossref, &ep, None), RateBucket::Service(Service::Crossref));
+    assert_eq!(resolve_bucket(&openalex, &ep, None), RateBucket::Service(Service::OpenAlex));
     assert_eq!(resolve_bucket(&s2, &ep, None), RateBucket::Service(Service::SemanticScholar));
     assert_eq!(resolve_bucket(&generic, &ep, None), RateBucket::LoopbackGeneric(18080));
     // Explicit hint overrides generic loopback paths.
@@ -125,11 +127,14 @@ fn distinct_loopback_ports_classify_by_endpoint_without_path_match() {
         inspire_api_base: "http://127.0.0.1:19002".into(),
         crossref_api_base: "http://127.0.0.1:19003".into(),
         semantic_scholar_api_base: "http://127.0.0.1:19004".into(),
+        openalex_api_base: "http://127.0.0.1:19005".into(),
     };
     let custom_arxiv: Uri = "http://127.0.0.1:19001/custom".parse().unwrap();
     let custom_inspire: Uri = "http://127.0.0.1:19002/custom".parse().unwrap();
+    let custom_openalex: Uri = "http://127.0.0.1:19005/custom".parse().unwrap();
     assert_eq!(resolve_bucket(&custom_arxiv, &ep, None), RateBucket::Service(Service::Arxiv));
     assert_eq!(resolve_bucket(&custom_inspire, &ep, None), RateBucket::Service(Service::Inspire));
+    assert_eq!(resolve_bucket(&custom_openalex, &ep, None), RateBucket::Service(Service::OpenAlex));
 }
 
 #[test]
