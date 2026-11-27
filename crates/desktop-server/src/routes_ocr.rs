@@ -6,8 +6,7 @@ use crate::ocr_settings::{effective_ocr_status, load_ocr_settings};
 use crate::routes_session::{bad, conflict, internal, not_found, parse_json_body, ApiResult};
 use crate::state::{decode_base64, parse_multipart_files, DesktopState};
 use research_tools::ingest_ocr::{
-    ingest_pdf_with_ocr, pin_ocr_outcome_to_session, OcrIngestMeta, OcrIngestRequest,
-    OcrIngestedSource,
+    pin_ocr_outcome_to_session, OcrIngestMeta, OcrIngestedSource,
 };
 use research_tools::library::Library;
 use research_tools::pdf::PdfError;
@@ -82,6 +81,7 @@ impl OcrPageRunner for WorkerOcrRunner {
 }
 
 struct StoredOcrJob {
+    data_dir: PathBuf,
     session_id: String,
     created_seq: u64,
     cancel_flag: Arc<AtomicBool>,
@@ -278,10 +278,14 @@ fn register_ocr_job(job_id: String, slot: Arc<StoredOcrJob>) -> Result<(), (u16,
     Ok(())
 }
 
-fn lookup_session_job(session: &str, job_id: &str) -> Result<Arc<StoredOcrJob>, (u16, String)> {
+fn lookup_session_job(
+    data_dir: &Path,
+    session: &str,
+    job_id: &str,
+) -> Result<Arc<StoredOcrJob>, (u16, String)> {
     let map = ocr_jobs().lock().map_err(|_| internal("OCR job registry lock poisoned"))?;
     match map.get(job_id) {
-        Some(slot) if slot.session_id == session => Ok(Arc::clone(slot)),
+        Some(slot) if slot.session_id == session && slot.data_dir == data_dir => Ok(Arc::clone(slot)),
         _ => Err(not_found(format!("OCR job `{job_id}` not found"))),
     }
 }
@@ -320,6 +324,7 @@ pub fn handle_ocr_ingest(
         let job = PdfOcrJob::start(job_id.clone(), parsed.raw_bytes.clone(), ocr_opts, renderer, runner_arc);
         let snapshot = job.snapshot();
         let slot = Arc::new(StoredOcrJob {
+            data_dir: state.cfg.data_dir.clone(),
             session_id: session.to_string(),
             created_seq: OCR_JOB_SEQ.fetch_add(1, Ordering::Relaxed),
             cancel_flag,
@@ -340,21 +345,32 @@ pub fn handle_ocr_ingest(
     }
 
     let renderer = RasterXObjectRenderer::default();
-    let sandbox = WorkspaceSandbox::new(env.data_dir.clone(), env.workspace_root.clone());
-    let ledger = Mutex::new(state.open_ledger().map_err(internal)?);
-    let library = Library::open(&state.cfg.data_dir).ok();
-    let req = OcrIngestRequest {
-        session_id: session,
-        file_name: &parsed.file_name,
-        origin: &parsed.file_name,
-        raw_bytes: &parsed.raw_bytes,
-        source_id_hint: None,
-        title: parsed.title.as_deref(),
-        ocr_opts,
-    };
     let runner_ref = runner.as_ref().map(|r| r as &dyn OcrPageRunner);
-    let ingested = ingest_pdf_with_ocr(&sandbox, &ledger, library.as_ref(), &req, &renderer, runner_ref)
-        .map_err(bad)?;
+    let outcome = research_tools::pdf_ocr::extract_and_ocr_pdf_pages(
+        &parsed.raw_bytes,
+        &ocr_opts,
+        &renderer,
+        runner_ref,
+    )
+    .map_err(|e| bad(e.to_string()))?;
+    let sandbox = WorkspaceSandbox::new(env.data_dir.clone(), env.workspace_root.clone());
+    let ingested = {
+        let _write_lock = state
+            .ledger_write_lock
+            .lock()
+            .map_err(|_| internal("ledger write lock poisoned"))?;
+        let ledger = Mutex::new(state.open_ledger().map_err(internal)?);
+        let library = Library::open(&state.cfg.data_dir).ok();
+        let meta = OcrIngestMeta {
+            session_id: session,
+            file_name: &parsed.file_name,
+            origin: &parsed.file_name,
+            source_id_hint: None,
+            title: parsed.title.as_deref(),
+        };
+        pin_ocr_outcome_to_session(&sandbox, &ledger, library.as_ref(), &meta, &parsed.raw_bytes, outcome)
+            .map_err(bad)?
+    };
     Ok((200, serde_json::to_value(ingested).map_err(|e| internal(e.to_string()))?))
 }
 
@@ -362,28 +378,45 @@ pub fn handle_ocr_ingest(
 pub fn handle_ocr_job_status(state: &DesktopState, session: &str, job_id: &str) -> ApiResult {
     require_session(state, session)?;
     validate_job_id(job_id)?;
-    let slot = lookup_session_job(session, job_id)?;
+    let slot = lookup_session_job(&state.cfg.data_dir, session, job_id)?;
     let mut guard = slot.inner.lock().map_err(|_| internal("OCR job state lock poisoned"))?;
     let inner = &mut *guard;
 
     if inner.job.as_ref().is_some_and(PdfOcrJob::is_finished) {
         if let Some(job) = inner.job.take() {
             let snap = job.snapshot();
+            inner.final_snapshot = Some(snap);
             let raw_bytes = std::mem::take(&mut inner.raw_bytes);
             match job.join() {
                 Ok(outcome) => {
-                    let sandbox = WorkspaceSandbox::new(inner.data_dir.clone(), inner.workspace_root.clone());
-                    let ledger = Mutex::new(state.open_ledger().map_err(internal)?);
-                    let library = Library::open(&inner.data_dir).ok();
-                    let pin_res = {
-                        let meta = OcrIngestMeta {
-                            session_id: &slot.session_id,
-                            file_name: &inner.file_name,
-                            origin: &inner.file_name,
-                            source_id_hint: None,
-                            title: inner.title.as_deref(),
-                        };
-                        pin_ocr_outcome_to_session(&sandbox, &ledger, library.as_ref(), &meta, &raw_bytes, outcome)
+                    let pin_res = match state.ledger_write_lock.lock() {
+                        Ok(_write_lock) => match state.open_ledger() {
+                            Ok(opened) => {
+                                let sandbox = WorkspaceSandbox::new(
+                                    inner.data_dir.clone(),
+                                    inner.workspace_root.clone(),
+                                );
+                                let ledger = Mutex::new(opened);
+                                let library = Library::open(&inner.data_dir).ok();
+                                let meta = OcrIngestMeta {
+                                    session_id: &slot.session_id,
+                                    file_name: &inner.file_name,
+                                    origin: &inner.file_name,
+                                    source_id_hint: None,
+                                    title: inner.title.as_deref(),
+                                };
+                                pin_ocr_outcome_to_session(
+                                    &sandbox,
+                                    &ledger,
+                                    library.as_ref(),
+                                    &meta,
+                                    &raw_bytes,
+                                    outcome,
+                                )
+                            }
+                            Err(err) => Err(err),
+                        },
+                        Err(_) => Err("ledger write lock poisoned".into()),
                     };
                     match pin_res {
                         Ok(ingested) => inner.source = Some(ingested),
@@ -393,7 +426,6 @@ pub fn handle_ocr_job_status(state: &DesktopState, session: &str, job_id: &str) 
                 Err(PdfError::Cancelled) => {}
                 Err(err) => inner.error = Some(err.to_string()),
             }
-            inner.final_snapshot = Some(snap);
         }
     }
 
@@ -414,9 +446,11 @@ pub fn handle_ocr_job_status(state: &DesktopState, session: &str, job_id: &str) 
 pub fn handle_ocr_job_cancel(state: &DesktopState, session: &str, job_id: &str) -> ApiResult {
     require_session(state, session)?;
     validate_job_id(job_id)?;
-    let slot = lookup_session_job(session, job_id)?;
+    let slot = lookup_session_job(&state.cfg.data_dir, session, job_id)?;
     slot.cancel_flag.store(true, Ordering::Relaxed);
-    let inner = slot.inner.lock().map_err(|_| internal("OCR job state lock poisoned"))?;
+    let mut inner = slot.inner.lock().map_err(|_| internal("OCR job state lock poisoned"))?;
+    inner.raw_bytes.clear();
+    inner.raw_bytes.shrink_to_fit();
     let snapshot = if let Some(ref job) = inner.job {
         job.cancel();
         job.snapshot()

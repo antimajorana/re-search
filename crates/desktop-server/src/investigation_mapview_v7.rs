@@ -358,9 +358,9 @@ pub(crate) fn attach_pdf_pages_to_anchor_obj(q: &mut Value, pdf: &IngestedPdfSou
         if rec.basis == PageBasis::None {
             return;
         }
-        if rec.basis == PageBasis::Ocr {
-            scan_basis = Some(rec.basis.as_str());
-        } else if rec.basis == PageBasis::ScanTextLayer && scan_basis != Some(PageBasis::Ocr.as_str()) {
+        if rec.basis == PageBasis::Ocr
+            || (rec.basis == PageBasis::ScanTextLayer && scan_basis != Some(PageBasis::Ocr.as_str()))
+        {
             scan_basis = Some(rec.basis.as_str());
         }
         min_p = Some(min_p.map_or(rec.page, |m| m.min(rec.page)));
