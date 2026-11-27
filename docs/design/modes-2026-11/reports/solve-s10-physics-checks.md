@@ -2,12 +2,12 @@
 
 - **Branch**: `gemini/modes/solve-s10-physics-checks`
 - **Initial base commit**: `acf7cb0` (PR #52 candidate integrating S8+S9+S11 onto `26c2dc6`)
-- **Merged remote fixed tip**: `24be58e` (`origin/gemini/work/fixed`, via merge commit `a71d5b6`)
+- **Merged remote fixed tip**: `eb0eb63` (`origin/gemini/work/fixed`, PR #55)
 - **Implementation commits**:
   - **S10a (Python physics checks + unit tests)**: `28f98bb`
   - **S10-staging (`STAGED_CHECK_FILES` + NSIS)**: `3c6616c`
   - **S10b (Rust host params + `AutoCheckGate` + cross-process E2E)**: `59f40fd`
-  - **Merged `origin/gemini/work/fixed` (`24be58e`)**: `a71d5b6`
+  - **Merged `origin/gemini/work/fixed` (`24be58e` then `eb0eb63`)**: `a71d5b6` and fast-forward/merge of `eb0eb63`
   - **S10 final report**: committed last on this branch
 
 ---
@@ -81,14 +81,14 @@ Zero frozen or out-of-lane files were modified (`Cargo.lock`, `crates/export/*`,
 
 ---
 
-## 5. Verification Results (Post-Final-Code-Edit, After Merging `24be58e`)
+## 5. Verification Results (Post-Final-Code-Edit, After Merging `eb0eb63`)
 
 | Command | Result |
 |---|---|
 | `py -3 scripts/check_file_length.py --base origin/gemini/work/fixed` | Pass (`No touched source file is over 600 lines.` across all 11 touched files) |
-| `python3 -m unittest discover -s python -v` (WSL2 Python 3.12.3, SymPy 1.14.0, mpmath 1.3.0, NumPy 2.5.4) | **52 passed, 0 failed** (`35.792s`) |
+| `python3 -m unittest discover -s python -v` (WSL2 Python 3.12.3, SymPy 1.14.0, mpmath 1.3.0, NumPy 2.5.4) | **52 passed, 0 failed** (`38.479s`) |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings -A clippy::manual_unwrap_or` (WSL2 non-root, `RE_SEARCH_PYTHON` unset) | Pass (`0` errors, `0` warnings beyond documented pre-existing `evidence.rs:744` suppression) |
-| `cargo test --workspace --locked --no-fail-fast -j 2` (WSL2 non-root, `RE_SEARCH_PYTHON` unset) | **1,199 passed, 0 failed, 2 ignored** across 152 suites (`agent/tests/eval_harness.rs`: `file_sheet_from_json` and `live_manifests_validate` require live env vars, pre-existing) |
+| `cargo test --workspace --locked --no-fail-fast -j 2` (WSL2 non-root, `RE_SEARCH_PYTHON` unset) | **1,202 passed, 0 failed, 2 ignored** across 153 suites (`agent/tests/eval_harness.rs`: `file_sheet_from_json` and `live_manifests_validate` require live env vars, pre-existing) |
 | `RE_SEARCH_PYTHON="/home/antimajorana/.venvs/bootloops/bin/python3" cargo test --locked -p worker -p research-tools` | **535 passed, 0 failed, 0 ignored** across 46 suites (includes `solve_s10_physics`: `3 passed`, `solve_checks`: `2 passed`, `worker::protocol::tests::collect_and_write_staged_scripts_includes_checks_package`: `1 passed`) |
 
 ### Not Run on Linux WSL2
