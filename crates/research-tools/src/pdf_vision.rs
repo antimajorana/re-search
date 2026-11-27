@@ -72,9 +72,7 @@ impl TextLayerBasis {
     }
 
     /// True when quotes matched from this layer must carry the `"OCR"` / scanned-source tag.
-    pub fn is_ocr_or_scan(self) -> bool {
-        matches!(self, Self::ScanTextLayer | Self::Ocr)
-    }
+    pub fn is_ocr_or_scan(self) -> bool { matches!(self, Self::ScanTextLayer | Self::Ocr) }
 
     fn to_page_basis(self) -> PageBasis {
         match self {
@@ -86,14 +84,9 @@ impl TextLayerBasis {
 
 /// Evaluate the fail-closed opt-in gate for equation-page vision transcription.
 ///
-/// - Explicit per-request `Some(false)` always refuses (overrides any saved setting).
-/// - Explicit per-request `Some(true)` opts in for that request.
-/// - Otherwise falls back to the persisted setting, defaulting to
-///   [`DEFAULT_EQUATION_TRANSCRIPTION_ENABLED`] (`false`).
-pub fn is_equation_transcription_opted_in(
-    setting_enabled: Option<bool>,
-    request_opt_in: Option<bool>,
-) -> bool {
+/// Explicit per-request `Some(false)` always refuses; `Some(true)` opts in; `None` falls back to
+/// the persisted setting, defaulting to [`DEFAULT_EQUATION_TRANSCRIPTION_ENABLED`] (`false`).
+pub fn is_equation_transcription_opted_in(setting_enabled: Option<bool>, request_opt_in: Option<bool>) -> bool {
     match request_opt_in {
         Some(false) => false,
         Some(true) => true,
@@ -121,16 +114,11 @@ pub struct FormulaTranscription {
 }
 
 impl FormulaTranscription {
-    /// Construct and validate a [`FormulaTranscription`] unconditionally labelled
-    /// [`MODEL_TRANSCRIBED_LABEL`].
+    /// Construct and validate a [`FormulaTranscription`] unconditionally labelled [`MODEL_TRANSCRIBED_LABEL`].
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        source_id: impl Into<String>,
-        raw_blob_sha256: impl Into<String>,
-        page: usize,
-        crop: Option<[u32; 4]>,
-        model: impl Into<String>,
-        latex_draft: impl Into<String>,
+        source_id: impl Into<String>, raw_blob_sha256: impl Into<String>, page: usize,
+        crop: Option<[u32; 4]>, model: impl Into<String>, latex_draft: impl Into<String>,
         agreed_with_text_layer: bool,
     ) -> Result<Self, String> {
         let rec = Self {
@@ -164,20 +152,13 @@ impl FormulaTranscription {
             }
         }
         if self.model.trim().is_empty() || self.model.len() > MAX_MODEL_ID_BYTES {
-            return Err(format!(
-                "pdf.transcription model must be non-empty and <= {MAX_MODEL_ID_BYTES} bytes"
-            ));
+            return Err(format!("pdf.transcription model must be non-empty and <= {MAX_MODEL_ID_BYTES} bytes"));
         }
         if self.latex_draft.trim().is_empty() || self.latex_draft.len() > MAX_LATEX_DRAFT_BYTES {
-            return Err(format!(
-                "pdf.transcription latex_draft must be non-empty and <= {MAX_LATEX_DRAFT_BYTES} bytes"
-            ));
+            return Err(format!("pdf.transcription latex_draft must be non-empty and <= {MAX_LATEX_DRAFT_BYTES} bytes"));
         }
         if self.label != MODEL_TRANSCRIBED_LABEL {
-            return Err(format!(
-                "pdf.transcription label must be `{MODEL_TRANSCRIBED_LABEL}`, got `{}`",
-                self.label
-            ));
+            return Err(format!("pdf.transcription label must be `{MODEL_TRANSCRIBED_LABEL}`, got `{}`", self.label));
         }
         Ok(())
     }
@@ -217,13 +198,9 @@ impl fmt::Display for TranscriptionGateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidTranscription(msg) => write!(f, "invalid transcription: {msg}"),
-            Self::SourceNotFound { source_id } => {
-                write!(f, "source `{source_id}` has no source.ingested receipt in session")
-            }
+            Self::SourceNotFound { source_id } => write!(f, "source `{source_id}` has no source.ingested receipt in session"),
             Self::SourceNotPdf { source_id } => write!(f, "source `{source_id}` is not a PDF"),
-            Self::RawBlobMismatch { source_id, .. } => {
-                write!(f, "source `{source_id}` raw_blob digest does not match transcription")
-            }
+            Self::RawBlobMismatch { source_id, .. } => write!(f, "source `{source_id}` raw_blob digest does not match transcription"),
             Self::NoTextLayer { source_id, page } => write!(
                 f,
                 "source `{source_id}` page {page} has no pinned text layer (TextLayer/ScanTextLayer/Ocr); model-transcribed text cannot be quoted"
