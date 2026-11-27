@@ -549,6 +549,8 @@ fn run_session_turn(
 
     match outcome {
         SessionOutcome::Aborted { reason, .. } => Err(reason),
-        SessionOutcome::Completed { .. } | SessionOutcome::Refusal { .. } => Ok(sink.final_text().to_string()),
+        SessionOutcome::Completed { .. }
+        | SessionOutcome::Refusal { .. }
+        | SessionOutcome::Paused { .. } => Ok(sink.final_text().to_string()),
     }
 }

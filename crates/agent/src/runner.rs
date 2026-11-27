@@ -39,6 +39,7 @@ pub struct AgentConfig {
 pub enum SessionOutcome {
     Completed { turns: u32, stop_reason: String },
     Refusal { turns: u32, text: String },
+    Paused { turns: u32, reason: String },
     Aborted { turns: u32, reason: String },
 }
 
