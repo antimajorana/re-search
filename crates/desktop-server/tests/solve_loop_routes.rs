@@ -155,3 +155,52 @@ fn solve_continue_runs_background_leg_and_reconcile_handles_interrupted_sessions
     srv.shutdown();
     mock.finish();
 }
+
+#[test]
+fn solve_post_messages_dispatches_to_solve_loop_and_pauses_on_transport_error_r16() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let ledger = Ledger::open(&data_dir).unwrap();
+    ledger.append_with_hash("s-solve-msg", event_kinds::SOLVE_STARTED, 1, &json!({ "origin": "new" })).unwrap();
+    ledger.append_with_hash("s-solve-msg", event_kinds::SOLVE_SETUP, 1, &setup_payload()).unwrap();
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::write(
+        data_dir.join("providers.json"),
+        serde_json::to_vec(&json!({ "anthropic": "sk-test-solve-456" })).unwrap(),
+    )
+    .unwrap();
+
+    let mock = MockHttp::start(vec![MockReply {
+        status: 500,
+        content_type: "application/json",
+        body: br#"{"error":{"message":"boom"}}"#.to_vec(),
+    }]);
+    let srv = start_desktop_server(test_cfg(&data_dir, None, None, Some(mock.base_url.clone()))).unwrap();
+    let port = srv.addr.port();
+    let auth = [("X-ReSearch-Token", srv.info.token.as_str()), ("Content-Type", "application/json")];
+
+    let msg_body = serde_json::to_vec(&json!({
+        "prompt": "Compute sum",
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5"
+    }))
+    .unwrap();
+    let (st, _, raw) = raw_http(port, "POST", "/api/sessions/s-solve-msg/messages", &auth, &msg_body);
+    assert_eq!(st, 202, "{}", String::from_utf8_lossy(&raw));
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let evs = ledger.read_session("s-solve-msg").unwrap();
+        if evs.iter().any(|e| e.kind == event_kinds::SOLVE_PAUSED) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let evs = ledger.read_session("s-solve-msg").unwrap();
+    assert!(evs.iter().any(|e| e.kind == "session.start" && e.payload["tool_profile"] == "solve/1"));
+    assert!(evs.iter().any(|e| e.kind == "model.request" && e.payload["caller"] == "solver"));
+    assert!(evs.iter().any(|e| e.kind == event_kinds::SOLVE_PAUSED && e.payload["reason"] == "transport_error"));
+    assert!(!evs.iter().any(|e| e.kind == "session.abort"));
+    srv.shutdown();
+    mock.finish();
+}
