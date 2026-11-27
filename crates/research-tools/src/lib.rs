@@ -6,6 +6,7 @@ pub mod budget_pool;
 pub mod formal_library;
 pub mod fs_tools;
 pub mod http_client;
+pub mod idea_brief;
 pub mod idea_queries;
 pub mod idea_rank;
 pub mod idea_terms;
