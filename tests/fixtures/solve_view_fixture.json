@@ -1,0 +1,244 @@
+{
+  "setup": {
+    "revision": 2,
+    "statement": "Compute the first-order ground-state energy shift E_0(eps) for the toy 1D anharmonic potential V(x) = (1/2) m omega^2 x^2 + eps m omega^2 x^4 with hbar = 1.",
+    "task_kind": "calculate",
+    "target": { "description": "Closed-form O(eps) ground-state energy", "form": "closed_form" },
+    "done": [
+      { "id": "c-final-own", "kind": "final_tier_at_least", "params": { "tier": "verified" } },
+      { "id": "c-closure", "kind": "closure_tier_at_least", "params": { "tier": "checked_numerically" } }
+    ],
+    "conventions": "Natural units hbar = 1; m > 0, omega > 0, eps > 0.",
+    "symbols": [
+      { "name": "m", "assumptions": ["real", "positive"] },
+      { "name": "omega", "assumptions": ["real", "positive"] },
+      { "name": "eps", "assumptions": ["real", "positive"] },
+      { "name": "x", "assumptions": ["real"] }
+    ],
+    "dimensions": {},
+    "assumptions": [{ "id": "a-1", "text": "Base harmonic oscillator has hbar = 1 and real positive parameters m, omega." }],
+    "sources": ["toy-notes-01"],
+    "roles": {
+      "solver": { "provider": "example", "model": "solver-model-a" },
+      "verifier": { "provider": "example", "model": "verifier-model-b" }
+    },
+    "budgets": { "max_model_calls": 60, "max_wall_minutes": 30, "max_model_calls_per_leg": 48, "max_review_loops": 6, "max_gate_bounces": 3 },
+    "review": "prose_only",
+    "tool_profile": "solve/1",
+    "math_sha256": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111",
+    "ask_before_running": false
+  },
+  "run_state": {
+    "state": "done_open_items", "label": "Done (open items)", "reason": null, "running": false,
+    "model_calls_used": 8, "model_calls_max": 60,
+    "open_items": [
+      { "kind": "unmet_criterion", "id": "c-closure" },
+      { "kind": "unacknowledged_assumption", "entry_id": "e-3" }
+    ]
+  },
+  "steps": [
+    {
+      "entry_id": "e-1", "seq": 2, "entry_type": "assumption", "origin": "setup",
+      "summary": "Given quadratic + quartic potential with m > 0, omega > 0, hbar = 1",
+      "details": "Toy Hamiltonian H = p^2/(2m) + (1/2) m omega^2 x^2 + eps m omega^2 x^4 with positive real m, omega, eps.",
+      "depends_on": [], "derived_depends_on": [], "claims": [], "claim_sha256": null,
+      "entry_sha256": "1001aaaa1001aaaa1001aaaa1001aaaa1001aaaa1001aaaa1001aaaa1001aaaa",
+      "source_ref": null, "transcription": null, "superseded_by": null,
+      "badge": { "entry_id": "e-1", "own": "given", "effective": "given", "label": "Given", "grade": "user_statement", "border": "plain", "provenance_tag": "you", "lowered_by": [], "broken_by": [], "sublabels": [], "flags": [], "stale": false },
+      "rests_on": { "given": [], "cited": [], "assumed_by_model": [], "weakest": [] },
+      "matching_check_ids": [], "receipt_refs": []
+    },
+    {
+      "entry_id": "e-2", "seq": 4, "entry_type": "reference_lookup", "origin": "solver",
+      "summary": "Harmonic ground-state fourth moment <x^4>_0 from toy notes",
+      "details": "Quoted fourth moment identity from scanned toy lecture notes.",
+      "depends_on": [], "derived_depends_on": [], "claims": [], "claim_sha256": null,
+      "entry_sha256": "1002aaaa1002aaaa1002aaaa1002aaaa1002aaaa1002aaaa1002aaaa1002aaaa",
+      "source_ref": { "source_id": "toy-notes-01", "path": "notes/oscillator_moments.txt", "start_line": 42, "end_line": 44, "page": 4, "ocr": true, "quote": "For the 1D harmonic ground state (hbar = 1), <x^4>_0 = 3 / (4 m^2 omega^2).", "file_sha256": "2002bbbb2002bbbb2002bbbb2002bbbb2002bbbb2002bbbb2002bbbb2002bbbb", "quote_sha256": "3002cccc3002cccc3002cccc3002cccc3002cccc3002cccc3002cccc3002cccc", "evidence_seq": 3 },
+      "transcription": null, "superseded_by": null,
+      "badge": { "entry_id": "e-2", "own": "cited", "effective": "cited", "label": "Found", "grade": "matched_quote_scanned_page", "border": "solid", "provenance_tag": "OCR", "lowered_by": [], "broken_by": [], "sublabels": [], "flags": ["OCR source"], "stale": false },
+      "rests_on": { "given": [], "cited": [], "assumed_by_model": [], "weakest": [] },
+      "matching_check_ids": [], "receipt_refs": []
+    },
+    {
+      "entry_id": "e-3", "seq": 6, "entry_type": "assumption", "origin": "solver",
+      "summary": "Assume weak-coupling regime eps << 1 for first-order truncation",
+      "details": "Model assumes eps is small enough that O(eps^2) corrections can be neglected.",
+      "depends_on": [], "derived_depends_on": [], "claims": [], "claim_sha256": null,
+      "entry_sha256": "1003aaaa1003aaaa1003aaaa1003aaaa1003aaaa1003aaaa1003aaaa1003aaaa",
+      "source_ref": null, "transcription": null, "superseded_by": null,
+      "badge": { "entry_id": "e-3", "own": "assumed_by_model", "effective": "assumed_by_model", "label": "Assumed by model", "grade": "model_statement", "border": "dashed", "lowered_by": [], "broken_by": [], "sublabels": [], "flags": [], "stale": false },
+      "rests_on": { "given": [], "cited": [], "assumed_by_model": [], "weakest": [] },
+      "matching_check_ids": [], "receipt_refs": []
+    },
+    {
+      "entry_id": "e-4", "seq": 9, "entry_type": "symbolic_computation", "origin": "solver",
+      "summary": "Simplify first-order energy shift dE_1 = eps m omega^2 <x^4>_0",
+      "details": "Substituting <x^4>_0 cancels omega^2 and one factor of m to give 3 eps / (4 m).",
+      "depends_on": ["e-1", "e-2"], "derived_depends_on": [],
+      "claims": [{ "form": "equation", "lhs": "lhs_a@1", "rhs": "rhs_a@1", "relation": "eq" }],
+      "claim_sha256": "c004ddddc004ddddc004ddddc004ddddc004ddddc004ddddc004ddddc004dddd",
+      "entry_sha256": "1004aaaa1004aaaa1004aaaa1004aaaa1004aaaa1004aaaa1004aaaa1004aaaa",
+      "source_ref": null, "transcription": null, "superseded_by": null,
+      "badge": { "entry_id": "e-4", "own": "verified", "effective": "verified", "label": "Verified", "grade": "by_code", "border": "solid", "lowered_by": [], "broken_by": [], "sublabels": ["symbolic"], "flags": [], "stale": false },
+      "rests_on": { "given": ["e-1"], "cited": ["e-2"], "assumed_by_model": [], "weakest": [] },
+      "matching_check_ids": ["chk-1"], "receipt_refs": [{ "call_id": "call-1", "present": true, "ok": true, "missing": false }]
+    },
+    {
+      "entry_id": "e-5", "seq": 12, "entry_type": "numerical_computation", "origin": "solver",
+      "summary": "Check combined energy fraction numerically across 12 sample points",
+      "details": "Evaluated unperturbed plus first-order shift against common-denominator form at 50 digits.",
+      "depends_on": ["e-4"], "derived_depends_on": ["e-4"],
+      "claims": [{ "form": "equation", "lhs": "num_a@1", "rhs": "num_b@1", "relation": "approx" }],
+      "claim_sha256": "c005ddddc005ddddc005ddddc005ddddc005ddddc005ddddc005ddddc005dddd",
+      "entry_sha256": "1005aaaa1005aaaa1005aaaa1005aaaa1005aaaa1005aaaa1005aaaa1005aaaa",
+      "source_ref": null, "transcription": null, "superseded_by": null,
+      "badge": { "entry_id": "e-5", "own": "checked_numerically", "effective": "checked_numerically", "label": "Numerically checked", "grade": "by_code", "border": "solid", "lowered_by": [], "broken_by": [], "sublabels": ["12 points, 50 digits"], "flags": [], "stale": false },
+      "rests_on": { "given": ["e-1"], "cited": ["e-2"], "assumed_by_model": [], "weakest": [] },
+      "matching_check_ids": ["chk-2"], "receipt_refs": [{ "call_id": "call-2", "present": true, "ok": true, "missing": false }]
+    },
+    {
+      "entry_id": "e-6", "seq": 15, "entry_type": "derivation", "origin": "solver",
+      "summary": "Zeroth-order series check at eps = 0 under weak-coupling assumption",
+      "details": "Matches unperturbed energy (1/2) omega to O(eps^0); inherits unacknowledged model assumption e-3.",
+      "depends_on": ["e-3", "e-4"], "derived_depends_on": ["e-4"],
+      "claims": [{ "form": "series", "lhs": "series_lhs@1", "rhs": "series_rhs@1", "relation": "eq", "order": { "variable": "eps", "point": "0", "n": 0 } }],
+      "claim_sha256": "c006ddddc006ddddc006ddddc006ddddc006ddddc006ddddc006ddddc006dddd",
+      "entry_sha256": "1006aaaa1006aaaa1006aaaa1006aaaa1006aaaa1006aaaa1006aaaa1006aaaa",
+      "source_ref": null, "transcription": null, "superseded_by": null,
+      "badge": { "entry_id": "e-6", "own": "verified", "effective": "unchecked", "label": "Unchecked", "own_check_line": "own check: verified", "rests_on_line": "rests on e-3 (assumed by model)", "grade": "model_statement", "border": "dashed", "lowered_by": ["e-3"], "broken_by": [], "sublabels": ["symbolic"], "flags": ["to O(eps^0)", "rests on 1 assumption made by the model"], "stale": false },
+      "rests_on": { "given": ["e-1"], "cited": ["e-2"], "assumed_by_model": ["e-3"], "weakest": [{ "entry_id": "e-3", "tier": "Assumed by model" }] },
+      "matching_check_ids": ["chk-3"], "receipt_refs": []
+    },
+    {
+      "entry_id": "e-7", "seq": 18, "entry_type": "derivation", "origin": "solver",
+      "summary": "Prose dimensional sanity argument for eps m omega^2 x^4",
+      "details": "Same-model reviewer agreed that x^2 scales as 1/(m omega) when hbar = 1.",
+      "depends_on": ["e-4"], "derived_depends_on": [], "claims": [], "claim_sha256": null,
+      "entry_sha256": "1007aaaa1007aaaa1007aaaa1007aaaa1007aaaa1007aaaa1007aaaa1007aaaa",
+      "source_ref": null, "transcription": null, "superseded_by": null,
+      "badge": { "entry_id": "e-7", "own": "model_agreed_same_model", "effective": "model_agreed_same_model", "label": "Model agreed (same model)", "grade": "model_statement", "border": "dashed", "lowered_by": [], "broken_by": [], "sublabels": [], "flags": ["same model"], "stale": false },
+      "rests_on": { "given": ["e-1"], "cited": ["e-2"], "assumed_by_model": [], "weakest": [] },
+      "matching_check_ids": [], "receipt_refs": []
+    },
+    {
+      "entry_id": "e-8", "seq": 20, "entry_type": "derivation", "origin": "solver",
+      "summary": "Sign check that positive quartic perturbation raises ground energy",
+      "details": "Hand-checked by user: eps m omega^2 x^4 >= 0 everywhere implies dE_1 > 0.",
+      "depends_on": ["e-1"], "derived_depends_on": [], "claims": [], "claim_sha256": null,
+      "entry_sha256": "1008aaaa1008aaaa1008aaaa1008aaaa1008aaaa1008aaaa1008aaaa1008aaaa",
+      "source_ref": null, "transcription": null, "superseded_by": null,
+      "badge": { "entry_id": "e-8", "own": "checked_by_you", "effective": "checked_by_you", "label": "Checked by you", "grade": "user_statement", "border": "plain", "provenance_tag": "you", "lowered_by": [], "broken_by": [], "sublabels": [], "flags": [], "stale": false },
+      "rests_on": { "given": ["e-1"], "cited": [], "assumed_by_model": [], "weakest": [] },
+      "matching_check_ids": [], "receipt_refs": []
+    },
+    {
+      "entry_id": "e-9", "seq": 22, "entry_type": "derivation", "origin": "solver",
+      "summary": "Rejected scratch claim equating dE_1 directly to full E_0",
+      "details": "Omitted zero-point term (1/2) omega; caught by symbolic counterexample check.",
+      "depends_on": ["e-4"], "derived_depends_on": [],
+      "claims": [{ "form": "equation", "lhs": "lhs_a@1", "rhs": "num_b@1", "relation": "eq" }],
+      "claim_sha256": "c009ddddc009ddddc009ddddc009ddddc009ddddc009ddddc009ddddc009dddd",
+      "entry_sha256": "1009aaaa1009aaaa1009aaaa1009aaaa1009aaaa1009aaaa1009aaaa1009aaaa",
+      "source_ref": null, "transcription": null, "superseded_by": null,
+      "badge": { "entry_id": "e-9", "own": "failed", "effective": "failed", "label": "Failed", "grade": "model_statement", "border": "none", "lowered_by": [], "broken_by": [], "sublabels": [], "flags": [], "stale": false },
+      "rests_on": { "given": ["e-1"], "cited": ["e-2"], "assumed_by_model": [], "weakest": [] },
+      "matching_check_ids": ["chk-4"], "receipt_refs": []
+    },
+    {
+      "entry_id": "e-10", "seq": 26, "entry_type": "final_answer", "origin": "solver",
+      "summary": "Final first-order ground-state energy E_0(eps) = omega/2 + 3 eps / (4 m)",
+      "details": "Combines verified shift e-4 with weak-coupling series framing e-6.",
+      "depends_on": ["e-4", "e-6"], "derived_depends_on": ["e-6"],
+      "claims": [{ "form": "equation", "lhs": "ans_lhs@1", "rhs": "ans_rhs@1", "relation": "eq" }],
+      "claim_sha256": "c010ddddc010ddddc010ddddc010ddddc010ddddc010ddddc010ddddc010dddd",
+      "entry_sha256": "1010aaaa1010aaaa1010aaaa1010aaaa1010aaaa1010aaaa1010aaaa1010aaaa",
+      "source_ref": null, "transcription": null, "superseded_by": null,
+      "badge": { "entry_id": "e-10", "own": "verified", "effective": "unchecked", "label": "Unchecked", "own_check_line": "own check: verified", "rests_on_line": "rests on e-6 (unchecked)", "grade": "model_statement", "border": "dashed", "lowered_by": ["e-6"], "broken_by": [], "sublabels": ["symbolic"], "flags": ["rests on 1 assumption made by the model"], "stale": false },
+      "rests_on": { "given": ["e-1"], "cited": ["e-2"], "assumed_by_model": ["e-3"], "weakest": [{ "entry_id": "e-3", "tier": "Assumed by model" }] },
+      "matching_check_ids": ["chk-5"], "receipt_refs": []
+    }
+  ],
+  "graph": {
+    "nodes": [
+      { "id": "e-1", "kind": "assumption", "label": "e-1: Given quadratic + quartic potential with m > 0, omega > 0", "group": null, "parent": null, "grade": "user", "display_grade": "user_statement", "border": "plain", "badges": [{ "text": "Given", "icon": "user", "tone": "neutral", "border": "plain" }, { "text": "you", "icon": "user", "tone": "neutral" }], "flags": [], "stale": false, "dim": false },
+      { "id": "e-2", "kind": "reference_lookup", "label": "e-2: Harmonic ground-state fourth moment <x^4>_0 from toy notes", "group": null, "parent": null, "grade": "quote_ocr", "display_grade": "matched_quote_scanned_page", "border": "solid", "badges": [{ "text": "Found", "icon": "quote", "tone": "ok", "border": "solid" }, { "text": "OCR", "icon": "ocr", "tone": "warn" }], "flags": ["OCR source"], "stale": false, "dim": false },
+      { "id": "e-3", "kind": "assumption", "label": "e-3: Assume weak-coupling regime eps << 1 for truncation", "group": null, "parent": null, "grade": "model", "display_grade": "model_statement", "border": "dashed", "badges": [{ "text": "Assumed by model", "icon": "warn", "tone": "warn", "border": "dashed" }], "flags": [], "stale": false, "dim": false },
+      { "id": "e-4", "kind": "symbolic_computation", "label": "e-4: Simplify first-order energy shift dE_1", "group": null, "parent": null, "grade": "code", "display_grade": "by_code", "border": "solid", "badges": [{ "text": "Verified", "icon": "check", "tone": "ok", "border": "solid" }], "flags": [], "stale": false, "dim": false },
+      { "id": "e-5", "kind": "numerical_computation", "label": "e-5: Check combined energy fraction numerically", "group": null, "parent": null, "grade": "code", "display_grade": "by_code", "border": "solid", "badges": [{ "text": "Numerically checked", "icon": "numeric", "tone": "ok", "border": "solid" }], "flags": [], "stale": false, "dim": false },
+      { "id": "e-6", "kind": "derivation", "label": "e-6: Zeroth-order series check at eps = 0", "group": null, "parent": null, "grade": "model", "display_grade": "model_statement", "border": "dashed", "badges": [{ "text": "Unchecked", "icon": "info", "tone": "muted", "border": "dashed" }, { "text": "own check: verified", "icon": "check", "tone": "muted", "border": "solid" }], "flags": ["to O(eps^0)", "rests on 1 assumption made by the model"], "stale": false, "dim": false },
+      { "id": "e-7", "kind": "derivation", "label": "e-7: Prose dimensional sanity argument", "group": null, "parent": null, "grade": "model", "display_grade": "model_statement", "border": "dashed", "badges": [{ "text": "Model agreed (same model)", "icon": "model", "tone": "warn", "border": "dashed" }], "flags": ["same model"], "stale": false, "dim": false },
+      { "id": "e-8", "kind": "derivation", "label": "e-8: Sign check that positive quartic raises energy", "group": null, "parent": null, "grade": "user", "display_grade": "user_statement", "border": "plain", "badges": [{ "text": "Checked by you", "icon": "user", "tone": "neutral", "border": "plain" }, { "text": "you", "icon": "user", "tone": "neutral" }], "flags": [], "stale": false, "dim": false },
+      { "id": "e-9", "kind": "derivation", "label": "e-9: Rejected scratch claim equating dE_1 to full E_0", "group": null, "parent": null, "grade": "model", "display_grade": "model_statement", "border": "none", "badges": [{ "text": "Failed", "icon": "error", "tone": "err", "border": "none" }], "flags": [], "stale": false, "dim": false },
+      { "id": "e-10", "kind": "final_answer", "label": "e-10: Final first-order ground-state energy E_0(eps)", "group": null, "parent": null, "grade": "model", "display_grade": "model_statement", "border": "dashed", "badges": [{ "text": "Unchecked", "icon": "info", "tone": "muted", "border": "dashed" }, { "text": "own check: verified", "icon": "check", "tone": "muted", "border": "solid" }], "flags": ["rests on 1 assumption made by the model"], "stale": false, "dim": false }
+    ],
+    "edges": [
+      { "src": "e-1", "dst": "e-4", "kind": "depends_on", "role": "statement", "basis": "model" },
+      { "src": "e-2", "dst": "e-4", "kind": "depends_on", "role": "statement", "basis": "model" },
+      { "src": "e-4", "dst": "e-5", "kind": "derived_depends_on", "role": "statement", "basis": "code" },
+      { "src": "e-4", "dst": "e-6", "kind": "derived_depends_on", "role": "statement", "basis": "code" },
+      { "src": "e-3", "dst": "e-6", "kind": "depends_on", "role": "statement", "basis": "model" },
+      { "src": "e-4", "dst": "e-7", "kind": "depends_on", "role": "statement", "basis": "model" },
+      { "src": "e-1", "dst": "e-8", "kind": "depends_on", "role": "statement", "basis": "model" },
+      { "src": "e-4", "dst": "e-9", "kind": "depends_on", "role": "statement", "basis": "model" },
+      { "src": "e-6", "dst": "e-10", "kind": "derived_depends_on", "role": "statement", "basis": "code" },
+      { "src": "e-4", "dst": "e-10", "kind": "depends_on", "role": "statement", "basis": "model" }
+    ],
+    "legend": [
+      { "tier": "verified", "label": "Verified", "explanation": "the two sides are equal as exact expressions under the stated assumptions, as decided by SymPy; this does not show that the expression means what the text says", "icon": "check", "tone": "ok", "dashed": false },
+      { "tier": "checked_numerically", "label": "Numerically checked", "icon": "numeric", "tone": "ok", "dashed": false },
+      { "tier": "cited", "label": "Found", "icon": "quote", "tone": "ok", "dashed": false },
+      { "tier": "model_agreed", "label": "Model agreed / Unchecked", "icon": "model", "tone": "muted", "dashed": true },
+      { "tier": "given", "label": "Given / Checked by you (you)", "icon": "user", "tone": "neutral", "dashed": false }
+    ]
+  },
+  "handles": [
+    { "handle": "lhs_a@1", "name": "lhs_a", "version": 1, "latex": "\\epsilon m \\omega^{2} \\cdot \\frac{3}{4 m^{2} \\omega^{2}}", "str_preview": "eps*m*omega**2*(3/(4*m**2*omega**2))", "srepr_sha256": "e001eeeee001eeeee001eeeee001eeeee001eeeee001eeeee001eeeee001eeee", "free_symbols": [{ "name": "eps", "assumptions": ["real", "positive"] }, { "name": "m", "assumptions": ["real", "positive"] }, { "name": "omega", "assumptions": ["real", "positive"] }], "produced_by": { "call_id": "call-1", "result_seq": 8 }, "owner_entry": "e-4", "portable": true },
+    { "handle": "rhs_a@1", "name": "rhs_a", "version": 1, "latex": "\\frac{3 \\epsilon}{4 m}", "str_preview": "3*eps/(4*m)", "srepr_sha256": "e002eeeee002eeeee002eeeee002eeeee002eeeee002eeeee002eeeee002eeee", "free_symbols": [{ "name": "eps", "assumptions": ["real", "positive"] }, { "name": "m", "assumptions": ["real", "positive"] }], "produced_by": { "call_id": "call-1", "result_seq": 8 }, "owner_entry": "e-4", "portable": true },
+    { "handle": "num_a@1", "name": "num_a", "version": 1, "latex": "\\frac{\\omega}{2} + \\frac{3 \\epsilon}{4 m}", "str_preview": "omega/2 + 3*eps/(4*m)", "srepr_sha256": "e003eeeee003eeeee003eeeee003eeeee003eeeee003eeeee003eeeee003eeee", "free_symbols": [{ "name": "eps", "assumptions": ["real", "positive"] }, { "name": "m", "assumptions": ["real", "positive"] }, { "name": "omega", "assumptions": ["real", "positive"] }], "produced_by": { "call_id": "call-2", "result_seq": 11 }, "owner_entry": "e-5", "portable": true },
+    { "handle": "num_b@1", "name": "num_b", "version": 1, "latex": "\\frac{2 m \\omega + 3 \\epsilon}{4 m}", "str_preview": "(2*m*omega + 3*eps)/(4*m)", "srepr_sha256": "e004eeeee004eeeee004eeeee004eeeee004eeeee004eeeee004eeeee004eeee", "free_symbols": [{ "name": "eps", "assumptions": ["real", "positive"] }, { "name": "m", "assumptions": ["real", "positive"] }, { "name": "omega", "assumptions": ["real", "positive"] }], "produced_by": { "call_id": "call-2", "result_seq": 11 }, "owner_entry": "e-5", "portable": true },
+    { "handle": "series_lhs@1", "name": "series_lhs", "version": 1, "latex": "\\frac{\\omega}{2} \\sqrt{1 + 2 \\epsilon}", "str_preview": "omega*sqrt(1 + 2*eps)/2", "srepr_sha256": "e005eeeee005eeeee005eeeee005eeeee005eeeee005eeeee005eeeee005eeee", "free_symbols": [{ "name": "eps", "assumptions": ["real", "positive"] }, { "name": "omega", "assumptions": ["real", "positive"] }], "produced_by": { "call_id": "call-3", "result_seq": 14 }, "owner_entry": "e-6", "portable": true },
+    { "handle": "series_rhs@1", "name": "series_rhs", "version": 1, "latex": "\\frac{\\omega}{2}", "str_preview": "omega/2", "srepr_sha256": "e006eeeee006eeeee006eeeee006eeeee006eeeee006eeeee006eeeee006eeee", "free_symbols": [{ "name": "omega", "assumptions": ["real", "positive"] }], "produced_by": { "call_id": "call-3", "result_seq": 14 }, "owner_entry": "e-6", "portable": true },
+    { "handle": "ans_lhs@1", "name": "ans_lhs", "version": 1, "latex": "\\frac{\\omega}{2} + \\epsilon m \\omega^{2} \\cdot \\frac{3}{4 m^{2} \\omega^{2}}", "str_preview": "omega/2 + eps*m*omega**2*(3/(4*m**2*omega**2))", "srepr_sha256": "e007eeeee007eeeee007eeeee007eeeee007eeeee007eeeee007eeeee007eeee", "free_symbols": [{ "name": "eps", "assumptions": ["real", "positive"] }, { "name": "m", "assumptions": ["real", "positive"] }, { "name": "omega", "assumptions": ["real", "positive"] }], "produced_by": { "call_id": "call-3", "result_seq": 25 }, "owner_entry": "e-10", "portable": true },
+    { "handle": "ans_rhs@1", "name": "ans_rhs", "version": 1, "latex": "\\frac{\\omega}{2} + \\frac{3 \\epsilon}{4 m}", "str_preview": "omega/2 + 3*eps/(4*m)", "srepr_sha256": "e008eeeee008eeeee008eeeee008eeeee008eeeee008eeeee008eeeee008eeee", "free_symbols": [{ "name": "eps", "assumptions": ["real", "positive"] }, { "name": "m", "assumptions": ["real", "positive"] }, { "name": "omega", "assumptions": ["real", "positive"] }], "produced_by": { "call_id": "call-3", "result_seq": 25 }, "owner_entry": "e-10", "portable": true },
+    { "handle": "raw_op@1", "name": "raw_op", "version": 1, "latex": "\\hat{H}_{\\text{raw}}", "str_preview": "NonPortableOperator(H_raw)", "srepr_sha256": "e009eeeee009eeeee009eeeee009eeeee009eeeee009eeeee009eeeee009eeee", "free_symbols": [{ "name": "x", "assumptions": ["real"] }], "produced_by": { "call_id": "call-1", "result_seq": 8 }, "owner_entry": "e-4", "portable": false }
+  ],
+  "receipts": [
+    { "call_id": "call-1", "tool": "sympy_eval", "request_seq": 7, "result_seq": 8, "ok": true, "code_sha256": "d001ffffd001ffffd001ffffd001ffffd001ffffd001ffffd001ffffd001ffff", "wall_ms": 42, "process": "solver", "exprs_out": ["lhs_a@1", "rhs_a@1", "raw_op@1"] },
+    { "call_id": "call-2", "tool": "check_run", "request_seq": 10, "result_seq": 11, "ok": true, "code_sha256": "d002ffffd002ffffd002ffffd002ffffd002ffffd002ffffd002ffffd002ffff", "wall_ms": 88, "process": "check", "exprs_out": ["num_a@1", "num_b@1"] },
+    { "call_id": "call-3", "tool": "check_run", "request_seq": 13, "result_seq": 14, "ok": true, "code_sha256": "d003ffffd003ffffd003ffffd003ffffd003ffffd003ffffd003ffffd003ffff", "wall_ms": 64, "process": "check", "exprs_out": ["series_lhs@1", "series_rhs@1", "ans_lhs@1", "ans_rhs@1"] }
+  ],
+  "checks": [
+    { "check_id": "chk-1", "claim_sha256": "c004ddddc004ddddc004ddddc004ddddc004ddddc004ddddc004ddddc004dddd", "claim_index": 0, "entry_id": "e-4", "math_sha256": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111", "name": "identity_symbolic", "registry_sha256": "f0010000f0010000f0010000f0010000f0010000f0010000f0010000f0010000", "params": {}, "outcome": "pass", "asked_by": "host", "receipt": { "call_id": "call-1", "result_seq": 8 }, "evidence": { "residual": "0" }, "evidence_sha256": "9001999990019999900199999001999990019999900199999001999990019999" },
+    { "check_id": "chk-2", "claim_sha256": "c005ddddc005ddddc005ddddc005ddddc005ddddc005ddddc005ddddc005dddd", "claim_index": 0, "entry_id": "e-5", "math_sha256": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111", "name": "identity_numeric", "registry_sha256": "f0010000f0010000f0010000f0010000f0010000f0010000f0010000f0010000", "params": { "points": 12, "digits": 50 }, "outcome": "pass", "asked_by": "host", "receipt": { "call_id": "call-2", "result_seq": 11 }, "evidence": { "points": 12, "digits": 50, "residual": "1.2e-50", "tolerance": "1e-40" }, "evidence_sha256": "9002999990029999900299999002999990029999900299999002999990029999" },
+    { "check_id": "chk-3", "claim_sha256": "c006ddddc006ddddc006ddddc006ddddc006ddddc006ddddc006ddddc006dddd", "claim_index": 0, "entry_id": "e-6", "math_sha256": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111", "name": "series_match", "registry_sha256": "f0010000f0010000f0010000f0010000f0010000f0010000f0010000f0010000", "params": { "variable": "eps", "point": "0", "n": 0 }, "outcome": "pass", "asked_by": "host", "receipt": { "call_id": "call-3", "result_seq": 14 }, "evidence": { "order": { "variable": "eps", "point": "0", "n": 0 }, "comparison": "exact" }, "evidence_sha256": "9003999990039999900399999003999990039999900399999003999990039999" },
+    { "check_id": "chk-4", "claim_sha256": "c009ddddc009ddddc009ddddc009ddddc009ddddc009ddddc009ddddc009dddd", "claim_index": 0, "entry_id": "e-9", "math_sha256": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111", "name": "identity_symbolic", "registry_sha256": "f0010000f0010000f0010000f0010000f0010000f0010000f0010000f0010000", "params": {}, "outcome": "fail", "asked_by": "host", "receipt": { "call_id": "call-3", "result_seq": 23 }, "evidence": { "counterexample": { "m": 1, "omega": 2, "eps": 0.1 }, "residual": "-1.0" }, "evidence_sha256": "9004999990049999900499999004999990049999900499999004999990049999" },
+    { "check_id": "chk-5", "claim_sha256": "c010ddddc010ddddc010ddddc010ddddc010ddddc010ddddc010ddddc010dddd", "claim_index": 0, "entry_id": "e-10", "math_sha256": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111", "name": "identity_symbolic", "registry_sha256": "f0010000f0010000f0010000f0010000f0010000f0010000f0010000f0010000", "params": {}, "outcome": "pass", "asked_by": "host", "receipt": { "call_id": "call-3", "result_seq": 25 }, "evidence": { "residual": "0" }, "evidence_sha256": "9005999990059999900599999005999990059999900599999005999990059999" },
+    { "check_id": "chk-6", "claim_sha256": "c006ddddc006ddddc006ddddc006ddddc006ddddc006ddddc006ddddc006dddd", "claim_index": 0, "entry_id": "e-6", "math_sha256": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111", "name": "identity_symbolic", "registry_sha256": "f0010000f0010000f0010000f0010000f0010000f0010000f0010000f0010000", "params": {}, "outcome": "inconclusive", "asked_by": "verifier", "receipt": { "call_id": "call-3", "result_seq": 16 }, "evidence": { "reason": "radical simplifier reached timeout" }, "evidence_sha256": "9006999990069999900699999006999990069999900699999006999990069999" },
+    { "check_id": "chk-7", "claim_sha256": "c005ddddc005ddddc005ddddc005ddddc005ddddc005ddddc005ddddc005dddd", "claim_index": 0, "entry_id": "e-5", "math_sha256": "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111", "name": "dimensions", "registry_sha256": "f0010000f0010000f0010000f0010000f0010000f0010000f0010000f0010000", "params": {}, "outcome": "not_run", "asked_by": "user", "receipt": { "call_id": "call-2", "result_seq": 11 }, "evidence": { "reason": "missing check worker grant" }, "evidence_sha256": "9007999990079999900799999007999990079999900799999007999990079999" },
+    { "check_id": "chk-8-stale", "claim_sha256": "c004ddddc004ddddc004ddddc004ddddc004ddddc004ddddc004ddddc004dddd", "claim_index": 0, "entry_id": "e-4", "math_sha256": "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222", "name": "identity_symbolic", "registry_sha256": "f0010000f0010000f0010000f0010000f0010000f0010000f0010000f0010000", "params": {}, "outcome": "pass", "asked_by": "host", "receipt": { "call_id": "call-1", "result_seq": 8 }, "evidence": { "residual": "0", "reason": "ran under setup revision 1" }, "evidence_sha256": "9008999990089999900899999008999990089999900899999008999990089999" }
+  ],
+  "artifacts": [],
+  "done": {
+    "seq": 28, "final_entry_id": "e-10", "own_tier": "verified", "effective_tier": "unchecked",
+    "status": "finished_open_items",
+    "criteria": [
+      { "id": "c-final-own", "met": true, "evidence": { "own_tier": "verified" } },
+      { "id": "c-closure", "met": false, "evidence": { "effective_tier": "unchecked", "lowered_by": ["e-6"] } }
+    ],
+    "rests_on": { "given": ["e-1"], "cited": ["e-2"], "assumed_by_model": ["e-3"], "weakest": [{ "entry_id": "e-3", "tier": "Assumed by model" }] },
+    "model_calls": { "solver": 6, "verifier": 2, "workers": 0 },
+    "summary_markdown": "Toy first-order shift E_0(eps) = omega/2 + 3 eps / (4 m) passed its own symbolic check (`e-10`), but remains Unchecked overall because `e-6` rests on unacknowledged model assumption `e-3`."
+  },
+  "plan": { "items": [{ "title": "Record toy potential and fourth-moment reference" }, { "title": "Compute and check first-order energy shift" }] },
+  "toolbox": { "available": true, "sandbox": "appcontainer", "line": "Toolbox: Python 3.12 · SymPy 1.13 · NumPy 2.1 · mpmath 1.3", "configured_python": true, "python": "3.12.7", "sympy": "1.13.3", "numpy": "2.1.3", "mpmath": "1.3.0" },
+  "approval_grants": {
+    "pre_turn_approver_supported": false, "pre_turn_session_capability_supported": true, "pre_turn_worker_session_supported": false,
+    "worker_restart_note": "A worker restart asks again.", "active_session_grants": [], "pending_approvals": [],
+    "grants": [
+      { "id": "solve-worker-solver-sympy", "kind": "worker_session", "caller": "solver:solve", "tool_id": "sympy_eval", "effect": "execute_code", "label": "Solver runs Python calculations (sympy_eval)", "granted": true, "restart_asks_again": true, "note": "A worker restart asks again." },
+      { "id": "solve-worker-host-check", "kind": "worker_session", "caller": "host:check", "tool_id": "check_run", "effect": "execute_code", "label": "Host runs exact and numeric checks (check_run)", "granted": true, "restart_asks_again": true, "note": "A worker restart asks again." }
+    ]
+  },
+  "model_connected": true
+}

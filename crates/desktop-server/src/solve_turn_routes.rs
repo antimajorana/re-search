@@ -231,11 +231,14 @@ pub fn handle_reconcile(state: &DesktopState, session_id: &str, _body: &[u8]) ->
 
 /// Startup reconciliation called once when `start_desktop_server` boots (never on `GET solve/view`).
 pub fn reconcile_interrupted_solve_sessions(state: &DesktopState) -> usize {
-    let Ok(ledger) = state.open_ledger() else {
+    if !state.cfg.data_dir.join("ledger.db").is_file() {
+        return 0;
+    }
+    let Ok(ro_ledger) = Ledger::open_existing(&state.cfg.data_dir) else {
         return 0;
     };
     let mut ids = BTreeSet::new();
-    if let Ok(rows) = ledger.sessions() {
+    if let Ok(rows) = ro_ledger.sessions() {
         for (id, _) in rows {
             if validate_session_id(&id).is_ok() {
                 ids.insert(id);
@@ -246,18 +249,26 @@ pub fn reconcile_interrupted_solve_sessions(state: &DesktopState) -> usize {
         ids.insert(id);
     }
 
+    let mut rw_ledger: Option<Ledger> = None;
     let mut count = 0usize;
     for sid in ids {
         if is_turn_running(state, &sid) {
             continue;
         }
-        let Ok(events) = ledger.read_session(&sid) else {
+        let Ok(events) = ro_ledger.read_session(&sid) else {
             continue;
         };
         if session_mode(&events) != Mode::Solve {
             continue;
         }
-        if reconcile_one_session(&ledger, &sid, &events).unwrap_or(false) {
+        let ledger_ref = match rw_ledger {
+            Some(ref l) => l,
+            None => match state.open_ledger() {
+                Ok(l) => rw_ledger.insert(l),
+                Err(_) => return count,
+            },
+        };
+        if reconcile_one_session(ledger_ref, &sid, &events).unwrap_or(false) {
             count += 1;
         }
     }
