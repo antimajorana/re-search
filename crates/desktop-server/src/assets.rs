@@ -171,6 +171,14 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/solve_setup.js"),
         }),
+        "/assets/solve_artifacts.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_artifacts.js"),
+        }),
+        "/assets/writeup_btn.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/writeup_btn.js"),
+        }),
         "/assets/solve.css" => Some(StaticAsset {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../assets/solve.css"),
@@ -263,9 +271,41 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_wholemap.css"),
         }),
+        "/assets/investigation_badges.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_badges.js"),
+        }),
+        "/assets/investigation_node_model.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_node_model.js"),
+        }),
+        "/assets/investigation_notes_ui.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_notes_ui.js"),
+        }),
         "/assets/investigation_context.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_context.js"),
+        }),
+        "/assets/investigation_context_cards.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_context_cards.js"),
+        }),
+        "/assets/investigation_orient_ui.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_orient_ui.js"),
+        }),
+        "/assets/investigation_share_ui.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_share_ui.js"),
+        }),
+        "/assets/investigation_handoff_ui.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_handoff_ui.js"),
+        }),
+        "/assets/investigation_legacy.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_legacy.js"),
         }),
         "/assets/api.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
@@ -403,6 +443,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/hitl.js"),
         }),
+        "/assets/worker_activity.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/worker_activity.js"),
+        }),
         "/assets/app.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/app.js"),
@@ -419,87 +463,7 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../vendor/katex/katex.min.css"),
         }),
-        "/vendor/katex/fonts/KaTeX_AMS-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_AMS-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Caligraphic-Bold.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Caligraphic-Bold.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Caligraphic-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Caligraphic-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Fraktur-Bold.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Fraktur-Bold.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Fraktur-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Fraktur-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Main-Bold.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Main-Bold.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Main-BoldItalic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Main-BoldItalic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Main-Italic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Main-Italic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Main-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Main-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Math-BoldItalic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Math-BoldItalic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Math-Italic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Math-Italic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_SansSerif-Bold.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_SansSerif-Bold.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_SansSerif-Italic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_SansSerif-Italic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_SansSerif-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_SansSerif-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Script-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Script-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Size1-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Size1-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Size2-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Size2-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Size3-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Size3-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Size4-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Size4-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2"),
-        }),
-        _ => None,
+        _ => crate::assets_fonts::lookup_katex_font(clean),
     }
 }
 

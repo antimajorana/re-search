@@ -22,6 +22,7 @@ use research_tools::investigation_markers::{
     EVENT_INVESTIGATION_READING, EVENT_INVESTIGATION_SKELETON, MARKER_TASK_FINISHED,
     MARKER_TASK_REQUESTED,
 };
+use research_tools::map_context_defs::record_context_cards_def;
 use research_tools::map_defs::{
     read_map_node_def, record_map_reading_def, INVESTIGATION_V2_MAY_GAIN, READ_MAP_NODE,
     RECORD_CONTEXT_CARDS, RECORD_MAP_READING, RECORD_PRIOR_WORK_CHECK,
@@ -361,7 +362,7 @@ fn investigation_v1_accepts_all_four_v2_may_gain_read_workspace_tools_and_reject
     let mut all_four_defs = investigation_v1().defs;
     all_four_defs.push(read_map_node_def());
     all_four_defs.push(record_map_reading_def());
-    all_four_defs.push(mk_reserved_def(RECORD_CONTEXT_CARDS, EffectClass::ReadWorkspace));
+    all_four_defs.push(record_context_cards_def());
     all_four_defs.push(mk_reserved_def(RECORD_PRIOR_WORK_CHECK, EffectClass::ReadWorkspace));
     all_four_defs.sort_by(|a, b| a.id.cmp(&b.id));
     assert_eq!(INVESTIGATION_V2_MAY_GAIN.len(), 4);

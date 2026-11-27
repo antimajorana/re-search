@@ -288,11 +288,50 @@ pub(crate) fn dispatch_api(
                 crate::investigation_open::handle(state, method, id, op, &req.query, &req.body),
             );
         }
+        ("GET", ["api", "sessions", id, "investigation", "legacy"]) => {
+            write_api_res(&mut stream, crate::investigation_legacy_view::handle_get_legacy(state, id));
+        }
         ("POST", ["api", "sessions", id, "investigation", "tasks"]) => {
             write_api_res(&mut stream, crate::investigation_tasks::handle(state, id, &req.body));
         }
+        ("POST", ["api", "sessions", id, "investigation", "notes"]) => {
+            write_api_res(&mut stream, crate::investigation_notes::handle(state, id, &req.body));
+        }
         ("POST", ["api", "sessions", id, "investigation", "cited"]) => {
             write_api_res(&mut stream, crate::investigation_cited::handle(state, id, &req.body));
+        }
+        ("GET", ["api", "sessions", id, "investigation", "export"]) => {
+            match crate::investigation_share::handle_export(state, id, &req.query) {
+                Ok((filename, ct, bytes)) => {
+                    let disp = format!("attachment; filename=\"{filename}\"");
+                    let csp = if ct.starts_with("text/html") {
+                        "default-src 'none'; style-src 'unsafe-inline'"
+                    } else {
+                        "sandbox"
+                    };
+                    write_bytes(
+                        &mut stream,
+                        200,
+                        ct,
+                        &bytes,
+                        &[
+                            ("Content-Disposition", disp.as_str()),
+                            ("Cache-Control", "no-store"),
+                            ("Content-Security-Policy", csp),
+                        ],
+                    );
+                }
+                Err((st, msg)) => write_json(&mut stream, st, json!({ "error": msg }), &[]),
+            }
+        }
+        ("POST", ["api", "sessions", id, "investigation", "import"]) => {
+            write_api_res(&mut stream, crate::investigation_share::handle_import(state, id, &req.body));
+        }
+        ("POST", ["api", "sessions", id, "investigation", "handoff-packet"]) => {
+            write_api_res(
+                &mut stream,
+                crate::investigation_handoff::handle_build_handoff_packet(state, id, &req.body),
+            );
         }
         ("POST", ["api", "sessions", id, "investigation", operation]) => {
             write_api_res(&mut stream, crate::investigation::handle(state, id, operation, &req.body));
@@ -300,11 +339,17 @@ pub(crate) fn dispatch_api(
         ("POST", ["api", "sessions", id, "fork"]) => {
             write_api_res(&mut stream, handle_fork(state, id, &req.body));
         }
+        ("POST", ["api", "sessions", id, "open-in-solve"]) => {
+            write_api_res(&mut stream, crate::solve_migrate::handle_open_in_solve(state, id, &req.body));
+        }
         ("POST", ["api", "sessions", id, "handoff"]) => {
             write_api_res(&mut stream, crate::handoff::handle_create_handoff(state, id, &req.body));
         }
         ("GET", ["api", "sessions", id, "handoffs"]) => {
             write_api_res(&mut stream, crate::handoff::handle_get_handoffs(state, id));
+        }
+        ("GET", ["api", "sessions", id, "solve", "artifacts", artifact_id]) => {
+            crate::solve_artifacts_route::serve_solve_artifact(&mut stream, state, id, artifact_id);
         }
         (method, ["api", "sessions", id, "solve", rest @ ..]) => {
             write_api_res(&mut stream, crate::solve::handle_solve(state, method, id, rest, &req.body));
@@ -334,11 +379,20 @@ pub(crate) fn dispatch_api(
             }
             Err((st, msg)) => write_json(&mut stream, st, json!({ "error": msg }), &[]),
         },
+        ("GET", ["api", "sessions", id, "writeup"]) => {
+            crate::routes_writeup::serve_writeup(&mut stream, state, id, &req.query);
+        }
         ("GET", ["api", "settings", "providers"]) => {
             write_api_res(&mut stream, handle_get_settings(state));
         }
         ("PUT", ["api", "settings", "providers"]) => {
             write_api_res(&mut stream, handle_put_settings(state, &req.body));
+        }
+        ("GET", ["api", "settings", "investigate"]) => {
+            write_api_res(&mut stream, crate::investigation_settings::handle_get(state));
+        }
+        ("PUT", ["api", "settings", "investigate"]) => {
+            write_api_res(&mut stream, crate::investigation_settings::handle_put(state, &req.body));
         }
         ("GET", ["api", "connections"]) => {
             write_api_res(&mut stream, crate::connections::handle_connections(state, &req.query));
@@ -413,6 +467,15 @@ pub(crate) fn dispatch_api(
         }
         ("POST", ["api", "sessions", id, "idea", op]) => {
             write_api_res(&mut stream, crate::routes_idea::handle_idea_op(state, id, op, &req.body));
+        }
+        ("GET", ["api", "sessions", id, "workers"]) => {
+            write_api_res(&mut stream, crate::routes_worker_activity::handle_list_workers(state, id));
+        }
+        ("GET", ["api", "sessions", id, "workers", job_id]) => {
+            write_api_res(&mut stream, crate::routes_worker_activity::handle_get_worker_detail(state, id, job_id));
+        }
+        ("POST", ["api", "sessions", id, "run-control"]) => {
+            write_api_res(&mut stream, crate::routes_worker_activity::handle_post_run_control(state, id, &req.body));
         }
         _ => write_json(
             &mut stream,

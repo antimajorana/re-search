@@ -1,9 +1,8 @@
-//! Tool definitions and shared Layer-2 record types for Investigate v2 (package V6, `investigate.md` §4.3, §5.1).
+//! Tool definitions and shared Layer-2 record types for Investigate v2 (V6 + V12, `investigate.md` §4.3, §5.1).
 //!
-//! Only `read_map_node` and `record_map_reading` (`ReadWorkspace`) are defined and registered in V6,
-//! exclusively through tool profile `investigation/2` (never added to `register_research_tools`).
-//! `record_context_cards` (V12) and `record_prior_work_check` (deferred V14) are kept as reserved
-//! ID constants under `may_gain` only.
+//! Only V6 (`read_map_node`, `record_map_reading`) and V12 (`record_context_cards`) tools are
+//! registered here, exclusively through tool profile `investigation/2` (never added to
+//! `register_research_tools`). `record_prior_work_check` (deferred V14) stays under `may_gain`.
 
 use crate::skeleton::SkNodeKind;
 use crate::ResearchEnv;
@@ -156,6 +155,10 @@ pub struct ReadingItemRecord {
     pub tag: String,
     pub node_fp: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attach_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<ReadingRole>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gist: Option<String>,
@@ -218,11 +221,11 @@ pub struct MapReadingEventPayload {
     pub anchor_report: Value,
 }
 
-fn str_schema(min: usize, max: usize) -> Value {
+pub(crate) fn str_schema(min: usize, max: usize) -> Value {
     json!({ "type": "string", "minLength": min, "maxLength": max })
 }
 
-fn pointer_anchor_schema() -> Value {
+pub(crate) fn pointer_anchor_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
@@ -375,8 +378,8 @@ pub fn record_map_reading_def() -> ToolDef {
     }
 }
 
-/// Register ONLY the two V6 Investigate tools (`read_map_node` and `record_map_reading`) on a
-/// profile-built `investigation/2` registry. Never called by `register_research_tools`.
+/// Register the `investigation/2` tools (`read_map_node`, `record_map_reading`, and V12
+/// `record_context_cards`) on a profile-built registry. Never called by `register_research_tools`.
 pub fn register_map_tools(registry: &mut Registry, env: Arc<ResearchEnv>) {
     let read_env = Arc::clone(&env);
     registry.register(
@@ -386,11 +389,19 @@ pub fn register_map_tools(registry: &mut Registry, env: Arc<ResearchEnv>) {
             crate::map_node_read::read_map_node(&read_env, &ledger, ctx.session, args)
         }),
     );
+    let reading_env = Arc::clone(&env);
     registry.register(
         record_map_reading_def(),
         Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
             let ledger = ctx.ledger.lock().map_err(|_| "ledger lock poisoned")?;
-            crate::map_reading::record_map_reading(&env, &ledger, ctx.session, ctx.caller, args)
+            crate::map_reading::record_map_reading(&reading_env, &ledger, ctx.session, ctx.caller, args)
+        }),
+    );
+    registry.register(
+        crate::map_context_defs::record_context_cards_def(),
+        Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
+            let ledger = ctx.ledger.lock().map_err(|_| "ledger lock poisoned")?;
+            crate::map_context::record_context_cards(&env, &ledger, ctx.session, ctx.caller, args)
         }),
     );
 }

@@ -379,14 +379,17 @@ fn open_task_scope_unknown_tag_new_node_app_only_and_marker_gate() {
         { "from": other_tag, "to": thm_tag, "role": "argument", "basis": "inferred", "reason": "Out of scope.", "anchor": fx.anchor(other_line, "unrelated auxiliary identity") }
     ]), json!([]), true);
     let res = record_map_reading(&fx.env, &fx.ledger, SID, CALLER, &args).unwrap();
-    assert_eq!(res["accepted_items"], 2);
+    assert_eq!(res["accepted_items"], 3);
     assert_eq!(res["items"][0]["status"], "accepted");
     assert_eq!(res["items"][1]["status"], "accepted");
     assert_eq!(res["items"][2]["code"], "out_of_scope_tag");
     assert_eq!(res["items"][3]["code"], "out_of_scope_tag");
     assert_eq!(res["items"][4]["code"], "unknown_tag");
     assert!(res["items"][4]["message"].as_str().unwrap().contains(&thm_tag));
-    assert_eq!(res["items"][5]["code"], "unsupported_model_node");
+    assert_eq!(res["items"][5]["status"], "accepted");
+    assert_eq!(res["items"][5]["temp_id"], "m1");
+    assert!(res["items"][5]["tag"].as_str().unwrap().starts_with("m-"));
+    assert_eq!(res["assigned_tags"]["m1"], res["items"][5]["tag"]);
     assert_eq!(res["accepted_edges"], 1);
     assert_eq!(res["edges"][0]["status"], "accepted");
     assert_eq!(res["edges"][1]["code"], "out_of_scope_tag");
@@ -446,4 +449,90 @@ fn open_edge_destination_must_be_in_item_scope_and_empty_done_requires_limitatio
     ).unwrap();
     assert_eq!(lim_done["status"], "recorded");
     assert!(lim_done["reading_seq"].as_u64().is_some());
+}
+
+#[test]
+fn v8_model_nodes_stable_across_reruns_arbitrary_depth_and_sibling_scope_isolation() {
+    let fx = Fixture::new();
+    let thm_tag = fx.tag_by_label("thm:main");
+    let proof_line = fx.line_of("along the adiabatic path");
+    let other_line = fx.line_of("unrelated auxiliary identity");
+
+    // Run 1: Open thm_tag, create two depth-1 child proof steps.
+    let req1 = fx.start_task("open", &[&thm_tag]);
+    fx.supply_all_lines(req1, CALLER, &fx.file_sha256);
+    let r1 = record_map_reading(&fx.env, &fx.ledger, SID, CALLER, &fx.call_args(req1, json!([
+        {
+            "new": { "id": "step-1", "attach_to": thm_tag, "kind": "proof_step" },
+            "gist": "First pass step 1.",
+            "anchors": [fx.anchor(proof_line, "along the adiabatic path yields")]
+        },
+        {
+            "new": { "id": "step-2", "attach_to": thm_tag, "kind": "proof_step" },
+            "gist": "Sibling step 2.",
+            "anchors": [fx.anchor(proof_line, "the claimed decay bound")]
+        },
+        {
+            "new": { "id": "bad-role", "attach_to": thm_tag, "kind": "proof_step" },
+            "role": "main_result",
+            "gist": "Forbidden role.",
+            "anchors": [fx.anchor(proof_line, "along the adiabatic path yields")]
+        },
+        {
+            "new": { "id": "bad-span", "attach_to": thm_tag, "kind": "proof_step" },
+            "gist": "Anchor outside theorem/proof.",
+            "anchors": [fx.anchor(other_line, "unrelated auxiliary identity")]
+        }
+    ]), json!([]), json!([]), true)).unwrap();
+    assert_eq!(r1["accepted_items"], 2);
+    assert_eq!(r1["items"][2]["code"], "invalid_role_for_kind");
+    assert_eq!(r1["items"][3]["code"], "anchor_outside_node");
+    let m_step1 = r1["assigned_tags"]["step-1"].as_str().unwrap().to_string();
+    let m_step2 = r1["assigned_tags"]["step-2"].as_str().unwrap().to_string();
+    assert!(m_step1.starts_with("m-") && m_step2.starts_with("m-") && m_step1 != m_step2);
+    fx.ledger.append(SID, MARKER_TASK_FINISHED, 1, &json!({ "request_seq": req1, "status": "done" })).unwrap();
+
+    // Run 2: Re-open thm_tag with same quote -> identical m_step1 tag (updates history, no duplicate).
+    let req2 = fx.start_task("open", &[&thm_tag]);
+    fx.supply_all_lines(req2, CALLER, &fx.file_sha256);
+    let r2 = record_map_reading(&fx.env, &fx.ledger, SID, CALLER, &fx.call_args(req2, json!([
+        {
+            "new": { "id": "rerun-1", "attach_to": thm_tag, "kind": "proof_step" },
+            "gist": "Refined step 1 gist.",
+            "anchors": [fx.anchor(proof_line, "along the adiabatic path yields")]
+        }
+    ]), json!([]), json!([]), true)).unwrap();
+    assert_eq!(r2["assigned_tags"]["rerun-1"].as_str().unwrap(), m_step1);
+    fx.ledger.append(SID, MARKER_TASK_FINISHED, 1, &json!({ "request_seq": req2, "status": "done" })).unwrap();
+
+    // Run 3: Open ONLY m_step1 (depth 2): can attach substep to m_step1, CANNOT touch sibling m_step2!
+    let req3 = fx.start_task("open", &[&m_step1]);
+    fx.supply_all_lines(req3, CALLER, &fx.file_sha256);
+    let r3 = record_map_reading(&fx.env, &fx.ledger, SID, CALLER, &fx.call_args(req3, json!([
+        {
+            "new": { "id": "sub-1a", "attach_to": m_step1, "kind": "substep" },
+            "gist": "Depth-2 expansion of step 1.",
+            "anchors": [fx.anchor(proof_line, "along the adiabatic path")]
+        },
+        {
+            "new": { "id": "sub-sib", "attach_to": m_step2, "kind": "substep" },
+            "gist": "Attempt to expand sibling.",
+            "anchors": [fx.anchor(proof_line, "the claimed decay bound")]
+        }
+    ]), json!([]), json!([]), true)).unwrap();
+    assert_eq!(r3["accepted_items"], 1);
+    let m_sub1a = r3["assigned_tags"]["sub-1a"].as_str().unwrap().to_string();
+    assert!(m_sub1a.starts_with("m-"));
+    assert_eq!(r3["items"][1]["code"], "out_of_scope_tag");
+    fx.ledger.append(SID, MARKER_TASK_FINISHED, 1, &json!({ "request_seq": req3, "status": "done" })).unwrap();
+
+    // Fold verifies additive history on m_step1, no duplicate child on thm_tag, and depth-2 link.
+    let events = fx.ledger.read_session(SID).unwrap();
+    let folded = crate::map_fold::fold_map(&fx.skeleton, &events, false);
+    assert_eq!(folded.nodes[&thm_tag].children, vec![m_step1.clone(), m_step2.clone()]);
+    assert_eq!(folded.nodes[&m_step1].children, vec![m_sub1a.clone()]);
+    assert_eq!(folded.nodes[&m_step1].gist.current.as_ref().unwrap().value, "Refined step 1 gist.");
+    assert_eq!(folded.nodes[&m_step1].gist.history.len(), 1);
+    assert!(!folded.nodes[&m_step1].any_stale);
+    assert!(!folded.nodes[&m_sub1a].any_stale);
 }

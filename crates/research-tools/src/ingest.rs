@@ -26,7 +26,7 @@ const MAX_EXCERPT_CHARS: usize = 12_000;
 
 const TEXT_EXTENSIONS: &[&str] = &[
     "tex", "ltx", "bib", "bbl", "sty", "cls", "md", "markdown", "txt", "csv", "tsv", "json", "py",
-    "log", "yml", "yaml",
+    "log", "yml", "yaml", "html", "htm", "xhtml",
 ];
 
 #[derive(Debug, Clone)]

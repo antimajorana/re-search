@@ -48,6 +48,36 @@ MAX_VALIDATION_TEXT = 64_000
 MAX_SEED_EVENTS = 32
 _active_seeds = contextvars.ContextVar("active_seeds", default=None)
 _cached_env = {}
+_MATPLOTLIB_TOP_MODULES = ("matplotlib", "pylab")
+
+
+def configure_matplotlib_env(scratch_dir=None):
+    """Configure headless Agg backend and scratch MPLCONFIGDIR lazily."""
+    os.environ["MPLBACKEND"] = "Agg"
+    if scratch_dir is not None:
+        cfg_dir = Path(scratch_dir) / "mplconfig"
+    else:
+        existing = os.environ.get("MPLCONFIGDIR", "").strip()
+        cfg_dir = Path(existing) if existing else (Path.cwd() / "mplconfig")
+    os.environ["MPLCONFIGDIR"] = str(cfg_dir)
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    return cfg_dir
+
+
+class _LazyMatplotlibEnvFinder:
+    """One-shot meta_path hook configuring Matplotlib only on first import."""
+
+    def __init__(self, scratch_dir=None):
+        self.scratch_dir = scratch_dir
+        self.triggered = False
+
+    def find_spec(self, fullname, path=None, target=None):
+        if not self.triggered:
+            top = fullname.partition(".")[0]
+            if top in _MATPLOTLIB_TOP_MODULES:
+                self.triggered = True
+                configure_matplotlib_env(self.scratch_dir)
+        return None
 
 
 def _ensure_script_dir_on_path():
@@ -241,7 +271,7 @@ def _validate_srepr_map(mapping, field_name):
     return validated
 
 
-def evaluate(code, ns, exprs_in=None, env_info=None):
+def evaluate(code, ns, exprs_in=None, env_info=None, scratch_dir=None):
     """Run `code`; if its last statement is an expression, return its value."""
     staged = None if exprs_in is None else _validate_srepr_map(exprs_in, "exprs_in")
     started = time.perf_counter()
@@ -260,6 +290,8 @@ def evaluate(code, ns, exprs_in=None, env_info=None):
         else contextlib.nullcontext(outbox)
     )
 
+    lazy_mpl = _LazyMatplotlibEnvFinder(scratch_dir=scratch_dir)
+    sys.meta_path.insert(0, lazy_mpl)
     token = _active_seeds.set(result)
     try:
         with expr_ctx as active_outbox, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -281,6 +313,10 @@ def evaluate(code, ns, exprs_in=None, env_info=None):
                 }
     finally:
         _active_seeds.reset(token)
+        try:
+            sys.meta_path.remove(lazy_mpl)
+        except ValueError:
+            pass
 
     truncated = False
     for key, text in (("stdout", out.getvalue()), ("stderr", err.getvalue())):

@@ -159,6 +159,8 @@ Section "reSearch"
   SetOutPath "$Stage\python\checks"
   File "${RE_SEARCH_STAGE}\python\checks\__init__.py"
   File "${RE_SEARCH_STAGE}\python\checks\srepr_safe.py"
+  File "${RE_SEARCH_STAGE}\python\checks\algebra.py"
+  File "${RE_SEARCH_STAGE}\python\checks\algebra_probe.py"
   SetOutPath "$Stage\licenses"
   File /r "${RE_SEARCH_STAGE}\licenses\*"
 !ifdef RE_SEARCH_BUNDLED_PYTHON

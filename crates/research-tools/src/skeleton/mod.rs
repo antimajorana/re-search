@@ -8,6 +8,15 @@
 pub mod bib;
 pub mod edges;
 pub mod flatten;
+pub mod html;
+mod html_bib;
+mod html_classify;
+pub mod html_confirm;
+mod html_edges;
+mod html_entities;
+mod html_finalize;
+mod html_lex;
+mod html_walk;
 pub mod locate;
 mod locate_parse;
 pub mod model;
@@ -35,6 +44,13 @@ pub use flatten::{
     flatten_tex_files, load_ingested_tex_source, select_primary_tex, FlattenedLine, FlattenedTex,
     IngestedTexSource, OriginEntry, MAX_FLATTENED_BYTES, MAX_FLATTENED_LINES, MAX_INCLUDE_DEPTH,
 };
+pub use html::{
+    build_html_skeleton, build_html_skeleton_from_ingested, build_html_skeleton_timed,
+    is_html_receipt, is_latexml_html_document, load_ingested_html_source, HtmlSkeletonInput,
+    HtmlSkeletonOutput, IngestedHtmlSource,
+};
+pub use html_confirm::{confirm_tex_numbers_with_html, ConfirmReport, NumberDisagreement};
+pub use html_lex::MAX_HTML_BYTES;
 pub use locate::{
     detect_tex_counter_drift, format_candidate_label, format_version_caveat, locate_in_skeleton,
     locate_in_skeleton_with_context, parse_locator, LocateCandidate, LocateContext, LocateResult,
@@ -292,4 +308,71 @@ fn join_quality_notes(notes: &[String]) -> Option<String> {
     } else {
         Some(notes.join("; "))
     }
+}
+
+/// True iff `receipt.payload["files"]` contains a `.tex`/`.ltx` path (excluding distinct `assembled_path`).
+pub fn is_tex_receipt(receipt: &Event) -> bool {
+    let primary = receipt.payload["primary_path"].as_str();
+    let assembled = receipt.payload["assembled_path"].as_str();
+    receipt.payload["files"].as_array().is_some_and(|files| {
+        files.iter().filter_map(serde_json::Value::as_str).any(|rel| {
+            if assembled == Some(rel) && primary != Some(rel) {
+                return false;
+            }
+            let lower = rel.to_ascii_lowercase();
+            lower.ends_with(".tex") || lower.ends_with(".ltx")
+        })
+    })
+}
+
+/// True iff `receipt` is a PDF `source.ingested` receipt eligible for V17 `pdf-1` skeleton extraction.
+pub fn is_pdf_receipt(receipt: &Event) -> bool {
+    if is_tex_receipt(receipt) {
+        return false;
+    }
+    let p = &receipt.payload;
+    let status = p["status"].as_str().unwrap_or("");
+    matches!(status, "ok" | "pdf_only" | "empty_text_layer")
+        && (p["format"].as_str() == Some("pdf")
+            || status == "pdf_only"
+            || p.get("pdf_extractor").is_some_and(serde_json::Value::is_string)
+            || p.get("pdf_pages").is_some_and(serde_json::Value::is_array))
+}
+
+/// True iff `receipt` supports deterministic skeleton building (`tex-1`, `html-1`, or `pdf-1`).
+pub fn is_skeleton_receipt(receipt: &Event) -> bool {
+    is_tex_receipt(receipt) || is_html_receipt(receipt) || is_pdf_receipt(receipt)
+}
+
+/// Derives `(PaperKey, version)` from overrides, `arxiv_cover_id`, `origin`, `raw_blob`, or `source_id`.
+pub fn derive_receipt_paper_identity(
+    receipt: &Event,
+    key_override: Option<PaperKey>,
+    version_override: Option<String>,
+) -> Result<(PaperKey, Option<String>), String> {
+    let ver_ov = version_override.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if let Some(key) = key_override {
+        return Ok((key, ver_ov));
+    }
+    let p = &receipt.payload;
+    for field in ["arxiv_cover_id", "origin"] {
+        if let Some(raw) = p[field].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            if let Ok((base, ver)) = crate::paper_key::split_arxiv_id(raw) {
+                return Ok((PaperKey::from_arxiv(&base)?, ver_ov.or(ver)));
+            }
+        }
+    }
+    if let Some(raw_blob) = p["raw_blob"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| s.len() >= 16 && s[..16].bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+    {
+        return Ok((PaperKey::parse(&format!("file:{}", &raw_blob[..16]))?, ver_ov));
+    }
+    let sid = p["source_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "source.ingested receipt missing `source_id`".to_string())?;
+    Ok((PaperKey::from_file_bytes(sid.as_bytes()), ver_ov))
 }

@@ -11,6 +11,10 @@ import { createQualityBanner, renderInvestigationOutline } from '/assets/investi
 import { filterResultNodes, renderInvestigationResults } from '/assets/investigation_results.js';
 import { lookupNearestSymbol, renderReadingPlanStrip, renderSymbolPopover } from '/assets/investigation_skip.js';
 import { createInvestigateWholeMap, VIEW_MODES } from '/assets/investigation_wholemap.js';
+import { buildTaskPayload, mountOrientControls } from '/assets/investigation_orient_ui.js';
+import '/assets/investigation_share_ui.js';
+import { syncContextCardsDrawer } from '/assets/investigation_context_cards.js';
+import { mountLegacyPanel } from '/assets/investigation_legacy.js';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -66,8 +70,13 @@ export function createInvestigationV3Controller(deps = {}) {
   let activeKey = '';
   let loadToken = 0;
   let activeWholeMap = null;
+  let stopModelWatch = null;
 
   function destroyWholeMap() {
+    if (stopModelWatch) {
+      stopModelWatch();
+      stopModelWatch = null;
+    }
     if (activeWholeMap) {
       activeWholeMap.destroy?.();
       activeWholeMap = null;
@@ -118,6 +127,8 @@ export function createInvestigationV3Controller(deps = {}) {
     }
 
     host.hidden = false;
+    const modelConnected = Boolean(hooks?.isModelConnected?.());
+    const refreshMv = () => { st.etag = ''; activeKey = ''; return hooks?.refresh?.(sessionId); };
     const banner = createQualityBanner(mv);
     const leftCol = el('div', 'inv-col inv-col--outline');
     const centerCol = el('div', 'inv-col inv-col--center');
@@ -130,7 +141,12 @@ export function createInvestigationV3Controller(deps = {}) {
     const mapBtn = el('button', 'inv-node-action-btn', 'Whole paper graph');
     mapBtn.type = 'button';
     mapBtn.setAttribute('aria-pressed', st.wholeMap ? 'true' : 'false');
-    toolbar.append(focusBtn, mapBtn);
+    const orientBtn = el('button', 'inv-node-action-btn', 'Orient paper');
+    orientBtn.type = 'button';
+    orientBtn.setAttribute('data-action', 'orient');
+    toolbar.append(focusBtn, mapBtn, orientBtn);
+    const orientStatusHost = el('div', 'inv-v7-orient-runbar');
+    stopModelWatch = mountOrientControls({ toolbar, statusHost: orientStatusHost, orientBtn, apiMod, sessionId, mv, st, hooks, onRefresh: refreshMv }).stopWatch;
 
     if (st.trail.length > 1) {
       const backBtn = el('button', 'inv-node-action-btn', '← Previous statement');
@@ -155,7 +171,8 @@ export function createInvestigationV3Controller(deps = {}) {
     const symHost = el('div', 'inv-symbol-stage');
     const graphHost = el('div', 'inv-graph-stage');
     const resultsHost = el('div', 'inv-results-stage');
-    centerCol.append(toolbar, symHost, skipHost, graphHost, resultsHost);
+    centerCol.append(toolbar, orientStatusHost, symHost, skipHost, graphHost, resultsHost);
+    mountLegacyPanel(centerCol, mv?.legacy, { onSelectNode: (id) => selectNode(id, true) });
 
     const outlineHost = el('div', 'inv-outline-stage');
     leftCol.appendChild(outlineHost);
@@ -244,7 +261,6 @@ export function createInvestigationV3Controller(deps = {}) {
       if (ev.key === 'Enter') { ev.preventDefault(); runSymbolLookup(); }
     });
 
-    const modelConnected = Boolean(hooks?.isModelConnected?.());
     const hasPdf = Boolean(
       sessionData?.sources?.some((s) => s.source_id === mv.source_id && s.format === 'pdf'),
     );
@@ -315,26 +331,34 @@ export function createInvestigationV3Controller(deps = {}) {
           ? (res) => st.liveHooks?.openPaperInNewSession?.(res)
           : undefined,
       });
-      if (st.pendingSections) {
-        for (const [secId, secEl] of st.pendingSections.entries()) {
-          st.contextDrawer.mountContextSection(secId, secEl);
-        }
-        st.pendingSections.clear();
-      }
+      st.pendingSections?.forEach((secEl, secId) => st.contextDrawer.mountContextSection(secId, secEl)); st.pendingSections?.clear();
       if (st.citedResult) st.contextDrawer.renderResult(st.citedResult);
     } else if (st.fetchBudget) {
       st.contextDrawer.setFetchBudget(st.fetchBudget);
     }
     const contextDrawer = st.contextDrawer;
     contextHost.replaceChildren(contextDrawer.element);
+    syncContextCardsDrawer(contextDrawer, { sessionId, mv, selectedTag: st.selectedTag, modelConnected, apiMod, hooks, refreshMv });
+
+    const startOpenTag = (tag) => apiMod.startInvestigationTask?.(sessionId, buildTaskPayload(hooks, { task: 'open', tags: [tag] }))?.then(refreshMv)?.catch((err) => hooks?.showStatus?.(err?.message || 'Could not open node.'));
 
     const mountNodeCard = (entry) => {
-      renderInvestigationNodeCard(nodeCardHost, mv, st.selectedTag, {
+      const cardCtrl = renderInvestigationNodeCard(nodeCardHost, mv, st.selectedTag, {
         nodeText: entry ? entry.text : (st.selectedTag ? null : ''),
         proofText: entry?.proof_text || '',
-        hasPdf,
-        modelConnected,
+        hasPdf, modelConnected,
+        handoff: { sessionId, api: apiMod, openSession: hooks?.openSession, refresh: refreshMv, showStatus: hooks?.showStatus },
         onSelectNode: (id) => selectNode(id, true),
+        onTogglePin: (node, pin) => {
+          void apiMod.saveInvestigationNote?.(sessionId, { tag: node.id, node_fp: node.fp, pin })?.then(refreshMv).catch((err) => hooks?.showStatus?.(err?.message || 'Could not update pin.'));
+        },
+        onSaveNote: async (payload) => { const res = await apiMod.saveInvestigationNote?.(sessionId, payload); void refreshMv(); return res; },
+        onOpenNode: (id) => { void startOpenTag(id); },
+        onContinueTask: (_t, node) => { if (node?.id) void startOpenTag(node.id); },
+        onRetryTask: (_t, node) => { if (node?.id) void startOpenTag(node.id); },
+        onStopTask: () => { void apiMod.stopTurn?.(sessionId)?.then(refreshMv); },
+        onOpenQuote: (t) => { if (t?.source_id && t?.path) hooks?.openSource?.(sessionId, t); },
+        onOpenPageImage: (t) => { if (t?.source_id) hooks?.openPdf?.(t); },
         onSelectCitation: (cite) => {
           const locator = Array.isArray(cite.locators) && cite.locators.length
             ? cite.locators[0]
@@ -361,14 +385,14 @@ export function createInvestigationV3Controller(deps = {}) {
               start_line: span.start_line,
               label: node.label,
             });
-          } else if (actionId === 'ask' || actionId === 'note') {
+          } else if (actionId === 'ask') {
             const input = typeof document !== 'undefined' ? document.getElementById('composer-input') : null;
             if (input) {
               if (!input.value) input.value = `Regarding ${node.label} (${node.id}): `;
               input.focus?.();
             }
           } else if (actionId === 'derive_solve' || actionId === 'extend_explore') {
-            hooks?.showStatus?.('Cross-mode hand-off buttons from Investigate nodes connect in V16.');
+            void cardCtrl?.handoffCtrl?.trigger(actionId);
           }
         },
       });
@@ -504,17 +528,15 @@ export function createInvestigationV3Controller(deps = {}) {
       return res;
     },
     async syncSession(sessionId, sessionData, hooks = {}) {
-      const host = typeof document !== 'undefined'
-        ? document.getElementById('investigation-v3-shell')
-        : null;
+      const host = typeof document !== 'undefined' ? document.getElementById('investigation-v3-shell') : null;
       activeSessionId = sessionId || null;
       if (!host) return false;
       if (!sessionId || sessionData?.mode !== 'investigation') {
         activeKey = '';
         destroyWholeMap();
         ensureEntryCard(sessionId, false, hooks);
-        host.hidden = true;
-        host.replaceChildren();
+        mountLegacyPanel(null, null);
+        host.hidden = true; host.replaceChildren();
         return false;
       }
       const inv = sessionData.investigation || {};
@@ -527,12 +549,14 @@ export function createInvestigationV3Controller(deps = {}) {
       if (!eligible) {
         activeKey = '';
         destroyWholeMap();
-        host.hidden = true;
-        host.replaceChildren();
+        mountLegacyPanel(null, null);
+        host.hidden = true; host.replaceChildren();
         return false;
       }
       const st = sessionState(sessionId);
-      const nextKey = `${sessionId}:${inv.skeleton_seq ?? 'auto'}:${inv.source_id ?? ''}`;
+      const evs = Array.isArray(sessionData.events) ? sessionData.events : [];
+      const tailSeq = evs.length ? (evs[evs.length - 1]?.seq ?? evs.length) : 0;
+      const nextKey = `${sessionId}:${inv.skeleton_seq ?? 'auto'}:${inv.source_id ?? ''}:${tailSeq}`;
       if (st.mapview && activeKey === nextKey) {
         renderShell(host, sessionId, sessionData, hooks);
         return true;
@@ -543,13 +567,14 @@ export function createInvestigationV3Controller(deps = {}) {
         if (token !== loadToken || activeSessionId !== sessionId) return false;
         if (!mv || mv.skeleton_seq == null) {
           destroyWholeMap();
-          host.hidden = true;
-          host.replaceChildren();
+          const hasFallback = Boolean(mv?.legacy?.fallback_old_view && mv?.legacy?.has_legacy);
+          mountLegacyPanel(hasFallback ? host : null, mv?.legacy);
+          host.hidden = !hasFallback; if (!hasFallback) host.replaceChildren();
           return false;
         }
         st.mapview = mv;
         st.etag = mv.etag || '';
-        activeKey = `${sessionId}:${mv.skeleton_seq}:${mv.source_id ?? ''}`;
+        activeKey = nextKey;
         const setupEl = document.getElementById('investigation-setup');
         if (setupEl) setupEl.hidden = true;
         ensureEntryCard(sessionId, false, hooks);
