@@ -39,6 +39,8 @@ pub(crate) mod stream_codecs;
 pub(crate) mod stream_http;
 pub mod transport;
 pub mod usage;
+pub(crate) mod verifier_context;
+pub(crate) mod verifier_parse;
 pub mod verifiers;
 pub(crate) mod wire;
 
