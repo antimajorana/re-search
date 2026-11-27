@@ -379,6 +379,9 @@ pub(crate) fn dispatch_api(
             }
             Err((st, msg)) => write_json(&mut stream, st, json!({ "error": msg }), &[]),
         },
+        ("GET", ["api", "sessions", id, "writeup"]) => {
+            crate::routes_writeup::serve_writeup(&mut stream, state, id, &req.query);
+        }
         ("GET", ["api", "settings", "providers"]) => {
             write_api_res(&mut stream, handle_get_settings(state));
         }
