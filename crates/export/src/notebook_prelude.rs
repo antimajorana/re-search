@@ -388,11 +388,12 @@ pub(crate) fn render_check_code_cell(
     match check.name.as_str() {
         "symbolic_zero_smoke" | "identity_symbolic" => {
             out.push_str(
-                "_raw_diff = _lhs - _rhs\n\
-                 _diff = sp.simplify(_raw_diff)\n\
-                 if _diff != 0 and _diff.has(sp.Integral, sp.Sum, sp.Derivative):\n\
-                     _diff = sp.simplify(_raw_diff.doit())\n\
-                 print(f\"check {_check_id} ({_check_name}): recorded={_recorded_outcome}, residual={_diff}\")\n",
+                r#"_raw_diff = _lhs - _rhs
+_diff = sp.simplify(_raw_diff)
+if _diff != 0 and _diff.has(sp.Integral, sp.Sum, sp.Derivative):
+    _diff = sp.simplify(_raw_diff.doit())
+print(f"check {_check_id} ({_check_name}): recorded={_recorded_outcome}, residual={_diff}")
+"#,
             );
         }
         "series_match" | "vanishes_to_order" => {

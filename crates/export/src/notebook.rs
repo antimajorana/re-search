@@ -402,7 +402,7 @@ fn latest_portable_handles(state: &SolveState) -> BTreeMap<String, HandleRef> {
         .collect()
 }
 
-fn resolve_slot_text(ledger: &Ledger, slot: Option<&Value>) -> String {
+pub(crate) fn resolve_slot_text(ledger: &Ledger, slot: Option<&Value>) -> String {
     let Some(obj) = slot.and_then(Value::as_object) else {
         return String::new();
     };
