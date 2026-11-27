@@ -312,6 +312,9 @@ pub(crate) fn dispatch_api(
         ("GET", ["api", "sessions", id, "handoffs"]) => {
             write_api_res(&mut stream, crate::handoff::handle_get_handoffs(state, id));
         }
+        ("GET", ["api", "sessions", id, "solve", "artifacts", artifact_id]) => {
+            crate::solve_artifacts_route::serve_solve_artifact(&mut stream, state, id, artifact_id);
+        }
         (method, ["api", "sessions", id, "solve", rest @ ..]) => {
             write_api_res(&mut stream, crate::solve::handle_solve(state, method, id, rest, &req.body));
         }
