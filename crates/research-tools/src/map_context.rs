@@ -19,8 +19,8 @@ use crate::map_context_defs::{
 use crate::map_defs::{HypothesisRecord, IndexedFault, VerifiedMapAnchor, RECORD_CONTEXT_CARDS};
 use crate::map_model_nodes::{collect_existing_model_nodes, ModelNodeRef};
 use crate::map_reading::validate::{
-    fault, span_contains_anchor, verify_anchor_with_fallback, AnchorErr, InputAnchor,
-    InputHypothesis, ReadingAnchorReport,
+    fault, span_contains_anchor, verify_anchor_with_fallback, AnchorErr, AnchorSessionCtx,
+    InputAnchor, InputHypothesis, ReadingAnchorReport,
 };
 use crate::map_reading::{
     compute_open_scopes, load_pinned_skeleton, reject_app_only_fields_with, rejected_outcome,
@@ -357,7 +357,7 @@ fn validate_one_card(
                 index,
                 "missing_anchors",
                 format!(
-                    "`{}` card requires at least one verified anchor; only `prerequisite` may use `model_background`.",
+                    "`{}` card requires at least one matched anchor; only `prerequisite` may use `model_background`.",
                     parsed.card_type.as_str()
                 ),
                 None,
@@ -447,7 +447,7 @@ fn validate_one_card(
                 index,
                 "anchor_outside_cited_node",
                 format!(
-                    "`cited_result` card needs at least one verified anchor inside `{}` node `{}`.",
+                    "`cited_result` card needs at least one matched anchor inside `{}` node `{}`.",
                     target.source_id, target.tag
                 ),
                 None,
@@ -509,11 +509,13 @@ fn verify_card_anchor(
     report: &mut ReadingAnchorReport,
 ) -> Result<VerifiedMapAnchor, IndexedFault> {
     match verify_anchor_with_fallback(
-        &ctx.sandbox,
-        ctx.session,
-        ctx.events,
-        ctx.sent,
-        ctx.caller,
+        &AnchorSessionCtx {
+            sandbox: &ctx.sandbox,
+            session: ctx.session,
+            events: ctx.events,
+            sent: ctx.sent,
+            caller: ctx.caller,
+        },
         owner,
         raw,
         fallback_path,

@@ -104,7 +104,7 @@ pub fn record_context_cards_def() -> ToolDef {
         id: RECORD_CONTEXT_CARDS.into(),
         description: "Record validated context cards (`symbol`, `prerequisite`, or `cited_result`) \
             for one node `tag` during an active `context` or `open` task. Supply `anchors` from \
-            verified quotes you received; code assigns `origin` (`paper`, `external`, or \
+            matched quotes you received; code assigns `origin` (`paper`, `external`, or \
             `model_background` only for `prerequisite` <= 300 chars and <= 5 per node). Never \
             supply `origin` or app-only anchor digest/excerpt fields. Failed anchors drop their \
             card rather than downgrading. `cited_result` requires `bib_key` present in the \

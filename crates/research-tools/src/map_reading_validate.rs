@@ -181,12 +181,16 @@ fn to_verified_map_anchor(vq: VerifiedQuote, quote: &str) -> VerifiedMapAnchor {
     }
 }
 
+pub(crate) struct AnchorSessionCtx<'a> {
+    pub sandbox: &'a WorkspaceSandbox,
+    pub session: &'a str,
+    pub events: &'a [Event],
+    pub sent: &'a SentLines,
+    pub caller: &'a str,
+}
+
 pub(crate) fn verify_anchor_with_fallback(
-    sandbox: &WorkspaceSandbox,
-    session: &str,
-    events: &[Event],
-    sent: &SentLines,
-    caller: &str,
+    ctx: &AnchorSessionCtx<'_>,
     owner: String,
     anchor: &InputAnchor,
     fallback_path: Option<&str>,
@@ -203,11 +207,11 @@ pub(crate) fn verify_anchor_with_fallback(
             true_text: None,
         })?;
     match accept_quote_with_sent(
-        sandbox,
-        session,
-        events,
-        sent,
-        caller,
+        ctx.sandbox,
+        ctx.session,
+        ctx.events,
+        ctx.sent,
+        ctx.caller,
         &anchor.source_id,
         path,
         anchor.start_line,
@@ -255,11 +259,13 @@ fn verify_one_anchor(
         });
     }
     verify_anchor_with_fallback(
-        &ctx.sandbox,
-        ctx.session,
-        ctx.events,
-        ctx.sent,
-        ctx.caller,
+        &AnchorSessionCtx {
+            sandbox: &ctx.sandbox,
+            session: ctx.session,
+            events: ctx.events,
+            sent: ctx.sent,
+            caller: ctx.caller,
+        },
         owner,
         anchor,
         default_path.or(ctx.receipt_primary_path),

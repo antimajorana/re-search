@@ -415,7 +415,7 @@ pub(crate) fn project_folded_context_cards(mv: &mut Value, folded: &FoldedMap) {
         node["context_cards"] = Value::Array(
             r.context_cards
                 .iter()
-                .map(|vc| serialize_folded_card(vc))
+                .map(serialize_folded_card)
                 .collect(),
         );
     }
