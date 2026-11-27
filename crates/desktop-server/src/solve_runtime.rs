@@ -171,6 +171,7 @@ fn build_solver_worker(state: &DesktopState, session: &str) -> Result<Option<Wor
             scratch,
             pycache,
             startup_timeout: Duration::from_secs(90),
+            job_memory_limit_bytes: None,
         },
         sandbox,
     )))
@@ -207,6 +208,7 @@ fn build_check_worker(state: &DesktopState, session: &str) -> Result<Option<Work
             scratch,
             pycache,
             startup_timeout: Duration::from_secs(90),
+            job_memory_limit_bytes: None,
         },
         sandbox,
         WorkerRole::Check,
