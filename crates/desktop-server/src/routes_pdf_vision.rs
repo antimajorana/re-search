@@ -16,12 +16,12 @@ use crate::routes_session::{bad, internal, not_found, ApiResult};
 use crate::state::DesktopState;
 use crate::turn_control::ApiTurnGuard;
 use agent::vision::{
-    build_image_block, decode_base64_strict, supports_vision, validate_image_bytes,
+    build_image_block, decode_base64_strict, encode_base64, supports_vision, validate_image_bytes,
     validate_request_images, MAX_IMAGE_BYTES,
 };
 use agent::{
-    CancelToken, ContentBlock, Message, ModelRequest, ProviderKind, Role, StreamObserver,
-    TransportErrorKind,
+    CancelToken, ContentBlock, Message, ModelRequest, ProviderKind, Role, StopReason,
+    StreamObserver, TransportErrorKind,
 };
 use ledger::Event;
 use research_tools::lines_sent::{
@@ -40,12 +40,12 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Sidecar settings file under `DesktopConfig::data_dir` (keeps `state.rs` untouched).
 pub const PDF_VISION_SETTINGS_FILE: &str = "pdf_vision_settings.json";
 
-/// Default F9 model-call budget cap for equation transcription requests when omitted.
+/// Maximum / default F9 model-call budget cap for equation transcription requests.
 pub const DEFAULT_VISION_BUDGET_CAP: u64 = 64;
 
 /// Ledger caller identifier recorded on `context.supplied` `page_ranges` events.
@@ -57,6 +57,7 @@ image into clean LaTeX. Output ONLY the transcribed LaTeX draft for the visible 
 invent symbols that are illegible or missing, and do not claim this draft is a verified quote.";
 
 static SETTINGS_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+static SETTINGS_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 fn default_equation_transcription_enabled() -> bool {
     DEFAULT_EQUATION_TRANSCRIPTION_ENABLED
@@ -72,9 +73,7 @@ pub struct PdfVisionSettings {
 
 impl Default for PdfVisionSettings {
     fn default() -> Self {
-        Self {
-            equation_transcription_enabled: DEFAULT_EQUATION_TRANSCRIPTION_ENABLED,
-        }
+        Self { equation_transcription_enabled: DEFAULT_EQUATION_TRANSCRIPTION_ENABLED }
     }
 }
 
@@ -92,20 +91,24 @@ pub fn load_pdf_vision_settings(data_dir: &Path) -> PdfVisionSettings {
 
 /// Atomically persist [`PdfVisionSettings`] to `<data_dir>/pdf_vision_settings.json`.
 pub fn save_pdf_vision_settings(data_dir: &Path, settings: &PdfVisionSettings) -> Result<(), String> {
+    let _guard = SETTINGS_WRITE_LOCK
+        .lock()
+        .map_err(|_| "pdf vision settings lock poisoned".to_string())?;
     fs::create_dir_all(data_dir)
         .map_err(|e| format!("failed to create data directory `{}`: {e}", data_dir.display()))?;
     let bytes = serde_json::to_vec_pretty(settings)
         .map_err(|e| format!("failed to serialize pdf vision settings: {e}"))?;
     let target = settings_path(data_dir);
     let seq = SETTINGS_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    let tmp = data_dir.join(format!(
-        "{PDF_VISION_SETTINGS_FILE}.{}.{}.tmp",
-        std::process::id(),
-        seq
-    ));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let tmp = data_dir.join(format!("{PDF_VISION_SETTINGS_FILE}.{}.{}.tmp", std::process::id(), seq));
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts
         .open(&tmp)
         .map_err(|e| format!("failed to create temp pdf vision settings file: {e}"))?;
     if let Err(err) = file.write_all(&bytes).and_then(|()| file.sync_all()) {
@@ -272,15 +275,16 @@ fn resolve_vision_model(
 
 fn resolve_crop_image(
     req: &TranscribeEquationsRequest,
-    raw_pdf_bytes: &[u8],
+    ledger: &ledger::Ledger,
+    raw_blob_sha256: &str,
     crop_provider: Option<&dyn PageCropProvider>,
-) -> Result<(String, Vec<u8>), (u16, String)> {
+) -> Result<(String, Vec<u8>, bool), (u16, String)> {
     match (&req.image_media_type, &req.image_base64) {
         (Some(mt), Some(b64)) => {
             let decoded = decode_base64_strict(b64, MAX_IMAGE_BYTES)
                 .map_err(|e| bad(format!("Invalid crop image base64: {e}")))?;
             validate_image_bytes(mt, &decoded).map_err(|e| bad(e.message))?;
-            Ok((mt.clone(), decoded))
+            Ok((mt.clone(), decoded, false))
         }
         (Some(_), None) | (None, Some(_)) => Err(bad(
             "Provide both `image_media_type` and `image_base64`, or omit both to use a configured page renderer.",
@@ -291,13 +295,29 @@ fn resolve_crop_image(
                     "Supply a PNG, JPEG, or WebP crop via `image_media_type` + `image_base64` (no PDF page renderer configured).",
                 ));
             };
+            let raw_pdf_bytes = ledger
+                .get_blob(raw_blob_sha256)
+                .map_err(|_| bad("The stored PDF failed its checksum or is missing."))?;
             let (mt, bytes) = provider
-                .render_crop(raw_pdf_bytes, req.page, req.crop)
+                .render_crop(&raw_pdf_bytes, req.page, req.crop)
                 .map_err(|e| bad(format!("Failed to render PDF page crop: {e}")))?;
             validate_image_bytes(&mt, &bytes).map_err(|e| bad(e.message))?;
-            Ok((mt, bytes))
+            Ok((mt, bytes, true))
         }
     }
+}
+
+fn receipt_max_page(receipt: &Value) -> Option<usize> {
+    if let Some(pc) = receipt["page_count"].as_u64().and_then(|n| usize::try_from(n).ok()).filter(|&n| n > 0) {
+        return Some(pc);
+    }
+    let from_pages = receipt["pdf_pages"].as_array().and_then(|arr| {
+        arr.iter().filter_map(|p| p.get("page").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok())).max()
+    });
+    let from_lines = receipt["pdf_page_lines"].as_array().and_then(|arr| {
+        arr.iter().filter_map(|e| e.as_array()?.first()?.as_u64().and_then(|n| usize::try_from(n).ok())).max()
+    });
+    from_pages.max(from_lines).filter(|&n| n > 0)
 }
 
 fn valid_source_id(id: &str) -> bool {
@@ -310,10 +330,7 @@ fn is_sha256_hex(s: &str) -> bool {
 
 /// HTTP handler for `POST /api/sessions/{id}/sources/{source}/transcribe-equations`.
 pub fn handle_transcribe_equations(
-    state: &Arc<DesktopState>,
-    session: &str,
-    source: &str,
-    body: &[u8],
+    state: &Arc<DesktopState>, session: &str, source: &str, body: &[u8],
 ) -> ApiResult {
     handle_transcribe_with_provider(state, session, source, body, None)
 }
@@ -341,7 +358,6 @@ pub fn handle_transcribe_with_provider(
             "Equation vision transcription is off by default. Explicitly opt in (`opt_in: true` or enable equation transcription in settings) before sending page images to your vision model.".into(),
         ));
     }
-
     if req.page == 0 {
         return Err(bad("`page` must be a 1-based page number (>= 1)."));
     }
@@ -362,10 +378,7 @@ pub fn handle_transcribe_with_provider(
     }
     let _activity = crate::session_lifecycle::reserve_turn(state, session)?;
     {
-        let mut active = state
-            .active_turns
-            .lock()
-            .map_err(|_| internal("Session lock unavailable."))?;
+        let mut active = state.active_turns.lock().map_err(|_| internal("Session lock unavailable."))?;
         if !active.insert(session.to_string()) {
             return Err((409, "Wait for the current turn or review to finish.".into()));
         }
@@ -388,53 +401,45 @@ pub fn handle_transcribe_with_provider(
     if receipt["format"].as_str() != Some("pdf") {
         return Err(bad("Equation transcription is only available for PDF sources."));
     }
-    if let Some(page_count) = receipt["page_count"].as_u64().and_then(|n| usize::try_from(n).ok()) {
-        if page_count > 0 && req.page > page_count {
-            return Err(bad(format!(
-                "Requested page {} exceeds source page_count ({page_count}).",
-                req.page
-            )));
-        }
+    let max_page = receipt_max_page(receipt)
+        .ok_or_else(|| bad("Source receipt is missing a valid positive PDF page_count."))?;
+    if req.page > max_page {
+        return Err(bad(format!("Requested page {} exceeds source page_count ({max_page}).", req.page)));
     }
     let raw_blob_sha256 = receipt["raw_blob"]
         .as_str()
         .filter(|s| is_sha256_hex(s))
         .ok_or_else(|| bad("Source receipt is missing a valid raw_blob SHA-256 digest."))?
         .to_string();
-    let raw_pdf_bytes = ledger
-        .get_blob(&raw_blob_sha256)
-        .map_err(|_| bad("The stored PDF failed its checksum or is missing."))?;
 
-    let (media_type, image_bytes) = resolve_crop_image(&req, &raw_pdf_bytes, crop_provider)?;
+    // Fail-closed vision capability + F9 run_budget checks BEFORE any PDF blob I/O or ledger write.
     let (provider, model) =
         resolve_vision_model(state, req.provider.as_deref(), req.model.as_deref())?;
-
-    // F9 run_budget enforcement before sending any request or mutating the ledger.
     let run_id_opt = req.run_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let scope = run_id_opt.map_or(RunScope::All, RunScope::RunId);
-    let cap = req.budget_cap.unwrap_or(DEFAULT_VISION_BUDGET_CAP);
-    let used = count_model_calls(&events, scope).saturating_add(count_vision_calls(&events, scope));
-    let budget = ModelCallBudget::new(cap, used);
-    if !budget.can_spend(1) {
-        return Err((
-            429,
-            format!(
-                "Model call budget exhausted ({} of {} calls used).",
-                budget.used, budget.cap
-            ),
-        ));
+    let clamped_cap = req.budget_cap.map_or(DEFAULT_VISION_BUDGET_CAP, |c| c.min(DEFAULT_VISION_BUDGET_CAP));
+    let session_used = count_model_calls(&events, RunScope::All).saturating_add(count_vision_calls(&events, RunScope::All));
+    let session_cap = if run_id_opt.is_some() { DEFAULT_VISION_BUDGET_CAP } else { clamped_cap };
+    let session_budget = ModelCallBudget::new(session_cap, session_used);
+    if !session_budget.can_spend(1) {
+        return Err((429, format!("Session model call budget exhausted ({} of {} calls used).", session_budget.used, session_budget.cap)));
     }
+    let (active_cap, active_used) = if let Some(rid) = run_id_opt {
+        let run_used = count_model_calls(&events, RunScope::RunId(rid)).saturating_add(count_vision_calls(&events, RunScope::RunId(rid)));
+        let run_budget = ModelCallBudget::new(clamped_cap, run_used);
+        if !run_budget.can_spend(1) {
+            return Err((429, format!("Model call budget exhausted ({} of {} calls used).", run_budget.used, run_budget.cap)));
+        }
+        (clamped_cap, run_used)
+    } else {
+        (session_cap, session_used)
+    };
 
+    let (media_type, image_bytes, rendered_by_provider) =
+        resolve_crop_image(&req, &ledger, &raw_blob_sha256, crop_provider)?;
     let img_block = build_image_block(&media_type, &image_bytes).map_err(|e| bad(e.message))?;
     let user_prompt = match prompt_hint {
-        Some(hint) => format!(
-            "Transcribe the mathematical formula(s) in this crop from page {} into LaTeX. Context hint: {hint}",
-            req.page
-        ),
-        None => format!(
-            "Transcribe the mathematical formula(s) in this crop from page {} into LaTeX.",
-            req.page
-        ),
+        Some(hint) => format!("Transcribe the mathematical formula(s) in this crop from page {} into LaTeX. Context hint: {hint}", req.page),
+        None => format!("Transcribe the mathematical formula(s) in this crop from page {} into LaTeX.", req.page),
     };
     let model_req = ModelRequest {
         model: model.clone(),
@@ -451,10 +456,11 @@ pub fn handle_transcribe_with_provider(
 
     let transport = state.build_transport(provider, &model).map_err(bad)?;
     let prepared = transport.prepare_request(&model_req).map_err(|e| bad(e.to_string()))?;
+    if worker.cancel.is_cancelled() {
+        return Err((409, "Equation transcription cancelled.".into()));
+    }
 
-    let run_id_recorded = run_id_opt
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("pdf-vision-p{}", req.page));
+    let run_id_recorded = run_id_opt.map(str::to_string).unwrap_or_else(|| format!("pdf-vision-p{}", req.page));
     let supplied_payload = ContextSuppliedPayload::new_with_pages(
         run_id_recorded,
         VISION_CALLER_ID,
@@ -470,10 +476,7 @@ pub fn handle_transcribe_with_provider(
     .map_err(internal)?;
 
     let context_supplied_seq = {
-        let _guard = state
-            .ledger_write_lock
-            .lock()
-            .map_err(|_| internal("Ledger write lock unavailable."))?;
+        let _guard = state.ledger_write_lock.lock().map_err(|_| internal("Ledger write lock unavailable."))?;
         let val = serde_json::to_value(&supplied_payload).map_err(|e| internal(e.to_string()))?;
         ledger
             .append_with_hash(session, CONTEXT_SUPPLIED_EVENT, 1, &val)
@@ -482,13 +485,24 @@ pub fn handle_transcribe_with_provider(
     };
 
     let mut observer = CancelOnlyObserver { cancel: worker.cancel.clone() };
-    let resp = transport
-        .send_prepared_streaming(&prepared, &mut observer)
-        .map_err(|e| match e.kind {
-            TransportErrorKind::Cancelled => (409, "Equation transcription cancelled.".into()),
-            TransportErrorKind::Config => bad(e.message),
-            _ => (502, format!("Vision model request failed: {e}")),
-        })?;
+    let resp = transport.send_prepared_streaming(&prepared, &mut observer).map_err(|e| match e.kind {
+        TransportErrorKind::Cancelled => (409, "Equation transcription cancelled.".into()),
+        TransportErrorKind::Config => bad(e.message),
+        _ => (502, format!("Vision model request failed: {e}")),
+    })?;
+
+    match &resp.stop_reason {
+        StopReason::EndTurn | StopReason::StopSequence => {}
+        StopReason::Refusal => {
+            return Err((422, "Vision model refused to transcribe the equation crop.".into()));
+        }
+        StopReason::MaxTokens => {
+            return Err((502, "Vision model transcription was truncated (max_tokens reached).".into()));
+        }
+        other => {
+            return Err((502, format!("Vision model stopped unexpectedly ({}).", other.as_str())));
+        }
+    }
 
     let mut latex_draft = String::new();
     for block in &resp.content {
@@ -509,31 +523,15 @@ pub fn handle_transcribe_with_provider(
 
     let env = state.research_env_for_session(session).map_err(bad)?;
     let agreement = check_text_layer_agreement(
-        &env.sandbox(),
-        session,
-        &events,
-        source,
-        &raw_blob_sha256,
-        req.page,
-        &latex_draft,
+        &env.sandbox(), session, &events, source, &raw_blob_sha256, req.page, &latex_draft,
     );
-
     let transcription = FormulaTranscription::new(
-        source,
-        &raw_blob_sha256,
-        req.page,
-        req.crop,
-        &model,
-        &latex_draft,
-        agreement.agreed,
+        source, &raw_blob_sha256, req.page, req.crop, &model, &latex_draft, agreement.agreed,
     )
     .map_err(internal)?;
 
     let event_seq = {
-        let _guard = state
-            .ledger_write_lock
-            .lock()
-            .map_err(|_| internal("Ledger write lock unavailable."))?;
+        let _guard = state.ledger_write_lock.lock().map_err(|_| internal("Ledger write lock unavailable."))?;
         let val = serde_json::to_value(&transcription).map_err(|e| internal(e.to_string()))?;
         ledger
             .append_with_hash(session, EVENT_PDF_TRANSCRIPTION, 1, &val)
@@ -541,17 +539,19 @@ pub fn handle_transcribe_with_provider(
             .seq
     };
 
-    let updated_budget = ModelCallBudget::new(cap, used.saturating_add(1));
-    Ok((
-        200,
-        json!({
-            "event_seq": event_seq,
-            "context_supplied_seq": context_supplied_seq,
-            "transcription": transcription,
-            "label": MODEL_TRANSCRIBED_LABEL,
-            "quotable": false,
-            "requires_text_layer_agreement": true,
-            "budget": updated_budget,
-        }),
-    ))
+    let updated_budget = ModelCallBudget::new(active_cap, active_used.saturating_add(1));
+    let mut out = json!({
+        "event_seq": event_seq,
+        "context_supplied_seq": context_supplied_seq,
+        "transcription": transcription,
+        "label": MODEL_TRANSCRIBED_LABEL,
+        "quotable": false,
+        "requires_text_layer_agreement": true,
+        "budget": updated_budget,
+    });
+    if rendered_by_provider {
+        out["crop_image_media_type"] = json!(media_type);
+        out["crop_image_base64"] = json!(encode_base64(&image_bytes));
+    }
+    Ok((200, out))
 }

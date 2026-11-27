@@ -415,7 +415,102 @@ fn decoupled_page_crop_provider_seam_works_without_inline_image() {
     assert_eq!(val["label"], MODEL_TRANSCRIBED_LABEL);
     assert_eq!(val["transcription"]["latex_draft"], "E = m c^2");
     assert_eq!(val["transcription"]["agreed_with_text_layer"], true);
+    assert_eq!(val["crop_image_media_type"], "image/png");
+    assert_eq!(val["crop_image_base64"], encode_base64(&sample_png()));
 
     mock.finish();
 }
+
+#[test]
+fn route_fails_closed_on_model_refusal_truncation_and_budget_cap_bypass() {
+    use desktop_server::routes_pdf_vision::DEFAULT_VISION_BUDGET_CAP;
+
+    let refusal_reply = MockReply {
+        status: 200,
+        content_type: "application/json",
+        body: serde_json::to_vec(&json!({
+            "id": "chatcmpl-refuse",
+            "object": "chat.completion",
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "I cannot process this image." },
+                "finish_reason": "content_filter"
+            }],
+            "usage": { "prompt_tokens": 20, "completion_tokens": 5 }
+        }))
+        .unwrap(),
+    };
+    let truncated_reply = MockReply {
+        status: 200,
+        content_type: "application/json",
+        body: serde_json::to_vec(&json!({
+            "id": "chatcmpl-trunc",
+            "object": "chat.completion",
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "E = m c^" },
+                "finish_reason": "length"
+            }],
+            "usage": { "prompt_tokens": 20, "completion_tokens": 1024 }
+        }))
+        .unwrap(),
+    };
+
+    let dir = TempDir::new().unwrap();
+    write_fake_openai_key(dir.path());
+    let mock = MockHttp::start(vec![refusal_reply, truncated_reply]);
+    let srv = start_desktop_server(test_cfg(dir.path(), None, Some(mock.base_url.clone()), None)).unwrap();
+    let port = srv.addr.port();
+    let token = srv.info.token.clone();
+    let sid = create_session(port, &token);
+    seed_pdf_session(dir.path(), &sid, "paper1");
+    let path = format!("/api/sessions/{sid}/sources/paper1/transcribe-equations");
+    let auth = [("X-ReSearch-Token", token.as_str()), ("Content-Type", "application/json")];
+    let body = serde_json::to_vec(&json!({
+        "page": 1,
+        "opt_in": true,
+        "image_media_type": "image/png",
+        "image_base64": encode_base64(&sample_png()),
+        "provider": "openai",
+        "model": "gpt-4o",
+        "budget_cap": 99999
+    }))
+    .unwrap();
+
+    // 1. Model refusal -> 422, NEVER persisted as pdf.transcription.
+    let (st, _, _) = raw_http(port, "POST", &path, &auth, &body);
+    assert_eq!(st, 422);
+
+    // 2. Truncated MaxTokens -> 502, NEVER persisted as pdf.transcription.
+    let (st, _, _) = raw_http(port, "POST", &path, &auth, &body);
+    assert_eq!(st, 502);
+
+    let ledger = Ledger::open(dir.path()).unwrap();
+    let evs = ledger.read_session(&sid).unwrap();
+    assert!(!evs.iter().any(|e| e.kind == EVENT_PDF_TRANSCRIPTION));
+
+    // 3. Session-wide main-loop model.request calls (without run_id) reaching DEFAULT_VISION_BUDGET_CAP
+    //    cannot be bypassed by supplying a fresh run_id or inflated budget_cap=99999.
+    for turn in 1..=DEFAULT_VISION_BUDGET_CAP {
+        ledger.append_with_hash(&sid, "model.request", 1, &json!({ "turn": turn })).unwrap();
+    }
+    let bypass_attempt = serde_json::to_vec(&json!({
+        "page": 1,
+        "opt_in": true,
+        "image_media_type": "image/png",
+        "image_base64": encode_base64(&sample_png()),
+        "provider": "openai",
+        "model": "gpt-4o",
+        "run_id": "fresh-bypass-run",
+        "budget_cap": 99999
+    }))
+    .unwrap();
+    let (st, _, _) = raw_http(port, "POST", &path, &auth, &bypass_attempt);
+    assert_eq!(st, 429);
+
+    mock.finish();
+}
+
 
