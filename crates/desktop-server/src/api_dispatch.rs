@@ -288,6 +288,9 @@ pub(crate) fn dispatch_api(
                 crate::investigation_open::handle(state, method, id, op, &req.query, &req.body),
             );
         }
+        ("GET", ["api", "sessions", id, "investigation", "legacy"]) => {
+            write_api_res(&mut stream, crate::investigation_legacy_view::handle_get_legacy(state, id));
+        }
         ("POST", ["api", "sessions", id, "investigation", "tasks"]) => {
             write_api_res(&mut stream, crate::investigation_tasks::handle(state, id, &req.body));
         }
@@ -323,6 +326,12 @@ pub(crate) fn dispatch_api(
         }
         ("POST", ["api", "sessions", id, "investigation", "import"]) => {
             write_api_res(&mut stream, crate::investigation_share::handle_import(state, id, &req.body));
+        }
+        ("POST", ["api", "sessions", id, "investigation", "handoff-packet"]) => {
+            write_api_res(
+                &mut stream,
+                crate::investigation_handoff::handle_build_handoff_packet(state, id, &req.body),
+            );
         }
         ("POST", ["api", "sessions", id, "investigation", operation]) => {
             write_api_res(&mut stream, crate::investigation::handle(state, id, operation, &req.body));

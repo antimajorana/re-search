@@ -4,6 +4,7 @@
 //! resume, the desktop router, the CLI research router, `cli-route`, and the MCP server (`core`).
 //! Adding a new mode adds a profile here without mutating `research/1` or `investigation/1`.
 
+use crate::map_context_defs::record_context_cards_def;
 use crate::map_defs::{
     read_map_node_def, record_map_reading_def, register_map_tools, INVESTIGATION_V2_MAY_GAIN,
 };
@@ -273,14 +274,15 @@ pub fn investigation_v1() -> ToolProfile {
     }
 }
 
-/// Profile `investigation/2`: `research/1` plus V6's `read_map_node` and `record_map_reading`
-/// (`ReadWorkspace`), sorted by id (`investigate.md` §5.1, `00-overview.md` 2.2).
-/// `record_context_cards` (V12) and `record_prior_work_check` (deferred V14) remain under
-/// `may_gain` so they can join later without breaking `investigation/2` resume.
+/// Profile `investigation/2`: `research/1` plus V6 (`read_map_node`, `record_map_reading`) and
+/// V12 (`record_context_cards`), all `ReadWorkspace`, sorted by id (`investigate.md` §5.1, `00-overview.md` 2.2).
+/// `record_prior_work_check` (deferred V14) remains under `may_gain` so it can join later without
+/// breaking `investigation/2` resume.
 pub fn investigation_v2() -> ToolProfile {
     let mut defs = research_v1_defs();
     defs.push(read_map_node_def());
     defs.push(record_map_reading_def());
+    defs.push(record_context_cards_def());
     defs.sort_by(|a, b| a.id.cmp(&b.id));
     ToolProfile {
         name: PROFILE_INVESTIGATION_V2,

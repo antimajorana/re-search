@@ -1,7 +1,7 @@
 //! Investigate v2 reading/edge recorder (`record_map_reading`, package V6).
 
 #[path = "map_reading_validate.rs"]
-mod validate;
+pub(crate) mod validate;
 
 use crate::investigation::anchor::{bounded, valid_id};
 use crate::investigation_markers::{
@@ -48,10 +48,10 @@ struct RawRecordArgs {
     done: bool,
 }
 
-fn reject_app_only_fields(value: &Value) -> Result<(), String> {
+pub(crate) fn reject_app_only_fields_with(value: &Value, extra: &[&str]) -> Result<(), String> {
     match value {
         Value::Object(map) => {
-            for &field in APP_ONLY_FIELDS {
+            for &field in APP_ONLY_FIELDS.iter().chain(extra.iter()) {
                 if map.contains_key(field) {
                     return Err(format!(
                         "Field `{field}` is set by the app and must not be supplied on input."
@@ -59,12 +59,12 @@ fn reject_app_only_fields(value: &Value) -> Result<(), String> {
                 }
             }
             for child in map.values() {
-                reject_app_only_fields(child)?;
+                reject_app_only_fields_with(child, extra)?;
             }
         }
         Value::Array(items) => {
             for child in items {
-                reject_app_only_fields(child)?;
+                reject_app_only_fields_with(child, extra)?;
             }
         }
         _ => {}
@@ -72,7 +72,11 @@ fn reject_app_only_fields(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-fn load_pinned_skeleton(
+fn reject_app_only_fields(value: &Value) -> Result<(), String> {
+    reject_app_only_fields_with(value, &[])
+}
+
+pub(crate) fn load_pinned_skeleton(
     ledger: &Ledger,
     history: &[Event],
     marker: &Event,
@@ -107,7 +111,7 @@ fn load_pinned_skeleton(
     Ok((skeleton_seq, skeleton))
 }
 
-fn compute_open_scopes(
+pub(crate) fn compute_open_scopes(
     marker: &Event,
     skeleton: &PaperSkeleton,
     nodes_by_tag: &BTreeMap<&str, &SkNode>,
@@ -173,7 +177,7 @@ fn compute_open_scopes(
     (item_scope, edge_scope)
 }
 
-fn rejected_outcome(f: &IndexedFault) -> Value {
+pub(crate) fn rejected_outcome(f: &IndexedFault) -> Value {
     let mut obj = json!({
         "index": f.index,
         "status": "rejected",

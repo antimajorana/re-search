@@ -2,9 +2,10 @@
 
 use crate::investigation_markers::{
     is_investigation_marker, latest_investigation_marker, InvestigationTaskKind,
-    EVENT_INVESTIGATION_NOTE, EVENT_INVESTIGATION_READING, EVENT_INVESTIGATION_SKELETON,
-    MARKER_TASK_FINISHED, MARKER_TASK_REQUESTED,
+    EVENT_INVESTIGATION_CONTEXT, EVENT_INVESTIGATION_NOTE, EVENT_INVESTIGATION_READING,
+    EVENT_INVESTIGATION_SKELETON, MARKER_TASK_FINISHED, MARKER_TASK_REQUESTED,
 };
+use crate::map_context_defs::{ContextCardRecord, MapContextEventPayload};
 use crate::map_defs::{
     AuthorsClaimRecord, HypothesisRecord, MapReadingEventPayload, ModelEdgeRecord, ModelEdgeRole,
     ReadingRole, VerifiedMapAnchor,
@@ -107,6 +108,8 @@ pub struct FoldedNodeReading {
     pub authors_claim: FieldSlot<AuthorsClaimRecord>,
     #[serde(default)]
     pub notes: Vec<FoldedNote>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_cards: Vec<VersionedValue<ContextCardRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin: Option<ReaderPin>,
     pub effective_is_main_result: bool,
@@ -129,6 +132,7 @@ impl FoldedNodeReading {
             anchors: FieldSlot::default(),
             authors_claim: FieldSlot::default(),
             notes: Vec::new(),
+            context_cards: Vec::new(),
             pin: None,
             effective_is_main_result: false,
             any_stale: false,
@@ -151,7 +155,8 @@ impl FoldedNodeReading {
             || self.hypotheses.current.as_ref().is_some_and(|v| v.stale)
             || self.anchors.current.as_ref().is_some_and(|v| v.stale)
             || self.authors_claim.current.as_ref().is_some_and(|v| v.stale)
-            || self.notes.iter().any(|n| n.stale);
+            || self.notes.iter().any(|n| n.stale)
+            || self.context_cards.iter().any(|c| c.stale);
     }
 }
 
@@ -325,6 +330,48 @@ fn fold_reading_event(
     }
 }
 
+fn fold_context_event(
+    ev: &Event,
+    skeleton: &PaperSkeleton,
+    skeleton_seq: Option<u64>,
+    nodes_by_tag: &BTreeMap<&str, &SkNode>,
+    acc: &mut FoldAcc,
+) {
+    let Ok(payload) = serde_json::from_value::<MapContextEventPayload>(ev.payload.clone()) else {
+        return;
+    };
+    if payload.source_id != skeleton.source_id {
+        return;
+    }
+
+    let tc = acc.task_counts.entry(payload.request_seq).or_default();
+    tc.saved_items = tc.saved_items.saturating_add(payload.cards.len());
+    tc.rejected_items = tc.rejected_items.saturating_add(payload.rejected.len());
+
+    let expected_fp = resolve_expected_fp(payload.tag.as_str(), None, nodes_by_tag, &acc.nodes);
+    let skel_mismatch = skeleton_seq.is_some_and(|seq| seq != payload.skeleton_seq);
+    let entry = acc
+        .nodes
+        .entry(payload.tag.clone())
+        .or_insert_with(|| FoldedNodeReading::new(payload.tag.clone()));
+    for card in payload.cards {
+        let raw_fp = card.node_fp.clone().unwrap_or_default();
+        let stale = if raw_fp.is_empty() {
+            expected_fp.is_none() || skel_mismatch
+        } else {
+            expected_fp != Some(raw_fp.as_str()) || skel_mismatch
+        };
+        entry.context_cards.push(versioned(
+            ev.seq,
+            payload.request_seq,
+            payload.skeleton_seq,
+            &raw_fp,
+            stale,
+            card,
+        ));
+    }
+}
+
 fn fold_note_event(
     ev: &Event,
     skeleton: &PaperSkeleton,
@@ -434,6 +481,7 @@ pub fn fold_map(skeleton: &PaperSkeleton, events: &[Event], running: bool) -> Fo
     for ev in slice {
         match ev.kind.as_str() {
             EVENT_INVESTIGATION_READING => fold_reading_event(ev, skeleton, skeleton_seq, &nodes_by_tag, &mut acc),
+            EVENT_INVESTIGATION_CONTEXT => fold_context_event(ev, skeleton, skeleton_seq, &nodes_by_tag, &mut acc),
             EVENT_INVESTIGATION_NOTE => fold_note_event(ev, skeleton, &nodes_by_tag, &mut acc.nodes),
             _ => {}
         }

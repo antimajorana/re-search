@@ -73,7 +73,8 @@ pub fn handle(state: &Arc<DesktopState>, session_id: &str, body: &[u8]) -> ApiRe
         }
     }
     let depth = parse_optional_text(req_json.get("depth"), "depth", MAX_DEPTH_CHARS)?;
-    let focus = parse_optional_text(req_json.get("focus"), "focus", MAX_FOCUS_CHARS)?;
+    let raw_focus = parse_optional_text(req_json.get("focus"), "focus", MAX_FOCUS_CHARS)?;
+    let focus = crate::investigation_context_tasks::canonicalize_task_focus(task, raw_focus);
 
     let ledger = state.open_ledger().map_err(storage)?;
     let events = ledger.read_session(session_id).map_err(storage)?;
@@ -139,7 +140,8 @@ pub(crate) fn prepare_task(
     let expected_skel_seq = spec.get("skeleton_seq").and_then(Value::as_u64)
         .ok_or_else(|| bad("Investigate task spec missing `skeleton_seq`."))?;
     let depth = parse_optional_text(spec.get("depth"), "depth", MAX_DEPTH_CHARS)?;
-    let focus = parse_optional_text(spec.get("focus"), "focus", MAX_FOCUS_CHARS)?;
+    let raw_focus = parse_optional_text(spec.get("focus"), "focus", MAX_FOCUS_CHARS)?;
+    let focus = crate::investigation_context_tasks::canonicalize_task_focus(task, raw_focus);
     let cap = clamp_cap(spec.get("cap").and_then(Value::as_u64), task_cap_for(task));
 
     let ledger = state.open_ledger().map_err(storage)?;
@@ -290,6 +292,12 @@ pub(crate) fn finish_task(
             any_done = true;
         }
     }
+    crate::investigation_context_tasks::accumulate_context_event_counts(
+        &events,
+        request_seq,
+        &mut saved_items,
+        &mut rejected_items,
+    );
 
     let has_saved = saved_items > 0 || saved_edges > 0;
     let has_documented_done = any_done && (has_saved || saved_limitations > 0);
@@ -337,9 +345,10 @@ fn require_map_tools_profile(events: &[Event]) -> Result<(), (u16, String)> {
     let profile = crate::session_mode::profile_for_session(events).map_err(bad)?;
     if profile.def_for(research_tools::map_defs::READ_MAP_NODE).is_none()
         || profile.def_for(research_tools::map_defs::RECORD_MAP_READING).is_none()
+        || profile.def_for(research_tools::map_defs::RECORD_CONTEXT_CARDS).is_none()
     {
         return Err(bad(format!(
-            "Session profile `{}` does not include `read_map_node` and `record_map_reading`; open a new Investigate session (`investigation/2`) to run v2 tasks.",
+            "Session profile `{}` does not include Investigate v2 tools (`read_map_node`, `record_map_reading`, `record_context_cards`); open a new Investigate session (`investigation/2`) to run v2 tasks.",
             profile.name
         )));
     }

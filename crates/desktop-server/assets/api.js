@@ -203,6 +203,10 @@ export function getInvestigationMapview(id) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/investigation/mapview`);
 }
 
+export function getInvestigationLegacy(id) {
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/investigation/legacy`);
+}
+
 export function getInvestigationNodeText(id, tag, seq) {
   const qs = new URLSearchParams({ tag: String(tag) });
   if (seq != null) qs.set('seq', String(seq));
@@ -264,6 +268,10 @@ export function listLibraryPapers(params = {}) {
 
 export function createHandoff(id, payload) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/handoff`, payload);
+}
+
+export function buildInvestigationHandoffPacket(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/handoff-packet`, payload);
 }
 
 export function getHandoffs(id) {
