@@ -50,6 +50,9 @@ pub(crate) fn dispatch_api(
                 Err(e) => write_api_res(&mut stream, Err(e)),
             }
         }
+        ("GET", ["api", "sessions", sid, "sources", source, "page-image"]) => {
+            crate::routes_ocr::serve_page_image(&mut stream, state, sid, source, &req.query);
+        }
         ("GET", ["api", "projects"]) => write_api_res(&mut stream, crate::projects::handle_list(state)),
         ("POST", ["api", "projects"]) => {
             write_api_res(&mut stream, crate::projects::handle_create(state, &req.body));
@@ -393,6 +396,22 @@ pub(crate) fn dispatch_api(
         }
         ("PUT", ["api", "settings", "investigate"]) => {
             write_api_res(&mut stream, crate::investigation_settings::handle_put(state, &req.body));
+        }
+        ("GET", ["api", "settings", "ocr"]) => {
+            write_api_res(&mut stream, crate::ocr_settings::handle_get_ocr_settings(state));
+        }
+        ("PUT", ["api", "settings", "ocr"]) => {
+            write_api_res(&mut stream, crate::ocr_settings::handle_put_ocr_settings(state, &req.body));
+        }
+        ("POST", ["api", "sessions", id, "ocr", "ingest"]) => {
+            let ct = req.header("content-type");
+            write_api_res(&mut stream, crate::routes_ocr::handle_ocr_ingest(state, id, ct, &req.query, &req.body));
+        }
+        ("GET", ["api", "sessions", id, "ocr", "jobs", job_id]) => {
+            write_api_res(&mut stream, crate::routes_ocr::handle_ocr_job_status(state, id, job_id));
+        }
+        ("POST", ["api", "sessions", id, "ocr", "jobs", job_id, "cancel"]) => {
+            write_api_res(&mut stream, crate::routes_ocr::handle_ocr_job_cancel(state, id, job_id));
         }
         ("GET", ["api", "connections"]) => {
             write_api_res(&mut stream, crate::connections::handle_connections(state, &req.query));
