@@ -65,6 +65,7 @@ fn build_worker(data_dir: &Path, session: &str, setup: WorkerSetup) -> Result<Wo
             scratch: setup.scratch,
             pycache: setup.pycache,
             startup_timeout: Duration::from_secs(90),
+            job_memory_limit_bytes: None,
         },
         sandbox,
     ))

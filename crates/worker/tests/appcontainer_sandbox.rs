@@ -371,6 +371,7 @@ fn control_vs_contained_probes() {
             scratch: ctrl_scratch,
             pycache: ctrl_pycache,
             startup_timeout: Duration::from_secs(60),
+            job_memory_limit_bytes: None,
         },
         Box::new(JobObjectSandbox),
     );
@@ -381,6 +382,7 @@ fn control_vs_contained_probes() {
             scratch: alpha_scratch.clone(),
             pycache: alpha_pycache,
             startup_timeout: Duration::from_secs(60),
+            job_memory_limit_bytes: None,
         },
         Box::new(alpha_sb),
     );
@@ -451,7 +453,14 @@ fn contained_check_worker_loads_staged_modules_and_reports_its_role() {
         scratch.clone(), pycache.clone(),
     ).unwrap();
     assert!(sandbox.staged().root.join("checks/srepr_safe.py").is_file());
-    let config = WorkerConfig { python, script, scratch, pycache, startup_timeout: Duration::from_secs(60) };
+    let config = WorkerConfig {
+        python,
+        script,
+        scratch,
+        pycache,
+        startup_timeout: Duration::from_secs(60),
+        job_memory_limit_bytes: None,
+    };
     let mut worker = Worker::new_with_role(config, Box::new(sandbox), WorkerRole::Check);
     let handles = BTreeMap::from([
         ("lhs".into(), "Integer(2)".into()),

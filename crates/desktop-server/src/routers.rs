@@ -60,6 +60,7 @@ fn build_desktop_worker(state: &DesktopState, session: &str) -> Result<Option<Wo
             scratch,
             pycache,
             startup_timeout: Duration::from_secs(90),
+            job_memory_limit_bytes: None,
         },
         sandbox,
     )))
