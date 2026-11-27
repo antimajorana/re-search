@@ -176,8 +176,47 @@ pub fn handle_answer_op(
     let events = ledger
         .read_session(session_id)
         .map_err(|e| internal(e.to_string()))?;
-    if latest_statement_seq(&events) == 0 {
+    let stmt_seq = latest_statement_seq(&events);
+    if stmt_seq == 0 {
         return Err(bad("session has no idea statement"));
+    }
+    if let Some(rl_arr) = payload.get("reading_list").and_then(Value::as_array) {
+        let budget = crate::idea::effective_budget(&events);
+        if budget.max_papers == 0 && !rl_arr.is_empty() {
+            return Err(bad(
+                "Quick preset reads 0 full papers (`reading_list` must be empty; Rule V2)",
+            ));
+        }
+        if rl_arr.len() > budget.max_papers {
+            return Err(bad(format!(
+                "`reading_list` contains {} papers, exceeding preset cap of {}",
+                rl_arr.len(),
+                budget.max_papers
+            )));
+        }
+        let known_cands: std::collections::BTreeSet<String> = events
+            .iter()
+            .rev()
+            .find(|e| e.kind == crate::idea::EVENT_IDEA_CANDIDATES && e.seq > stmt_seq)
+            .and_then(|e| e.payload.get("candidates"))
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|c| c.get("key").and_then(Value::as_str).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !known_cands.is_empty() {
+            for entry in rl_arr {
+                if let Some(k) = entry.as_str() {
+                    if !known_cands.contains(k) {
+                        return Err(bad(format!(
+                            "`reading_list` entry `{k}` is not among current session candidates"
+                        )));
+                    }
+                }
+            }
+        }
     }
     payload.insert("author".into(), json!("user"));
     let val_payload = Value::Object(payload);

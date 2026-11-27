@@ -48,6 +48,7 @@ pub fn fold_answers(
     latest_statement_seq: u64,
     latest_brief: Option<&Value>,
     latest_brief_seq: u64,
+    latest_triage_seq: u64,
 ) -> AppliedAnswers {
     let mut merged = latest_brief.cloned();
     let mut question_answers: BTreeMap<String, String> = BTreeMap::new();
@@ -62,14 +63,16 @@ pub fn fold_answers(
         if let Some(pause) = p.get("pause_before_reading").and_then(Value::as_bool) {
             pause_before_reading = pause;
         }
-        if let Some(rl) = p.get("reading_list").and_then(Value::as_array) {
-            let keys: Vec<String> = rl
-                .iter()
-                .filter_map(Value::as_str)
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            reading_list_override = Some(keys);
+        if ev.seq >= latest_triage_seq {
+            if let Some(rl) = p.get("reading_list").and_then(Value::as_array) {
+                let keys: Vec<String> = rl
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                reading_list_override = Some(keys);
+            }
         }
         if ev.seq < latest_brief_seq {
             continue;

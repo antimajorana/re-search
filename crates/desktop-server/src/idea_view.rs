@@ -54,6 +54,7 @@ pub fn view(events: &[Event], running: bool) -> Value {
     let mut latest_brief: Option<Value> = None;
     let mut latest_brief_seq = 0u64;
     let mut latest_triage: Option<Value> = None;
+    let mut latest_triage_seq = 0u64;
     let mut latest_map: Option<Value> = None;
     let mut latest_map_seq = 0u64;
     let mut latest_verdicts: Option<Value> = None;
@@ -82,6 +83,8 @@ pub fn view(events: &[Event], running: bool) -> Value {
                 latest_statement_seq = ev.seq;
                 latest_brief = None;
                 latest_brief_seq = 0;
+                latest_triage = None;
+                latest_triage_seq = 0;
                 latest_statement = Some(json!({
                     "seq": ev.seq,
                     "rev": ev.payload.get("rev").and_then(Value::as_u64).unwrap_or(statement_revisions),
@@ -125,7 +128,10 @@ pub fn view(events: &[Event], running: bool) -> Value {
                 latest_brief_seq = ev.seq;
                 latest_brief = Some(ev.payload.clone());
             }
-            EVENT_IDEA_TRIAGE => latest_triage = Some(ev.payload.clone()),
+            EVENT_IDEA_TRIAGE => {
+                latest_triage_seq = ev.seq;
+                latest_triage = Some(ev.payload.clone());
+            }
             EVENT_IDEA_MAP => {
                 latest_map_seq = ev.seq;
                 latest_map = Some(ev.payload.clone());
@@ -162,6 +168,7 @@ pub fn view(events: &[Event], running: bool) -> Value {
         latest_statement_seq,
         latest_brief.as_ref(),
         latest_brief_seq,
+        latest_triage_seq,
     );
 
     let candidates = annotate_candidate_views(latest_candidates, &paper_statuses);
@@ -196,6 +203,38 @@ pub fn view(events: &[Event], running: bool) -> Value {
     let map_view = build_map_graph_view(latest_map.as_ref());
     let map_stale = latest_map_seq > 0 && latest_statement_seq > latest_map_seq;
 
+    let abstract_evidence: Vec<Value> = events
+        .iter()
+        .filter(|e| {
+            e.kind == research_tools::quote_core::EVIDENCE_ABSTRACT_EVENT
+                && e.seq > latest_statement_seq
+        })
+        .map(|e| {
+            json!({
+                "id": format!("xa-{}", e.seq),
+                "seq": e.seq,
+                "paper_key": e.payload.get("paper_key").cloned().unwrap_or(Value::Null),
+                "quote": e.payload.get("quote").cloned().unwrap_or(Value::Null),
+                "start": e.payload.get("start").cloned().unwrap_or(Value::Null),
+                "end": e.payload.get("end").cloned().unwrap_or(Value::Null),
+                "provider": e.payload.get("provider").cloned().unwrap_or(Value::Null),
+                "raw_blob": e.payload.get("raw_blob").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect();
+
+    let effective_triage = latest_triage.map(|mut t| {
+        if let Some(obj) = t.as_object_mut() {
+            if budget.max_papers == 0 {
+                obj.insert("reading_list".into(), json!([]));
+                obj.insert("quick_abstract_only".into(), json!(true));
+            } else if let Some(ref ov) = applied.reading_list_override {
+                obj.insert("reading_list".into(), json!(ov));
+            }
+        }
+        t
+    });
+
     json!({
         "pipeline_version": pipeline_version,
         "preset": preset.as_str(),
@@ -217,11 +256,12 @@ pub fn view(events: &[Event], running: bool) -> Value {
         "brief": applied.sharpened_idea,
         "sharpened_idea": applied.sharpened_idea,
         "question_answers": applied.question_answers,
-        "reading_list_override": applied.reading_list_override,
+        "reading_list_override": if budget.max_papers == 0 { Value::Null } else { json!(applied.reading_list_override) },
         "pause_before_reading": applied.pause_before_reading,
         "search_plan": latest_plan,
         "plan_approval": plan_approval,
-        "triage": latest_triage,
+        "triage": effective_triage,
+        "abstract_evidence": abstract_evidence,
         "verdicts": latest_verdicts,
         "map": map_view,
         "map_stale": map_stale,

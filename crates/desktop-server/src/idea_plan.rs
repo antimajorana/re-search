@@ -191,7 +191,7 @@ pub fn assemble_search_plan(
                 "run Sharpen or provide explicit `queries` before planning a follow-up search",
             ));
         };
-        let applied = fold_answers(events, stmt_seq, Some(&brief_ev.payload), brief_ev.seq);
+        let applied = fold_answers(events, stmt_seq, Some(&brief_ev.payload), brief_ev.seq, 0);
         let Some(perspectives) = applied
             .sharpened_idea
             .as_ref()

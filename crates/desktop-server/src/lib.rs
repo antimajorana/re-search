@@ -50,6 +50,7 @@ pub mod http_srv;
 pub mod idea;
 mod idea_answer;
 pub mod idea_exchanges;
+pub mod idea_exchanges_triage;
 mod idea_plan;
 pub mod idea_plan_search;
 pub mod idea_view;

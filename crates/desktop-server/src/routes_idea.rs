@@ -324,7 +324,7 @@ pub fn handle_idea_op(
         "answer" => crate::idea_answer::handle_answer_op(state, &ledger, session_id, body),
         "plan" => crate::idea_plan_search::handle_plan_op(state, &ledger, session_id, body),
         "search" => crate::idea_plan_search::handle_search_op(state, &ledger, session_id, body),
-        "triage" => Err(not_implemented("Explore `triage` is not built yet (owned by package X8).")),
+        "triage" => crate::idea_exchanges_triage::handle_triage_op(state, &ledger, session_id, body),
         "read" => Err(not_implemented("Explore `read` is not built yet (owned by packages X9–X10).")),
         "map" => Err(not_implemented("Explore `map` is not built yet (owned by package X11).")),
         "directions" => Err(not_implemented("Explore `directions` is not built yet (owned by package X13).")),
@@ -528,14 +528,11 @@ fn handle_continue(
 
     let events = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
     match crate::idea::next_stage(&events) {
-        Some(crate::idea::IdeaStage::Sharpen) => {
-            crate::idea_exchanges::handle_sharpen_op(state, ledger, session_id, body)
-        }
-        Some(crate::idea::IdeaStage::Search) => {
-            crate::idea_plan_search::handle_search_op(state, ledger, session_id, body)
-        }
+        Some(crate::idea::IdeaStage::Sharpen) => crate::idea_exchanges::handle_sharpen_op(state, ledger, session_id, body),
+        Some(crate::idea::IdeaStage::Search) => crate::idea_plan_search::handle_search_op(state, ledger, session_id, body),
+        Some(crate::idea::IdeaStage::Triage) => crate::idea_exchanges_triage::handle_triage_op(state, ledger, session_id, body),
         other => Err(not_implemented(format!(
-            "Explore `continue` for stage `{}` is not built yet (owned by packages X8–X13); pass `extra_queries`/`extra_papers`/`extra_model_calls` to record a budget increase.",
+            "Explore `continue` for stage `{}` is not built yet (owned by packages X9–X13); pass `extra_queries`/`extra_papers`/`extra_model_calls` to record a budget increase.",
             other.map_or("done", crate::idea::IdeaStage::as_str),
         ))),
     }

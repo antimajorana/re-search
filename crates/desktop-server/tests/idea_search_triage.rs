@@ -524,6 +524,44 @@ fn x7_plan_search_enforces_router_approval_denial_session_grant_rule_p5_p7_and_f
         }
     }
 
+    // 5b. X8 Triage runs cleanly after Search, emitting verbatim `evidence.abstract` (`xa-<seq>`).
+    let triage_items: Vec<Value> = retry_json["idea"]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let k = c["key"].as_str().unwrap();
+            if k == "arxiv:2501.01234" {
+                json!({
+                    "key": k, "relevance": "core", "subclaim_ids": ["sc-1"],
+                    "why": "Directly tests Lanczos growth in monitored Majorana chains.",
+                    "abstract_quote": "b_n grows linearly in the volume-law phase"
+                })
+            } else {
+                json!({
+                    "key": k, "relevance": "background", "subclaim_ids": [],
+                    "why": "Secondary search hit.", "abstract_quote": null
+                })
+            }
+        })
+        .collect();
+    let t_triage = ScriptedTransport::new(vec![tool_resp(
+        "tu-triage",
+        "record_idea_triage",
+        json!({ "items": triage_items, "reading_list": ["arxiv:2501.01234"] }),
+    )]);
+    let triage_res = desktop_server::idea_exchanges_triage::run_triage_with_transport(
+        &data_dir, &ledger, "s-x7-flow", &t_triage, "m", None, |_, _| {},
+    )
+    .expect("X8 triage should succeed after X7 search");
+    match triage_res {
+        desktop_server::idea_exchanges_triage::TriageRunResult::Finished { outcome, .. } => {
+            assert_eq!(outcome.abstract_evidence_ids.len(), 1);
+            assert!(outcome.abstract_evidence_ids[0].starts_with("xa-"));
+        }
+        other => panic!("expected Finished triage, got {other:?}"),
+    }
+
     // 6. Calling `/idea/stop` while a fresh session's `/idea/search` is waiting on UiApprover
     // immediately unblocks UiApprover (Carbon Finding 4).
     let stop_create = serde_json::to_vec(&json!({

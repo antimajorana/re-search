@@ -401,61 +401,50 @@ pub fn resolve_stages(events: &[Event], running: bool) -> Vec<StageRecord> {
     }).collect()
 }
 
+fn is_offline_session(events: &[Event]) -> bool {
+    events.iter().rev().find_map(|e| {
+        matches!(e.kind.as_str(), EVENT_IDEA_STARTED | EVENT_IDEA_SEARCH_PLANNED | EVENT_IDEA_SEARCH_FINISHED)
+            .then(|| e.payload.get("offline").and_then(Value::as_bool)).flatten()
+    }).unwrap_or(false)
+}
+
 /// Deterministic single transition table (`explore.md` Rule P1).
 ///
 /// Scoped to the active `idea.stated` revision; preserves post-Sharpen `Search` when only
 /// the initial pre-Sharpen user search has run, and skips `Read` when `max_papers == 0`.
 pub fn next_stage(events: &[Event]) -> Option<IdeaStage> {
     let rev_seq = latest_statement_seq(events);
-    if rev_seq == 0 {
-        return Some(IdeaStage::Idea);
-    }
+    if rev_seq == 0 { return Some(IdeaStage::Idea); }
     let stages = resolve_stages(events, false);
     let budget = effective_budget(events);
-    for rec in &stages {
-        if let Some(st) = rec.stored_state {
-            if st != ExploreStageState::Finished {
-                return Some(rec.stage);
-            }
-        }
+    if let Some(rec) = stages.iter().find(|r| r.stored_state.is_some_and(|st| st != ExploreStageState::Finished)) {
+        return Some(rec.stage);
     }
 
     let stage_of = |t: IdeaStage| stages.iter().find(|r| r.stage == t);
-    let rev_events = || events.iter().filter(|e| e.seq > rev_seq);
-    let latest_kind_seq = |k: &str| rev_events().filter(|e| e.kind == k).map(|e| e.seq).max();
+    let latest_kind_seq = |k: &str| events.iter().filter(|e| e.seq > rev_seq && e.kind == k).map(|e| e.seq).max();
 
     let brief_seq = latest_kind_seq(EVENT_IDEA_BRIEF);
-    if stage_of(IdeaStage::Sharpen).and_then(|r| r.stored_state) != Some(ExploreStageState::Finished)
-        || brief_seq.is_none()
-    {
+    if stage_of(IdeaStage::Sharpen).and_then(|r| r.stored_state) != Some(ExploreStageState::Finished) || brief_seq.is_none() {
         return Some(IdeaStage::Sharpen);
     }
     let search_rec = stage_of(IdeaStage::Search);
-    let search_done_after_brief = search_rec.is_some_and(|r| {
+    let search_ready = search_rec.is_some_and(|r| {
         r.stored_state == Some(ExploreStageState::Finished)
-            && r.updated_seq.unwrap_or(0) > brief_seq.unwrap_or(0)
+            && (is_offline_session(events) || r.updated_seq.unwrap_or(0) > brief_seq.unwrap_or(0))
     });
+    let latest_cands_seq = latest_kind_seq(EVENT_IDEA_CANDIDATES).unwrap_or(0);
     let triage_done = stage_of(IdeaStage::Triage).and_then(|r| r.stored_state) == Some(ExploreStageState::Finished)
-        && latest_kind_seq(EVENT_IDEA_TRIAGE).is_some();
-    if !search_done_after_brief && !triage_done {
-        return Some(IdeaStage::Search);
-    }
-    if !triage_done {
-        return Some(IdeaStage::Triage);
-    }
-    if budget.max_papers > 0
-        && stage_of(IdeaStage::Read).and_then(|r| r.stored_state) != Some(ExploreStageState::Finished)
-    {
+        && latest_kind_seq(EVENT_IDEA_TRIAGE).is_some_and(|ts| ts > latest_cands_seq);
+    if !search_ready && !triage_done { return Some(IdeaStage::Search); }
+    if !triage_done { return Some(IdeaStage::Triage); }
+    if budget.max_papers > 0 && stage_of(IdeaStage::Read).and_then(|r| r.stored_state) != Some(ExploreStageState::Finished) {
         return Some(IdeaStage::Read);
     }
-    if stage_of(IdeaStage::Map).and_then(|r| r.stored_state) != Some(ExploreStageState::Finished)
-        || latest_kind_seq(EVENT_IDEA_MAP).is_none()
-    {
+    if stage_of(IdeaStage::Map).and_then(|r| r.stored_state) != Some(ExploreStageState::Finished) || latest_kind_seq(EVENT_IDEA_MAP).is_none() {
         return Some(IdeaStage::Map);
     }
-    if stage_of(IdeaStage::Directions).and_then(|r| r.stored_state) != Some(ExploreStageState::Finished)
-        || latest_kind_seq(EVENT_IDEA_DIRECTIONS).is_none()
-    {
+    if stage_of(IdeaStage::Directions).and_then(|r| r.stored_state) != Some(ExploreStageState::Finished) || latest_kind_seq(EVENT_IDEA_DIRECTIONS).is_none() {
         return Some(IdeaStage::Directions);
     }
     None
@@ -472,8 +461,7 @@ pub fn validate_recorder_stage(events: &[Event], recorder: IdeaRecorder) -> Resu
     if state_of(required) != Some(ExploreStageState::Requested) {
         return Err(format!(
             "recorder `{}` refused outside stage `{}` (current stage state: {})",
-            recorder.as_str(),
-            required.as_str(),
+            recorder.as_str(), required.as_str(),
             state_of(required).map_or("idle", ExploreStageState::as_str),
         ));
     }
@@ -483,19 +471,20 @@ pub fn validate_recorder_stage(events: &[Event], recorder: IdeaRecorder) -> Resu
     let prereq_ok = match recorder {
         IdeaRecorder::RecordIdeaBrief => rev_seq > 0,
         IdeaRecorder::RecordIdeaTriage => {
+            let brief_seq = events.iter().filter(|e| e.seq > rev_seq && e.kind == EVENT_IDEA_BRIEF)
+                .map(|e| e.seq).max().unwrap_or(0);
+            let search_ok = stages.iter().find(|r| r.stage == IdeaStage::Search).is_some_and(|r| {
+                r.stored_state == Some(ExploreStageState::Finished)
+                    && (is_offline_session(events) || r.updated_seq.unwrap_or(0) > brief_seq)
+            });
             state_of(IdeaStage::Sharpen) == Some(ExploreStageState::Finished)
-                && has_in_rev(EVENT_IDEA_BRIEF)
-                && state_of(IdeaStage::Search) == Some(ExploreStageState::Finished)
-                && has_in_rev(EVENT_IDEA_CANDIDATES)
+                && brief_seq > 0 && search_ok && has_in_rev(EVENT_IDEA_CANDIDATES)
         }
         IdeaRecorder::RecordPaperEvidence => {
-            budget.max_papers > 0
-                && state_of(IdeaStage::Triage) == Some(ExploreStageState::Finished)
-                && has_in_rev(EVENT_IDEA_TRIAGE)
+            budget.max_papers > 0 && state_of(IdeaStage::Triage) == Some(ExploreStageState::Finished) && has_in_rev(EVENT_IDEA_TRIAGE)
         }
         IdeaRecorder::RecordIdeaMap => {
-            state_of(IdeaStage::Triage) == Some(ExploreStageState::Finished)
-                && has_in_rev(EVENT_IDEA_TRIAGE)
+            state_of(IdeaStage::Triage) == Some(ExploreStageState::Finished) && has_in_rev(EVENT_IDEA_TRIAGE)
                 && (budget.max_papers == 0 || state_of(IdeaStage::Read) == Some(ExploreStageState::Finished))
         }
         IdeaRecorder::RecordIdeaDirections => {
