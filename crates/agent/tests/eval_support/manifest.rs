@@ -15,7 +15,10 @@ pub const MANIFEST_FORMAT_VERSION: u32 = 1;
 /// into a paper; it must not be able to carry the paper's text.
 pub const MAX_LOCATOR_CHARS: usize = 80;
 
-/// The case sets of section 7.2.
+/// Longest user correction lesson stored by F16b (`00-overview.md` 2.14).
+pub const MAX_LESSON_CHARS: usize = 300;
+
+/// The case sets of section 7.2 (`P2` and `P4` are deferred per 0.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Set {
     P,
@@ -23,14 +26,21 @@ pub enum Set {
     P3,
     P4,
     P5,
+    P6,
+    B,
     I,
     Q,
+    W,
+    K,
     C,
     R,
 }
 
 impl Set {
-    pub const ALL: [Set; 9] = [Set::P, Set::P2, Set::P3, Set::P4, Set::P5, Set::I, Set::Q, Set::C, Set::R];
+    pub const ALL: [Set; 13] = [
+        Set::P, Set::P2, Set::P3, Set::P4, Set::P5, Set::P6,
+        Set::B, Set::I, Set::Q, Set::W, Set::K, Set::C, Set::R,
+    ];
 
     pub fn letter(self) -> &'static str {
         match self {
@@ -39,8 +49,12 @@ impl Set {
             Set::P3 => "P3",
             Set::P4 => "P4",
             Set::P5 => "P5",
+            Set::P6 => "P6",
+            Set::B => "B",
             Set::I => "I",
             Set::Q => "Q",
+            Set::W => "W",
+            Set::K => "K",
             Set::C => "C",
             Set::R => "R",
         }
@@ -49,9 +63,12 @@ impl Set {
     /// The one mode a case of this set runs in.
     pub fn mode(self) -> Mode {
         match self {
-            Set::P | Set::P2 | Set::P3 | Set::P4 | Set::P5 => Mode::Investigate,
+            Set::P | Set::P2 | Set::P3 | Set::P4 | Set::P5 | Set::P6 => Mode::Investigate,
+            Set::B => Mode::Library,
             Set::I => Mode::Explore,
             Set::Q => Mode::Solve,
+            Set::W => Mode::Writeup,
+            Set::K => Mode::Corrections,
             Set::C => Mode::Handover,
             Set::R => Mode::Resume,
         }
@@ -67,8 +84,12 @@ impl Set {
             Set::P3 => &["results"],
             Set::P4 => &["earlier_source"],
             Set::P5 => &["statement"],
+            Set::P6 => &["statements", "sections", "sampled_sentences"],
+            Set::B => &["items", "planted_cases"],
             Set::I => &["parts"],
             Set::Q => &["final_answer", "steps", "planted_step"],
+            Set::W => &["compiles", "check_table"],
+            Set::K => &["expected_effect"],
             Set::C => &["target_answer"],
             Set::R => &["must_resume", "same_content"],
         }
@@ -79,10 +100,22 @@ impl Set {
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     Investigate,
+    Library,
     Explore,
     Solve,
+    Writeup,
+    Corrections,
     Handover,
     Resume,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LibrarySourceKind {
+    KandinskyVault,
+    Folder,
+    Bibtex,
+    Zotero,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,7 +174,7 @@ pub enum LedgerVariant {
 
 /// What a case is started from. No variant can carry a paper's text: a
 /// paper is named by identifier, or (fixed tier) by the path of a
-/// self-written file under `tests/fixtures/eval/`.
+/// self-written file or library tree under `tests/fixtures/eval/`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Input {
@@ -162,6 +195,17 @@ pub enum Input {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         locator: Option<String>,
     },
+    LibraryFixture {
+        source_kind: LibrarySourceKind,
+        path: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        auxiliary_paths: Vec<String>,
+    },
+    Library {
+        source_kind: LibrarySourceKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
     Idea {
         text: String,
     },
@@ -170,6 +214,20 @@ pub enum Input {
         statement: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         steps: Option<Vec<String>>,
+    },
+    Writeup {
+        case_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ledger: Option<String>,
+    },
+    Correction {
+        scenario: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_case: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lesson: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        scripts: Vec<String>,
     },
     Chain {
         from: String,
@@ -182,11 +240,38 @@ pub enum Input {
 }
 
 impl Input {
-    /// Fixture paths this input names, relative to `tests/fixtures/eval/`.
+    /// Regular fixture file paths this input names, relative to `tests/fixtures/eval/`.
     pub fn fixture_paths(&self) -> Vec<&str> {
         match self {
             Input::Fixture { files, .. } => files.iter().map(String::as_str).collect(),
+            Input::LibraryFixture {
+                source_kind: LibrarySourceKind::Bibtex | LibrarySourceKind::Zotero,
+                path,
+                ..
+            } => vec![path.as_str()],
+            Input::Writeup { ledger: Some(path), .. } => vec![path.as_str()],
+            Input::Correction { scripts, .. } => scripts.iter().map(String::as_str).collect(),
             Input::Ledger { path, .. } => vec![path.as_str()],
+            _ => Vec::new(),
+        }
+    }
+
+    /// Directory fixture paths this input names, relative to `tests/fixtures/eval/`.
+    pub fn fixture_dir_paths(&self) -> Vec<&str> {
+        match self {
+            Input::LibraryFixture {
+                source_kind: LibrarySourceKind::KandinskyVault | LibrarySourceKind::Folder,
+                path,
+                ..
+            } => vec![path.as_str()],
+            _ => Vec::new(),
+        }
+    }
+
+    /// Auxiliary file or directory paths this input names, relative to `tests/fixtures/eval/`.
+    pub fn fixture_auxiliary_paths(&self) -> Vec<&str> {
+        match self {
+            Input::LibraryFixture { auxiliary_paths, .. } => auxiliary_paths.iter().map(String::as_str).collect(),
             _ => Vec::new(),
         }
     }
@@ -221,8 +306,8 @@ pub fn validate_manifest(m: &Manifest) -> Vec<String> {
 }
 
 /// Checks several manifests together: each one alone, ids unique across
-/// all, at most one manifest per (set, tier), and every chain of set C
-/// pointing at cases that exist in the right sets.
+/// all, at most one manifest per (set, tier), and cross-set references in
+/// sets C, W, and K pointing at cases that exist in the right sets.
 pub fn validate_manifests(manifests: &[Manifest]) -> Vec<String> {
     let mut errs = Vec::new();
     let mut ids: BTreeMap<&str, Set> = BTreeMap::new();
@@ -240,24 +325,48 @@ pub fn validate_manifests(manifests: &[Manifest]) -> Vec<String> {
             }
         }
     }
-    for m in manifests.iter().filter(|m| m.set == Set::C) {
+    for m in manifests {
         for case in &m.cases {
-            if let Input::Chain { from, to } = &case.input {
-                match (ids.get(from.as_str()), ids.get(to.as_str())) {
-                    (Some(Set::P), Some(Set::Q)) | (Some(Set::P), Some(Set::I)) | (Some(Set::I), Some(Set::Q)) => {}
+            match (m.set, &case.input) {
+                (Set::C, Input::Chain { from, to }) => match (ids.get(from.as_str()), ids.get(to.as_str())) {
+                    (Some(Set::P | Set::P6), Some(Set::Q | Set::I)) | (Some(Set::I), Some(Set::Q)) => {}
                     (Some(a), Some(b)) => errs.push(format!(
                         "{}: a chain from set {} to set {} is not one of P to Q, P to I, I to Q",
-                        case.id,
-                        a.letter(),
-                        b.letter()
+                        case.id, a.letter(), b.letter()
                     )),
                     (None, _) => errs.push(format!("{}: chain start `{from}` is not a known case", case.id)),
                     (_, None) => errs.push(format!("{}: chain target `{to}` is not a known case", case.id)),
+                },
+                (Set::W, Input::Writeup { case_id, ledger }) => {
+                    check_source_ref(&case.id, "writeup source", case_id, ledger.is_none(), &ids, &mut errs);
                 }
+                (Set::K, Input::Correction { target_case: Some(tc), scripts, .. }) => {
+                    check_source_ref(&case.id, "correction target", tc, scripts.is_empty(), &ids, &mut errs);
+                }
+                _ => {}
             }
         }
     }
     errs
+}
+
+fn check_source_ref(
+    case_id: &str,
+    label: &str,
+    target: &str,
+    require_known: bool,
+    ids: &BTreeMap<&str, Set>,
+    errs: &mut Vec<String>,
+) {
+    match ids.get(target) {
+        Some(Set::P | Set::P6 | Set::I | Set::Q) => {}
+        Some(other) => errs.push(format!(
+            "{case_id}: {label} `{target}` in set {} is not one of P, P6, I, Q",
+            other.letter()
+        )),
+        None if require_known => errs.push(format!("{case_id}: {label} `{target}` is not a known case")),
+        None => {}
+    }
 }
 
 fn validate_case(set: Set, tier: Tier, case: &Case) -> Vec<String> {
@@ -284,17 +393,24 @@ fn validate_case(set: Set, tier: Tier, case: &Case) -> Vec<String> {
     errs
 }
 
+fn input_allowed_for_set(set: Set, input: &Input) -> bool {
+    match set {
+        Set::P | Set::P2 | Set::P3 | Set::P4 | Set::P5 | Set::P6 => {
+            matches!(input, Input::Arxiv { .. } | Input::Doi { .. } | Input::Fixture { .. })
+        }
+        Set::B => matches!(input, Input::LibraryFixture { .. } | Input::Library { .. }),
+        Set::I => matches!(input, Input::Idea { .. }),
+        Set::Q => matches!(input, Input::Problem { .. }),
+        Set::W => matches!(input, Input::Writeup { .. }),
+        Set::K => matches!(input, Input::Correction { .. }),
+        Set::C => matches!(input, Input::Chain { .. }),
+        Set::R => matches!(input, Input::Ledger { .. }),
+    }
+}
+
 fn validate_input(set: Set, tier: Tier, input: &Input) -> Vec<String> {
     let mut errs = Vec::new();
-    let allowed = matches!(
-        (set, input),
-        (Set::P | Set::P2 | Set::P3 | Set::P4 | Set::P5, Input::Arxiv { .. } | Input::Doi { .. } | Input::Fixture { .. })
-            | (Set::I, Input::Idea { .. })
-            | (Set::Q, Input::Problem { .. })
-            | (Set::C, Input::Chain { .. })
-            | (Set::R, Input::Ledger { .. })
-    );
-    if !allowed {
+    if !input_allowed_for_set(set, input) {
         errs.push(format!("this kind of input is not allowed in set {}", set.letter()));
         return errs;
     }
@@ -334,10 +450,18 @@ fn validate_input(set: Set, tier: Tier, input: &Input) -> Vec<String> {
             if files.len() != want {
                 errs.push(format!("set {} needs exactly {want} fixture file(s)", set.letter()));
             }
-            for f in files {
-                check_fixture_path(f, &mut errs);
-            }
+            files.iter().for_each(|f| check_fixture_path(f, &mut errs));
             check_locator(locator, &mut errs);
+        }
+        Input::LibraryFixture { path, auxiliary_paths, .. } => {
+            if tier == Tier::Live {
+                errs.push("a live-tier library case cannot use a stored fixture".into());
+            }
+            check_fixture_path(path, &mut errs);
+            auxiliary_paths.iter().for_each(|p| check_fixture_path(p, &mut errs));
+        }
+        Input::Library { label, .. } => {
+            if let Some(l) = label { check_text("library label", l, &mut errs); }
         }
         Input::Idea { text } => check_text("idea text", text, &mut errs),
         Input::Problem { task, statement, steps } => {
@@ -350,10 +474,29 @@ fn validate_input(set: Set, tier: Tier, input: &Input) -> Vec<String> {
                 errs.push("a step must not be empty".into());
             }
         }
-        Input::Chain { from, to } => {
-            if from == to {
-                errs.push("a chain must join two different cases".into());
+        Input::Writeup { case_id, ledger } => {
+            check_text("writeup case_id", case_id, &mut errs);
+            if let Some(path) = ledger {
+                if tier == Tier::Live { errs.push("a live-tier writeup cannot reference a stored ledger file".into()); }
+                check_fixture_path(path, &mut errs);
             }
+        }
+        Input::Correction { scenario, target_case, lesson, scripts } => {
+            check_text("correction scenario", scenario, &mut errs);
+            if let Some(tc) = target_case { check_text("correction target_case", tc, &mut errs); }
+            if let Some(text) = lesson {
+                check_text("correction lesson", text, &mut errs);
+                if text.chars().count() > MAX_LESSON_CHARS {
+                    errs.push(format!("correction lesson must be at most {MAX_LESSON_CHARS} characters"));
+                }
+            }
+            if !scripts.is_empty() {
+                if tier == Tier::Live { errs.push("a live-tier correction case cannot reference stored script files".into()); }
+                scripts.iter().for_each(|s| check_fixture_path(s, &mut errs));
+            }
+        }
+        Input::Chain { from, to } => {
+            if from == to { errs.push("a chain must join two different cases".into()); }
         }
         Input::Ledger { path, .. } => check_fixture_path(path, &mut errs),
     }
@@ -361,9 +504,7 @@ fn validate_input(set: Set, tier: Tier, input: &Input) -> Vec<String> {
 }
 
 fn check_text(what: &str, text: &str, errs: &mut Vec<String>) {
-    if text.trim().is_empty() {
-        errs.push(format!("{what} must not be empty"));
-    }
+    if text.trim().is_empty() { errs.push(format!("{what} must not be empty")); }
 }
 
 fn check_locator(locator: &Option<String>, errs: &mut Vec<String>) {
@@ -409,9 +550,7 @@ pub fn is_arxiv_id(id: &str) -> bool {
     let (base, _) = split_version(id);
     let digits = |s: &str, lens: &[usize]| lens.contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit());
     if let Some((yymm, num)) = base.split_once('.') {
-        if digits(yymm, &[4]) && digits(num, &[4, 5]) {
-            return true;
-        }
+        if digits(yymm, &[4]) && digits(num, &[4, 5]) { return true; }
     }
     if let Some((archive, num)) = base.split_once('/') {
         let archive_ok = !archive.is_empty()
