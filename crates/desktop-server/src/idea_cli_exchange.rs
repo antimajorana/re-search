@@ -36,10 +36,10 @@ use cli_route::vendor::VendorCli;
 use parse::{render_plain_exchange_prompt, ExchangeStreamState};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 use tools::canon::random_hex;
 
@@ -56,6 +56,8 @@ struct PreparedEnvelope {
     provenance: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     confinement: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    env_auth_vars_allowed: Vec<String>,
     model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<String>,
@@ -71,6 +73,8 @@ pub struct CliExchangeTransport {
     exe: PathBuf,
     work_root: PathBuf,
     allow_env_auth: bool,
+    env_auth_vars_allowed: Vec<String>,
+    version_cache: Mutex<Option<String>>,
     timeout: Duration,
 }
 
@@ -86,6 +90,8 @@ impl CliExchangeTransport {
             exe,
             work_root,
             allow_env_auth,
+            env_auth_vars_allowed: Vec::new(),
+            version_cache: Mutex::new(None),
             timeout: EXCHANGE_ATTEMPT_TIMEOUT,
         }
     }
@@ -95,8 +101,33 @@ impl CliExchangeTransport {
         self
     }
 
+    fn with_provenance(
+        mut self,
+        env_auth_vars_allowed: Vec<String>,
+        cached_version: Option<String>,
+    ) -> Self {
+        self.env_auth_vars_allowed = env_auth_vars_allowed;
+        *self.version_cache.get_mut().unwrap_or_else(|e| e.into_inner()) = cached_version;
+        self
+    }
+
     fn route_label(&self) -> &'static str {
         self.kind.ledger_route()
+    }
+
+    fn resolve_version(&self, agy_vendor: &Antigravity) -> Result<String, TransportError> {
+        let mut guard = self.version_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(v) = guard.as_ref() {
+            return Ok(v.clone());
+        }
+        let v = match self.kind {
+            CliRouteKind::Claude => ClaudeCode.version(&self.exe),
+            CliRouteKind::Antigravity => agy_vendor.version(&self.exe),
+        }
+        .map_err(|e| net_err(e, None))?
+        .raw;
+        *guard = Some(v.clone());
+        Ok(v)
     }
 }
 
@@ -117,21 +148,24 @@ pub fn build_cli_exchange_transport(
             std::env::var_os(n).or_else(|| state.env_var(n))
         }
     };
-    let (exe, allow_env_auth) = match kind {
+    let (exe, allow_env_auth, allowed_vars, cached_version) = match kind {
         CliRouteKind::Claude => {
-            claude_check_env_auth(ClaudeCode.env_auth_vars(), &auth_env).map_err(|e| (400, e))?;
+            let vars = claude_check_env_auth(ClaudeCode.env_auth_vars(), &auth_env)
+                .map_err(|e| (400, e))?;
             let exe = ClaudeCode
                 .locate(state.cfg.claude_exe.as_deref(), &env_lookup)
                 .map_err(|e| (400, e))?;
-            (exe, claude_opted_in(&auth_env))
+            let vars = vars.into_iter().map(str::to_string).collect();
+            (exe, claude_opted_in(&auth_env), vars, state.claude_version.get().cloned())
         }
         CliRouteKind::Antigravity => {
             crate::antigravity::require_acknowledged(state).map_err(|e| (403, e))?;
-            agy_check_env_auth(&auth_env).map_err(|e| (400, e))?;
+            let vars = agy_check_env_auth(&auth_env).map_err(|e| (400, e))?;
             let exe = Antigravity::new()
                 .locate(state.cfg.agy_exe.as_deref(), &env_lookup)
                 .map_err(|e| (400, e))?;
-            (exe, flag_set(AGY_ALLOW_ENV_AUTH_VAR, &auth_env))
+            let vars = vars.into_iter().map(str::to_string).collect();
+            (exe, flag_set(AGY_ALLOW_ENV_AUTH_VAR, &auth_env), vars, state.agy_version.get().cloned())
         }
     };
 
@@ -149,10 +183,9 @@ pub fn build_cli_exchange_transport(
     std::fs::create_dir_all(&work_root)
         .map_err(|e| (500, format!("could not create {}: {e}", work_root.display())))?;
 
-    Ok((
-        Box::new(CliExchangeTransport::new(kind, exe, work_root, allow_env_auth)),
-        model,
-    ))
+    let transport = CliExchangeTransport::new(kind, exe, work_root, allow_env_auth)
+        .with_provenance(allowed_vars, cached_version);
+    Ok((Box::new(transport), model))
 }
 
 struct AttemptDirGuard(PathBuf);
@@ -233,12 +266,15 @@ fn cleanup_child(
     child: &mut ExchangeChild,
     writer: Option<std::thread::JoinHandle<()>>,
     reader: std::thread::JoinHandle<()>,
+    wait_io: bool,
 ) {
     child.kill_tree();
-    if let Some(w) = writer {
-        let _ = w.join();
+    if wait_io {
+        if let Some(w) = writer {
+            let _ = w.join();
+        }
+        let _ = reader.join();
     }
-    let _ = reader.join();
 }
 
 impl Transport for CliExchangeTransport {
@@ -258,6 +294,7 @@ impl Transport for CliExchangeTransport {
             provenance: cli_route::PROVENANCE.to_string(),
             confinement: (self.kind == CliRouteKind::Antigravity)
                 .then(|| AGY_CONFINEMENT.to_string()),
+            env_auth_vars_allowed: self.env_auth_vars_allowed.clone(),
             model: req.model.clone(),
             reasoning_effort: req.reasoning_effort.clone(),
             recorder,
@@ -285,12 +322,7 @@ impl Transport for CliExchangeTransport {
             .map_err(|e| cfg_err(format!("invalid prepared CLI exchange envelope: {e}")))?;
 
         let agy_vendor = Antigravity::new();
-        let version = match self.kind {
-            CliRouteKind::Claude => ClaudeCode.version(&self.exe),
-            CliRouteKind::Antigravity => agy_vendor.version(&self.exe),
-        }
-        .map_err(|e| net_err(e, None))?;
-
+        let version = self.resolve_version(&agy_vendor)?;
         if observer.is_cancelled() {
             return Err(TransportError::cancelled());
         }
@@ -344,7 +376,8 @@ impl Transport for CliExchangeTransport {
 
         let (tx, rx) = mpsc::channel::<Result<Vec<u8>, String>>();
         let reader_thread = std::thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
+            // Bound total bytes read from stdout (even on a single huge line without `\n`).
+            let mut reader = BufReader::new(stdout.take((MAX_CAPTURE_BYTES + 1) as u64));
             let mut total = 0usize;
             loop {
                 let mut line = Vec::new();
@@ -373,18 +406,25 @@ impl Transport for CliExchangeTransport {
 
         loop {
             if observer.is_cancelled() {
-                cleanup_child(&mut child, writer, reader_thread);
+                drop(rx);
+                cleanup_child(&mut child, writer, reader_thread, false);
                 return Err(TransportError::cancelled());
             }
             if Instant::now() >= deadline {
-                cleanup_child(&mut child, writer, reader_thread);
+                drop(rx);
+                cleanup_child(&mut child, writer, reader_thread, false);
                 return Err(net_err(
                     format!(
                         "{} exchange timed out after {} s",
                         self.kind.cli_name(),
                         self.timeout.as_secs()
                     ),
-                    Some(build_raw_audit(self.kind, &version.raw, &stream)),
+                    Some(build_raw_audit(
+                        self.kind,
+                        &version,
+                        &self.env_auth_vars_allowed,
+                        &stream,
+                    )),
                 ));
             }
             let raw_bytes = match rx.recv_timeout(CANCEL_POLL) {
@@ -403,20 +443,35 @@ impl Transport for CliExchangeTransport {
                 continue;
             }
             stream.feed_line(self.kind, &agy_vendor, self.allow_env_auth, trimmed);
-            if stream.abort.is_some() {
+            if stream.abort.is_some() || stream.unexpected_tool.is_some() {
                 break;
             }
         }
+        drop(rx);
 
-        let raw_body = build_raw_audit(self.kind, &version.raw, &stream);
+        let raw_body = build_raw_audit(self.kind, &version, &self.env_auth_vars_allowed, &stream);
         if let Some(reason) = stream.abort {
-            cleanup_child(&mut child, writer, reader_thread);
+            cleanup_child(&mut child, writer, reader_thread, false);
             return Err(net_err(reason, Some(raw_body)));
+        }
+
+        // Rule P2 immediate containment: kill the CLI right away if it emitted an unauthorized
+        // tool call mid-stream, and surface it so `run_exchange` records `UnexpectedToolCall`.
+        if let Some((id, name, input)) = stream.unexpected_tool.take() {
+            cleanup_child(&mut child, writer, reader_thread, false);
+            return Ok(ModelResponse {
+                raw_body,
+                id: None,
+                model: stream.observed_model,
+                stop_reason: StopReason::ToolUse,
+                content: vec![ContentBlock::ToolUse { id, name, input }],
+                usage: stream.usage,
+            });
         }
 
         let exit_code = loop {
             if observer.is_cancelled() {
-                cleanup_child(&mut child, writer, reader_thread);
+                cleanup_child(&mut child, writer, reader_thread, false);
                 return Err(TransportError::cancelled());
             }
             match child.child().try_wait() {
@@ -425,16 +480,16 @@ impl Transport for CliExchangeTransport {
                     std::thread::sleep(Duration::from_millis(20));
                 }
                 Ok(None) => {
-                    cleanup_child(&mut child, writer, reader_thread);
+                    cleanup_child(&mut child, writer, reader_thread, false);
                     return Err(net_err("CLI process did not exit after stream closed", Some(raw_body)));
                 }
                 Err(e) => {
-                    cleanup_child(&mut child, writer, reader_thread);
+                    cleanup_child(&mut child, writer, reader_thread, false);
                     return Err(net_err(e.to_string(), Some(raw_body)));
                 }
             }
         };
-        cleanup_child(&mut child, writer, reader_thread);
+        cleanup_child(&mut child, writer, reader_thread, true);
 
         if !stream.init_ok {
             return Err(net_err(
@@ -455,9 +510,8 @@ impl Transport for CliExchangeTransport {
             ));
         }
 
-        // Rule P2: surface any unauthorized tool call directly so `run_exchange` records
-        // `UnexpectedToolCall` in `idea.exchange` and fails closed.
-        if let Some((id, name, input)) = stream.unexpected_tool {
+        // Rule P2: catch any unresolved Antigravity built-in tool step that never reported denial.
+        if let Some((id, name, input)) = stream.take_unexpected_tool() {
             return Ok(ModelResponse {
                 raw_body,
                 id: None,
@@ -469,7 +523,7 @@ impl Transport for CliExchangeTransport {
         }
 
         let final_text = stream.final_text();
-        let (stop_reason, content) = match extract_json_object(final_text) {
+        let (stop_reason, content) = match extract_json_object(&final_text) {
             Ok(obj) => (
                 StopReason::ToolUse,
                 vec![ContentBlock::ToolUse {
@@ -497,13 +551,18 @@ impl Transport for CliExchangeTransport {
     }
 }
 
-fn build_raw_audit(kind: CliRouteKind, cli_version: &str, stream: &ExchangeStreamState) -> Vec<u8> {
+fn build_raw_audit(
+    kind: CliRouteKind,
+    cli_version: &str,
+    env_auth_vars_allowed: &[String],
+    stream: &ExchangeStreamState,
+) -> Vec<u8> {
     let route = match kind {
         CliRouteKind::Claude => CLAUDE_ROUTE,
         CliRouteKind::Antigravity => AGY_ROUTE,
     };
     let confinement = (kind == CliRouteKind::Antigravity).then_some(AGY_CONFINEMENT);
-    serde_json::to_vec(&json!({
+    let mut obj = json!({
         "route": route,
         "provenance": cli_route::PROVENANCE,
         "confinement": confinement,
@@ -512,17 +571,22 @@ fn build_raw_audit(kind: CliRouteKind, cli_version: &str, stream: &ExchangeStrea
         "model": stream.observed_model,
         "text": stream.final_text(),
         "raw_ndjson_lines": stream.raw_lines,
-    }))
-    .unwrap_or_default()
+    });
+    if !env_auth_vars_allowed.is_empty() {
+        obj["env_auth_vars_allowed"] = json!(env_auth_vars_allowed);
+    }
+    serde_json::to_vec(&obj).unwrap_or_default()
 }
 
 fn write_empty_mcp_config(path: &Path) -> Result<(), String> {
-    std::fs::write(path, br#"{"mcpServers":{}}"#).map_err(|e| e.to_string())?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).write(true).truncate(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| e.to_string())?;
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
     }
-    Ok(())
+    let mut file = opts.open(path).map_err(|e| e.to_string())?;
+    file.write_all(br#"{"mcpServers":{}}"#)
+        .map_err(|e| e.to_string())
 }

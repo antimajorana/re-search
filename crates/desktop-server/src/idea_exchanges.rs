@@ -55,10 +55,16 @@ fn recorded_exchange_route(state: &DesktopState, session_id: &str) -> Option<Res
     let events = ledger.read_session(session_id).ok()?;
     for ev in &events {
         if ev.kind == "session.start" || ev.kind == "session.resume" {
-            if let Some(r) = ev.payload.get("route").and_then(Value::as_str) {
+            if let Some(r) = ev.payload.get("route").and_then(Value::as_str).filter(|s| !s.is_empty()) {
                 if let Some(k) = CliRouteKind::from_ledger_route(r) {
                     return Some(Ok(k));
                 }
+            }
+            if let Some(p) = ev.payload.get("provider").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                return Some(match CliRouteKind::from_ledger_route(p) {
+                    Some(k) => Ok(k),
+                    None => Err(p.to_string()),
+                });
             }
         }
         if ev.kind == EVENT_IDEA_EXCHANGE {
@@ -144,20 +150,27 @@ pub fn resolve_explore_transport(
     let ui_default = non_empty_trimmed(ui.default_provider.as_deref());
 
     if requested_provider.is_none() {
-        if let Some(cand) = [orch_provider, session_default, ui_default]
+        let cand_kind = [session_default, orch_provider, ui_default]
             .into_iter()
             .flatten()
             .next()
-        {
-            if let Some(cand_kind) = CliRouteKind::from_provider(&cand.to_ascii_lowercase()) {
-                if let Some(Err(api_prov)) = &prior_route {
-                    return Err(conflict(format!(
-                        "session `{session_id}` already ran exchanges on `{api_prov}`; start a new session for {}",
-                        cand_kind.name()
-                    )));
-                }
-                return build_cli_exchange_transport(state, session_id, cand_kind, req);
+            .and_then(|cand| CliRouteKind::from_provider(&cand.to_ascii_lowercase()));
+        if let Some(cand_kind) = cand_kind {
+            if let Some(Err(api_prov)) = &prior_route {
+                return Err(conflict(format!(
+                    "session `{session_id}` already ran exchanges on `{api_prov}`; start a new session for {}",
+                    cand_kind.name()
+                )));
             }
+            let built = build_cli_exchange_transport(state, session_id, cand_kind, req)?;
+            if let Some(mut m) = meta {
+                if m.route.is_none() {
+                    m.route = Some(cand_kind.provider_id().to_string());
+                    m.default_provider = Some(cand_kind.provider_id().to_string());
+                    let _ = state.save_meta(&m);
+                }
+            }
+            return Ok(built);
         }
     }
 

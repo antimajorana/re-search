@@ -10,12 +10,15 @@ use cli_route::antigravity::{
 use cli_route::claude::{check_auth_source as claude_check_auth_source, ClaudeCode};
 use cli_route::vendor::{push_effort_flag, VendorCli};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Exchange-only Antigravity `--settings` object: Default agent mode, `request-review`,
-/// terminal sandbox on, no non-workspace access, every built-in kind denied, and `allow: []`
-/// (plain JSON-block exchanges never expose any MCP server).
+/// terminal sandbox on, no non-workspace access, every built-in kind AND `mcp(*)` denied,
+/// and `allow: []` (plain JSON-block exchanges never expose any MCP server).
 pub fn exchange_agy_settings() -> Value {
+    let mut deny: Vec<String> = AGY_DENIED_KINDS.iter().map(|k| format!("{k}(*)")).collect();
+    deny.push("mcp(*)".to_string());
     json!({
         "agentMode": "",
         "toolPermission": AGY_EXPECTED_PERM_MODE,
@@ -24,7 +27,7 @@ pub fn exchange_agy_settings() -> Value {
         "permissions": {
             "allow": [],
             "ask": [],
-            "deny": AGY_DENIED_KINDS.iter().map(|k| format!("{k}(*)")).collect::<Vec<_>>(),
+            "deny": deny,
         },
     })
 }
@@ -118,11 +121,16 @@ pub fn extract_json_object(text: &str) -> Result<Value, String> {
     collect_fenced_blocks(trimmed, &mut json_fenced, &mut other_fenced);
 
     let mut last_err: Option<String> = None;
-    for block in json_fenced.iter().rev() {
-        match parse_json_object(block) {
-            Ok(v) => return Ok(v),
-            Err(e) => last_err = Some(e),
+    if !json_fenced.is_empty() {
+        for block in json_fenced.iter().rev() {
+            match parse_json_object(block) {
+                Ok(v) => return Ok(v),
+                Err(e) => last_err = Some(e),
+            }
         }
+        return Err(last_err.unwrap_or_else(|| {
+            "```json block did not contain a valid JSON object".into()
+        }));
     }
     for block in other_fenced.iter().rev() {
         match parse_json_object(block) {
@@ -155,37 +163,49 @@ fn parse_json_object(raw: &str) -> Result<Value, String> {
     }
 }
 
+fn leading_backticks(s: &str) -> usize {
+    s.bytes().take_while(|&b| b == b'`').count()
+}
+
+fn flush_fenced(buf: &mut String, is_json: bool, json_out: &mut Vec<String>, other_out: &mut Vec<String>) {
+    let block = buf.trim().to_string();
+    if !block.is_empty() {
+        if is_json {
+            json_out.push(block);
+        } else {
+            other_out.push(block);
+        }
+    }
+    buf.clear();
+}
+
 fn collect_fenced_blocks(text: &str, json_out: &mut Vec<String>, other_out: &mut Vec<String>) {
-    let mut in_fence = false;
+    let mut fence_len: usize = 0;
     let mut is_json = false;
     let mut buf = String::new();
     for line in text.lines() {
         let t = line.trim_start();
-        if !in_fence {
-            if let Some(rest) = t.strip_prefix("```") {
-                let tag = rest.split_whitespace().next().unwrap_or("");
-                in_fence = true;
+        let ticks = leading_backticks(t);
+        if fence_len == 0 {
+            if ticks >= 3 {
+                let tag = t[ticks..].split_whitespace().next().unwrap_or("");
+                fence_len = ticks;
                 is_json = tag.eq_ignore_ascii_case("json");
                 buf.clear();
             }
-        } else if t.starts_with("```") {
-            let block = buf.trim().to_string();
-            if !block.is_empty() {
-                if is_json {
-                    json_out.push(block);
-                } else {
-                    other_out.push(block);
-                }
-            }
-            in_fence = false;
+        } else if ticks >= fence_len && t[ticks..].trim().is_empty() {
+            flush_fenced(&mut buf, is_json, json_out, other_out);
+            fence_len = 0;
             is_json = false;
-            buf.clear();
         } else {
             if !buf.is_empty() {
                 buf.push('\n');
             }
             buf.push_str(line);
         }
+    }
+    if fence_len > 0 {
+        flush_fenced(&mut buf, is_json, json_out, other_out);
     }
 }
 
@@ -287,6 +307,11 @@ fn render_message(out: &mut String, msg: &Message, idx: usize, recorder: &str) {
                     ContentBlock::Text { text } => {
                         out.push_str(text);
                         out.push('\n');
+                        if idx > 0 {
+                            out.push_str(&format!(
+                                "Do NOT call any tool. Respond with ONLY the corrected ```json ... ``` object for `{recorder}`.\n"
+                            ));
+                        }
                     }
                     ContentBlock::ToolResult { content, .. } => {
                         out.push_str(content);
@@ -326,9 +351,11 @@ pub(crate) struct ExchangeStreamState {
     pub abort: Option<String>,
     pub observed_model: String,
     pub usage: Value,
-    pub last_text: String,
+    pub text_blocks: Vec<String>,
     pub result_text: String,
     pub unexpected_tool: Option<(String, String, Value)>,
+    pending_builtin_tools: BTreeMap<u64, (String, String, Value)>,
+    unindexed_builtin_seq: u64,
     pub raw_lines: Vec<String>,
 }
 
@@ -340,19 +367,41 @@ impl ExchangeStreamState {
             abort: None,
             observed_model: requested_model.to_string(),
             usage: Value::Null,
-            last_text: String::new(),
+            text_blocks: Vec::new(),
             result_text: String::new(),
             unexpected_tool: None,
+            pending_builtin_tools: BTreeMap::new(),
+            unindexed_builtin_seq: u64::MAX / 2,
             raw_lines: Vec::new(),
         }
     }
 
-    pub fn final_text(&self) -> &str {
-        if self.last_text.is_empty() {
-            &self.result_text
-        } else {
-            &self.last_text
+    fn push_text_block(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
         }
+        if self.text_blocks.last().map(String::as_str) != Some(text) {
+            self.text_blocks.push(text.to_string());
+        }
+    }
+
+    pub fn final_text(&self) -> String {
+        if self.text_blocks.is_empty() {
+            self.result_text.clone()
+        } else {
+            self.text_blocks.join("\n")
+        }
+    }
+
+    /// Return any confirmed unauthorized tool call, or any Antigravity built-in tool step that
+    /// started during the stream and was never explicitly denied/failed before stream end.
+    pub fn take_unexpected_tool(&mut self) -> Option<(String, String, Value)> {
+        if let Some(hit) = self.unexpected_tool.take() {
+            return Some(hit);
+        }
+        self.pending_builtin_tools
+            .pop_first()
+            .map(|(_, entry)| entry)
     }
 
     pub fn feed_line(
@@ -395,7 +444,7 @@ impl ExchangeStreamState {
             match ev_kind.as_str() {
                 "model.text" => {
                     if let Some(t) = data["text"].as_str() {
-                        self.last_text = t.to_string();
+                        self.push_text_block(t);
                     }
                 }
                 "model.tool_use" if self.unexpected_tool.is_none() => {
@@ -451,7 +500,7 @@ impl ExchangeStreamState {
             match ev_kind.as_str() {
                 "model.text" => {
                     if let Some(t) = data["text"].as_str() {
-                        self.last_text = t.to_string();
+                        self.push_text_block(t);
                     }
                 }
                 "model.tool_use" if self.unexpected_tool.is_none() => {
@@ -462,18 +511,31 @@ impl ExchangeStreamState {
                     ));
                 }
                 "vendor.builtin_tool" if self.unexpected_tool.is_none() => {
-                    let st = data["state"].as_str().unwrap_or("");
-                    let completed =
-                        matches!(st.to_ascii_uppercase().as_str(), "DONE" | "COMPLETED");
-                    if completed && data["denied_or_failed"].as_bool() == Some(false) {
-                        self.unexpected_tool = Some((
-                            format!("agy-builtin-{}", data["step_index"].as_u64().unwrap_or(0)),
-                            data["tool_name"]
-                                .as_str()
-                                .unwrap_or("vendor_builtin")
-                                .to_string(),
-                            json!({ "parameters": data["parameters"] }),
-                        ));
+                    let step_key = data["step_index"].as_u64().unwrap_or_else(|| {
+                        let k = self.unindexed_builtin_seq;
+                        self.unindexed_builtin_seq = self.unindexed_builtin_seq.saturating_add(1);
+                        k
+                    });
+                    if data["denied_or_failed"].as_bool() == Some(true) {
+                        self.pending_builtin_tools.remove(&step_key);
+                        continue;
+                    }
+                    let entry = (
+                        format!("agy-builtin-{step_key}"),
+                        data["tool_name"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("vendor_builtin")
+                            .to_string(),
+                        json!({ "parameters": data["parameters"] }),
+                    );
+                    let st = data["state"].as_str().unwrap_or("").to_ascii_uppercase();
+                    let in_progress = matches!(st.as_str(), "ACTIVE" | "RUNNING" | "PENDING" | "WAITING");
+                    if in_progress {
+                        self.pending_builtin_tools.insert(step_key, entry);
+                    } else {
+                        self.pending_builtin_tools.remove(&step_key);
+                        self.unexpected_tool = Some(entry);
                     }
                 }
                 "cli.result" => {

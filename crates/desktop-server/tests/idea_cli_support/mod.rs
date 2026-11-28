@@ -14,8 +14,10 @@ use std::sync::OnceLock;
 static MULTI_CLI_BIN: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 
 const MULTI_CLI_SRC: &str = r#"
+use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 fn here() -> PathBuf {
     std::env::current_exe().unwrap().parent().unwrap().to_path_buf()
@@ -25,29 +27,54 @@ fn read(dir: &Path, name: &str) -> Option<String> {
     std::fs::read_to_string(dir.join(name)).ok()
 }
 
+fn append_line(dir: &Path, name: &str, line: &str) {
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(dir.join(name)) {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
 fn main() {
     let dir = here();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--version") {
+        append_line(&dir, "version_calls.txt", "1");
         let v = read(&dir, "version.txt").unwrap_or_else(|| "2.1.318 (Claude Code)".into());
         println!("{}", v.trim());
         return;
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        append_line(&dir, "cwds.txt", &cwd.to_string_lossy());
     }
     let idx: usize = read(&dir, "counter.txt")
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0)
         + 1;
-    std::fs::write(dir.join("counter.txt"), idx.to_string()).unwrap();
-    std::fs::write(dir.join(format!("argv_{idx}.txt")), args.join("\n")).unwrap();
+    let _ = std::fs::write(dir.join("counter.txt"), idx.to_string());
+    let _ = std::fs::write(dir.join(format!("argv_{idx}.txt")), args.join("\n"));
     let mut stdin_buf = String::new();
     let _ = io::stdin().read_to_string(&mut stdin_buf);
-    std::fs::write(dir.join(format!("stdin_{idx}.txt")), &stdin_buf).unwrap();
+    let _ = std::fs::write(dir.join(format!("stdin_{idx}.txt")), &stdin_buf);
 
     if let Some(pos) = args.iter().position(|a| a == "--mcp-config") {
         if let Some(path) = args.get(pos + 1) {
             let txt = std::fs::read_to_string(path).unwrap_or_default();
-            std::fs::write(dir.join(format!("mcp_{idx}.json")), txt).unwrap();
+            let _ = std::fs::write(dir.join(format!("mcp_{idx}.json")), txt);
         }
+    }
+
+    if let Some(n) = read(&dir, "huge_line_bytes.txt").and_then(|s| s.trim().parse::<usize>().ok()) {
+        let chunk = vec![b'a'; 65536];
+        let mut out = io::stdout().lock();
+        let mut rem = n;
+        while rem > 0 {
+            let take = rem.min(chunk.len());
+            if out.write_all(&chunk[..take]).is_err() {
+                break;
+            }
+            rem -= take;
+        }
+        let _ = out.flush();
+        return;
     }
 
     let script = read(&dir, &format!("attempt_{idx}.ndjson"))
@@ -56,9 +83,12 @@ fn main() {
     let mut out = io::stdout().lock();
     for line in script.lines() {
         if !line.trim().is_empty() {
-            writeln!(out, "{line}").unwrap();
-            out.flush().unwrap();
+            let _ = writeln!(out, "{line}");
+            let _ = out.flush();
         }
+    }
+    if let Some(ms) = read(&dir, "sleep_ms.txt").and_then(|s| s.trim().parse::<u64>().ok()) {
+        std::thread::sleep(Duration::from_millis(ms));
     }
 }
 "#;
@@ -110,11 +140,37 @@ impl MultiAttemptCli {
         std::fs::write(self.dir.join(format!("attempt_{n}.ndjson")), lines.join("\n")).unwrap();
     }
 
+    pub fn set_default_script(&self, lines: &[String]) {
+        std::fs::write(self.dir.join("script.ndjson"), lines.join("\n")).unwrap();
+    }
+
+    pub fn set_sleep_ms(&self, ms: u64) {
+        std::fs::write(self.dir.join("sleep_ms.txt"), ms.to_string()).unwrap();
+    }
+
+    pub fn set_huge_line_bytes(&self, bytes: usize) {
+        std::fs::write(self.dir.join("huge_line_bytes.txt"), bytes.to_string()).unwrap();
+    }
+
     pub fn attempts_run(&self) -> usize {
         std::fs::read_to_string(self.dir.join("counter.txt"))
             .ok()
             .and_then(|s| s.trim().parse().ok())
             .unwrap_or(0)
+    }
+
+    pub fn version_calls(&self) -> usize {
+        std::fs::read_to_string(self.dir.join("version_calls.txt"))
+            .ok()
+            .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
+            .unwrap_or(0)
+    }
+
+    pub fn recorded_cwds(&self) -> Vec<String> {
+        std::fs::read_to_string(self.dir.join("cwds.txt"))
+            .ok()
+            .map(|s| s.lines().map(str::to_string).collect())
+            .unwrap_or_default()
     }
 
     pub fn stdin_of(&self, n: usize) -> Option<String> {
