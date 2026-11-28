@@ -175,9 +175,9 @@ fn unbuilt_mode_sessions_report_mode_and_refuse_turns_starting_nothing() {
     assert_eq!(st, 200);
     assert_eq!(serde_json::from_slice::<Value>(&solve_raw).unwrap()["mode"], "solve");
 
-    // POST /api/sessions/{id}/messages refuses unbuilt Explore cleanly and refuses unconfigured Solve.
+    // POST /api/sessions/{id}/messages refuses unstated Explore cleanly and refuses unconfigured Solve.
     for (sid, expected_len, needle) in [
-        ("s-explore-1", 1usize, "not built yet"),
+        ("s-explore-1", 1usize, "idea statement"),
         ("s-solve-1", 2usize, "setup"),
     ] {
         let msg = serde_json::to_vec(&json!({ "prompt": "Run please" })).unwrap();

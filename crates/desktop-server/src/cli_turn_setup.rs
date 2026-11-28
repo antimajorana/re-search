@@ -269,7 +269,7 @@ pub(crate) fn path_str(p: &Path) -> String {
 /// Detect the session's mode and active frozen [`ToolProfile`] from its ledger events.
 pub fn resolve_cli_turn_profile(events: &[ledger::Event]) -> Result<(Mode, ToolProfile), String> {
     let mode = session_mode_from_events(events);
-    if mode == Mode::Explore && !crate::session_mode::DESKTOP_MODE_EXPLORE_ENABLED {
+    if mode == Mode::Explore && !crate::session_mode::DESKTOP_MODE_EXPLORE_CLI_ENABLED {
         return Err(
             "Explore CLI turns are not built yet (awaiting X18; CLI profile not built yet)"
                 .to_string(),
