@@ -176,6 +176,10 @@ pub enum ContentBlock {
         is_error: bool,
         content: String,
     },
+    Image {
+        media_type: String,
+        data_base64: String,
+    },
     Other {
         block_type: String,
         raw: Value,

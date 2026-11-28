@@ -480,3 +480,81 @@ fn read_map_node_credits_hash_pinned_delivered_lines_only() {
     assert!(!sent.covers("worker:other", "src1", "src1/main.tex", HASH_A, 10, 14));
     assert!(!sent.covers("agent:anthropic:s1", "src1", "src1/bad.tex", "not-a-hash", 1, 5));
 }
+
+#[test]
+fn page_ranges_validate_stay_backward_compatible_and_grant_zero_sent_lines_credit() {
+    // Old line-only JSON deserializes cleanly and omits `page_ranges` when re-serialized.
+    let legacy_json = json!({
+        "run_id": "run-old",
+        "caller": "reader-1",
+        "ranges": [{
+            "source_id": "src1",
+            "path": "src1/paper.txt",
+            "file_sha256": HASH_A,
+            "start_line": 1,
+            "end_line": 4
+        }]
+    });
+    let legacy: ContextSuppliedPayload = serde_json::from_value(legacy_json).unwrap();
+    assert!(legacy.page_ranges.is_empty());
+    let reserialized = serde_json::to_value(&legacy).unwrap();
+    assert!(reserialized.get("page_ranges").is_none());
+
+    // Valid page_ranges payload round-trips with and without crop.
+    let with_pages = ContextSuppliedPayload::new_with_pages(
+        "run-vis",
+        "pdf_vision",
+        vec![],
+        vec![
+            SuppliedPageRange {
+                source_id: "src1".into(),
+                raw_blob_sha256: HASH_A.into(),
+                start_page: 2,
+                end_page: 2,
+                crop: Some([10, 20, 300, 120]),
+            },
+            SuppliedPageRange {
+                source_id: "src1".into(),
+                raw_blob_sha256: HASH_A.into(),
+                start_page: 3,
+                end_page: 4,
+                crop: None,
+            },
+        ],
+    )
+    .unwrap();
+    let val = serde_json::to_value(&with_pages).unwrap();
+    let decoded: ContextSuppliedPayload = serde_json::from_value(val.clone()).unwrap();
+    assert_eq!(decoded, with_pages);
+    assert!(val["page_ranges"][1].get("crop").is_none());
+
+    // `page_ranges` MUST grant ZERO credit in `SentLines::covers`.
+    let events = vec![ev(1, CONTEXT_SUPPLIED_EVENT, val)];
+    let sent = lines_sent(&events, Some("run-vis"));
+    assert!(sent.is_empty());
+    assert!(!sent.covers("pdf_vision", "src1", "src1/paper.pdf.extracted.txt", HASH_A, 1, 1));
+    assert!(!sent.covers("pdf_vision", "src1", "src1/paper.pdf.extracted.txt", HASH_B, 2, 2));
+
+    // Unknown fields on SuppliedPageRange are rejected.
+    assert!(serde_json::from_value::<SuppliedPageRange>(json!({
+        "source_id": "src1",
+        "raw_blob_sha256": HASH_A,
+        "start_page": 1,
+        "end_page": 1,
+        "extra": 1
+    }))
+    .is_err());
+
+    // Validation rejections: page 0, inverted pages, bad hash, invalid source_id, zero-area crop.
+    for bad in [
+        SuppliedPageRange { source_id: "src1".into(), raw_blob_sha256: HASH_A.into(), start_page: 0, end_page: 1, crop: None },
+        SuppliedPageRange { source_id: "src1".into(), raw_blob_sha256: HASH_A.into(), start_page: 3, end_page: 2, crop: None },
+        SuppliedPageRange { source_id: "src1".into(), raw_blob_sha256: "bad".into(), start_page: 1, end_page: 1, crop: None },
+        SuppliedPageRange { source_id: "../bad".into(), raw_blob_sha256: HASH_A.into(), start_page: 1, end_page: 1, crop: None },
+        SuppliedPageRange { source_id: "src1".into(), raw_blob_sha256: HASH_A.into(), start_page: 1, end_page: 1, crop: Some([0, 0, 0, 50]) },
+        SuppliedPageRange { source_id: "src1".into(), raw_blob_sha256: HASH_A.into(), start_page: 1, end_page: 1, crop: Some([0, 0, 50, 0]) },
+    ] {
+        assert!(ContextSuppliedPayload::new_with_pages("run-bad", "pdf_vision", vec![], vec![bad]).is_err());
+    }
+}
+

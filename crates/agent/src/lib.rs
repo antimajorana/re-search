@@ -46,6 +46,7 @@ pub mod verifier_loop;
 pub(crate) mod verifier_parse;
 pub mod verifier_tools;
 pub mod verifiers;
+pub mod vision;
 pub(crate) mod wire;
 
 pub use anthropic::{
