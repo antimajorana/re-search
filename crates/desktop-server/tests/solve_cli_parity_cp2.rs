@@ -20,7 +20,9 @@ use desktop_server::sse::SseHub;
 use desktop_server::start_desktop_server;
 use desktop_server::state::DesktopState;
 use ledger::Ledger;
-use research_tools::solve_model::{compute_math_sha256, event_kinds, StepEntryType, StepOrigin};
+use research_tools::solve_model::{
+    compute_entry_sha256, compute_math_sha256, event_kinds, StepEntryType, StepOrigin,
+};
 #[cfg(windows)]
 use research_tools::tool_profile::PROFILE_SOLVE_V1;
 use research_tools::ResearchEnv;
@@ -102,6 +104,11 @@ fn seed_solve_session_with_done(ledger: &Ledger, sid: &str) {
             }),
         )
         .unwrap();
+    let e1_sha = compute_entry_sha256(
+        None,
+        "Sum equals two",
+        "Prose proof ready for CP2 API verifier review.",
+    );
     ledger
         .append_with_hash(
             sid,
@@ -113,6 +120,7 @@ fn seed_solve_session_with_done(ledger: &Ledger, sid: &str) {
                 "summary": "Sum equals two",
                 "details": "Prose proof ready for CP2 API verifier review.",
                 "depends_on": [],
+                "entry_sha256": e1_sha,
                 "origin": StepOrigin::Solver,
             }),
         )
