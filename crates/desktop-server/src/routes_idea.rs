@@ -327,7 +327,7 @@ pub fn handle_idea_op(
         "plan" => crate::idea_plan_search::handle_plan_op(state, &ledger, session_id, body),
         "search" => crate::idea_plan_search::handle_search_op(state, &ledger, session_id, body),
         "triage" => crate::idea_exchanges_triage::handle_triage_op(state, &ledger, session_id, body),
-        "read" => Err(not_implemented("Explore `read` is not built yet (owned by packages X9–X10).")),
+        "read" => crate::routes_idea_read::handle_read_op(state, &ledger, session_id, body),
         "map" => Err(not_implemented("Explore `map` is not built yet (owned by package X11).")),
         "directions" => Err(not_implemented("Explore `directions` is not built yet (owned by package X13).")),
         "handoff" => Err(not_implemented(
@@ -533,6 +533,7 @@ fn handle_continue(
         Some(crate::idea::IdeaStage::Sharpen) => crate::idea_exchanges::handle_sharpen_op(state, ledger, session_id, body),
         Some(crate::idea::IdeaStage::Search) => crate::idea_plan_search::handle_search_op(state, ledger, session_id, body),
         Some(crate::idea::IdeaStage::Triage) => crate::idea_exchanges_triage::handle_triage_op(state, ledger, session_id, body),
+        Some(crate::idea::IdeaStage::Read) => crate::routes_idea_read::handle_read_op(state, ledger, session_id, body),
         _ if budget_raised => Ok((200, json!({ "ok": true, "budget_raised": true, "idea": idea_view::view(&events, is_turn_running(state, session_id)) }))),
         other => Err(not_implemented(format!(
             "Explore `continue` for stage `{}` is not built yet (owned by packages X9–X13); pass `extra_queries`/`extra_papers`/`extra_model_calls` to record a budget increase.",

@@ -209,9 +209,42 @@ pub fn build_idea_router(
     registry.register(
         research_tools::idea_tools::idea_search_def(),
         research_tools::idea_tools::idea_search_handler_with_gate_and_config(
-            env,
+            Arc::clone(&env),
             None,
             Some(provider_cfg),
+        ),
+    );
+    // Bind live SSE progress sink into `idea_fetch_papers` with identical ToolDef (X9).
+    let sse_for_fetch = Arc::clone(&state.sse);
+    let sid_for_fetch = session.to_string();
+    let progress_sink: research_tools::idea_fetch::FetchProgressSink =
+        Arc::new(move |key, row_state, label, page_info| {
+            let mut payload = serde_json::json!({
+                "key": key,
+                "row_state": row_state,
+                "label": label,
+            });
+            if let Some((page, total_pages)) = page_info {
+                payload["page"] = serde_json::json!(page);
+                payload["total_pages"] = serde_json::json!(total_pages);
+            }
+            sse_for_fetch.emit(
+                &sid_for_fetch,
+                "session_event",
+                serde_json::json!({
+                    "session": sid_for_fetch,
+                    "kind": crate::idea_read::SSE_IDEA_READ_PROGRESS,
+                    "payload": payload,
+                }),
+            );
+        });
+    registry.register(
+        research_tools::idea_tools::idea_fetch_papers_def(),
+        research_tools::idea_fetch::idea_fetch_papers_handler_with_gate_and_progress(
+            env,
+            None,
+            Some(progress_sink),
+            None,
         ),
     );
     let ledger = state.open_ledger()?;
