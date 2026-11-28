@@ -5,7 +5,15 @@ import * as api from './api.js';
 import { mountWriteupButton } from './writeup_btn.js';
 
 export const READ_ONLY_BANNER_TEXT = 'quotes not matched on this machine';
-const toolbarWriteupCtrls = new WeakMap();
+let activeWriteupCtrl = null;
+let activeBrowserCtx = null;
+
+export function destroyInvestigationWriteup() {
+  if (activeWriteupCtrl) {
+    activeWriteupCtrl.destroy?.();
+    activeWriteupCtrl = null;
+  }
+}
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -107,11 +115,7 @@ export function mountInvestigationShare({
   toolbar, centerCol, apiMod = api, sessionId, sessionData, st, hooks, onRefresh, fetchFn, urlApi, scheduleRevoke,
 } = {}) {
   if (!toolbar && !centerCol) return null;
-  const prevWriteup = toolbar ? toolbarWriteupCtrls.get(toolbar) : null;
-  if (prevWriteup) {
-    prevWriteup.destroy?.();
-    toolbarWriteupCtrls.delete(toolbar);
-  }
+  destroyInvestigationWriteup();
   const oldGroup = toolbar?.querySelector?.('[data-testid="inv-share-controls"]');
   oldGroup?.remove?.();
   const oldWriteup = toolbar?.querySelector?.('[data-testid="inv-writeup-host"]');
@@ -209,7 +213,7 @@ export function mountInvestigationShare({
       onStatus: (res) => hooks?.showStatus?.(`Saved ${res?.filename || 'write-up'}.`),
       onError: (err) => hooks?.showStatus?.(err?.message || 'Could not generate write-up.'),
     });
-    if (writeupCtrl) toolbarWriteupCtrls.set(toolbar, writeupCtrl);
+    activeWriteupCtrl = writeupCtrl || null;
   }
   panel.append(stmtLabel, notesLabel, bannerHost);
   centerCol?.appendChild?.(panel);
@@ -261,6 +265,41 @@ export function syncInvestigationEntryShare(entryHost, { sessionId, sessionData,
   return bar;
 }
 
+function remountShellControls(shellHost) {
+  if (!shellHost || shellHost.hidden || !activeBrowserCtx) return;
+  const toolbar = shellHost.querySelector?.('.inv-node-actions');
+  const centerCol = shellHost.querySelector?.('.inv-col--center');
+  if (!toolbar && !centerCol) return;
+  mountInvestigationShare({
+    toolbar,
+    centerCol,
+    apiMod: api,
+    sessionId: activeBrowserCtx.sessionId,
+    sessionData: activeBrowserCtx.sessionData,
+    hooks: activeBrowserCtx.hooks,
+    onRefresh: () => activeBrowserCtx?.hooks?.refresh?.(activeBrowserCtx.sessionId),
+  });
+}
+
+function ensureShellObserver(shellHost) {
+  if (!shellHost || shellHost.__shareObserver || typeof MutationObserver !== 'function') return;
+  let remounting = false;
+  const observer = new MutationObserver(() => {
+    if (remounting || !activeBrowserCtx || shellHost.hidden) return;
+    const toolbar = shellHost.querySelector?.('.inv-node-actions');
+    if (toolbar && !toolbar.querySelector?.('[data-testid="inv-writeup-host"]')) {
+      remounting = true;
+      try {
+        remountShellControls(shellHost);
+      } finally {
+        remounting = false;
+      }
+    }
+  });
+  observer.observe(shellHost, { childList: true });
+  shellHost.__shareObserver = observer;
+}
+
 function installBrowserHook() {
   if (typeof globalThis === 'undefined' || typeof queueMicrotask !== 'function') return;
   queueMicrotask(() => {
@@ -270,22 +309,19 @@ function installBrowserHook() {
     ctrl.__shareHookInstalled = true;
     ctrl.syncSession = async function syncWithShare(sessionId, sessionData, hooks = {}) {
       const ok = await origSync(sessionId, sessionData, hooks);
-      if (typeof document === 'undefined' || sessionData?.mode !== 'investigation' || !sessionId) return ok;
+      if (typeof document === 'undefined' || sessionData?.mode !== 'investigation' || !sessionId) {
+        activeBrowserCtx = null;
+        destroyInvestigationWriteup();
+        return ok;
+      }
       const shellHost = document.getElementById('investigation-v3-shell');
       if (ok && shellHost && !shellHost.hidden) {
-        const toolbar = shellHost.querySelector?.('.inv-node-actions');
-        const centerCol = shellHost.querySelector?.('.inv-col--center');
-        if (toolbar || centerCol) {
-          mountInvestigationShare({
-            toolbar,
-            centerCol,
-            apiMod: api,
-            sessionId,
-            sessionData,
-            hooks,
-            onRefresh: () => hooks?.refresh?.(sessionId),
-          });
-        }
+        activeBrowserCtx = { sessionId, sessionData, hooks };
+        ensureShellObserver(shellHost);
+        remountShellControls(shellHost);
+      } else {
+        activeBrowserCtx = null;
+        destroyInvestigationWriteup();
       }
       const entryHost = document.getElementById('investigation-v4-entry');
       if (entryHost && !entryHost.hidden) {

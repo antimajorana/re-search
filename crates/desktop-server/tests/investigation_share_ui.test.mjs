@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import {
   READ_ONLY_BANNER_TEXT,
+  destroyInvestigationWriteup,
   formatDroppedQuotesBanner,
   mountInvestigationShare,
   syncInvestigationEntryShare,
@@ -264,11 +265,13 @@ test('mountInvestigationShare mounts F15 write-up control with X-ReSearch-Token 
     assert.deepEqual(revokedUrls, ['blob:inv-1']);
     assert.ok(statuses.some((s) => s.includes('s-inv-ui-1-writeup.md')));
 
-    // Switching sessions remounts on the same toolbar and destroys the previous controller so
-    // an in-flight download from the previous session cannot trigger a stale save.
+    // Switching sessions creates a fresh toolbar node (matching investigation_v3_shell renderShell)
+    // and must STILL destroy the previous controller so its in-flight download cannot trigger a save.
     let resolveSlow;
+    const toolbarOld = dom.makeEl('div');
+    const toolbarNew = dom.makeEl('div');
     const uiSlow = mountInvestigationShare({
-      toolbar,
+      toolbar: toolbarOld,
       centerCol,
       sessionId: 's-inv-old',
       sessionData: { events: [] },
@@ -280,7 +283,7 @@ test('mountInvestigationShare mounts F15 write-up control with X-ReSearch-Token 
     });
     const pending = uiSlow.writeupCtrl.download();
     mountInvestigationShare({
-      toolbar,
+      toolbar: toolbarNew,
       centerCol,
       sessionId: 's-inv-new',
       sessionData: { events: [] },
@@ -297,9 +300,34 @@ test('mountInvestigationShare mounts F15 write-up control with X-ReSearch-Token 
       blob: async () => new Blob(['old'], { type: 'application/x-tex' }),
     });
     await pending;
-    assert.equal(createdUrls.length, 1, 'stale download after session switch must be dropped');
+    assert.equal(createdUrls.length, 1, 'stale download after fresh-toolbar session switch must be dropped');
+
+    // Leaving Investigate mode calls destroyInvestigationWriteup and drops any in-flight download.
+    let resolveLeave;
+    const uiLeave = mountInvestigationShare({
+      toolbar: dom.makeEl('div'),
+      centerCol,
+      sessionId: 's-inv-leave',
+      sessionData: { events: [] },
+      apiMod: { getCsrfToken: () => 'inv-csrf-tok' },
+      hooks: { showStatus: () => {} },
+      fetchFn: () => new Promise((resolve) => { resolveLeave = resolve; }),
+      urlApi,
+      scheduleRevoke: (fn) => fn(),
+    });
+    const pendingLeave = uiLeave.writeupCtrl.download();
+    destroyInvestigationWriteup();
+    resolveLeave({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'attachment; filename="s-inv-leave-writeup.tex"' },
+      blob: async () => new Blob(['leave'], { type: 'application/x-tex' }),
+    });
+    await pendingLeave;
+    assert.equal(createdUrls.length, 1, 'download after destroyInvestigationWriteup must be dropped');
     assert.equal(dom.innerHtmlWrites, 0);
   } finally {
+    destroyInvestigationWriteup();
     globalThis.document = prevDoc;
   }
 });
