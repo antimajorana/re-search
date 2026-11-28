@@ -81,26 +81,46 @@ fn settings_path(data_dir: &Path) -> PathBuf {
     data_dir.join(PDF_VISION_SETTINGS_FILE)
 }
 
-/// Load [`PdfVisionSettings`] from `<data_dir>/pdf_vision_settings.json` (defaults to disabled).
+/// Load [`PdfVisionSettings`] from `<data_dir>/pdf_vision_settings.json` (defaults to disabled;
+/// refuses symlinks and non-regular files).
 pub fn load_pdf_vision_settings(data_dir: &Path) -> PdfVisionSettings {
-    let Ok(bytes) = fs::read(settings_path(data_dir)) else {
+    let path = settings_path(data_dir);
+    let Ok(meta) = fs::symlink_metadata(&path) else {
+        return PdfVisionSettings::default();
+    };
+    if meta.file_type().is_symlink() || !meta.file_type().is_file() {
+        return PdfVisionSettings::default();
+    }
+    let Ok(bytes) = fs::read(&path) else {
         return PdfVisionSettings::default();
     };
     serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
-/// Atomically persist [`PdfVisionSettings`] to `<data_dir>/pdf_vision_settings.json`.
+#[cfg(unix)]
+fn enforce_0600(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("failed to enforce 0600 permissions on pdf vision settings: {e}"))
+}
+
+/// Atomically persist [`PdfVisionSettings`] to `<data_dir>/pdf_vision_settings.json` with
+/// symlink refusal, rollback-safe Windows `.bak` replacement, and `0600` Unix permissions.
 pub fn save_pdf_vision_settings(data_dir: &Path, settings: &PdfVisionSettings) -> Result<(), String> {
     let _guard = SETTINGS_WRITE_LOCK
         .lock()
         .map_err(|_| "pdf vision settings lock poisoned".to_string())?;
     fs::create_dir_all(data_dir)
         .map_err(|e| format!("failed to create data directory `{}`: {e}", data_dir.display()))?;
+    let target = settings_path(data_dir);
+    if fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(format!("refusing to overwrite symlink `{PDF_VISION_SETTINGS_FILE}`"));
+    }
     let bytes = serde_json::to_vec_pretty(settings)
         .map_err(|e| format!("failed to serialize pdf vision settings: {e}"))?;
-    let target = settings_path(data_dir);
     let seq = SETTINGS_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = data_dir.join(format!("{PDF_VISION_SETTINGS_FILE}.{}.{}.tmp", std::process::id(), seq));
+    let bak = data_dir.join(format!("{PDF_VISION_SETTINGS_FILE}.{}.{}.bak", std::process::id(), seq));
     let mut opts = OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -116,15 +136,31 @@ pub fn save_pdf_vision_settings(data_dir: &Path, settings: &PdfVisionSettings) -
         return Err(format!("failed to write pdf vision settings: {err}"));
     }
     drop(file);
-    if let Err(err) = fs::rename(&tmp, &target) {
-        if target.exists() {
-            let _ = fs::remove_file(&target);
-            if fs::rename(&tmp, &target).is_ok() {
-                return Ok(());
-            }
-        }
+    #[cfg(unix)]
+    if let Err(err) = enforce_0600(&tmp) {
         let _ = fs::remove_file(&tmp);
-        return Err(format!("failed to commit pdf vision settings: {err}"));
+        return Err(err);
+    }
+    if let Err(err) = fs::rename(&tmp, &target) {
+        if fs::symlink_metadata(&target).is_ok() {
+            if let Err(bak_err) = fs::rename(&target, &bak) {
+                let _ = fs::remove_file(&tmp);
+                return Err(format!("failed to back up existing pdf vision settings: {bak_err}"));
+            }
+            if let Err(replace_err) = fs::rename(&tmp, &target) {
+                let _ = fs::rename(&bak, &target);
+                let _ = fs::remove_file(&tmp);
+                return Err(format!("failed to commit pdf vision settings: {replace_err}"));
+            }
+            let _ = fs::remove_file(&bak);
+        } else {
+            let _ = fs::remove_file(&tmp);
+            return Err(format!("failed to commit pdf vision settings: {err}"));
+        }
+    }
+    #[cfg(unix)]
+    if fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_file()) {
+        enforce_0600(&target)?;
     }
     Ok(())
 }
@@ -539,7 +575,10 @@ pub fn handle_transcribe_with_provider(
             .seq
     };
 
-    let updated_budget = ModelCallBudget::new(active_cap, active_used.saturating_add(1));
+    let updated_session_budget =
+        ModelCallBudget::new(session_cap, session_used.saturating_add(1));
+    let mut updated_budget = ModelCallBudget::new(active_cap, active_used.saturating_add(1));
+    updated_budget.remaining = updated_budget.remaining.min(updated_session_budget.remaining);
     let mut out = json!({
         "event_seq": event_seq,
         "context_supplied_seq": context_supplied_seq,
@@ -548,6 +587,7 @@ pub fn handle_transcribe_with_provider(
         "quotable": false,
         "requires_text_layer_agreement": true,
         "budget": updated_budget,
+        "session_budget": updated_session_budget,
     });
     if rendered_by_provider {
         out["crop_image_media_type"] = json!(media_type);

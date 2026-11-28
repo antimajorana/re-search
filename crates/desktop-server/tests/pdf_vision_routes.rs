@@ -513,4 +513,85 @@ fn route_fails_closed_on_model_refusal_truncation_and_budget_cap_bypass() {
     mock.finish();
 }
 
+#[test]
+fn settings_refuse_symlinks_and_budget_remaining_clamps_to_session_cap() {
+    use desktop_server::routes_pdf_vision::{
+        load_pdf_vision_settings, save_pdf_vision_settings, PdfVisionSettings,
+        DEFAULT_VISION_BUDGET_CAP, PDF_VISION_SETTINGS_FILE,
+    };
 
+    // 1. Settings sidecar refuses symlinks on load and save (Unix).
+    #[cfg(unix)]
+    {
+        let dir = TempDir::new().unwrap();
+        let outside = dir.path().join("outside.json");
+        std::fs::write(&outside, br#"{"equation_transcription_enabled":true}"#).unwrap();
+        let link = dir.path().join(PDF_VISION_SETTINGS_FILE);
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        assert!(
+            !load_pdf_vision_settings(dir.path()).equation_transcription_enabled,
+            "symlinked settings must fail closed to default false"
+        );
+        let err = save_pdf_vision_settings(
+            dir.path(),
+            &PdfVisionSettings { equation_transcription_enabled: true },
+        )
+        .unwrap_err();
+        assert!(err.contains("symlink"), "unexpected save error: {err}");
+    }
+
+    // 2. When session has 1 call left (63/64) and run_id requests cap 10, response clamps
+    //    budget.remaining to 0 (matching session_budget.remaining) and next call returns 429.
+    let ok_reply = MockReply {
+        status: 200,
+        content_type: "application/json",
+        body: serde_json::to_vec(&json!({
+            "id": "chatcmpl-last",
+            "object": "chat.completion",
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "E = m c^2" },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 10, "completion_tokens": 5 }
+        }))
+        .unwrap(),
+    };
+    let dir = TempDir::new().unwrap();
+    write_fake_openai_key(dir.path());
+    let mock = MockHttp::start(vec![ok_reply]);
+    let srv = start_desktop_server(test_cfg(dir.path(), None, Some(mock.base_url.clone()), None)).unwrap();
+    let port = srv.addr.port();
+    let token = srv.info.token.clone();
+    let sid = create_session(port, &token);
+    seed_pdf_session(dir.path(), &sid, "paper1");
+
+    let ledger = Ledger::open(dir.path()).unwrap();
+    for turn in 1..DEFAULT_VISION_BUDGET_CAP {
+        ledger.append_with_hash(&sid, "model.request", 1, &json!({ "turn": turn })).unwrap();
+    }
+
+    let path = format!("/api/sessions/{sid}/sources/paper1/transcribe-equations");
+    let auth = [("X-ReSearch-Token", token.as_str()), ("Content-Type", "application/json")];
+    let body = serde_json::to_vec(&json!({
+        "page": 1,
+        "opt_in": true,
+        "image_media_type": "image/png",
+        "image_base64": encode_base64(&sample_png()),
+        "provider": "openai",
+        "model": "gpt-4o",
+        "run_id": "sub-run-1",
+        "budget_cap": 10
+    }))
+    .unwrap();
+    let (st, _, raw) = raw_http(port, "POST", &path, &auth, &body);
+    assert_eq!(st, 200);
+    let parsed: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(parsed["budget"]["remaining"], 0);
+    assert_eq!(parsed["session_budget"]["remaining"], 0);
+
+    let (st2, _, _) = raw_http(port, "POST", &path, &auth, &body);
+    assert_eq!(st2, 429);
+    mock.finish();
+}
