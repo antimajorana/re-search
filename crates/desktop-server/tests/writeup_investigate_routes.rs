@@ -202,13 +202,74 @@ fn investigate_desktop_session_writeup_and_v15_disjointness() {
     assert_eq!(audit.blocker_count, 0);
     assert_eq!(audit.error_count, 0);
 
-    // 5. Verify non-removable status & check table when inline marks are disabled.
-    let opts_off = WriteupOptions { include_inline_badges: false, bib_stem: "decay_notes".into() };
-    let (_, md_off_bytes) = writeup_session_bytes(&data_dir, &sid, WriteupFormat::Md, &opts_off).unwrap();
-    let md_off = String::from_utf8(md_off_bytes).unwrap();
-    assert!(md_off.contains("tex-1, full"));
-    assert!(md_off.contains(writeup_wording::CHECK_TABLE_HEADING));
-    assert!(!md_off.to_ascii_lowercase().contains("verified"));
+    // 5. Exercise the live HTTP `GET /api/sessions/{id}/writeup` route end to end (Tex, Md, Bib,
+    // inline_marks=0, security headers, Bearer auth, and byte determinism).
+    let find_hdr = |hdrs: &[(String, String)], name: &str| -> Option<String> {
+        hdrs.iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.clone())
+    };
+    let (htex_st1, htex_hdrs, htex_body1) = raw_http(
+        port,
+        "GET",
+        &format!("/api/sessions/{sid}/writeup?format=tex"),
+        &[("X-ReSearch-Token", &tok)],
+        b"",
+    );
+    let (htex_st2, _, htex_body2) = raw_http(
+        port,
+        "GET",
+        &format!("/api/sessions/{sid}/writeup?format=tex"),
+        &[("X-ReSearch-Token", &tok)],
+        b"",
+    );
+    assert_eq!(htex_st1, 200, "live GET /writeup tex failed: {}", String::from_utf8_lossy(&htex_body1));
+    assert_eq!(htex_st2, 200);
+    assert_eq!(htex_body1, htex_body2, "live HTTP TeX write-up must be byte-deterministic");
+    assert_eq!(find_hdr(&htex_hdrs, "content-type").as_deref(), Some("application/x-tex; charset=utf-8"));
+    assert_eq!(
+        find_hdr(&htex_hdrs, "content-disposition").as_deref(),
+        Some(format!("attachment; filename=\"{sid}-writeup.tex\"").as_str())
+    );
+    assert_eq!(find_hdr(&htex_hdrs, "cache-control").as_deref(), Some("no-store"));
+    assert_eq!(find_hdr(&htex_hdrs, "content-security-policy").as_deref(), Some("sandbox"));
+    assert_eq!(find_hdr(&htex_hdrs, "x-content-type-options").as_deref(), Some("nosniff"));
+    let htex_str = String::from_utf8(htex_body1).unwrap();
+    assert!(htex_str.contains(&format!("\\bibliography{{{sid}-writeup}}")));
+    assert!(htex_str.contains("\\cite{sato2024decay}"));
+    assert!(!htex_str.to_ascii_lowercase().contains("verified"));
+
+    let bearer = format!("Bearer {tok}");
+    let (hmd_st, hmd_hdrs, hmd_body) = raw_http(
+        port,
+        "GET",
+        &format!("/api/sessions/{sid}/writeup?format=md&inline_marks=0"),
+        &[("Authorization", &bearer)],
+        b"",
+    );
+    assert_eq!(hmd_st, 200, "live GET /writeup md failed: {}", String::from_utf8_lossy(&hmd_body));
+    assert_eq!(find_hdr(&hmd_hdrs, "content-type").as_deref(), Some("text/markdown; charset=utf-8"));
+    assert_eq!(
+        find_hdr(&hmd_hdrs, "content-disposition").as_deref(),
+        Some(format!("attachment; filename=\"{sid}-writeup.md\"").as_str())
+    );
+    let hmd_str = String::from_utf8(hmd_body).unwrap();
+    assert!(hmd_str.contains("tex-1, full"));
+    assert!(hmd_str.contains("pinned as main result by you"));
+    assert!(hmd_str.contains("Verify boundary factor on small chains by hand."));
+    assert!(hmd_str.contains(writeup_wording::CHECK_TABLE_HEADING));
+    assert!(!hmd_str.to_ascii_lowercase().contains("verified"));
+
+    let (hbib_st, hbib_hdrs, hbib_body) = raw_http(
+        port,
+        "GET",
+        &format!("/api/sessions/{sid}/writeup?format=bib"),
+        &[("X-ReSearch-Token", &tok)],
+        b"",
+    );
+    assert_eq!(hbib_st, 200, "live GET /writeup bib failed: {}", String::from_utf8_lossy(&hbib_body));
+    assert_eq!(find_hdr(&hbib_hdrs, "content-type").as_deref(), Some("application/x-bibtex; charset=utf-8"));
+    assert!(String::from_utf8(hbib_body).unwrap().contains("@article{sato2024decay,"));
 
     // 6. Disjointness from V15 Share: `/investigation/export?format=md` redirects to F15,
     // while `rsmap` and `html` remain intact.
@@ -230,6 +291,26 @@ fn investigate_desktop_session_writeup_and_v15_disjointness() {
         b"",
     );
     assert_eq!(rsmap_st, 200);
+
+    // 7. Modifying the pinned source file on disk fails closed over live HTTP.
+    let src_file = env
+        .sandbox()
+        .resolve_existing(research_tools::sandbox::SandboxRoot::Sources, &sid, &ing.files[0], false)
+        .unwrap();
+    fs::write(&src_file.canonical_target, b"tampered source bytes").unwrap();
+    let (tamper_st, _, tamper_body) = raw_http(
+        port,
+        "GET",
+        &format!("/api/sessions/{sid}/writeup?format=tex"),
+        &[("X-ReSearch-Token", &tok)],
+        b"",
+    );
+    assert_eq!(tamper_st, 400, "tampered source must fail closed: {}", String::from_utf8_lossy(&tamper_body));
+    assert!(
+        String::from_utf8_lossy(&tamper_body).contains("hash mismatch"),
+        "expected hash mismatch error, got: {}",
+        String::from_utf8_lossy(&tamper_body)
+    );
 
     handle.shutdown();
 }

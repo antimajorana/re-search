@@ -555,12 +555,26 @@ fn shared_writeup_session_dispatch_serves_tex_md_bib_writes_sidecar_and_gates_ot
     assert_eq!(audit.blocker_count, 0);
     assert_eq!(audit.error_count, 0);
 
-    // Non-Investigate session fails cleanly with `"write-up adapter not built yet"`.
+    // Research sessions direct users to `export`; Explore remains unbuilt until f15-writeup-explore.
     ledger.append("s-research-other", "session.created", 1, &json!({ "title": "Research" })).unwrap();
-    let err = writeup_session_bytes(&data_dir, "s-research-other", WriteupFormat::Md, &opts)
+    let res_err = writeup_session_bytes(&data_dir, "s-research-other", WriteupFormat::Md, &opts)
         .unwrap_err();
     assert!(
-        err.contains("write-up adapter not built yet"),
-        "expected unbuilt-mode error, got: {err}"
+        res_err.contains("Research"),
+        "expected Research refusal error, got: {res_err}"
+    );
+    ledger
+        .append_with_hash(
+            "s-explore-other",
+            research_tools::tool_profile::MARKER_IDEA_STARTED,
+            1,
+            &json!({}),
+        )
+        .unwrap();
+    let exp_err = writeup_session_bytes(&data_dir, "s-explore-other", WriteupFormat::Md, &opts)
+        .unwrap_err();
+    assert!(
+        exp_err.contains("write-up adapter not built yet"),
+        "expected unbuilt-mode error for Explore, got: {exp_err}"
     );
 }
