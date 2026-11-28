@@ -574,7 +574,7 @@ fn shared_writeup_session_dispatch_serves_tex_md_bib_writes_sidecar_and_gates_ot
     let exp_err = writeup_session_bytes(&data_dir, "s-explore-other", WriteupFormat::Md, &opts)
         .unwrap_err();
     assert!(
-        exp_err.contains("write-up adapter not built yet"),
-        "expected unbuilt-mode error for Explore, got: {exp_err}"
+        exp_err.contains("idea.stated"),
+        "expected fail-closed Explore refusal for bare marker session, got: {exp_err}"
     );
 }

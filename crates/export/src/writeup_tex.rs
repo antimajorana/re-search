@@ -94,6 +94,21 @@ pub fn render_writeup_tex(doc: &Writeup, opts: &WriteupOptions) -> Result<String
                     out.push_str("\\end{quote}\n");
                     let _ = writeln!(out, "\\noindent --- \\cite{{{}}} ({loc}){ocr_suffix}\n", q.cite_key);
                 }
+                WriteupBlock::AbstractQuote {
+                    evidence_id,
+                    cite_key,
+                    provider_label,
+                    text,
+                } => {
+                    let _ = writeln!(
+                        out,
+                        "\\noindent\\textit{{Recorded verbatim abstract ({}, \\cite{{{}}}, {}, abstract only):}} ``{}'' --- possible relevance only (full text not read).\n",
+                        escape_latex(evidence_id),
+                        cite_key,
+                        escape_latex(provider_label),
+                        escape_latex(text),
+                    );
+                }
                 WriteupBlock::Statement {
                     id,
                     text,
