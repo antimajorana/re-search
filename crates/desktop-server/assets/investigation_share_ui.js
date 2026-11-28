@@ -2,8 +2,10 @@
 // Strictly DOM-based (`textContent` / `createElement` only; no raw HTML string injection).
 
 import * as api from './api.js';
+import { mountWriteupButton } from './writeup_btn.js';
 
 export const READ_ONLY_BANNER_TEXT = 'quotes not matched on this machine';
+const toolbarWriteupCtrls = new WeakMap();
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -101,10 +103,19 @@ async function performImportText(apiMod, sessionId, text, bannerHost, hooks, onR
   await (onRefresh?.() ?? hooks?.refresh?.(sessionId));
 }
 
-export function mountInvestigationShare({ toolbar, centerCol, apiMod = api, sessionId, sessionData, st, hooks, onRefresh } = {}) {
+export function mountInvestigationShare({
+  toolbar, centerCol, apiMod = api, sessionId, sessionData, st, hooks, onRefresh, fetchFn, urlApi, scheduleRevoke,
+} = {}) {
   if (!toolbar && !centerCol) return null;
+  const prevWriteup = toolbar ? toolbarWriteupCtrls.get(toolbar) : null;
+  if (prevWriteup) {
+    prevWriteup.destroy?.();
+    toolbarWriteupCtrls.delete(toolbar);
+  }
   const oldGroup = toolbar?.querySelector?.('[data-testid="inv-share-controls"]');
   oldGroup?.remove?.();
+  const oldWriteup = toolbar?.querySelector?.('[data-testid="inv-writeup-host"]');
+  oldWriteup?.remove?.();
   const oldPanel = centerCol?.querySelector?.('[data-testid="inv-share-panel"]');
   oldPanel?.remove?.();
 
@@ -183,10 +194,30 @@ export function mountInvestigationShare({ toolbar, centerCol, apiMod = api, sess
 
   group.append(exportRsmapBtn, exportHtmlBtn, importBtn, fileInput);
   toolbar?.appendChild?.(group);
+  let writeupHost = null;
+  let writeupCtrl = null;
+  if (toolbar) {
+    writeupHost = el('div', 'inv-writeup-host');
+    writeupHost.setAttribute('data-testid', 'inv-writeup-host');
+    toolbar.appendChild?.(writeupHost);
+    writeupCtrl = mountWriteupButton(writeupHost, {
+      sessionId: sessionId || '',
+      getToken: () => (typeof apiMod?.getCsrfToken === 'function' ? apiMod.getCsrfToken() : ''),
+      fetchFn,
+      urlApi,
+      scheduleRevoke,
+      onStatus: (res) => hooks?.showStatus?.(`Saved ${res?.filename || 'write-up'}.`),
+      onError: (err) => hooks?.showStatus?.(err?.message || 'Could not generate write-up.'),
+    });
+    if (writeupCtrl) toolbarWriteupCtrls.set(toolbar, writeupCtrl);
+  }
   panel.append(stmtLabel, notesLabel, bannerHost);
   centerCol?.appendChild?.(panel);
 
-  return { group, panel, stmtCheck, notesCheck, exportRsmapBtn, exportHtmlBtn, importBtn, fileInput, bannerHost };
+  return {
+    group, panel, stmtCheck, notesCheck, exportRsmapBtn, exportHtmlBtn, importBtn, fileInput, bannerHost,
+    writeupHost, writeupCtrl,
+  };
 }
 
 export function syncInvestigationEntryShare(entryHost, { sessionId, sessionData, apiMod = api, hooks } = {}) {

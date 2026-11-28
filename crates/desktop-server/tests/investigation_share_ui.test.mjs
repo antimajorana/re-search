@@ -199,3 +199,107 @@ test('import displays dropped-quote and read-only banners without innerHTML or v
     globalThis.document = prevDoc;
   }
 });
+
+test('mountInvestigationShare mounts F15 write-up control with X-ReSearch-Token and cancels stale remount downloads', async () => {
+  const dom = makeFakeDom();
+  const prevDoc = globalThis.document;
+  globalThis.document = dom.document;
+  try {
+    const requests = [];
+    const createdUrls = [];
+    const revokedUrls = [];
+    const statuses = [];
+    const urlApi = {
+      createObjectURL(blob) {
+        const u = `blob:inv-${createdUrls.length + 1}`;
+        createdUrls.push({ u, blob });
+        return u;
+      },
+      revokeObjectURL(u) { revokedUrls.push(u); },
+    };
+
+    const toolbar = dom.makeEl('div');
+    const centerCol = dom.makeEl('div');
+    const ui1 = mountInvestigationShare({
+      toolbar,
+      centerCol,
+      sessionId: 's-inv-ui-1',
+      sessionData: { events: [] },
+      apiMod: {
+        getCsrfToken: () => 'inv-csrf-tok',
+        async exportInvestigationFile() { return {}; },
+        async importInvestigationMap() { return {}; },
+      },
+      hooks: { refresh: async () => {}, showStatus: (m) => statuses.push(m) },
+      fetchFn: async (url, init) => {
+        requests.push({ url, init });
+        return {
+          ok: true,
+          status: 200,
+          headers: {
+            get(name) {
+              const n = name.toLowerCase();
+              if (n === 'content-type') return 'text/markdown; charset=utf-8';
+              if (n === 'content-disposition') return 'attachment; filename="s-inv-ui-1-writeup.md"';
+              return null;
+            },
+          },
+          blob: async () => new Blob(['# Reading Notes\n'], { type: 'text/markdown' }),
+        };
+      },
+      urlApi,
+      scheduleRevoke: (fn) => fn(),
+    });
+
+    assert.ok(ui1.writeupHost, 'toolbar must mount inv-writeup-host');
+    assert.ok(ui1.writeupCtrl, 'toolbar must mount writeup_btn controller');
+    ui1.writeupCtrl.formatSelect.value = 'md';
+    ui1.writeupCtrl.inlineCheckbox.checked = false;
+    await ui1.writeupCtrl.download();
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, '/api/sessions/s-inv-ui-1/writeup?format=md&inline_marks=0');
+    assert.equal(requests[0].init.headers['X-ReSearch-Token'], 'inv-csrf-tok');
+    assert.equal(createdUrls.length, 1);
+    assert.deepEqual(revokedUrls, ['blob:inv-1']);
+    assert.ok(statuses.some((s) => s.includes('s-inv-ui-1-writeup.md')));
+
+    // Switching sessions remounts on the same toolbar and destroys the previous controller so
+    // an in-flight download from the previous session cannot trigger a stale save.
+    let resolveSlow;
+    const uiSlow = mountInvestigationShare({
+      toolbar,
+      centerCol,
+      sessionId: 's-inv-old',
+      sessionData: { events: [] },
+      apiMod: { getCsrfToken: () => 'inv-csrf-tok' },
+      hooks: { showStatus: () => {} },
+      fetchFn: () => new Promise((resolve) => { resolveSlow = resolve; }),
+      urlApi,
+      scheduleRevoke: (fn) => fn(),
+    });
+    const pending = uiSlow.writeupCtrl.download();
+    mountInvestigationShare({
+      toolbar,
+      centerCol,
+      sessionId: 's-inv-new',
+      sessionData: { events: [] },
+      apiMod: { getCsrfToken: () => 'inv-csrf-tok' },
+      hooks: { showStatus: () => {} },
+      fetchFn: async () => ({ ok: true, status: 200, headers: { get: () => '' }, blob: async () => new Blob(['']) }),
+      urlApi,
+      scheduleRevoke: (fn) => fn(),
+    });
+    resolveSlow({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'attachment; filename="s-inv-old-writeup.tex"' },
+      blob: async () => new Blob(['old'], { type: 'application/x-tex' }),
+    });
+    await pending;
+    assert.equal(createdUrls.length, 1, 'stale download after session switch must be dropped');
+    assert.equal(dom.innerHtmlWrites, 0);
+  } finally {
+    globalThis.document = prevDoc;
+  }
+});
