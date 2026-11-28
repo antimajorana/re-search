@@ -277,7 +277,7 @@ pub fn resolve_cli_verifier_status(
 
 /// Run automatic post-CLI-turn API `verifier_loop` review (CP2) when `Mode::Solve` completes
 /// on a subscription-CLI route and an in-core API verifier is configured (`solve.md` 5.2-5.3, D16).
-pub(crate) fn maybe_run_post_cli_solve_review(
+pub fn maybe_run_post_cli_solve_review(
     state: &Arc<DesktopState>,
     research: &Arc<ResearchEnv>,
     session_id: &str,

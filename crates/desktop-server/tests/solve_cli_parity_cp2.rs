@@ -1,16 +1,27 @@
 //! Integration tests for S15 CP2: Solve subscription-CLI turn dispatch (gated on
 //! `solve.setup`) and automatic post-CLI-turn API `verifier_loop` review.
 
+#[cfg(windows)]
 mod cli_support;
 mod common;
 
+#[cfg(windows)]
 use cli_route::core_tools::core_tool_set_for_profile;
+#[cfg(windows)]
 use cli_route::testkit::FakeCli;
+#[cfg(windows)]
 use cli_support::clear_env_auth;
+use cli_route::StopHandle;
 use common::{raw_http, test_cfg, MockHttp, MockReply};
+use desktop_server::chatgpt::ChatGptHub;
+use desktop_server::cli_turn_solve::maybe_run_post_cli_solve_review;
+use desktop_server::auth::AuthGuard;
+use desktop_server::sse::SseHub;
 use desktop_server::start_desktop_server;
+use desktop_server::state::DesktopState;
 use ledger::Ledger;
 use research_tools::solve_model::{compute_math_sha256, event_kinds, StepEntryType, StepOrigin};
+#[cfg(windows)]
 use research_tools::tool_profile::PROFILE_SOLVE_V1;
 use research_tools::ResearchEnv;
 use serde_json::{json, Value};
@@ -19,28 +30,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-#[test]
-fn solve_cli_turn_gated_by_setup_and_runs_post_turn_api_verifier_loop() {
-    clear_env_auth();
-
-    let tmp = TempDir::new().unwrap();
-    let data = tmp.path().join("data");
-    std::fs::create_dir_all(&data).unwrap();
-    std::fs::write(
-        data.join("providers.json"),
-        serde_json::to_vec(&json!({
-            "providers": { "openai": { "api_key": "sk-test-cli-verifier" } }
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-
-    let fake = FakeCli::new(tmp.path(), "fake-cli");
-    let mock = MockHttp::start(vec![MockReply {
+fn openai_verdict_reply(id: &str, call_id: &str, entry_id: &str) -> MockReply {
+    MockReply {
         status: 200,
         content_type: "application/json",
         body: serde_json::to_vec(&json!({
-            "id": "chatcmpl_cli_cp2",
+            "id": id,
             "object": "chat.completion",
             "model": "gpt-4.1",
             "choices": [{
@@ -49,15 +44,15 @@ fn solve_cli_turn_gated_by_setup_and_runs_post_turn_api_verifier_loop() {
                     "role": "assistant",
                     "content": null,
                     "tool_calls": [{
-                        "id": "call_cp2_v1",
+                        "id": call_id,
                         "type": "function",
                         "function": {
                             "name": "report_verdict",
                             "arguments": json!({
                                 "verdicts": [{
-                                    "entry_id": "e-1",
+                                    "entry_id": entry_id,
                                     "verdict": "accepted",
-                                    "summary": "Prose step e-1 verified via CP2 API loop.",
+                                    "summary": "Prose step verified via CP2 API loop.",
                                     "checks_cited": []
                                 }]
                             }).to_string()
@@ -69,41 +64,14 @@ fn solve_cli_turn_gated_by_setup_and_runs_post_turn_api_verifier_loop() {
             "usage": { "prompt_tokens": 30, "completion_tokens": 18, "total_tokens": 48 }
         }))
         .unwrap(),
-    }]);
+    }
+}
 
-    let mut cfg = test_cfg(&data, None, Some(mock.base_url.clone()), None);
-    cfg.claude_exe = Some(fake.exe.clone());
-    cfg.core_exe = Some(fake.exe.clone());
-    cfg.connection_env = Some(BTreeMap::new());
-    let srv = start_desktop_server(cfg).unwrap();
-    let (port, tok) = (srv.addr.port(), srv.info.token.clone());
-    let hdrs = [("X-ReSearch-Token", tok.as_str()), ("Content-Type", "application/json")];
-
-    let sid = "s-cli-cp2";
-    let (st, _, raw) = raw_http(
-        port,
-        "POST",
-        "/api/sessions",
-        &hdrs,
-        serde_json::to_vec(&json!({ "id": sid, "mode": "solve" })).unwrap().as_slice(),
-    );
-    assert_eq!(st, 200, "create solve session failed: {}", String::from_utf8_lossy(&raw));
-
-    // 1. Before `solve.setup`, `POST .../messages` on CLI route still returns 400.
-    let msg = serde_json::to_vec(&json!({
-        "prompt": "Run Solve on CLI",
-        "provider": "claude-cli",
-        "model": "sonnet"
-    }))
-    .unwrap();
-    let (st, _, raw) = raw_http(port, "POST", &format!("/api/sessions/{sid}/messages"), &hdrs, &msg);
-    assert_eq!(st, 400, "expected 400 before setup: {}", String::from_utf8_lossy(&raw));
-    assert!(String::from_utf8_lossy(&raw).contains("setup"));
-    assert!(fake.argv().is_none(), "fake CLI must not run before solve.setup");
-
-    // 2. Seed `solve.setup` + prose step `e-1` + `solve.done`, then run CLI turn.
-    let ledger = Ledger::open(&data).unwrap();
+fn seed_solve_session_with_done(ledger: &Ledger, sid: &str) {
     let msha = compute_math_sha256(&[], &Default::default(), &[], "");
+    ledger
+        .append_with_hash(sid, event_kinds::SOLVE_STARTED, 1, &json!({ "origin": "new" }))
+        .unwrap();
     ledger
         .append_with_hash(
             sid,
@@ -165,7 +133,139 @@ fn solve_cli_turn_gated_by_setup_and_runs_post_turn_api_verifier_loop() {
             }),
         )
         .unwrap();
+}
 
+#[test]
+fn solve_cli_route_dispatches_after_setup_and_post_cli_review_runs_api_verifier_loop() {
+    let tmp = TempDir::new().unwrap();
+    let data = tmp.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(
+        data.join("providers.json"),
+        serde_json::to_vec(&json!({
+            "providers": { "openai": { "api_key": "sk-test-cli-verifier" } }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mock = MockHttp::start(vec![openai_verdict_reply("chatcmpl_cp2_xplat", "call_xplat_v1", "e-1")]);
+    let mut cfg = test_cfg(&data, None, Some(mock.base_url.clone()), None);
+    cfg.connection_env = Some(BTreeMap::new());
+    let srv = start_desktop_server(cfg.clone()).unwrap();
+    let (port, tok) = (srv.addr.port(), srv.info.token.clone());
+    let hdrs = [("X-ReSearch-Token", tok.as_str()), ("Content-Type", "application/json")];
+
+    // 1. Before `solve.setup`, `POST /messages` on `claude-cli` returns 400 (setup required).
+    let sid_gate = "s-cli-gate";
+    let (st, _, raw) = raw_http(
+        port,
+        "POST",
+        "/api/sessions",
+        &hdrs,
+        serde_json::to_vec(&json!({ "id": sid_gate, "mode": "solve" })).unwrap().as_slice(),
+    );
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&raw));
+
+    let msg = serde_json::to_vec(&json!({
+        "prompt": "Run Solve on CLI",
+        "provider": "claude-cli",
+        "model": "sonnet"
+    }))
+    .unwrap();
+    let (st, _, raw) = raw_http(port, "POST", &format!("/api/sessions/{sid_gate}/messages"), &hdrs, &msg);
+    assert_eq!(st, 400, "expected 400 before setup: {}", String::from_utf8_lossy(&raw));
+    assert!(String::from_utf8_lossy(&raw).contains("setup"));
+
+    // 2. Once `solve.setup` exists, `turn_runner` no longer refuses `claude-cli` ("requires API or ChatGPT").
+    let ledger = Ledger::open(&data).unwrap();
+    seed_solve_session_with_done(&ledger, sid_gate);
+    let (st, _, raw) = raw_http(port, "POST", &format!("/api/sessions/{sid_gate}/messages"), &hdrs, &msg);
+    assert_eq!(st, 202, "expected 202 dispatch after setup: {}", String::from_utf8_lossy(&raw));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let evs = ledger.read_session(sid_gate).unwrap();
+        if evs.iter().any(|e| e.kind == "session.end" || e.kind == "session.abort") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    // 3. CP2 post-CLI-turn API `verifier_loop` runs against MockHttp and persists `proof.verification`.
+    let sid_cp2 = "s-cli-cp2-review";
+    seed_solve_session_with_done(&ledger, sid_cp2);
+    let chatgpt = ChatGptHub::new(&cfg).unwrap();
+    let state = Arc::new(DesktopState::new(
+        cfg,
+        AuthGuard::new(1).unwrap(),
+        Arc::new(SseHub::new()),
+        chatgpt,
+    ));
+    let research = Arc::new(ResearchEnv::new(&data));
+    maybe_run_post_cli_solve_review(&state, &research, sid_cp2, &StopHandle::new()).unwrap();
+
+    let evs = ledger.read_session(sid_cp2).unwrap();
+    assert!(
+        evs.iter().any(|e| e.kind == "verifier.request" && e.payload["caller"] == "verifier:solve" && e.payload["provider"] == "openai"),
+        "expected CP2 verifier.request in {evs:#?}"
+    );
+    assert!(
+        evs.iter().any(|e| e.kind == event_kinds::PROOF_VERIFICATION && e.payload["target_entry_id"] == "e-1" && e.payload["verdict"] == "accepted"),
+        "expected CP2 PROOF_VERIFICATION accepted in {evs:#?}"
+    );
+
+    let (st, _, view_raw) = raw_http(port, "GET", &format!("/api/sessions/{sid_cp2}/solve/view"), &hdrs, b"");
+    assert_eq!(st, 200);
+    let view: Value = serde_json::from_slice(&view_raw).unwrap();
+    assert_eq!(view["cli_review"]["automatic_review_available"], true);
+    assert_eq!(view["cli_review"]["s14_verifier_loop_ready"], true);
+    assert_eq!(view["cli_review"]["notice"], Value::Null);
+    assert_eq!(view["result_sheet"]["badge_label"], "Model agreed");
+
+    srv.shutdown();
+    mock.finish();
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_full_cli_turn_runs_fake_cli_and_post_turn_api_verifier_loop() {
+    clear_env_auth();
+
+    let tmp = TempDir::new().unwrap();
+    let data = tmp.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(
+        data.join("providers.json"),
+        serde_json::to_vec(&json!({
+            "providers": { "openai": { "api_key": "sk-test-cli-verifier" } }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let fake = FakeCli::new(tmp.path(), "fake-cli");
+    let mock = MockHttp::start(vec![openai_verdict_reply("chatcmpl_win_cp2", "call_win_v1", "e-1")]);
+
+    let mut cfg = test_cfg(&data, None, Some(mock.base_url.clone()), None);
+    cfg.claude_exe = Some(fake.exe.clone());
+    cfg.core_exe = Some(fake.exe.clone());
+    cfg.connection_env = Some(BTreeMap::new());
+    let srv = start_desktop_server(cfg).unwrap();
+    let (port, tok) = (srv.addr.port(), srv.info.token.clone());
+    let hdrs = [("X-ReSearch-Token", tok.as_str()), ("Content-Type", "application/json")];
+
+    let sid = "s-win-cli-cp2";
+    let (st, _, raw) = raw_http(
+        port,
+        "POST",
+        "/api/sessions",
+        &hdrs,
+        serde_json::to_vec(&json!({ "id": sid, "mode": "solve" })).unwrap().as_slice(),
+    );
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&raw));
+
+    let ledger = Ledger::open(&data).unwrap();
+    seed_solve_session_with_done(&ledger, sid);
     let tools: Vec<String> = core_tool_set_for_profile(
         Arc::new(ResearchEnv::new(&data)),
         PROFILE_SOLVE_V1,
@@ -175,7 +275,7 @@ fn solve_cli_turn_gated_by_setup_and_runs_post_turn_api_verifier_loop() {
     .iter()
     .map(|d| format!("mcp__core__{}", d.id))
     .collect();
-    let script = vec![
+    fake.script(&[
         json!({
             "type": "system", "subtype": "init", "tools": tools,
             "mcp_servers": [{ "name": "core", "status": "connected" }],
@@ -190,13 +290,17 @@ fn solve_cli_turn_gated_by_setup_and_runs_post_turn_api_verifier_loop() {
             "type": "result", "subtype": "success", "is_error": false,
             "result": "CLI solve turn done.", "num_turns": 1, "duration_ms": 5
         }).to_string(),
-    ];
-    fake.script(&script);
+    ]);
 
+    let msg = serde_json::to_vec(&json!({
+        "prompt": "Finish Solve on CLI",
+        "provider": "claude-cli",
+        "model": "sonnet"
+    }))
+    .unwrap();
     let (st, _, raw) = raw_http(port, "POST", &format!("/api/sessions/{sid}/messages"), &hdrs, &msg);
-    assert_eq!(st, 202, "CLI Solve turn after setup failed: {}", String::from_utf8_lossy(&raw));
+    assert_eq!(st, 202, "{}", String::from_utf8_lossy(&raw));
 
-    // Wait for post-CLI CP2 verifier review to persist `proof.verification` (written after CLI `session.end`).
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         let evs = ledger.read_session(sid).unwrap();
@@ -213,22 +317,10 @@ fn solve_cli_turn_gated_by_setup_and_runs_post_turn_api_verifier_loop() {
     assert!(evs.iter().any(|e| e.kind == "session.end"), "expected session.end in {evs:#?}");
     assert!(!evs.iter().any(|e| e.kind == "session.abort"), "unexpected session.abort in {evs:#?}");
     assert!(
-        evs.iter().any(|e| e.kind == "verifier.request" && e.payload["caller"] == "verifier:solve" && e.payload["provider"] == "openai"),
-        "expected CP2 verifier.request in {evs:#?}"
-    );
-    assert!(
         evs.iter().any(|e| e.kind == event_kinds::PROOF_VERIFICATION && e.payload["target_entry_id"] == "e-1" && e.payload["verdict"] == "accepted"),
         "expected CP2 PROOF_VERIFICATION accepted in {evs:#?}"
     );
     assert!(fake.argv().is_some(), "expected fake CLI to run");
-
-    let (st, _, view_raw) = raw_http(port, "GET", &format!("/api/sessions/{sid}/solve/view"), &hdrs, b"");
-    assert_eq!(st, 200);
-    let view: Value = serde_json::from_slice(&view_raw).unwrap();
-    assert_eq!(view["cli_review"]["automatic_review_available"], true);
-    assert_eq!(view["cli_review"]["s14_verifier_loop_ready"], true);
-    assert_eq!(view["cli_review"]["notice"], Value::Null);
-    assert_eq!(view["result_sheet"]["badge_label"], "Model agreed");
 
     srv.shutdown();
     mock.finish();
