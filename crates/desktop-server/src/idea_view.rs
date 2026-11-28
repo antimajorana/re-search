@@ -85,6 +85,13 @@ pub fn view(events: &[Event], running: bool) -> Value {
                 latest_brief_seq = 0;
                 latest_triage = None;
                 latest_triage_seq = 0;
+                latest_plan = None;
+                latest_search_finished = None;
+                latest_candidates.clear();
+                candidates_round = 0;
+                latest_verdicts = None;
+                latest_directions.clear();
+                paper_statuses.clear();
                 latest_statement = Some(json!({
                     "seq": ev.seq,
                     "rev": ev.payload.get("rev").and_then(Value::as_u64).unwrap_or(statement_revisions),

@@ -144,13 +144,18 @@ pub fn build_where_i_looked(
     _finished: Option<&Value>,
     candidates: &[Value],
 ) -> (Value, SearchCoverage) {
-    let coverage = compute_coverage_from_events(events);
     let latest_stmt_seq = events
         .iter()
         .rev()
         .find(|e| e.kind == "idea.stated")
         .map(|e| e.seq)
         .unwrap_or(0);
+    let rev_events: Vec<Event> = events
+        .iter()
+        .filter(|e| e.kind == "idea.started" || e.seq >= latest_stmt_seq)
+        .cloned()
+        .collect();
+    let coverage = compute_coverage_from_events(&rev_events);
 
     // Accumulate latest query outcome per `qid` across all rounds since the latest statement
     // so single-provider retries update their own rows without erasing other services' rows.

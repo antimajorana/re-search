@@ -269,6 +269,9 @@ pub fn handle_plan_op(
     let events = ledger
         .read_session(session_id)
         .map_err(|e| internal(e.to_string()))?;
+    if is_session_offline(&events) {
+        return Err(bad("Explore session is in offline (library-only) mode"));
+    }
     let (round, plan_payload) = assemble_search_plan(&events, &req_val)?;
     let request_id = format!("search-r{round}");
 
@@ -391,8 +394,11 @@ pub(crate) fn merge_with_prior_candidates(
     new_ranked_lists: &[research_tools::idea_rank::RankedServiceList],
 ) -> Vec<research_tools::idea_rank::RankedCandidate> {
     use research_tools::idea_rank::{
-        merge_and_rank, RankedCandidate, MAX_CANDIDATES_PER_ROUND, PERSPECTIVE_BONUS,
+        collect_canonical_keys, merge_and_rank, RankedCandidate, MAX_CANDIDATES_PER_ROUND,
+        PERSPECTIVE_BONUS,
     };
+    use research_tools::paper_key::PaperRef;
+
     let prior_candidates: Vec<RankedCandidate> = events
         .iter()
         .rev()
@@ -401,16 +407,40 @@ pub(crate) fn merge_with_prior_candidates(
         .and_then(|v| serde_json::from_value::<Vec<RankedCandidate>>(v.clone()).ok())
         .unwrap_or_default();
 
+    let aliases_of = |c: &RankedCandidate| -> Vec<PaperKey> {
+        let pref = PaperRef { key: c.key.clone(), version: c.version.clone(), ids: c.ids.clone() };
+        collect_canonical_keys(&pref)
+    };
+
     let new_candidates = merge_and_rank(new_ranked_lists);
-    let mut by_key: std::collections::BTreeMap<PaperKey, RankedCandidate> =
-        std::collections::BTreeMap::new();
+    let mut slots: Vec<RankedCandidate> = Vec::with_capacity(prior_candidates.len() + new_candidates.len());
+    let mut alias_to_slot: std::collections::BTreeMap<PaperKey, usize> = std::collections::BTreeMap::new();
     for prev in prior_candidates {
-        by_key.insert(prev.key.clone(), prev);
+        let idx = slots.len();
+        for k in aliases_of(&prev) {
+            alias_to_slot.entry(k).or_insert(idx);
+        }
+        slots.push(prev);
     }
 
     for fresh in new_candidates {
-        if let Some(existing) = by_key.get_mut(&fresh.key) {
+        let fresh_aliases = aliases_of(&fresh);
+        let matched_slot = fresh_aliases.iter().find_map(|k| alias_to_slot.get(k).copied());
+        if let Some(idx) = matched_slot {
+            let existing = &mut slots[idx];
             let old_persp = existing.perspectives.len();
+            if existing.ids.arxiv.is_none() { existing.ids.arxiv = fresh.ids.arxiv.clone(); }
+            if existing.ids.doi.is_none() { existing.ids.doi = fresh.ids.doi.clone(); }
+            if existing.ids.inspire.is_none() { existing.ids.inspire = fresh.ids.inspire.clone(); }
+            if existing.ids.s2.is_none() { existing.ids.s2 = fresh.ids.s2.clone(); }
+            if existing.version.is_none() { existing.version = fresh.version.clone(); }
+            if let Ok(pref) = PaperRef::from_ids_or(
+                existing.ids.clone(),
+                existing.version.clone(),
+                Some(existing.key.clone()),
+            ) {
+                existing.key = pref.key;
+            }
             for qid in fresh.found_by {
                 if !existing.found_by.contains(&qid) {
                     existing.found_by.push(qid);
@@ -432,17 +462,28 @@ pub(crate) fn merge_with_prior_candidates(
             if existing.citation_count.is_none() {
                 existing.citation_count = fresh.citation_count;
             }
+            existing.withdrawn_or_retracted |= fresh.withdrawn_or_retracted;
+            existing.in_library |= fresh.in_library;
+            existing.owned |= fresh.owned;
+            existing.user_seed |= fresh.user_seed;
+            existing.cited_by_origin |= fresh.cited_by_origin;
             let added_persp = existing.perspectives.len().saturating_sub(old_persp) as f64;
             existing.score = existing.score.max(fresh.score) + added_persp * PERSPECTIVE_BONUS;
+            for k in aliases_of(existing) {
+                alias_to_slot.insert(k, idx);
+            }
         } else {
-            by_key.insert(fresh.key.clone(), fresh);
+            let idx = slots.len();
+            for k in fresh_aliases {
+                alias_to_slot.entry(k).or_insert(idx);
+            }
+            slots.push(fresh);
         }
     }
 
-    let mut out: Vec<RankedCandidate> = by_key.into_values().collect();
-    out.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.key.cmp(&b.key)));
-    out.truncate(MAX_CANDIDATES_PER_ROUND);
-    out
+    slots.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.key.cmp(&b.key)));
+    slots.truncate(MAX_CANDIDATES_PER_ROUND);
+    slots
 }
 
 pub(crate) fn summarize_provider_states(

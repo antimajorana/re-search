@@ -346,9 +346,6 @@ fn handle_revise(
     session_id: &str,
     body: &[u8],
 ) -> ApiResult {
-    if is_turn_running(state, session_id) {
-        return Err(conflict("cannot revise the idea while an Explore run is active"));
-    }
     let val = parse_json_body(body)?;
     let raw_text = val
         .get("text")
@@ -358,6 +355,9 @@ fn handle_revise(
     let raw_seeds = parse_string_list(val.get("seeds"), "seeds")?;
 
     let _lock = state.ledger_write_lock.lock().map_err(|_| internal("ledger lock poisoned"))?;
+    if is_turn_running(state, session_id) {
+        return Err(conflict("cannot revise the idea while an Explore run is active"));
+    }
     let events = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
     let prev_rev = events
         .iter()
@@ -502,6 +502,7 @@ fn handle_continue(
         return Err(bad("requested budget increase exceeds per-click ceiling"));
     }
 
+    let mut budget_raised = false;
     if extra_queries > 0 || extra_papers > 0 || extra_calls > 0 {
         let payload = json!({
             "extra_queries": extra_queries,
@@ -509,30 +510,30 @@ fn handle_continue(
             "extra_model_calls": extra_calls,
             "author": "user",
         });
-        ledger
-            .append(session_id, EVENT_IDEA_BUDGET_RAISED, EVENT_SCHEMA_VERSION, &payload)
-            .map_err(|e| internal(e.to_string()))?;
+        {
+            let _lock = state.ledger_write_lock.lock().map_err(|_| internal("ledger lock poisoned"))?;
+            ledger
+                .append(session_id, EVENT_IDEA_BUDGET_RAISED, EVENT_SCHEMA_VERSION, &payload)
+                .map_err(|e| internal(e.to_string()))?;
+        }
         state.sse.emit(
             session_id,
             "session_event",
             json!({ "session": session_id, "kind": EVENT_IDEA_BUDGET_RAISED, "payload": payload }),
         );
-        let updated = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
-        return Ok((
-            200,
-            json!({
-                "ok": true,
-                "budget_raised": true,
-                "idea": idea_view::view(&updated, is_turn_running(state, session_id)),
-            }),
-        ));
+        budget_raised = true;
     }
 
+    let resume_stage = val.get("resume").and_then(Value::as_bool).unwrap_or(true);
     let events = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
+    if !resume_stage {
+        return Ok((200, json!({ "ok": true, "budget_raised": budget_raised, "idea": idea_view::view(&events, is_turn_running(state, session_id)) })));
+    }
     match crate::idea::next_stage(&events) {
         Some(crate::idea::IdeaStage::Sharpen) => crate::idea_exchanges::handle_sharpen_op(state, ledger, session_id, body),
         Some(crate::idea::IdeaStage::Search) => crate::idea_plan_search::handle_search_op(state, ledger, session_id, body),
         Some(crate::idea::IdeaStage::Triage) => crate::idea_exchanges_triage::handle_triage_op(state, ledger, session_id, body),
+        _ if budget_raised => Ok((200, json!({ "ok": true, "budget_raised": true, "idea": idea_view::view(&events, is_turn_running(state, session_id)) }))),
         other => Err(not_implemented(format!(
             "Explore `continue` for stage `{}` is not built yet (owned by packages X9–X13); pass `extra_queries`/`extra_papers`/`extra_model_calls` to record a budget increase.",
             other.map_or("done", crate::idea::IdeaStage::as_str),

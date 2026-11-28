@@ -332,3 +332,178 @@ fn x8_quick_preset_triage_enforces_zero_reading_list_and_skips_read_stage() {
     assert_eq!(view["next_stage"], "map");
     srv.shutdown();
 }
+
+#[test]
+fn revision_isolation_offline_plan_guard_and_continue_budget_resume() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let srv = start_desktop_server(test_cfg(&data_dir, None, None, None)).unwrap();
+    let port = srv.addr.port();
+    let tok = srv.info.token.clone();
+    let auth = [("X-ReSearch-Token", tok.as_str())];
+    let ledger = Ledger::open(&data_dir).unwrap();
+
+    // 1. Offline session refuses /idea/plan and /idea/search with 400 and appends 0 plans.
+    let sid_off = "s-x8-offline-guard";
+    let stmt = build_idea_statement(1, IDEA_TEXT, &[], &[]).unwrap();
+    append_explore_session_start(&ledger, sid_off, IdeaPreset::Standard, true, &stmt).unwrap();
+    let (st_plan, _, _) = raw_http(
+        port, "POST", &format!("/api/sessions/{sid_off}/idea/plan"), &auth,
+        br#"{"queries":[{"provider":"arxiv","q":"Krylov complexity"}]}"#,
+    );
+    assert_eq!(st_plan, 400);
+    let (st_search, _, _) = raw_http(
+        port, "POST", &format!("/api/sessions/{sid_off}/idea/search"), &auth,
+        br#"{"queries":[{"provider":"arxiv","q":"Krylov complexity"}]}"#,
+    );
+    assert_eq!(st_search, 400);
+    let off_evs = ledger.read_session(sid_off).unwrap();
+    assert!(!off_evs.iter().any(|e| e.kind == "idea.search_planned"));
+
+    // 2. Revision isolation: idea.stated rev 2 clears rev 1 candidates, plan, queries, and coverage.
+    let sid_rev = "s-x8-rev-iso";
+    append_explore_session_start(&ledger, sid_rev, IdeaPreset::Standard, false, &stmt).unwrap();
+    ledger.append(sid_rev, "idea.search_planned", 1, &json!({
+        "round": 1, "offline": false,
+        "queries": [{ "qid": "q-r1-1", "provider": "arxiv", "q": "Krylov", "relation": { "kind": "none" }, "origin": "user" }]
+    })).unwrap();
+    ledger.append(sid_rev, "idea.search_finished", 1, &json!({
+        "round": 1, "offline": false,
+        "results": [{ "qid": "q-r1-1", "provider": "arxiv", "q": "Krylov", "status": "ok", "count": 1, "hits": 1 }],
+        "queries": [{ "qid": "q-r1-1", "provider": "arxiv", "q": "Krylov", "status": "ok", "count": 1, "hits": 1 }]
+    })).unwrap();
+    ledger.append(sid_rev, EVENT_IDEA_CANDIDATES, 1, &json!({
+        "round": 1,
+        "candidates": [{
+            "key": "arxiv:2501.01234", "ids": { "arxiv": "2501.01234" },
+            "title": "Rev 1 Paper", "authors": ["A"], "year": 2025,
+            "found_by": ["q-r1-1"], "perspectives": [], "score": 1.0,
+            "withdrawn_or_retracted": false, "in_library": false, "owned": false,
+            "user_seed": false, "cited_by_origin": false
+        }]
+    })).unwrap();
+    let rev_body = serde_json::to_vec(&json!({ "text": "Revised Krylov saturation idea in rev 2" })).unwrap();
+    let (st_rev, _, rev_raw) = raw_http(port, "POST", &format!("/api/sessions/{sid_rev}/idea/revise"), &auth, &rev_body);
+    assert_eq!(st_rev, 200);
+    let rev_v: Value = serde_json::from_slice(&rev_raw).unwrap();
+    assert_eq!(rev_v["idea"]["statement"]["rev"], 2);
+    assert_eq!(rev_v["idea"]["candidates"].as_array().unwrap().len(), 0);
+    assert_eq!(rev_v["idea"]["search_plan"], Value::Null);
+    assert_eq!(rev_v["idea"]["where_i_looked"]["queries"].as_array().unwrap().len(), 0);
+    let arxiv_prov = rev_v["idea"]["where_i_looked"]["providers"]
+        .as_array().unwrap().iter()
+        .find(|p| p["name"] == "arxiv").unwrap();
+    assert_eq!(arxiv_prov["queries_ok"], 0);
+
+    // 3. /idea/continue with extra_queries on StoppedAtCap records idea.budget_raised AND resumes Search
+    //    (using a theoremsearch disabled query so no external network is needed).
+    let sid_cap = "s-x8-continue-cap";
+    append_explore_session_start(&ledger, sid_cap, IdeaPreset::Quick, false, &stmt).unwrap();
+    ledger.append(sid_cap, "idea.brief", 1, &json!({ "idea_rev": 1, "restatement": "r", "subclaims": [], "perspectives": [] })).unwrap();
+    ledger.append(sid_cap, EVENT_IDEA_STAGE, 1, &json!({ "stage": "sharpen", "state": "finished" })).unwrap();
+    ledger.append(sid_cap, "idea.search_planned", 1, &json!({
+        "round": 1, "offline": false,
+        "queries": [{ "qid": "q-ts-1", "provider": "theoremsearch", "q": "Majorana", "relation": { "kind": "none" }, "origin": "model" }]
+    })).unwrap();
+    ledger.append(sid_cap, EVENT_IDEA_STAGE, 1, &json!({ "stage": "search", "state": "stopped_at_cap", "reason": "Query cap reached" })).unwrap();
+    let bump = serde_json::to_vec(&json!({ "extra_queries": 6, "resume": false })).unwrap();
+    let (st_bump, _, bump_raw) = raw_http(port, "POST", &format!("/api/sessions/{sid_cap}/idea/continue"), &auth, &bump);
+    assert_eq!(st_bump, 200);
+    let bump_v: Value = serde_json::from_slice(&bump_raw).unwrap();
+    assert_eq!(bump_v["budget_raised"], true);
+    assert_eq!(bump_v["idea"]["budget"]["max_queries"], 14); // Quick 8 + 6
+    srv.shutdown();
+}
+
+#[test]
+fn multi_round_search_deduplicates_candidates_across_f2_canonical_aliases() {
+    use desktop_server::idea_plan_search::{run_planned_search_with_router, SearchRunResult};
+    use research_tools::{research_policy, LiteratureEndpoints, ResearchEnv};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use tools::{ApprovalReply, ApprovalRequest, Approver, Registry, Router};
+
+    struct ApproveAll;
+    impl Approver for ApproveAll {
+        fn decide(&self, req: &ApprovalRequest) -> ApprovalReply {
+            ApprovalReply { approved: true, digest: req.digest.clone(), by: "test".into() }
+        }
+    }
+
+    let s2_body = json!({
+        "total": 1,
+        "data": [{
+            "paperId": "s2alias999",
+            "title": "Canonical Alias Paper via S2",
+            "authors": [{ "name": "C. Physicist" }],
+            "year": 2025,
+            "abstract": "Exact verbatim abstract from S2 for alias merge test.",
+            "externalIds": { "ArXiv": "2502.01234", "DOI": "10.1234/alias.merge" },
+            "citationCount": 11
+        }]
+    })
+    .to_string();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let srv_handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = stream.read(&mut buf);
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{s2_body}",
+            s2_body.len()
+        );
+        let _ = stream.write_all(resp.as_bytes());
+    });
+
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let ledger = Ledger::open(&data_dir).unwrap();
+    let sid = "s-x8-alias-dedup";
+    let stmt = build_idea_statement(1, IDEA_TEXT, &[], &[]).unwrap();
+    append_explore_session_start(&ledger, sid, IdeaPreset::Standard, false, &stmt).unwrap();
+    // Round 1 discovered the paper via DOI only (no arXiv id yet, no abstract).
+    ledger.append(sid, EVENT_IDEA_CANDIDATES, 1, &json!({
+        "round": 1,
+        "candidates": [{
+            "key": "doi:10.1234/alias.merge",
+            "ids": { "doi": "10.1234/alias.merge" },
+            "title": "Canonical Alias Paper via Crossref",
+            "authors": ["C. Physicist"],
+            "year": 2025,
+            "found_by": ["q-r1-cr"],
+            "perspectives": ["p-1"],
+            "score": 0.9,
+            "withdrawn_or_retracted": false,
+            "in_library": false, "owned": false, "user_seed": false, "cited_by_origin": false
+        }]
+    })).unwrap();
+    ledger.append(sid, "idea.search_planned", 1, &json!({
+        "round": 2, "offline": false,
+        "queries": [{
+            "qid": "q-r2-s2", "perspective_id": "p-2", "provider": "semantic_scholar",
+            "q": "canonical alias test", "relation": { "kind": "none" }, "origin": "model"
+        }]
+    })).unwrap();
+
+    let mut env = ResearchEnv::new(&data_dir);
+    env.network_endpoints = LiteratureEndpoints::loopback_mock(&format!("http://127.0.0.1:{}", addr.port())).unwrap();
+    let mut reg = Registry::new();
+    research_tools::idea_tools::register_explore_v1_tools(&mut reg, Arc::new(env), None);
+    let router = Router::new(reg, research_policy(), Ledger::open(&data_dir).unwrap(), sid, Arc::new(ApproveAll));
+
+    let res = run_planned_search_with_router(&data_dir, &ledger, &router, sid, None, None, |_, _| {}).unwrap();
+    srv_handle.join().unwrap();
+    let SearchRunResult::Finished { candidates, .. } = res else { panic!("{res:?}") };
+    assert_eq!(candidates.len(), 1, "Round 1 DOI and Round 2 arXiv+DOI must merge into 1 candidate: {candidates:?}");
+    let c = &candidates[0];
+    assert_eq!(c.key.as_str(), "arxiv:2502.01234");
+    assert_eq!(c.ids.doi.as_deref(), Some("10.1234/alias.merge"));
+    assert_eq!(c.ids.arxiv.as_deref(), Some("2502.01234"));
+    assert!(c.found_by.contains(&"q-r1-cr".to_string()));
+    assert!(c.found_by.contains(&"q-r2-s2".to_string()));
+    assert!(c.perspectives.contains(&"p-1".to_string()));
+    assert!(c.perspectives.contains(&"p-2".to_string()));
+    assert!(c.abstract_ref.as_ref().is_some_and(|r| r.verbatim));
+}

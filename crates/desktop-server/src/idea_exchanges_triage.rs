@@ -23,7 +23,7 @@ use crate::idea_exchanges::{
 use crate::idea_view;
 use crate::idea_view_coverage::fold_answers;
 use crate::routes_idea::ActiveExploreGuard;
-use crate::routes_session::{conflict, internal, parse_json_body, ApiResult};
+use crate::routes_session::{bad, conflict, internal, parse_json_body, ApiResult};
 use crate::state::{now_ms, DesktopState};
 use agent::exchange::{run_exchange, ExchangeError, ExchangeSpec, MAX_REPAIR_ATTEMPTS};
 use agent::{CancelToken, ToolSpec, Transport};
@@ -524,6 +524,7 @@ pub fn handle_triage_op(
             json!({ "ok": false, "cancelled": true, "idea": view }),
         )),
         Err(msg) if msg.contains("outside stage") => Err(conflict(msg)),
+        Err(msg) if msg.contains("no candidates available") => Err(bad(msg)),
         Err(msg) => Err((502, msg)),
     }
 }

@@ -173,6 +173,11 @@ pub fn handle_answer_op(
         .ledger_write_lock
         .lock()
         .map_err(|_| internal("ledger lock poisoned"))?;
+    if is_turn_running(state, session_id) {
+        return Err(crate::routes_session::conflict(
+            "cannot submit Explore answers while a run is active",
+        ));
+    }
     let events = ledger
         .read_session(session_id)
         .map_err(|e| internal(e.to_string()))?;

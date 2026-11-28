@@ -34,7 +34,7 @@ use research_tools::paper_key::PaperKey;
 use research_tools::run_budget::ExploreStageState;
 use research_tools::ResearchEnv;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use tools::{CallOutcome, Router, EVENT_SCHEMA_VERSION};
@@ -95,33 +95,37 @@ where
         .unwrap_or_else(|| next_search_round(&events));
     let request_id = format!("search-r{round}");
 
-    // When resuming after StoppedAtCap (not an explicit provider retry), skip qids already `ok`.
-    let completed_qids: BTreeSet<String> = if provider_filter.is_none() {
-        collect_completed_qids(&events, plan_ev.seq)
-    } else {
-        BTreeSet::new()
+    // Skip qids already `ok` so resuming after StoppedAtCap or retrying a Partial provider
+    // does not waste query budget re-running succeeded queries. If an explicit provider retry
+    // has zero remaining failed/pending queries, fall back to re-running that provider's rows.
+    let completed_qids = collect_completed_qids(&events, plan_ev.seq);
+    let matches_provider = |q: &Value| -> bool {
+        match provider_filter {
+            None => true,
+            Some(target) => q
+                .get("provider")
+                .and_then(Value::as_str)
+                .and_then(LitProvider::parse)
+                == Some(target),
+        }
     };
-
-    let all_planned: Vec<Value> = plan_ev
+    let plan_queries = plan_ev
         .payload
         .get("queries")
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default()
-        .into_iter()
+        .unwrap_or_default();
+    let mut all_planned: Vec<Value> = plan_queries
+        .iter()
         .filter(|q| {
-            let prov_ok = match provider_filter {
-                None => true,
-                Some(target) => q
-                    .get("provider")
-                    .and_then(Value::as_str)
-                    .and_then(LitProvider::parse)
-                    == Some(target),
-            };
             let qid = q.get("qid").and_then(Value::as_str).unwrap_or("");
-            prov_ok && !completed_qids.contains(qid)
+            matches_provider(q) && !completed_qids.contains(qid)
         })
+        .cloned()
         .collect();
+    if all_planned.is_empty() && provider_filter.is_some() {
+        all_planned = plan_queries.into_iter().filter(matches_provider).collect();
+    }
     if all_planned.is_empty() {
         return Err(match provider_filter {
             Some(p) => format!("no planned queries found for provider `{p}`"),
@@ -424,6 +428,9 @@ pub fn handle_search_op(
     {
         let _lock = state.ledger_write_lock.lock().map_err(|_| internal("ledger lock poisoned"))?;
         let existing = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
+        if is_session_offline(&existing) {
+            return Err(bad("Explore session is in offline (library-only) mode"));
+        }
         let stmt_seq = latest_statement_seq(&existing);
         let latest_brief_seq = existing
             .iter()
@@ -492,6 +499,7 @@ pub fn handle_search_op(
             200,
             json!({ "ok": false, "cancelled": true, "idea": view }),
         )),
+        Err(msg) if msg.starts_with("router ledger error") => Err(internal(msg)),
         Err(msg) => Err(bad(msg)),
     }
 }
