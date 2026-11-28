@@ -70,6 +70,18 @@ pub fn render_writeup_markdown(doc: &Writeup, opts: &WriteupOptions) -> Result<S
                         q.cite_key
                     );
                 }
+                WriteupBlock::AbstractQuote {
+                    evidence_id,
+                    cite_key,
+                    provider_label,
+                    text,
+                } => {
+                    let quoted = text.replace('\n', "\n> ");
+                    let _ = writeln!(
+                        out,
+                        "> \"{quoted}\"\n>\n> -- [@{cite_key}, {evidence_id}, {provider_label}, abstract only; possible relevance only, full text not read]\n",
+                    );
+                }
                 WriteupBlock::Statement {
                     id,
                     text,
