@@ -34,6 +34,7 @@ pub const EVENT_IDEA_ANSWER: &str = "idea.answer";
 pub const EVENT_IDEA_SEARCH_PLANNED: &str = "idea.search_planned";
 pub const EVENT_IDEA_SEARCH_FINISHED: &str = "idea.search_finished";
 pub const EVENT_IDEA_CANDIDATES: &str = "idea.candidates";
+pub const EVENT_IDEA_CITATION_NET: &str = "idea.citation_net";
 pub const EVENT_IDEA_TRIAGE: &str = "idea.triage";
 pub const EVENT_IDEA_PAPER: &str = "idea.paper";
 pub const EVENT_IDEA_MAP: &str = "idea.map";
