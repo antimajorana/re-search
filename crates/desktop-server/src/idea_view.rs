@@ -14,7 +14,7 @@ use crate::idea::{
     EVENT_IDEA_NOTE, EVENT_IDEA_PAPER, EVENT_IDEA_SEARCH_FINISHED, EVENT_IDEA_SEARCH_PLANNED,
     EVENT_IDEA_STARTED, EVENT_IDEA_STATED, EVENT_IDEA_TRIAGE, EVENT_IDEA_VERDICT, PIPELINE_VERSION,
 };
-use crate::idea_view_coverage::{build_map_graph_view, build_where_i_looked, fold_answers};
+use crate::idea_view_coverage::{build_where_i_looked, fold_answers};
 pub use crate::idea_view_coverage::NOT_SEARCHED_ITEMS;
 use ledger::Event;
 use research_tools::run_budget::{
@@ -202,7 +202,8 @@ pub fn view(events: &[Event], running: bool) -> Value {
         latest_triage_seq,
     );
 
-    let candidates = annotate_candidate_views(latest_candidates, &paper_statuses);
+    let mut candidates = annotate_candidate_views(latest_candidates, &paper_statuses);
+    crate::idea_view_map::annotate_origin_citations(&mut candidates, events);
     let library_matches: Vec<Value> = candidates
         .iter()
         .filter(|c| c.get("in_library").and_then(Value::as_bool).unwrap_or(false))
@@ -231,7 +232,6 @@ pub fn view(events: &[Event], running: bool) -> Value {
     });
     let plan_approval =
         crate::idea_view_coverage::build_plan_approval(latest_plan.as_ref(), search_awaiting_approval);
-    let map_view = build_map_graph_view(latest_map.as_ref());
     let map_stale = latest_map_seq > 0 && latest_statement_seq > latest_map_seq;
 
     let abstract_evidence: Vec<Value> = events
@@ -332,6 +332,15 @@ pub fn view(events: &[Event], running: bool) -> Value {
         t
     });
 
+    let map_view = crate::idea_view_map::build_explore_graph_view(latest_map.as_ref(), &full_text_evidence, events);
+    let verdicts_view = crate::idea_view_map::build_verdicts_view(
+        latest_verdicts.as_ref(),
+        events,
+        preset,
+        budget.max_screened,
+        budget.max_papers,
+    );
+
     json!({
         "pipeline_version": pipeline_version,
         "preset": preset.as_str(),
@@ -361,7 +370,7 @@ pub fn view(events: &[Event], running: bool) -> Value {
         "triage": effective_triage,
         "abstract_evidence": abstract_evidence,
         "evidence": full_text_evidence,
-        "verdicts": latest_verdicts,
+        "verdicts": verdicts_view,
         "map": map_view,
         "map_stale": map_stale,
         "directions": latest_directions,
