@@ -14,6 +14,9 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 use tempfile::TempDir;
 
+const S2_TEST_KEY: &str = "eval-s2-hermetic-key";
+const OA_TEST_KEY: &str = "eval-oa-hermetic-key";
+
 /// One search-only evaluation configuration (zero model calls).
 #[derive(Debug, Clone, Copy)]
 pub struct RecallRegime {
@@ -56,8 +59,8 @@ pub fn run_search_recall_regime(
     let mut cfg = test_cfg(&data_dir, None, None, Some(lit_base));
     if regime.with_keys {
         let env = cfg.connection_env.get_or_insert_with(Default::default);
-        env.insert("SEMANTIC_SCHOLAR_API_KEY".into(), "eval-s2-hermetic-key".into());
-        env.insert("OPENALEX_API_KEY".into(), "eval-oa-hermetic-key".into());
+        env.insert("SEMANTIC_SCHOLAR_API_KEY".into(), S2_TEST_KEY.into());
+        env.insert("OPENALEX_API_KEY".into(), OA_TEST_KEY.into());
     }
     let srv = start_desktop_server(cfg).expect("start desktop server for recall eval");
     let port = srv.addr.port();
@@ -85,12 +88,8 @@ pub fn run_search_recall_regime(
         // 1. First deterministic search (Rule P4 user-shown arXiv + INSPIRE + F10 library).
         let t0 = Instant::now();
         let create_body = serde_json::to_vec(&json!({
-            "id": sid,
-            "mode": "explore",
-            "text": text,
-            "preset": "standard",
-            "offline": false,
-            "queries": first_qs
+            "id": sid, "mode": "explore", "text": text,
+            "preset": "standard", "offline": false, "queries": first_qs
         }))
         .unwrap();
         let (st, _, raw) = raw_http(port, "POST", "/api/sessions", &auth, &create_body);
@@ -109,38 +108,25 @@ pub fn run_search_recall_regime(
         let mut ext_queries = Vec::new();
         if let Some(cr_q) = deterministic_crossref_query(text) {
             ext_queries.push(json!({
-                "qid": "q-det-crossref",
-                "provider": "crossref",
-                "q": cr_q,
-                "origin": "user"
+                "qid": "q-det-crossref", "provider": "crossref", "q": cr_q, "origin": "user"
             }));
         }
         if regime.with_keys {
             for (idx, (prov, q)) in deterministic_keyed_queries(text).into_iter().enumerate() {
                 ext_queries.push(json!({
                     "qid": format!("q-det-keyed-{idx}"),
-                    "provider": prov.as_str(),
-                    "q": q,
-                    "origin": "user"
+                    "provider": prov.as_str(), "q": q, "origin": "user"
                 }));
             }
         }
         let plan_body = serde_json::to_vec(&json!({ "queries": ext_queries })).unwrap();
         let (st_p, _, raw_p) = raw_http(
-            port,
-            "POST",
-            &format!("/api/sessions/{sid}/idea/plan"),
-            &auth,
-            &plan_body,
+            port, "POST", &format!("/api/sessions/{sid}/idea/plan"), &auth, &plan_body,
         );
         assert_eq!(st_p, 200, "{}: plan failed: {}", case.id, String::from_utf8_lossy(&raw_p));
 
         let (st_s, _, raw_s) = raw_http(
-            port,
-            "POST",
-            &format!("/api/sessions/{sid}/idea/search"),
-            &auth,
-            b"{}",
+            port, "POST", &format!("/api/sessions/{sid}/idea/search"), &auth, b"{}",
         );
         assert_eq!(st_s, 200, "{}: search failed: {}", case.id, String::from_utf8_lossy(&raw_s));
         let resp: Value = serde_json::from_slice(&raw_s).unwrap();
@@ -156,7 +142,15 @@ pub fn run_search_recall_regime(
             case.id
         );
 
-        // Rule V10: user library is listed in coverage, never counted as an external service.
+        // Rule P8: API keys must never appear in ledger events (`literature.fetched`, etc.) or response view.
+        let events_json = serde_json::to_string(&events).unwrap();
+        let resp_json = serde_json::to_string(&resp).unwrap();
+        for secret in [S2_TEST_KEY, OA_TEST_KEY] {
+            assert!(!events_json.contains(secret), "{}: Rule P8 key leaked into ledger", case.id);
+            assert!(!resp_json.contains(secret), "{}: Rule P8 key leaked into HTTP response", case.id);
+        }
+
+        // Rule V4 / V10: unconfigured services listed honestly, library never counted as external service.
         let ext_answered = resp["idea"]["coverage"]["gate"]["answered_external_services"]
             .as_u64()
             .unwrap_or(0);
@@ -166,6 +160,18 @@ pub fn run_search_recall_regime(
             "{}: answered_external_services mismatch (regime {})",
             case.id, regime.label
         );
+        if !regime.with_keys {
+            let s2_state = resp["idea"]["where_i_looked"]["providers"]
+                .as_array()
+                .and_then(|arr| arr.iter().find(|p| p["name"] == "semantic_scholar"))
+                .and_then(|p| p["state"].as_str());
+            assert_eq!(
+                s2_state,
+                Some("not_configured"),
+                "{}: keyless regime must list semantic_scholar as not_configured",
+                case.id
+            );
+        }
         if regime.with_library {
             assert!(
                 resp["idea"]["coverage"]["library"]["papers"].as_u64().unwrap_or(0) >= 2,

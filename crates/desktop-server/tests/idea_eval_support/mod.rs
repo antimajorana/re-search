@@ -19,6 +19,7 @@ pub mod routed_mock;
 pub mod exchanges;
 pub mod pdf_eval;
 pub mod recall;
+pub mod wording_audit;
 
 use agent::{
     ContentBlock, ModelRequest, ModelResponse, PreparedRequest, StopReason, Transport,

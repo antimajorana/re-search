@@ -3,11 +3,12 @@
 use ledger::{sha256_hex, Ledger};
 use research_tools::ingest::{ingest_bytes, IngestRequest};
 use research_tools::lines_sent::{ContextSuppliedPayload, SuppliedRange, CONTEXT_SUPPLIED_EVENT};
+use research_tools::pdf_match::match_pdf_quote;
 use research_tools::pdf_pages::{
-    extract_pdf_pages, PageBasis, PdfExtractOptions, DEFAULT_PDF_EXTRACTOR_ID,
+    extract_pdf_pages, PageBasis, PdfExtractOptions, DEFAULT_PDF_EXTRACTOR_ID, PAGE_BREAK_CHAR,
 };
 use research_tools::prior_work_wording::wording::TAG_OCR;
-use research_tools::quote_core::accept_quote;
+use research_tools::quote_core::{accept_quote, QuoteRejection};
 use research_tools::sandbox::WorkspaceSandbox;
 use std::fs;
 use std::path::Path;
@@ -28,15 +29,19 @@ pub struct PdfEvalMetrics {
     pub sentences_total: u64,
     pub sentences_matched: u64,
     pub wrong_page_chips: u64,
+    pub scanned_pages_checked: u64,
     pub scanned_reported_plain_text: u64,
     pub scanned_quotes_total: u64,
     pub scanned_quotes_tagged_ocr: u64,
     pub two_col_wrong_order_lines: u64,
     pub image_only_pages_needing_ocr: u64,
+    pub lines_not_sent_rejections: u64,
+    pub fabricated_quote_rejections: u64,
 }
 
-/// Evaluate one synthetic PDF fixture: F14a extraction, page-basis honesty, F4 quote matching
-/// with `context.supplied`, physical page-chip lookup (`page_map.page_of`), and OCR tagging.
+/// Evaluate one synthetic PDF fixture: F14a extraction, page-basis honesty, F14a `match_pdf_quote`,
+/// F4 `accept_quote` positive + negative (`LinesNotSent`, `VerificationFailed`), physical page-chip
+/// lookup (`page_map.page_of`, including `\x0c` separator and cross-page distinction), and OCR tagging.
 pub fn evaluate_pdf_fixture(
     pdf_path: &Path,
     expected_page_bases: &[PageBasis],
@@ -63,8 +68,11 @@ pub fn evaluate_pdf_fixture(
     for (idx, expected_basis) in expected_page_bases.iter().enumerate() {
         let rec = &doc.page_map.pages[idx];
         assert_eq!(rec.page, idx + 1);
-        if expected_basis.is_scan() && rec.basis == PageBasis::TextLayer {
-            metrics.scanned_reported_plain_text += 1;
+        if expected_basis.is_scan() {
+            metrics.scanned_pages_checked += 1;
+            if rec.basis == PageBasis::TextLayer {
+                metrics.scanned_reported_plain_text += 1;
+            }
         }
         assert_eq!(
             rec.basis, *expected_basis,
@@ -74,12 +82,33 @@ pub fn evaluate_pdf_fixture(
         );
         if *expected_basis == PageBasis::None {
             assert!(rec.basis.needs_ocr());
+            assert!(rec.first_line.is_none() && rec.last_line.is_none());
             metrics.image_only_pages_needing_ocr += 1;
         }
     }
 
-    // Check two-column reading order on the extracted page-broken text.
+    // Verify form-feed page-break line (`\x0c`) maps to `None` and page 1 != page 2 cleanly.
     let lines: Vec<&str> = doc.text.lines().collect();
+    for (idx, line) in lines.iter().enumerate() {
+        if *line == PAGE_BREAK_CHAR.to_string() {
+            assert_eq!(
+                doc.page_map.page_of(idx + 1),
+                None,
+                "inter-page form-feed line {} must map to None",
+                idx + 1
+            );
+        }
+    }
+    if let (Some(p1_last), Some(p2_first)) = (
+        doc.page_map.pages.first().and_then(|p| p.last_line),
+        doc.page_map.pages.get(1).and_then(|p| p.first_line),
+    ) {
+        assert_eq!(doc.page_map.page_of(p1_last), Some(1));
+        assert_eq!(doc.page_map.page_of(p2_first), Some(2));
+        assert_ne!(doc.page_map.page_of(p1_last), doc.page_map.page_of(p2_first));
+    }
+
+    // Check two-column reading order on the extracted page-broken text.
     for &(earlier, later) in ordered_pairs {
         let pos_a = lines.iter().position(|l| l.contains(earlier));
         let pos_b = lines.iter().position(|l| l.contains(later));
@@ -89,8 +118,7 @@ pub fn evaluate_pdf_fixture(
         }
     }
 
-    // Ingest through the real session ingestion path (`source.ingested`) and verify quotes
-    // through F4 `accept_quote` after recording `context.supplied`.
+    // Ingest through real `source.ingested` and verify quotes through F4 `accept_quote` + F14a `match_pdf_quote`.
     let tmp = TempDir::new().unwrap();
     let data_dir = tmp.path().join("data");
     let ledger = Mutex::new(Ledger::open(&data_dir).unwrap());
@@ -101,13 +129,8 @@ pub fn evaluate_pdf_fixture(
         &sandbox,
         &ledger,
         &IngestRequest {
-            session_id: sid,
-            file_name,
-            origin: "eval_pdf_fixture",
-            raw_bytes: &raw_bytes,
-            source_id_hint: None,
-            section_filter: None,
-            title: None,
+            session_id: sid, file_name, origin: "eval_pdf_fixture", raw_bytes: &raw_bytes,
+            source_id_hint: None, section_filter: None, title: None,
         },
     )
     .expect("ingest PDF into session");
@@ -124,18 +147,21 @@ pub fn evaluate_pdf_fixture(
     let reading_lines: Vec<&str> = reading_text.lines().collect();
     let total_lines = reading_lines.len().max(1);
 
-    // Record F4 `context.supplied` so the reader caller is credited for the extracted reading file.
-    let caller = "explore:reader:eval";
-    {
+    // Record F4 `context.supplied` for two callers:
+    // - `caller_full`: credited for `1..=total_lines`
+    // - `caller_partial`: credited only for `1..=1` (negative Rule C2 `LinesNotSent` test)
+    let caller_full = "explore:reader:eval";
+    let caller_partial = "explore:reader:partial";
+    for (caller, end_line) in [(caller_full, total_lines), (caller_partial, 1usize)] {
         let payload = ContextSuppliedPayload::new(
             "pdf-eval-run",
             caller,
             vec![SuppliedRange {
                 source_id: ing.source_id.clone(),
                 path: text_rel.clone(),
-                file_sha256,
+                file_sha256: file_sha256.clone(),
                 start_line: 1,
-                end_line: total_lines,
+                end_line,
             }],
         )
         .expect("valid context.supplied payload");
@@ -150,22 +176,42 @@ pub fn evaluate_pdf_fixture(
     let events = ledger.lock().unwrap().read_session(sid).unwrap();
     assert!(events.iter().any(|e| e.kind == CONTEXT_SUPPLIED_EVENT));
 
+    // Negative Rule C1 test: fabricated quote must fail with `QuoteRejection::VerificationFailed`.
+    let fab = accept_quote(
+        &sandbox, sid, &events, None, Some("pdf-eval-run"), caller_full,
+        &ing.source_id, &text_rel, 1, total_lines.min(3),
+        "fabricated sentence completely absent from this synthetic pdf",
+    );
+    assert!(matches!(fab, Err(QuoteRejection::VerificationFailed(_))));
+    metrics.fabricated_quote_rejections += 1;
+
+    let mut tested_not_sent = false;
     for s in sentences {
         metrics.sentences_total += 1;
-        let line_1based = find_quote_line(&reading_lines, s.quote)
-            .unwrap_or_else(|| panic!("quote `{}` not found in `{}`", s.quote, pdf_path.display()));
+        // Production F14a `match_pdf_quote` must agree on physical page and page basis.
+        let pm = match_pdf_quote(&reading_text, &doc.page_map, s.quote)
+            .unwrap_or_else(|| panic!("F14a match_pdf_quote missed `{}` in `{}`", s.quote, pdf_path.display()));
+        assert_eq!(pm.start_page, Some(s.expected_page));
+        assert_eq!(pm.start_page_basis, Some(s.expected_basis));
+
+        // Negative Rule C2 test: quoting a real line > 1 with `caller_partial` (only line 1 sent) must return `LinesNotSent`.
+        if !tested_not_sent && pm.start_line > 1 {
+            let unsent = accept_quote(
+                &sandbox, sid, &events, None, Some("pdf-eval-run"), caller_partial,
+                &ing.source_id, &text_rel, pm.start_line, pm.end_line, s.quote,
+            );
+            assert!(
+                matches!(unsent, Err(QuoteRejection::LinesNotSent { .. })),
+                "expected LinesNotSent for caller_partial on line {}, got {unsent:?}",
+                pm.start_line
+            );
+            metrics.lines_not_sent_rejections += 1;
+            tested_not_sent = true;
+        }
+
         let verified = accept_quote(
-            &sandbox,
-            sid,
-            &events,
-            None,
-            Some("pdf-eval-run"),
-            caller,
-            &ing.source_id,
-            &text_rel,
-            line_1based,
-            (line_1based + 1).min(total_lines),
-            s.quote,
+            &sandbox, sid, &events, None, Some("pdf-eval-run"), caller_full,
+            &ing.source_id, &text_rel, pm.start_line, pm.end_line, s.quote,
         );
         match verified {
             Ok(m) => {
@@ -174,46 +220,18 @@ pub fn evaluate_pdf_fixture(
                 if resolved_page != Some(s.expected_page) {
                     metrics.wrong_page_chips += 1;
                 }
-                let rec = doc
-                    .page_map
-                    .record_of_line(m.quote_ref.start_line)
-                    .expect("page record for matched line");
-                assert_eq!(rec.basis, s.expected_basis);
                 if s.expected_basis.is_scan() {
                     metrics.scanned_quotes_total += 1;
-                    // Rule C8 / 00-overview.md 8.3 Q3: scanned quote carries OCR tag and disables math rendering.
-                    let render_math = !rec.basis.is_scan();
-                    assert!(!render_math, "scanned page quote must disable math rendering");
-                    let ocr_tag = if rec.basis.is_scan() { Some(TAG_OCR) } else { None };
+                    // `pm.start_page_basis` is computed by F14a `match_pdf_quote` directly from `PageMap`.
+                    assert!(pm.start_page_basis.is_some_and(PageBasis::is_scan));
+                    let ocr_tag = pm.start_page_basis.filter(|b| b.is_scan()).map(|_| TAG_OCR);
                     if ocr_tag == Some(TAG_OCR) {
                         metrics.scanned_quotes_tagged_ocr += 1;
                     }
                 }
             }
-            Err(fault) => {
-                panic!(
-                    "F4 accept_quote failed on `{}` in `{}`: {fault}",
-                    s.quote,
-                    pdf_path.display(),
-                );
-            }
+            Err(fault) => panic!("F4 accept_quote failed on `{}` in `{}`: {fault}", s.quote, pdf_path.display()),
         }
     }
-}
-
-fn find_quote_line(lines: &[&str], needle: &str) -> Option<usize> {
-    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
-    let target = norm(needle);
-    for (idx, line) in lines.iter().enumerate() {
-        if norm(line).contains(&target) {
-            return Some(idx + 1);
-        }
-        if idx + 1 < lines.len() {
-            let joined = format!("{} {}", line, lines[idx + 1]);
-            if norm(&joined).contains(&target) {
-                return Some(idx + 1);
-            }
-        }
-    }
-    None
+    assert!(tested_not_sent, "expected at least one line > 1 sentence to verify Rule C2 LinesNotSent");
 }
