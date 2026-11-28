@@ -375,10 +375,21 @@ fn orient_cap_two_settings_partial_non_error_and_continue_from() {
     assert_eq!(fin1["payload"]["run_state"], json!("paused"));
     assert!(fin1["payload"]["error"].as_str().unwrap_or("").starts_with("reached max_turns ("));
 
-    // Verify injected preamble printed `call_cap=2` and `cap 2 model calls`.
-    let first_req_str = h.provider.seen_requests.lock().unwrap()[0].to_string();
+    // Verify injected preamble printed `call_cap=2` and `cap 2 model calls`, and pinned paper omits `set_session_title` even when max_turns > 1.
+    let first_req = h.provider.seen_requests.lock().unwrap()[0].clone();
+    let first_req_str = first_req.to_string();
     assert!(first_req_str.contains("call_cap=2") && first_req_str.contains("cap 2 model calls"));
     assert!(!first_req_str.contains("call_cap=8") && !first_req_str.contains("call_cap=12"));
+    let first_tools: Vec<&str> = first_req["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(
+        !first_tools.contains(&"set_session_title"),
+        "pinned-paper Investigate turn with max_turns=2 must omit set_session_title: {first_tools:?}"
+    );
 
     // 3. continue_from validation: invalid rejected 400; valid partial accepted 202 & recorded.
     assert_eq!(req(&h.srv, "POST", &format!("/api/sessions/{}/investigation/tasks", h.sid), Some(&json!({ "task": "orient", "continue_from": 0 }))).0, 400);

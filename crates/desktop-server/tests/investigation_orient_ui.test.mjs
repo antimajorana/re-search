@@ -417,6 +417,10 @@ test('V7 Orient UI renders RunBar (Paused not Partial), model choices, Auto-orie
   await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(settingCalls[1], { orient_call_cap: 12 });
   assert.equal(mv.orient_call_cap, 12);
+  assert.equal(
+    shellHost.querySelector('[data-run-action="continue"]').textContent,
+    'Continue (up to 12 more model calls)',
+  );
   failNextSetting = true;
   capInput.value = '16';
   capInput.dispatch('change');

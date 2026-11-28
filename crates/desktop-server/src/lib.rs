@@ -43,6 +43,7 @@ pub mod cli_turn_setup;
 pub mod cli_turn_solve;
 pub mod connections;
 mod explain_export;
+#[allow(clippy::manual_unwrap_or)]
 mod evidence;
 mod experiments;
 mod project_context;

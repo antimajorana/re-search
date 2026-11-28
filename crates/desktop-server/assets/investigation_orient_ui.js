@@ -105,6 +105,49 @@ export function mountOrientControls({ toolbar, statusHost, orientBtn, apiMod, se
     startOrient(true);
   };
 
+  const renderStatusBar = () => {
+    if (!statusHost) return;
+    if (!latest) {
+      statusHost.hidden = true;
+      statusHost.replaceChildren();
+      return;
+    }
+    const rawState = latest.run_state ?? latest.status ?? latest.state ?? 'done';
+    const mc = latest.model_calls && typeof latest.model_calls === 'object' ? latest.model_calls : null;
+    const callsUsed = mc ? mc.used : (latest.model_calls_used ?? latest.model_calls);
+    const callsMax = mc ? mc.cap : (latest.cap ?? latest.model_calls_max);
+    const continueCap = Number(mv?.orient_call_cap) || Number(callsMax) || ORIENT_CAP_DEFAULT;
+    const unresolvedRejected = Math.floor(Number(latest.unresolved_rejected_items) || 0);
+    const extras = unresolvedRejected > 0
+      ? [`${unresolvedRejected} section(s) not saved (quote outside section)`]
+      : [];
+    const detail = latest.detail || latest.focus || (
+      typeof latest.saved_items === 'number' && latest.saved_items > 0
+        ? `Orient (${latest.saved_items} readings)`
+        : 'Orient'
+    );
+    statusHost.hidden = false;
+    statusHost.replaceChildren();
+    createRunBar(statusHost, {
+      state: rawState,
+      detail,
+      reason: orientReason(latest),
+      extras,
+      elapsedMs: latest.elapsed_ms,
+      modelCallsUsed: callsUsed,
+      modelCallsMax: callsMax,
+      openItems: Array.isArray(latest.open_items) ? latest.open_items : [],
+    }, {
+      continueLabel: `Continue (up to ${continueCap} more model calls)`,
+      onStop: () => {
+        void apiMod?.stopTurn?.(sessionId)?.then?.(onRefresh)
+          ?.catch?.((err) => hooks?.showStatus?.(err?.message || 'Could not stop Orient.'));
+      },
+      onContinue: () => startOrient(false, latest.request_seq != null ? latest.request_seq : null),
+      onRetry: () => startOrient(false),
+    });
+  };
+
   if (toolbar && typeof apiMod?.putInvestigateSettings === 'function') {
     const label = el('label', 'inv-v7-auto-orient-toggle');
     const box = el('input');
@@ -156,6 +199,7 @@ export function mountOrientControls({ toolbar, statusHost, orientBtn, apiMod, se
         savedCap = next;
         capInput.value = String(savedCap);
         if (mv && typeof mv === 'object') mv.orient_call_cap = savedCap;
+        renderStatusBar();
       } catch (err) {
         capInput.value = String(savedCap);
         hooks?.showStatus?.(err?.message || 'Could not update Orient call cap.');
@@ -167,47 +211,7 @@ export function mountOrientControls({ toolbar, statusHost, orientBtn, apiMod, se
     toolbar.appendChild(capLabel);
   }
 
-  if (statusHost) {
-    if (!latest) {
-      statusHost.hidden = true;
-      statusHost.replaceChildren();
-    } else {
-      const rawState = latest.run_state ?? latest.status ?? latest.state ?? 'done';
-      const mc = latest.model_calls && typeof latest.model_calls === 'object' ? latest.model_calls : null;
-      const callsUsed = mc ? mc.used : (latest.model_calls_used ?? latest.model_calls);
-      const callsMax = mc ? mc.cap : (latest.cap ?? latest.model_calls_max);
-      const continueCap = Number(mv?.orient_call_cap) || Number(callsMax) || ORIENT_CAP_DEFAULT;
-      const unresolvedRejected = Math.floor(Number(latest.unresolved_rejected_items) || 0);
-      const extras = unresolvedRejected > 0
-        ? [`${unresolvedRejected} section(s) not saved (quote outside section)`]
-        : [];
-      const detail = latest.detail || latest.focus || (
-        typeof latest.saved_items === 'number' && latest.saved_items > 0
-          ? `Orient (${latest.saved_items} readings)`
-          : 'Orient'
-      );
-      statusHost.hidden = false;
-      statusHost.replaceChildren();
-      createRunBar(statusHost, {
-        state: rawState,
-        detail,
-        reason: orientReason(latest),
-        extras,
-        elapsedMs: latest.elapsed_ms,
-        modelCallsUsed: callsUsed,
-        modelCallsMax: callsMax,
-        openItems: Array.isArray(latest.open_items) ? latest.open_items : [],
-      }, {
-        continueLabel: `Continue (up to ${continueCap} more model calls)`,
-        onStop: () => {
-          void apiMod?.stopTurn?.(sessionId)?.then?.(onRefresh)
-            ?.catch?.((err) => hooks?.showStatus?.(err?.message || 'Could not stop Orient.'));
-        },
-        onContinue: () => startOrient(false, latest.request_seq != null ? latest.request_seq : null),
-        onRetry: () => startOrient(false),
-      });
-    }
-  }
+  renderStatusBar();
 
   maybeAutoOrient();
   const stopWatch = watchModelConnection(isConnected, maybeAutoOrient);

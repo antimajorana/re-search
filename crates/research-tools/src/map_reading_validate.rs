@@ -367,6 +367,20 @@ fn resolve_item_target<'a>(
 pub(super) fn validate_item(
     ctx: &mut ValidationCtx<'_>, index: usize, raw: Value, report: &mut ReadingAnchorReport,
 ) -> Result<ValidatedItem, IndexedFault> {
+    let raw_tag = raw.get("tag").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    validate_item_inner(ctx, index, raw, report).map_err(|mut f| {
+        if let Some(tag) = raw_tag {
+            if !f.message.contains(&format!("`{tag}`")) {
+                f.message.push_str(&format!(" [node `{tag}`]"));
+            }
+        }
+        f
+    })
+}
+
+fn validate_item_inner(
+    ctx: &mut ValidationCtx<'_>, index: usize, raw: Value, report: &mut ReadingAnchorReport,
+) -> Result<ValidatedItem, IndexedFault> {
     let item: InputReadingItem = serde_json::from_value(raw)
         .map_err(|e| fault(index, "invalid_item", format!("Invalid reading item: {e}"), None))?;
 

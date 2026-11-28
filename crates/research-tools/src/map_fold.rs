@@ -326,7 +326,7 @@ fn fold_reading_event(
             .or_else(|| call_tags.as_ref().and_then(|t| t.get(fault.index)).and_then(Clone::clone))
             .or_else(|| extract_backticked_tag(&fault.message, nodes_by_tag, &acc.nodes));
         match tag {
-            Some(t) => { let e = tc.unresolved_by_tag.entry((false, t)).or_insert(0); *e = e.saturating_add(1); }
+            Some(t) => { tc.unresolved_by_tag.insert((false, t), 1); }
             None => tc.unattributed_rejected = tc.unattributed_rejected.saturating_add(1),
         }
     }

@@ -556,3 +556,29 @@ fn task_fold_prefers_cap_key_over_max_calls_and_call_cap() {
     assert_eq!(folded.tasks[3].model_calls.cap, 25);
 }
 
+#[test]
+fn unresolved_rejected_deduplicates_retries_and_survives_blob_spilled_tool_request() {
+    let skel = make_skeleton();
+    let lem_tag = skel.nodes.iter().find(|n| n.label.as_deref() == Some("lem:a")).and_then(|n| n.tag.clone()).unwrap();
+    let events = vec![
+        ev(1, MARKER_INVESTIGATION_STARTED, json!({})),
+        ev(2, EVENT_INVESTIGATION_SKELETON, json!({ "source_id": "src1" })),
+        ev(3, MARKER_TASK_REQUESTED, json!({ "task": "orient", "source_id": "src1", "skeleton_seq": 2, "cap": 8 })),
+        // Blob-spilled tool.request (>4 KB) cannot provide inline tags; fault message tag must still attribute.
+        ev(4, "tool.request", json!({ "tool": "record_map_reading", "args": { "blob": "deadbeef", "bytes": 9001 } })),
+        ev(5, EVENT_INVESTIGATION_READING, json!({
+            "schema_version": 1, "request_seq": 3, "source_id": "src1", "skeleton_seq": 2,
+            "items": [], "edges": [], "limitations": [], "done": false,
+            "rejected": { "items": [
+                { "index": 0, "code": "missing_anchors", "message": format!("No anchor matched. [node `{lem_tag}`]") },
+                { "index": 1, "code": "quote_not_found", "message": format!("Quote not found. [node `{lem_tag}`]") }
+            ], "edges": [] }, "anchor_report": {}
+        })),
+        ev(6, MARKER_TASK_FINISHED, json!({ "request_seq": 3, "status": "partial" })),
+    ];
+    let folded = fold_map(&skel, &events, false);
+    assert_eq!(folded.tasks[0].rejected_items, 2, "raw rejected_items preserves both attempts for audit");
+    assert_eq!(folded.tasks[0].unresolved_rejected_items, 1, "same unresolved tag counts once");
+}
+
+

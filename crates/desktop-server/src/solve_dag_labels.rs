@@ -182,11 +182,11 @@ mod tests {
             domain: None,
             how: None,
         };
-        let ok_claim_sha = compute_claim_sha256(&[claim_ok.clone()], |h| {
+        let ok_claim_sha = compute_claim_sha256(std::slice::from_ref(&claim_ok), |h| {
             if h.name == "A" { Some("sha_a") } else { Some("sha_b") }
         })
         .unwrap();
-        let bad_claim_sha = compute_claim_sha256(&[claim_bad.clone()], |h| {
+        let bad_claim_sha = compute_claim_sha256(std::slice::from_ref(&claim_bad), |h| {
             if h.name == "A" { Some("sha_a") } else { Some("sha_c") }
         })
         .unwrap();
