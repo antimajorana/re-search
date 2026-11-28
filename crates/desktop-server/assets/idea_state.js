@@ -191,6 +191,9 @@ export function ideaReducer(state, action) {
             triage: null,
             reading_list_override: null,
             candidates: [],
+            papers: [],
+            evidence: [],
+            abstract_evidence: [],
             search_plan: null,
             plan_approval: null,
             empty_state: null,
@@ -323,6 +326,32 @@ export function ideaReducer(state, action) {
               : {}),
           },
         };
+      }
+      if ((action.kind === 'idea.paper' || action.kind === 'idea.read_progress') && payload.key) {
+        const key = String(payload.key);
+        const prev = Array.isArray(state.view.papers) ? state.view.papers : [];
+        const base = prev.find((p) => p?.key === key) || { key };
+        const rowState = action.kind === 'idea.paper' ? (payload.status || base.row_state) : (payload.row_state || base.row_state);
+        const merged = { ...base, ...payload, row_state: rowState };
+        const papers = prev.some((p) => p?.key === key) ? prev.map((p) => (p?.key === key ? merged : p)) : [...prev, merged];
+        let candidates = state.view.candidates;
+        if (action.kind === 'idea.paper' && payload.status && Array.isArray(candidates)) {
+          const st = String(payload.status);
+          candidates = candidates.map((c) => (c?.key === key ? { ...c, read_status: st, read_badge: st.replace(/_/g, ' ') } : c));
+        }
+        return { ...state, view: { ...state.view, papers, candidates } };
+      }
+      if (action.kind === 'evidence.quote' && payload.paper_key) {
+        const key = String(payload.paper_key);
+        const prevEv = Array.isArray(state.view.evidence) ? state.view.evidence : [];
+        const evidence = payload.id && prevEv.some((e) => e?.id === payload.id) ? prevEv : [...prevEv, payload];
+        const papers = (Array.isArray(state.view.papers) ? state.view.papers : []).map((p) => {
+          if (p?.key !== key) return p;
+          const prevQ = Array.isArray(p.quotes) ? p.quotes : [];
+          const quotes = payload.id && prevQ.some((q) => q?.id === payload.id) ? prevQ : [...prevQ, payload];
+          return { ...p, quotes, quote_count: quotes.length };
+        });
+        return { ...state, view: { ...state.view, evidence, papers } };
       }
       return state;
     }

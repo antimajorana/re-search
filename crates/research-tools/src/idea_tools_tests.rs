@@ -77,7 +77,7 @@ fn idea_search_disabled_services_return_disabled_and_stub_fetch_fails_closed() {
     let ledger = Ledger::open(tmp.path()).unwrap();
     let env = Arc::new(ResearchEnv::new(tmp.path()));
     let mut reg = Registry::new();
-    register_explore_v1_tools(&mut reg, env, None);
+    register_explore_v1_tools(&mut reg, env, Some(idea_fetch_papers_stub_handler()));
     let router = Router::new(reg, research_policy(), ledger, "s-disabled", Arc::new(ApproveAll));
 
     // After X19 Part 1, OpenAlex is allowlisted while TheoremSearch remains disabled.

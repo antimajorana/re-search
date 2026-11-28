@@ -14,7 +14,7 @@ use crate::idea::{
     EVENT_IDEA_NOTE, EVENT_IDEA_PAPER, EVENT_IDEA_SEARCH_FINISHED, EVENT_IDEA_SEARCH_PLANNED,
     EVENT_IDEA_STARTED, EVENT_IDEA_STATED, EVENT_IDEA_TRIAGE, EVENT_IDEA_VERDICT, PIPELINE_VERSION,
 };
-use crate::idea_view_coverage::{build_map_graph_view, build_where_i_looked, fold_answers};
+use crate::idea_view_coverage::{build_where_i_looked, fold_answers};
 pub use crate::idea_view_coverage::NOT_SEARCHED_ITEMS;
 use ledger::Event;
 use research_tools::run_budget::{
@@ -61,10 +61,33 @@ pub fn view(events: &[Event], running: bool) -> Value {
     let mut latest_directions: Vec<Value> = Vec::new();
 
     let mut paper_statuses: BTreeMap<String, String> = BTreeMap::new();
+    let mut paper_records: BTreeMap<String, Value> = BTreeMap::new();
+    let mut source_pdf_pages: BTreeMap<String, Vec<(usize, usize, usize, String)>> = BTreeMap::new();
     let mut notes: Vec<Value> = Vec::new();
 
     for ev in events {
         match ev.kind.as_str() {
+            "source.ingested" => {
+                if let (Some(sid), Some(pages)) = (
+                    ev.payload.get("source_id").and_then(Value::as_str),
+                    ev.payload.get("pdf_pages").and_then(Value::as_array),
+                ) {
+                    let spans: Vec<(usize, usize, usize, String)> = pages
+                        .iter()
+                        .filter_map(|p| {
+                            Some((
+                                p.get("page")?.as_u64()? as usize,
+                                p.get("first_line")?.as_u64()? as usize,
+                                p.get("last_line")?.as_u64()? as usize,
+                                p.get("basis").and_then(Value::as_str).unwrap_or("text_layer").to_string(),
+                            ))
+                        })
+                        .collect();
+                    if !spans.is_empty() {
+                        source_pdf_pages.insert(sid.to_string(), spans);
+                    }
+                }
+            }
             EVENT_IDEA_STARTED => {
                 if let Some(v) = ev.payload.get("pipeline_version").and_then(Value::as_u64) {
                     pipeline_version = v;
@@ -92,6 +115,7 @@ pub fn view(events: &[Event], running: bool) -> Value {
                 latest_verdicts = None;
                 latest_directions.clear();
                 paper_statuses.clear();
+                paper_records.clear();
                 latest_statement = Some(json!({
                     "seq": ev.seq,
                     "rev": ev.payload.get("rev").and_then(Value::as_u64).unwrap_or(statement_revisions),
@@ -124,11 +148,11 @@ pub fn view(events: &[Event], running: bool) -> Value {
                     .unwrap_or_default();
             }
             EVENT_IDEA_PAPER => {
-                if let (Some(k), Some(st)) = (
-                    ev.payload.get("key").and_then(Value::as_str),
-                    ev.payload.get("status").and_then(Value::as_str),
-                ) {
-                    paper_statuses.insert(k.to_string(), st.to_string());
+                if let Some(k) = ev.payload.get("key").and_then(Value::as_str) {
+                    if let Some(st) = ev.payload.get("status").and_then(Value::as_str) {
+                        paper_statuses.insert(k.to_string(), st.to_string());
+                    }
+                    paper_records.insert(k.to_string(), ev.payload.clone());
                 }
             }
             EVENT_IDEA_BRIEF => {
@@ -178,7 +202,8 @@ pub fn view(events: &[Event], running: bool) -> Value {
         latest_triage_seq,
     );
 
-    let candidates = annotate_candidate_views(latest_candidates, &paper_statuses);
+    let mut candidates = annotate_candidate_views(latest_candidates, &paper_statuses);
+    crate::idea_view_map::annotate_origin_citations(&mut candidates, events);
     let library_matches: Vec<Value> = candidates
         .iter()
         .filter(|c| c.get("in_library").and_then(Value::as_bool).unwrap_or(false))
@@ -207,7 +232,6 @@ pub fn view(events: &[Event], running: bool) -> Value {
     });
     let plan_approval =
         crate::idea_view_coverage::build_plan_approval(latest_plan.as_ref(), search_awaiting_approval);
-    let map_view = build_map_graph_view(latest_map.as_ref());
     let map_stale = latest_map_seq > 0 && latest_statement_seq > latest_map_seq;
 
     let abstract_evidence: Vec<Value> = events
@@ -230,6 +254,72 @@ pub fn view(events: &[Event], running: bool) -> Value {
         })
         .collect();
 
+    let mut quotes_by_paper: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    let full_text_evidence: Vec<Value> = events
+        .iter()
+        .filter(|e| {
+            e.kind == research_tools::quote_core::EVIDENCE_QUOTE_EVENT
+                && e.seq > latest_statement_seq
+        })
+        .map(|e| {
+            let p = &e.payload;
+            let sid = p.get("source_id").and_then(Value::as_str).unwrap_or("");
+            let start_line = p.get("start_line").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let pkey = p.get("paper_key").and_then(Value::as_str).unwrap_or("").to_string();
+            let (page, page_basis) = source_pdf_pages
+                .get(sid)
+                .and_then(|spans| {
+                    spans
+                        .iter()
+                        .find(|(_, first, last, _)| start_line >= *first && start_line <= *last)
+                        .map(|(pg, _, _, b)| (Some(*pg), Some(b.as_str())))
+                })
+                .unwrap_or((None, None));
+            let paper_basis = paper_records
+                .get(&pkey)
+                .and_then(|r| r.get("text_basis"))
+                .and_then(Value::as_str)
+                .unwrap_or("tex");
+            let eff_basis = page_basis.unwrap_or(paper_basis);
+            let ocr_tag = matches!(eff_basis, "scan_text_layer" | "ocr").then_some("OCR");
+            let item = json!({
+                "id": format!("xe-{}", e.seq),
+                "seq": e.seq,
+                "paper_key": p.get("paper_key").cloned().unwrap_or(Value::Null),
+                "source_id": sid,
+                "path": p.get("path").cloned().unwrap_or(Value::Null),
+                "start_line": start_line,
+                "end_line": p.get("end_line").cloned().unwrap_or(Value::Null),
+                "quote": p.get("quote").cloned().unwrap_or(Value::Null),
+                "excerpt": p.get("excerpt").cloned().unwrap_or(Value::Null),
+                "role": p.get("role").cloned().unwrap_or(Value::Null),
+                "gist": p.get("gist").cloned().unwrap_or(Value::Null),
+                "subclaim_ids": p.get("subclaim_ids").cloned().unwrap_or_else(|| json!([])),
+                "page": page,
+                "text_basis": eff_basis,
+                "ocr_tag": ocr_tag,
+            });
+            if !pkey.is_empty() {
+                quotes_by_paper.entry(pkey).or_default().push(item.clone());
+            }
+            item
+        })
+        .collect();
+
+    let papers_view: Vec<Value> = paper_records
+        .into_iter()
+        .map(|(k, mut rec)| {
+            let qs = quotes_by_paper.remove(&k).unwrap_or_default();
+            if let Some(obj) = rec.as_object_mut() {
+                let st = obj.get("status").and_then(Value::as_str).unwrap_or("").to_string();
+                obj.insert("row_state".into(), Value::String(st));
+                obj.insert("quote_count".into(), json!(qs.len()));
+                obj.insert("quotes".into(), Value::Array(qs));
+            }
+            rec
+        })
+        .collect();
+
     let effective_triage = latest_triage.map(|mut t| {
         if let Some(obj) = t.as_object_mut() {
             if budget.max_papers == 0 {
@@ -241,6 +331,15 @@ pub fn view(events: &[Event], running: bool) -> Value {
         }
         t
     });
+
+    let map_view = crate::idea_view_map::build_explore_graph_view(latest_map.as_ref(), &full_text_evidence, events);
+    let verdicts_view = crate::idea_view_map::build_verdicts_view(
+        latest_verdicts.as_ref(),
+        events,
+        preset,
+        budget.max_screened,
+        budget.max_papers,
+    );
 
     json!({
         "pipeline_version": pipeline_version,
@@ -256,6 +355,7 @@ pub fn view(events: &[Event], running: bool) -> Value {
         "budget": budget,
         "candidates_round": candidates_round,
         "candidates": candidates,
+        "papers": papers_view,
         "library_matches": library_matches,
         "where_i_looked": where_i_looked,
         "coverage": coverage,
@@ -269,7 +369,8 @@ pub fn view(events: &[Event], running: bool) -> Value {
         "plan_approval": plan_approval,
         "triage": effective_triage,
         "abstract_evidence": abstract_evidence,
-        "verdicts": latest_verdicts,
+        "evidence": full_text_evidence,
+        "verdicts": verdicts_view,
         "map": map_view,
         "map_stale": map_stale,
         "directions": latest_directions,

@@ -230,9 +230,9 @@ export function renderExploreSession(hostEl, state, callbacks = {}) {
   shell.append(
     renderCandidateList(candidates, {
       highlightTerms: terms, filters: state?.filters, onFilterChange: callbacks.onFilterChange,
-      triage: view.triage, maxPapers: view.budget?.max_papers,
+      triage: view.triage, papers: view.papers, maxPapers: view.budget?.max_papers,
       pauseBeforeReading: Boolean(view.pause_before_reading),
-      onSaveReadingList, onTogglePauseBeforeReading,
+      onSaveReadingList, onTogglePauseBeforeReading, onAttachPdf: callbacks.onAttachPdf,
     }),
   );
 
@@ -297,7 +297,7 @@ export function createExploreSessionController(hostEl, deps = {}) {
     if (!section || !oldCards) return false;
     const filtered = selectFilteredCandidates(state);
     if (countEl) countEl.textContent = `Candidates (${filtered.length})`;
-    const freshCards = renderCandidateCards(filtered, extractHighlightTerms(state.view), { triage: state.view?.triage, maxPapers: state.view?.budget?.max_papers, onSaveReadingList: (reading_list) => void invokeOp('answer', { reading_list }) });
+    const freshCards = renderCandidateCards(filtered, extractHighlightTerms(state.view), { triage: state.view?.triage, papers: state.view?.papers, maxPapers: state.view?.budget?.max_papers, onSaveReadingList: (reading_list) => void invokeOp('answer', { reading_list }), onAttachPdf: deps.onAttachPdf });
     const idx = Array.isArray(section.children) ? section.children.indexOf(oldCards) : -1;
     if (typeof oldCards.replaceWith === 'function') {
       oldCards.replaceWith(freshCards);
