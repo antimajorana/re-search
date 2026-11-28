@@ -457,3 +457,86 @@ fn gate_rejects_ambiguous_duplicate_matches_and_treats_legacy_receipts_as_scan()
     );
     assert!(!dup.agreed);
 }
+
+#[test]
+fn gate_enforces_quote_core_parity_on_two_char_ligature_and_line_span_limits() {
+    let dir = tempfile::tempdir().unwrap();
+    let sandbox = WorkspaceSandbox::new(dir.path(), None);
+    let ledger = Ledger::open(dir.path()).unwrap();
+    let sid = "s-parity-edge";
+    let src = "par1";
+    let path = format!("{src}/par1.pdf.extracted.txt");
+
+    // Line 1: 2-non-ws whole-line formula ("E0") -> quote_core requires >= 3.
+    // Line 2: longer line containing an inline ligature substring ("\u{FB01}eld \u{FB03}ux = 12345")
+    //         whose raw non-ws count is 13 (< 16) while normalized ligature expansion reaches 16.
+    // Lines 3..=68: sparse multi-line formula spanning 66 lines (end - start = 65 >= 64).
+    let mut text = String::from("E0\nPrefix text \u{FB01}eld \u{FB03}ux = 12345 suffix text\nStartFormula(\n");
+    for _ in 0..64 {
+        text.push('\n');
+    }
+    text.push_str(")EndFormula\n");
+    let total_lines = text.lines().count();
+    assert!(total_lines >= 68);
+
+    let dst = sandbox.resolve_for_write(SandboxRoot::Sources, sid, &path).unwrap();
+    std::fs::create_dir_all(dst.target_path.parent().unwrap()).unwrap();
+    std::fs::write(&dst.target_path, text.as_bytes()).unwrap();
+    let sha = ledger::sha256_hex(text.as_bytes());
+
+    ledger
+        .append(
+            sid,
+            "source.ingested",
+            1,
+            &json!({
+                "source_id": src,
+                "origin": "upload:par1.pdf",
+                "format": "pdf",
+                "status": "ok",
+                "bytes": 64,
+                "raw_blob": RAW_PDF_SHA,
+                "primary_path": path,
+                "files": [path],
+                "files_sha256": { &path: &sha },
+                "page_count": 1,
+                "pdf_pages": [{
+                    "page": 1,
+                    "basis": "text_layer",
+                    "first_line": 1,
+                    "last_line": total_lines
+                }]
+            }),
+        )
+        .unwrap();
+    let supplied = ContextSuppliedPayload::new(
+        "run-parity",
+        "reader-1",
+        vec![SuppliedRange {
+            source_id: src.into(),
+            path: path.clone(),
+            file_sha256: sha,
+            start_line: 1,
+            end_line: total_lines,
+        }],
+    )
+    .unwrap();
+    ledger.append(sid, CONTEXT_SUPPLIED_EVENT, 1, &serde_json::to_value(&supplied).unwrap()).unwrap();
+    let events = ledger.read_session(sid).unwrap();
+
+    for draft in ["E0", "field ffiux = 12345", "StartFormula( )EndFormula"] {
+        let ag = check_text_layer_agreement(&sandbox, sid, &events, src, RAW_PDF_SHA, 1, draft);
+        assert!(!ag.agreed, "advisory agreement must stay false for `{draft}` to match quote_core");
+        let rec = FormulaTranscription::new(src, RAW_PDF_SHA, 1, None, "gpt-4o", draft, false).unwrap();
+        assert!(
+            matches!(
+                verify_transcription_against_text_layer(
+                    &sandbox, sid, &events, Some(&ledger), Some("run-parity"), "reader-1", &rec
+                ),
+                Err(TranscriptionGateError::TextLayerDisagrees { page: 1, .. })
+            ),
+            "gate must reject `{draft}`"
+        );
+    }
+}
+

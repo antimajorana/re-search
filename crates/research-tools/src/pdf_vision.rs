@@ -40,7 +40,9 @@ pub const MAX_LATEX_DRAFT_BYTES: usize = 16 * 1024;
 pub const MAX_MODEL_ID_BYTES: usize = 160;
 
 const MAX_READING_FILE_BYTES: usize = 16 * 1024 * 1024;
+const MIN_WHOLE_LINE_NON_WS_CHARS: usize = 3;
 const MIN_SUBSTRING_NON_WS_CHARS: usize = 16;
+const MAX_ANCHOR_SPAN_LINES: usize = 64;
 
 /// Pinned text-layer provenance classes permitted to support a matched quote on a PDF page.
 ///
@@ -451,21 +453,24 @@ fn match_candidate_on_page(pinned: &PinnedPageText, page: usize, latex_draft: &s
             continue;
         }
         let norm = normalize_for_pdf_match(cand);
-        let non_ws = norm.chars().filter(|c| !c.is_whitespace()).count();
-        if non_ws < 2 {
+        let norm_non_ws = norm.chars().filter(|c| !c.is_whitespace()).count();
+        if norm_non_ws < MIN_WHOLE_LINE_NON_WS_CHARS {
             continue;
         }
         let Some(mut m) = match_pdf_quote(&pinned.page_text, &dummy_map, cand) else {
             continue;
         };
-        if m.stored_excerpt.chars().count() > MAX_DISPLAY_QUOTE_CHARS
+        let raw_non_ws = m.stored_excerpt.chars().filter(|c| !c.is_whitespace()).count();
+        if raw_non_ws < MIN_WHOLE_LINE_NON_WS_CHARS
+            || m.end_line.saturating_sub(m.start_line) >= MAX_ANCHOR_SPAN_LINES
+            || m.stored_excerpt.chars().count() > MAX_DISPLAY_QUOTE_CHARS
             || !has_token_boundaries(&pinned.page_text, m.start_byte, m.end_byte)
         {
             continue;
         }
-        // Keep parity with quote_core's anti-short-substring rule (<16 non-ws chars must cover
-        // the entire trimmed cited line span).
-        if non_ws < MIN_SUBSTRING_NON_WS_CHARS {
+        // Keep parity with quote_core's anti-short-substring rule (raw or normalized <16 non-ws
+        // chars must cover the entire trimmed cited line span; prevents ligature expansion bypass).
+        if raw_non_ws < MIN_SUBSTRING_NON_WS_CHARS || norm_non_ws < MIN_SUBSTRING_NON_WS_CHARS {
             let Some((_, line_span, _)) = slice_lines(&pinned.page_text, m.start_line, m.end_line) else {
                 continue;
             };
