@@ -7,6 +7,7 @@ pub mod handoff;
 mod handoff_types;
 mod handoff_view;
 pub mod html;
+pub mod idea;
 pub mod latex;
 pub mod notebook;
 mod notebook_prelude;

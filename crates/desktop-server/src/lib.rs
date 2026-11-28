@@ -77,6 +77,7 @@ mod routers;
 pub use routers::build_idea_router;
 pub mod routes_export;
 pub mod routes_idea;
+pub mod routes_idea_export;
 pub mod routes_idea_net;
 pub mod routes_idea_read;
 pub mod routes_lessons;
