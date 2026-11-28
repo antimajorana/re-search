@@ -67,10 +67,16 @@ pub struct CitationNetInput {
     pub hops: usize,
 }
 
+fn paper_ids_is_empty(ids: &PaperIds) -> bool {
+    ids.arxiv.is_none() && ids.doi.is_none() && ids.inspire.is_none() && ids.s2.is_none()
+}
+
 /// Ranked paper node inside a [`CitationNetwork`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CitationNetNode {
     pub key: PaperKey,
+    #[serde(default, skip_serializing_if = "paper_ids_is_empty")]
+    pub ids: PaperIds,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default)]
@@ -256,6 +262,7 @@ pub fn build(input: CitationNetInput) -> CitationNetwork {
             origin_set.contains(&key),
         );
         let meta = meta_by_key.get(&key);
+        let ids = meta.map(|m| m.ids.clone()).unwrap_or_default();
         let title = meta.and_then(|m| m.title.clone());
         let authors = meta.map(|m| m.authors.clone()).unwrap_or_default();
         let year = meta.and_then(|m| m.year);
@@ -280,6 +287,7 @@ pub fn build(input: CitationNetInput) -> CitationNetwork {
         }
         nodes.push(CitationNetNode {
             key,
+            ids,
             title,
             authors,
             year,
@@ -340,15 +348,15 @@ pub fn build_from_events(
 ) -> CitationNetwork {
     let stmt_seq = events.iter().rev().find(|e| e.kind == "idea.stated").map_or(0, |e| e.seq);
     let mut seeds: BTreeSet<PaperKey> = extra_seeds.iter().cloned().collect();
-    let mut core_papers: BTreeSet<PaperKey> = BTreeSet::new();
+    let mut triage_relevance: BTreeMap<PaperKey, String> = BTreeMap::new();
     let mut read_papers: BTreeSet<PaperKey> = BTreeSet::new();
+    let mut read_relevant: BTreeSet<PaperKey> = BTreeSet::new();
     let mut edges = extra_edges.to_vec();
     let mut papers = extra_papers.to_vec();
     let mut max_hops = extra_hops;
 
     for ev in events.iter().filter(|e| e.seq >= stmt_seq) {
         match ev.kind.as_str() {
-            "idea.stated" => collect_key_array(&ev.payload["seeds"], &mut seeds),
             "idea.candidates" => {
                 if let Some(arr) = ev.payload["candidates"].as_array() {
                     papers.extend(arr.iter().filter_map(parse_candidate_meta));
@@ -356,9 +364,12 @@ pub fn build_from_events(
             }
             "idea.triage" => {
                 if let Some(arr) = ev.payload["items"].as_array() {
-                    for it in arr.iter().filter(|i| i["relevance"].as_str() == Some("core")) {
-                        if let Some(k) = it["key"].as_str().and_then(|s| PaperKey::parse(s).ok()) {
-                            core_papers.insert(k);
+                    for it in arr {
+                        if let (Some(k), Some(rel)) = (
+                            it["key"].as_str().and_then(|s| PaperKey::parse(s).ok()),
+                            it["relevance"].as_str(),
+                        ) {
+                            triage_relevance.insert(k, rel.to_ascii_lowercase());
                         }
                     }
                 }
@@ -369,7 +380,7 @@ pub fn build_from_events(
                     if let Some(k) = ev.payload["key"].as_str().and_then(|s| PaperKey::parse(s).ok()) {
                         read_papers.insert(k.clone());
                         if st != "nothing_relevant" {
-                            core_papers.insert(k);
+                            read_relevant.insert(k);
                         }
                     }
                 }
@@ -388,9 +399,18 @@ pub fn build_from_events(
         }
     }
 
+    let core_papers: Vec<PaperKey> = if !triage_relevance.is_empty() {
+        triage_relevance
+            .into_iter()
+            .filter_map(|(k, rel)| (rel == "core").then_some(k))
+            .collect()
+    } else {
+        read_relevant.into_iter().collect()
+    };
+
     build(CitationNetInput {
         seeds: seeds.into_iter().collect(),
-        core_papers: core_papers.into_iter().collect(),
+        core_papers,
         read_papers,
         origin_paper: origin_paper_from_events(events),
         edges,
@@ -521,6 +541,19 @@ fn meta_canonical_key(m: &CitationPaperMeta, alias_map: &BTreeMap<PaperKey, Pape
 }
 
 fn merge_meta(dst: &mut CitationPaperMeta, src: &CitationPaperMeta) {
+    if dst.ids.arxiv.is_none() { dst.ids.arxiv = src.ids.arxiv.clone(); }
+    if dst.ids.doi.is_none() { dst.ids.doi = src.ids.doi.clone(); }
+    if dst.ids.inspire.is_none() { dst.ids.inspire = src.ids.inspire.clone(); }
+    if dst.ids.s2.is_none() { dst.ids.s2 = src.ids.s2.clone(); }
+    if let Some(ref k) = src.key {
+        match k.kind() {
+            PaperKeyKind::Arxiv if dst.ids.arxiv.is_none() => dst.ids.arxiv = Some(k.value().to_string()),
+            PaperKeyKind::Doi if dst.ids.doi.is_none() => dst.ids.doi = Some(k.value().to_string()),
+            PaperKeyKind::Inspire if dst.ids.inspire.is_none() => dst.ids.inspire = Some(k.value().to_string()),
+            PaperKeyKind::S2 if dst.ids.s2.is_none() => dst.ids.s2 = Some(k.value().to_string()),
+            _ => {}
+        }
+    }
     if let Some(ref t) = src.title {
         if dst.title.as_ref().is_none_or(|d| t.len() > d.len()) {
             dst.title = Some(t.clone());

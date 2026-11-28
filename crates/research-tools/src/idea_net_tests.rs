@@ -258,3 +258,92 @@ fn supported_citation_providers_match_f11_and_x19_capabilities() {
         Some(LitProvider::Inspire)
     );
 }
+
+#[test]
+fn audit_m3_alias_reload_triage_downgrade_and_rev2_isolation() {
+    // 1. Alias learned in round 1 persists on CitationNetNode.ids when reloaded via build_from_events.
+    let paper_with_alias = CitationPaperMeta {
+        key: Some(pk("arxiv:2209.00077")),
+        ids: PaperIds {
+            arxiv: Some("2209.00077".into()),
+            doi: Some("10.5555/read-paper".into()),
+            inspire: None,
+            s2: None,
+        },
+        title: Some("Read Paper With DOI Alias".into()),
+        authors: vec!["Ada Example".into()],
+        year: Some(2022),
+        citation_count: Some(15),
+        in_library: false,
+        owned: false,
+    };
+    let net1 = build(CitationNetInput {
+        seeds: vec![pk("arxiv:2401.00001")],
+        core_papers: vec![pk("arxiv:2401.00001")],
+        read_papers: [pk("arxiv:2401.00001")].into_iter().collect(),
+        origin_paper: None,
+        edges: vec![edge("arxiv:2401.00001", "doi:10.5555/read-paper", LitProvider::OpenAlex)],
+        papers: vec![paper_with_alias],
+        hops: 1,
+    });
+    let persisted = serde_json::to_value(&net1).unwrap();
+    // Later `idea.paper` marks the paper read via its arXiv key; reload has NO extra_papers!
+    let reload_events = vec![
+        make_event(1, "idea.stated", json!({ "rev": 1, "seeds": ["arxiv:2401.00001"] })),
+        make_event(2, "idea.triage", json!({ "items": [{ "key": "arxiv:2401.00001", "relevance": "core" }] })),
+        make_event(3, EVENT_IDEA_CITATION_NET, persisted),
+        make_event(4, "idea.paper", json!({ "key": "doi:10.5555/read-paper", "status": "read_full" })),
+    ];
+    let reloaded = build_from_events(&reload_events, &[], &[], &[], 0);
+    assert!(
+        reloaded.unread_core_citations.is_empty(),
+        "DOI-read paper must remain excluded via persisted CitationNetNode.ids alias: {:?}",
+        reloaded.unread_core_citations
+    );
+
+    // 2. Triage downgrade (core -> related) removes paper from core_papers even if read.
+    let downgrade_events = vec![
+        make_event(1, "idea.stated", json!({ "rev": 1, "seeds": ["arxiv:2401.00001"] })),
+        make_event(2, "idea.triage", json!({ "items": [
+            { "key": "arxiv:2401.00001", "relevance": "core" },
+            { "key": "arxiv:2401.00002", "relevance": "core" }
+        ] })),
+        make_event(3, "idea.triage", json!({ "items": [
+            { "key": "arxiv:2401.00002", "relevance": "related" }
+        ] })),
+        make_event(4, "idea.paper", json!({ "key": "arxiv:2401.00002", "status": "read_passages" })),
+    ];
+    let net_dg = build_from_events(
+        &downgrade_events,
+        &[edge("arxiv:2401.00002", "arxiv:2101.00055", LitProvider::Inspire)],
+        &[],
+        &[],
+        1,
+    );
+    assert!(
+        net_dg.unread_core_citations.is_empty(),
+        "downgraded `related` read paper must not generate unread_core_citations"
+    );
+
+    // 3. Revision 2 clears rev 1 citation net while preserving pre-rev handoff.packet origin exclusion.
+    let rev2_events = vec![
+        make_event(1, "handoff.packet", json!({
+            "from": { "paper": { "key": "arxiv:1901.00001", "ids": { "arxiv": "1901.00001" } } }
+        })),
+        make_event(2, "idea.stated", json!({ "rev": 1, "seeds": ["arxiv:2301.00001"] })),
+        make_event(3, EVENT_IDEA_CITATION_NET, json!({
+            "seeds": ["arxiv:2301.00001"], "hops": 1, "provider": "inspire",
+            "edges": [{ "from": "arxiv:2301.00001", "to": "arxiv:2101.00001", "provider": "inspire" }]
+        })),
+        make_event(4, "idea.stated", json!({ "rev": 2, "seeds": ["arxiv:2401.00009"] })),
+    ];
+    let net_r2 = build_from_events(
+        &rev2_events,
+        &[edge("arxiv:2401.00009", "arxiv:1901.00001", LitProvider::Inspire)],
+        &[],
+        &[pk("arxiv:2401.00009")],
+        1,
+    );
+    assert_eq!(net_r2.edges.len(), 1, "rev 1 edges must not leak into rev 2");
+    assert!(net_r2.unread_core_citations.is_empty(), "origin paper must stay excluded in rev 2");
+}
