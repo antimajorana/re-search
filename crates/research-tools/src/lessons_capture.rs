@@ -10,7 +10,7 @@
 
 use crate::paper_key::{Mode, NodeRef, PaperKey};
 use crate::quote_core::clip_to_chars;
-use ledger::{LessonsDb, UserLessonRow, LESSONS_DB_NAME};
+use ledger::{LessonsDb, UserLessonRow};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -382,12 +382,14 @@ pub struct UserLessonsStore {
 
 impl UserLessonsStore {
     pub fn open(data_dir: &Path) -> Result<Self, String> {
-        let db_path = data_dir.join("library").join(LESSONS_DB_NAME);
-        Self::open_at(&db_path)
+        let db =
+            LessonsDb::open(data_dir).map_err(|e| format!("Failed to open lessons.db: {e}"))?;
+        Ok(Self { db })
     }
 
     pub fn open_at(db_path: &Path) -> Result<Self, String> {
-        let db = LessonsDb::open(db_path).map_err(|e| format!("Failed to open lessons.db: {e}"))?;
+        let db = LessonsDb::open_at(db_path)
+            .map_err(|e| format!("Failed to open lessons.db: {e}"))?;
         Ok(Self { db })
     }
 
