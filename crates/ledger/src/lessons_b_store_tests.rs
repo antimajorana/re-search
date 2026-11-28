@@ -52,8 +52,8 @@ fn sample_row(id: &str, text: &str, created_ms: i64) -> UserLessonRow {
 #[test]
 fn fresh_db_opens_at_v2_with_user_lesson_table() {
     let dir = TempDir::new("fresh_v2");
-    let db_path = dir.path.join("library").join("lessons.db");
-    let db = LessonsDb::open(&db_path).expect("open fresh lessons.db");
+    let db = LessonsDb::open(&dir.path).expect("open fresh lessons.db");
+    assert_eq!(db.db_path(), dir.path.join("library").join("lessons.db"));
     let ver: u32 = db
         .conn()
         .pragma_query_value(None, "user_version", |r| r.get(0))
@@ -69,57 +69,60 @@ fn fresh_db_opens_at_v2_with_user_lesson_table() {
 #[test]
 fn migrates_v1_to_v2_preserving_f16a_rows_and_refuses_downgrade() {
     let dir = TempDir::new("migrate_v1_v2");
-    let db_path = dir.path.join("lessons.db");
+    let library_dir = dir.path.join("library");
+    fs::create_dir_all(&library_dir).unwrap();
+    let db_path = library_dir.join("lessons.db");
 
-    // Seed a legacy v1 DB manually before opening with v2 LessonsDb.
+    // Seed a legacy v1 DB with real F16a schema before opening with v2 LessonsDb.
     {
         let conn = Connection::open(&db_path).unwrap();
         conn.execute_batch(
-            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_ms INTEGER NOT NULL);
+            "CREATE TABLE schema_migrations (version INTEGER NOT NULL PRIMARY KEY CHECK (version >= 1), applied_ms INTEGER NOT NULL) STRICT, WITHOUT ROWID;
              INSERT INTO schema_migrations (version, applied_ms) VALUES (1, 123);
              CREATE TABLE term_alias (
-                 id INTEGER PRIMARY KEY, scope_kind TEXT NOT NULL, scope_key TEXT NOT NULL,
-                 alias TEXT NOT NULL, canonical TEXT NOT NULL, source TEXT NOT NULL,
-                 session_id TEXT, created_ms INTEGER NOT NULL,
-                 UNIQUE (scope_kind, scope_key, alias)
-             );
+                 term_a TEXT NOT NULL, term_b TEXT NOT NULL,
+                 decision TEXT NOT NULL CHECK (decision IN ('confirmed', 'rejected')),
+                 origin_session TEXT NOT NULL DEFAULT '',
+                 origin_node_json TEXT NOT NULL DEFAULT 'null' CHECK (json_valid(origin_node_json)),
+                 updated_ms INTEGER NOT NULL,
+                 PRIMARY KEY (term_a, term_b)
+             ) STRICT, WITHOUT ROWID;
              CREATE TABLE symbol_default (
-                 id INTEGER PRIMARY KEY, scope_kind TEXT NOT NULL, scope_key TEXT NOT NULL,
-                 symbol TEXT NOT NULL, assumptions_json TEXT NOT NULL, dimensions TEXT,
-                 source TEXT NOT NULL, session_id TEXT, created_ms INTEGER NOT NULL,
-                 UNIQUE (scope_kind, scope_key, symbol)
-             );
+                 symbol TEXT NOT NULL, domain TEXT NOT NULL DEFAULT '',
+                 assumptions_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(assumptions_json)),
+                 dimensions TEXT, convention_note TEXT,
+                 origin_session TEXT NOT NULL DEFAULT '', updated_ms INTEGER NOT NULL,
+                 PRIMARY KEY (symbol, domain)
+             ) STRICT, WITHOUT ROWID;
              CREATE TABLE convention_default (
-                 id INTEGER PRIMARY KEY, scope_kind TEXT NOT NULL, scope_key TEXT NOT NULL,
-                 kind TEXT NOT NULL, key_name TEXT NOT NULL, value TEXT NOT NULL,
-                 source TEXT NOT NULL, session_id TEXT, created_ms INTEGER NOT NULL,
-                 UNIQUE (scope_kind, scope_key, kind, key_name)
-             );
+                 conv_key TEXT NOT NULL, conv_value TEXT NOT NULL, domain TEXT NOT NULL DEFAULT '',
+                 origin_session TEXT NOT NULL DEFAULT '', updated_ms INTEGER NOT NULL,
+                 PRIMARY KEY (conv_key, domain)
+             ) STRICT, WITHOUT ROWID;
              CREATE TABLE skeleton_override (
-                 id INTEGER PRIMARY KEY, paper_key TEXT NOT NULL, node_id TEXT NOT NULL,
-                 field TEXT NOT NULL, value_json TEXT NOT NULL, source TEXT NOT NULL,
-                 session_id TEXT, created_ms INTEGER NOT NULL,
-                 UNIQUE (paper_key, node_id, field)
-             );
+                 node_tag TEXT NOT NULL PRIMARY KEY, paper_key TEXT, kind_override TEXT,
+                 end_line_override INTEGER CHECK (end_line_override IS NULL OR end_line_override >= 1),
+                 note TEXT NOT NULL DEFAULT '', origin_session TEXT NOT NULL DEFAULT '',
+                 updated_ms INTEGER NOT NULL
+             ) STRICT, WITHOUT ROWID;
              CREATE TABLE ocr_overlay (
-                 id INTEGER PRIMARY KEY, paper_key TEXT NOT NULL, page_no INTEGER NOT NULL,
-                 span_fp TEXT NOT NULL, corrected_text TEXT NOT NULL, source TEXT NOT NULL,
-                 session_id TEXT, created_ms INTEGER NOT NULL,
-                 UNIQUE (paper_key, page_no, span_fp)
-             );
+                 file_sha256 TEXT NOT NULL, line_no INTEGER NOT NULL CHECK (line_no >= 1),
+                 corrected_text TEXT NOT NULL, original_sha256 TEXT,
+                 origin_session TEXT NOT NULL DEFAULT '', updated_ms INTEGER NOT NULL,
+                 PRIMARY KEY (file_sha256, line_no)
+             ) STRICT, WITHOUT ROWID;
              CREATE TABLE ingested_cursor (
-                 session_id TEXT NOT NULL, event_kind TEXT NOT NULL,
-                 last_seq INTEGER NOT NULL, updated_ms INTEGER NOT NULL,
-                 PRIMARY KEY (session_id, event_kind)
-             );
-             INSERT INTO term_alias (scope_kind, scope_key, alias, canonical, source, created_ms)
-             VALUES ('global', '', 'RG', 'renormalization group', 'user_edit', 100);
+                 session_id TEXT NOT NULL PRIMARY KEY, last_seq INTEGER NOT NULL CHECK (last_seq >= 0),
+                 updated_ms INTEGER NOT NULL
+             ) STRICT, WITHOUT ROWID;
+             INSERT INTO term_alias (term_a, term_b, decision, origin_session, origin_node_json, updated_ms)
+             VALUES ('rg', 'renormalization group', 'confirmed', 's0', 'null', 100);
              PRAGMA user_version = 1;",
         )
         .unwrap();
     }
 
-    let db = LessonsDb::open(&db_path).expect("migrate v1 -> v2");
+    let db = LessonsDb::open(&dir.path).expect("migrate v1 -> v2");
     let alias_count: i64 = db
         .conn()
         .query_row("SELECT COUNT(*) FROM term_alias", [], |r| r.get(0))
@@ -141,13 +144,13 @@ fn migrates_v1_to_v2_preserving_f16a_rows_and_refuses_downgrade() {
     let conn = Connection::open(&db_path).unwrap();
     conn.pragma_update(None, "user_version", 99_u32).unwrap();
     drop(conn);
-    assert!(LessonsDb::open(&db_path).is_err());
+    assert!(LessonsDb::open(&dir.path).is_err());
 }
 
 #[test]
 fn crud_uses_and_restore_roundtrip() {
     let dir = TempDir::new("crud");
-    let db = LessonsDb::open(&dir.path.join("lessons.db")).unwrap();
+    let db = LessonsDb::open(&dir.path).unwrap();
 
     db.insert_user_lesson(&sample_row("les-a", "First note", 100))
         .unwrap();
