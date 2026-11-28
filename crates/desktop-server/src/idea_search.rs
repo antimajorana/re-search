@@ -196,10 +196,10 @@ pub fn search_library_matches(
 }
 
 /// Run the initial user-shown first search (plus local F10 library matches) via an explicit F3
-/// [`NetRateGate`], write `idea.search_planned`, `literature.fetched`, `idea.search_finished`,
-/// `idea.candidates`, and `idea.stage`, and record F10 `seen` (`Candidate`).
+/// [`NetRateGate`] and [`ProviderConfig`], write `idea.search_planned`, `literature.fetched`,
+/// `idea.search_finished`, `idea.candidates`, and `idea.stage`, and record F10 `seen` (`Candidate`).
 #[allow(clippy::too_many_arguments)]
-pub fn run_first_search_with_gate<F>(
+pub fn run_first_search_with_gate_and_config<F>(
     data_dir: &Path,
     endpoints: &LiteratureEndpoints,
     ledger: &Ledger,
@@ -208,6 +208,7 @@ pub fn run_first_search_with_gate<F>(
     planned: &[PlannedQuery],
     offline: bool,
     gate: &NetRateGate,
+    cfg: &ProviderConfig,
     cancel: Option<&CancelToken>,
     mut on_progress: F,
 ) -> Result<Vec<RankedCandidate>, String>
@@ -263,7 +264,6 @@ where
         let snap = budget_snapshot(&existing, true);
         let prior_used = snap.queries_used as usize;
         let max_q = snap.max_queries as usize;
-        let cfg = ProviderConfig::default();
 
         for pq in effective_planned {
             if cancel.is_some_and(CancelToken::is_cancelled) {
@@ -289,7 +289,7 @@ where
                 .with_paging(FIRST_SEARCH_MAX_RESULTS, 0)
                 .with_tracking(Some(pq.qid.clone()), Some(request_id.clone()));
             let res: LitQueryResult =
-                run_query_and_record_with_gate(endpoints, ledger, session_id, &lq, &cfg, gate)?;
+                run_query_and_record_with_gate(endpoints, ledger, session_id, &lq, cfg, gate)?;
             if res.status == QueryStatus::Ok {
                 attempted_ok += 1;
                 let hits: Vec<RawHit> = res.papers.iter().map(lit_paper_to_raw_hit).collect();
@@ -307,6 +307,7 @@ where
                 "status": res.status,
                 "http_status": res.http_status,
                 "count": res.papers.len(),
+                "hits": res.papers.len(),
                 "error": res.error,
                 "retry_after_secs": res.retry_after_secs,
             });
@@ -336,7 +337,18 @@ where
     let mut candidates = merge_and_rank(&ranked_lists);
     annotate_and_record_library(data_dir, session_id, &stmt.seeds, &mut candidates);
 
-    let finished_payload = json!({ "round": round, "offline": offline, "results": query_outcomes });
+    let (lib_papers, lib_ft) = Library::open(data_dir)
+        .and_then(|l| l.search(&LibraryQuery::default()))
+        .map(|all| (all.len(), all.iter().filter(|p| p.has_fulltext).count()))
+        .unwrap_or((0, 0));
+    let lib_hits = candidates.iter().filter(|c| c.in_library).count();
+    let finished_payload = json!({
+        "round": round,
+        "offline": offline,
+        "results": query_outcomes,
+        "queries": query_outcomes,
+        "library": { "papers": lib_papers, "with_full_text": lib_ft, "hits": lib_hits },
+    });
     ledger
         .append(session_id, EVENT_IDEA_SEARCH_FINISHED, EVENT_SCHEMA_VERSION, &finished_payload)
         .map_err(|e| e.to_string())?;
@@ -370,6 +382,53 @@ where
     Ok(candidates)
 }
 
+/// Run the initial user-shown first search via an explicit F3 [`NetRateGate`] with default
+/// [`ProviderConfig`].
+#[allow(clippy::too_many_arguments)]
+pub fn run_first_search_with_gate<F>(
+    data_dir: &Path,
+    endpoints: &LiteratureEndpoints,
+    ledger: &Ledger,
+    session_id: &str,
+    stmt: &IdeaStatement,
+    planned: &[PlannedQuery],
+    offline: bool,
+    gate: &NetRateGate,
+    cancel: Option<&CancelToken>,
+    on_progress: F,
+) -> Result<Vec<RankedCandidate>, String>
+where
+    F: FnMut(&str, Value),
+{
+    run_first_search_with_gate_and_config(
+        data_dir, endpoints, ledger, session_id, stmt, planned, offline, gate,
+        &ProviderConfig::default(), cancel, on_progress,
+    )
+}
+
+/// Convenience wrapper using F3's process-wide [`global_gate`] and hydrated [`ProviderConfig`].
+#[allow(clippy::too_many_arguments)]
+pub fn run_first_search_with_config<F>(
+    data_dir: &Path,
+    endpoints: &LiteratureEndpoints,
+    ledger: &Ledger,
+    session_id: &str,
+    stmt: &IdeaStatement,
+    planned: &[PlannedQuery],
+    offline: bool,
+    cfg: &ProviderConfig,
+    cancel: Option<&CancelToken>,
+    on_progress: F,
+) -> Result<Vec<RankedCandidate>, String>
+where
+    F: FnMut(&str, Value),
+{
+    run_first_search_with_gate_and_config(
+        data_dir, endpoints, ledger, session_id, stmt, planned, offline, global_gate(), cfg,
+        cancel, on_progress,
+    )
+}
+
 /// Convenience wrapper using F3's process-wide [`global_gate`] (Rule P6).
 #[allow(clippy::too_many_arguments)]
 pub fn run_first_search<F>(
@@ -392,7 +451,7 @@ where
     )
 }
 
-fn lit_paper_to_raw_hit(p: &LitPaper) -> RawHit {
+pub(crate) fn lit_paper_to_raw_hit(p: &LitPaper) -> RawHit {
     RawHit {
         paper: p.paper_ref.clone(),
         title: p.title.clone(),
@@ -435,7 +494,7 @@ fn summary_to_raw_hit(s: PaperSummary) -> RawHit {
 
 /// Annotate candidates with existing F10 `in_library` / `owned` status (resolving all canonical
 /// aliases and F13a `source_items`) BEFORE recording `SeenRole::Candidate`.
-fn annotate_and_record_library(
+pub(crate) fn annotate_and_record_library(
     data_dir: &Path,
     session_id: &str,
     seeds: &[PaperKey],

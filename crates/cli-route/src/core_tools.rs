@@ -230,9 +230,15 @@ mod tests {
         .unwrap();
         assert_eq!(s1.defs.len(), 17);
         assert_eq!(s1.policy_version, research_tools::SOLVE_POLICY_VERSION);
-        let err = core_tool_set_for_profile(env, research_tools::tool_profile::PROFILE_EXPLORE_V1)
-            .unwrap_err();
-        assert!(err.contains("profile not built yet"), "{err}");
+        let e1 = core_tool_set_for_profile(
+            Arc::clone(&env),
+            research_tools::tool_profile::PROFILE_EXPLORE_V1,
+        )
+        .unwrap();
+        assert_eq!(e1.defs.len(), 5);
+        assert_eq!(e1.policy_version, research_tools::RESEARCH_POLICY_VERSION);
+        let err = core_tool_set_for_profile(env, "unknown/99").unwrap_err();
+        assert!(err.contains("unknown tool profile"), "{err}");
     }
 
     #[test]
@@ -257,14 +263,26 @@ mod tests {
 
     #[test]
     fn core_tool_ids_for_falls_back_cleanly_on_invalid_or_unbuilt_profile() {
-        for bad in ["explore/1", "unknown/99"] {
-            let env = BTreeMap::from([
-                (CORE_TOOL_PROFILE_ENV.to_string(), bad.to_string()),
-                ("CORE_ENABLE_RESEARCH_TOOLS".to_string(), "1".to_string()),
-            ]);
-            let ids = core_tool_ids_for(&env);
-            assert_eq!(ids, vec!["ledger_note".to_string(), "sympy_eval".to_string()]);
-        }
+        let explore_env = BTreeMap::from([(
+            CORE_TOOL_PROFILE_ENV.to_string(),
+            research_tools::tool_profile::PROFILE_EXPLORE_V1.to_string(),
+        )]);
+        let explore_ids = core_tool_ids_for(&explore_env);
+        let expected_explore: Vec<String> = research_tools::tool_profile::explore_v1()
+            .mcp_defs()
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        assert_eq!(explore_ids.len(), 5);
+        assert_eq!(explore_ids, expected_explore);
+        assert!(!explore_ids.iter().any(|id| id == "fs_write" || id == "sympy_eval"));
+
+        let env = BTreeMap::from([
+            (CORE_TOOL_PROFILE_ENV.to_string(), "unknown/99".to_string()),
+            ("CORE_ENABLE_RESEARCH_TOOLS".to_string(), "1".to_string()),
+        ]);
+        let ids = core_tool_ids_for(&env);
+        assert_eq!(ids, vec!["ledger_note".to_string(), "sympy_eval".to_string()]);
     }
 
     #[test]

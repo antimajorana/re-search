@@ -328,13 +328,14 @@ fn resolve_session_profile_handles_explicit_legacy_unbuilt_and_r2_drift() {
     assert_eq!(r_v2.profile.name, PROFILE_INVESTIGATION_V2);
     assert!(r_v2.explicit);
 
-    // Reserved / unbuilt profiles fail closed with Drift ("profile not built yet").
+    // Explicit `explore/1` and `idea.started` resolve to built profile `explore/1`.
     let evs = [dummy_event(1, "session.start", json!({ "tool_profile": PROFILE_EXPLORE_V1 }))];
-    let err = resolve_session_profile("s-res", &evs).unwrap_err();
-    assert_eq!(err.kind, ResumeRejectKind::Drift);
-    assert!(err.message.contains("profile not built yet"), "{}", err.message);
+    let r = resolve_session_profile("s-res", &evs).unwrap();
+    assert_eq!(r.profile.name, PROFILE_EXPLORE_V1);
+    assert_eq!(r.profile.policy.version, research_tools::RESEARCH_POLICY_VERSION);
+    assert!(r.explicit);
 
-    // Explicit `solve/1` and `solve.started` now resolve to built profile `solve/1` (`v0.5-solve`).
+    // Explicit `solve/1` and `solve.started` resolve to built profile `solve/1` (`v0.5-solve`).
     let solve_explicit = [dummy_event(1, "session.start", json!({ "tool_profile": PROFILE_SOLVE_V1 }))];
     let r = resolve_session_profile("s-solve-exp", &solve_explicit).unwrap();
     assert_eq!(r.profile.name, PROFILE_SOLVE_V1);
@@ -349,14 +350,14 @@ fn resolve_session_profile_handles_explicit_legacy_unbuilt_and_r2_drift() {
     assert_eq!(r.profile.name, PROFILE_SOLVE_V1);
     assert!(!r.explicit);
 
-    // Legacy markers for unbuilt modes also fail closed.
+    // Legacy `idea.started` marker resolves cleanly to `explore/1`.
     let evs = [
         dummy_event(1, MARKER_IDEA_STARTED, json!({})),
         dummy_event(2, "session.start", json!({})),
     ];
-    let err = resolve_session_profile("s-m", &evs).unwrap_err();
-    assert_eq!(err.kind, ResumeRejectKind::Drift);
-    assert!(err.message.contains("profile not built yet"), "{}", err.message);
+    let r = resolve_session_profile("s-m", &evs).unwrap();
+    assert_eq!(r.profile.name, PROFILE_EXPLORE_V1);
+    assert!(!r.explicit);
 
     // Non-string tool_profile fails closed.
     let evs = [dummy_event(1, "session.start", json!({ "tool_profile": null }))];

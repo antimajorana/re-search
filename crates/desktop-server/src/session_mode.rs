@@ -92,6 +92,11 @@ pub fn parse_requested_mode(raw: &str) -> Result<Mode, String> {
 /// Desktop-server gate for Solve session creation and turns (`solve/1` enabled in S12e).
 const DESKTOP_MODE_SOLVE_ENABLED: bool = true;
 
+/// Desktop-server gate for bare Explore session creation and Conversation turns (`explore/1`
+/// tool profile is frozen in package X7 and used directly by `build_idea_router`, while bare
+/// Explore sessions and `/messages` Conversation turns land in X15).
+pub(crate) const DESKTOP_MODE_EXPLORE_ENABLED: bool = false;
+
 /// Resolve the built [`ToolProfile`] for a mode, returning a plain user-facing error when
 /// that mode's desktop session flow or tool profile has not been built yet (never faking
 /// or falling back to Research).
@@ -99,6 +104,12 @@ pub fn profile_for_mode(mode: Mode) -> Result<ToolProfile, String> {
     if mode == Mode::Solve && !DESKTOP_MODE_SOLVE_ENABLED {
         return Err(format!(
             "{} mode is not built yet (session setup and loop pending S4/S12).",
+            mode_label(mode)
+        ));
+    }
+    if mode == Mode::Explore && !DESKTOP_MODE_EXPLORE_ENABLED {
+        return Err(format!(
+            "{} mode is not built yet (conversation turns pending X15).",
             mode_label(mode)
         ));
     }
@@ -120,6 +131,12 @@ pub fn profile_for_session(events: &[Event]) -> Result<ToolProfile, String> {
     if mode == Mode::Solve && !DESKTOP_MODE_SOLVE_ENABLED {
         return Err(format!(
             "{} mode is not built yet (session setup and loop pending S4/S12).",
+            mode_label(mode)
+        ));
+    }
+    if mode == Mode::Explore && !DESKTOP_MODE_EXPLORE_ENABLED {
+        return Err(format!(
+            "{} mode is not built yet (conversation turns pending X15).",
             mode_label(mode)
         ));
     }

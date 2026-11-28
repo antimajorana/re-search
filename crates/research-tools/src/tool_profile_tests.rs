@@ -164,10 +164,12 @@ fn profile_for_session_events_prefers_recorded_field_and_fails_closed_on_invalid
     ];
     assert_eq!(profile_for_session_events(&explicit).unwrap().name, PROFILE_RESEARCH_V1);
 
-    // Unbuilt explicit profile fails closed.
-    let unbuilt = [dummy_event(1, "session.start", json!({ "tool_profile": "explore/1" }))];
-    let err = profile_for_session_events(&unbuilt).unwrap_err();
-    assert!(err.contains("profile not built yet"), "{err}");
+    // Explicit `explore/1` resolves cleanly to explore/1 with research_policy (4 tools).
+    let explore_explicit = [dummy_event(1, "session.start", json!({ "tool_profile": "explore/1" }))];
+    let ep = profile_for_session_events(&explore_explicit).unwrap();
+    assert_eq!(ep.name, PROFILE_EXPLORE_V1);
+    assert_eq!(ep.policy.version, crate::RESEARCH_POLICY_VERSION);
+    assert_eq!(ep.defs.len(), 4);
 
     // Explicit `solve/1` resolves cleanly to solve/1 with v0.5-solve policy.
     let solve_explicit = [dummy_event(1, "session.start", json!({ "tool_profile": "solve/1" }))];
@@ -194,12 +196,12 @@ fn profile_for_session_events_prefers_recorded_field_and_fails_closed_on_invalid
     ];
     assert_eq!(profile_for_session_events(&legacy_solve).unwrap().name, PROFILE_SOLVE_V1);
 
-    // Marker for unbuilt Explore mode fails closed.
+    // Marker for built Explore mode resolves to explore/1.
     let legacy_explore = [
         dummy_event(1, MARKER_IDEA_STARTED, json!({})),
         dummy_event(2, "session.start", json!({})),
     ];
-    assert!(profile_for_session_events(&legacy_explore).unwrap_err().contains("profile not built yet"));
+    assert_eq!(profile_for_session_events(&legacy_explore).unwrap().name, PROFILE_EXPLORE_V1);
 }
 
 #[test]

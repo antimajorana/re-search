@@ -6,7 +6,7 @@
 
 use crate::idea::{
     append_explore_session_start, build_idea_statement, is_single_paper_identifier,
-    normalize_fields, preview_first_queries, resolve_stages, run_first_search,
+    normalize_fields, preview_first_queries, resolve_stages,
     search_library_matches, validate_first_queries, IdeaPreset, SubmittedFirstQuery,
     EVENT_IDEA_BUDGET_RAISED, EVENT_IDEA_NOTE, EVENT_IDEA_STAGE, EVENT_IDEA_STATED,
     MAX_NOTE_COMMENT_CHARS, MAX_PREVIEW_LIBRARY_MATCHES, NOTE_ACTIONS, NOTE_TARGET_KINDS,
@@ -40,14 +40,14 @@ fn not_implemented(msg: impl Into<String>) -> (u16, String) {
 /// RAII guard registering an active Explore search in `active_turns` + `api_turns` so
 /// `GET /api/sessions/{id}` sees `running: true` (preventing false Rule S3 `"Interrupted"`)
 /// and `/idea/stop` can cooperatively cancel in-flight queries.
-struct ActiveExploreGuard {
+pub(crate) struct ActiveExploreGuard {
     state: Arc<DesktopState>,
     session_id: String,
-    cancel: CancelToken,
+    pub(crate) cancel: CancelToken,
 }
 
 impl ActiveExploreGuard {
-    fn acquire(state: &Arc<DesktopState>, session_id: &str) -> Result<Self, (u16, String)> {
+    pub(crate) fn acquire(state: &Arc<DesktopState>, session_id: &str) -> Result<Self, (u16, String)> {
         let cancel = CancelToken::new();
         {
             let mut active = state
@@ -222,6 +222,11 @@ pub fn create_explore_session(state: &Arc<DesktopState>, val: &Value) -> ApiResu
         })
         .unwrap_or_else(|| DEFAULT_SESSION_TITLE.to_string());
 
+    let provider = opt_string(val.get("provider"), "provider")?.map(str::trim).filter(|s| !s.is_empty());
+    let model_req = opt_string(val.get("model"), "model")?.map(str::trim).filter(|s| !s.is_empty());
+    let route = provider
+        .and_then(|p| crate::cli_turn::CliRouteKind::from_provider(&p.to_ascii_lowercase()))
+        .map(|k| k.provider_id().to_string());
     let meta = SessionMeta {
         id: id.clone(),
         title: title.clone(),
@@ -232,12 +237,12 @@ pub fn create_explore_session(state: &Arc<DesktopState>, val: &Value) -> ApiResu
         verification_mode: false,
         calculation_mode: false,
         model_preset: None,
-        default_provider: ui.default_provider,
-        default_model: ui.default_model,
+        default_provider: provider.map(str::to_string).or(ui.default_provider),
+        default_model: model_req.map(str::to_string).or(ui.default_model),
         reasoning_effort: None,
         created_ms: now_ms(),
         fork_info: None,
-        route: None,
+        route,
         archived: false,
         deleted: false,
     };
@@ -254,7 +259,8 @@ pub fn create_explore_session(state: &Arc<DesktopState>, val: &Value) -> ApiResu
     let guard = ActiveExploreGuard::acquire(state, &id)?;
     let sse = Arc::clone(&state.sse);
     let sid_for_sse = id.clone();
-    let search_res = run_first_search(
+    let provider_cfg = crate::routers::resolve_explore_provider_config(state);
+    let search_res = crate::idea::search::run_first_search_with_config(
         &state.cfg.data_dir,
         &state.cfg.literature_endpoints,
         &ledger,
@@ -262,6 +268,7 @@ pub fn create_explore_session(state: &Arc<DesktopState>, val: &Value) -> ApiResu
         &stmt,
         &planned,
         offline,
+        &provider_cfg,
         Some(&guard.cancel),
         move |kind, payload| {
             sse.emit(
@@ -293,7 +300,7 @@ pub fn create_explore_session(state: &Arc<DesktopState>, val: &Value) -> ApiResu
 
 /// Single dispatcher for `POST /api/sessions/{id}/idea/{op}` (`explore.md` 5.4).
 pub fn handle_idea_op(
-    state: &DesktopState,
+    state: &Arc<DesktopState>,
     session_id: &str,
     op: &str,
     body: &[u8],
@@ -315,12 +322,11 @@ pub fn handle_idea_op(
         "note" => handle_note(state, &ledger, session_id, body),
         "stop" => handle_stop(state, &ledger, session_id),
         "continue" => handle_continue(state, &ledger, session_id, body),
-        "answer" => Err(not_implemented("Explore `answer` is not built yet (owned by package X6).")),
-        "plan" => Err(not_implemented("Explore `plan` is not built yet (owned by package X7).")),
-        "search" => Err(not_implemented(
-            "Explore follow-up `search` is not built yet (owned by package X7; model-composed queries require approval via Router::try_call).",
-        )),
-        "triage" => Err(not_implemented("Explore `triage` is not built yet (owned by package X8).")),
+        "sharpen" => crate::idea_exchanges::handle_sharpen_op(state, &ledger, session_id, body),
+        "answer" => crate::idea_answer::handle_answer_op(state, &ledger, session_id, body),
+        "plan" => crate::idea_plan_search::handle_plan_op(state, &ledger, session_id, body),
+        "search" => crate::idea_plan_search::handle_search_op(state, &ledger, session_id, body),
+        "triage" => crate::idea_exchanges_triage::handle_triage_op(state, &ledger, session_id, body),
         "read" => Err(not_implemented("Explore `read` is not built yet (owned by packages X9–X10).")),
         "map" => Err(not_implemented("Explore `map` is not built yet (owned by package X11).")),
         "directions" => Err(not_implemented("Explore `directions` is not built yet (owned by package X13).")),
@@ -340,9 +346,6 @@ fn handle_revise(
     session_id: &str,
     body: &[u8],
 ) -> ApiResult {
-    if is_turn_running(state, session_id) {
-        return Err(conflict("cannot revise the idea while an Explore run is active"));
-    }
     let val = parse_json_body(body)?;
     let raw_text = val
         .get("text")
@@ -352,6 +355,9 @@ fn handle_revise(
     let raw_seeds = parse_string_list(val.get("seeds"), "seeds")?;
 
     let _lock = state.ledger_write_lock.lock().map_err(|_| internal("ledger lock poisoned"))?;
+    if is_turn_running(state, session_id) {
+        return Err(conflict("cannot revise the idea while an Explore run is active"));
+    }
     let events = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
     let prev_rev = events
         .iter()
@@ -439,6 +445,7 @@ fn handle_stop(
             tok.cancel();
         }
     }
+    state.deny_pending(session_id, None, "supervisor: turn stopped by the user");
     let _lock = state.ledger_write_lock.lock().map_err(|_| internal("ledger lock poisoned"))?;
     let events = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
     // Pass `running = true` so `Requested` stages are inspected raw rather than masked as Interrupted.
@@ -478,12 +485,12 @@ fn handle_stop(
 }
 
 fn handle_continue(
-    state: &DesktopState,
+    state: &Arc<DesktopState>,
     ledger: &ledger::Ledger,
     session_id: &str,
     body: &[u8],
 ) -> ApiResult {
-    let val = parse_json_body(body)?;
+    let val = if body.is_empty() { json!({}) } else { parse_json_body(body)? };
     let extra_queries = parse_opt_u64(val.get("extra_queries"), "extra_queries")?;
     let extra_papers = parse_opt_u64(val.get("extra_papers"), "extra_papers")?;
     let extra_calls = parse_opt_u64(val.get("extra_model_calls"), "extra_model_calls")?;
@@ -495,6 +502,7 @@ fn handle_continue(
         return Err(bad("requested budget increase exceeds per-click ceiling"));
     }
 
+    let mut budget_raised = false;
     if extra_queries > 0 || extra_papers > 0 || extra_calls > 0 {
         let payload = json!({
             "extra_queries": extra_queries,
@@ -502,28 +510,35 @@ fn handle_continue(
             "extra_model_calls": extra_calls,
             "author": "user",
         });
-        ledger
-            .append(session_id, EVENT_IDEA_BUDGET_RAISED, EVENT_SCHEMA_VERSION, &payload)
-            .map_err(|e| internal(e.to_string()))?;
+        {
+            let _lock = state.ledger_write_lock.lock().map_err(|_| internal("ledger lock poisoned"))?;
+            ledger
+                .append(session_id, EVENT_IDEA_BUDGET_RAISED, EVENT_SCHEMA_VERSION, &payload)
+                .map_err(|e| internal(e.to_string()))?;
+        }
         state.sse.emit(
             session_id,
             "session_event",
             json!({ "session": session_id, "kind": EVENT_IDEA_BUDGET_RAISED, "payload": payload }),
         );
-        let updated = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
-        return Ok((
-            200,
-            json!({
-                "ok": true,
-                "budget_raised": true,
-                "idea": idea_view::view(&updated, is_turn_running(state, session_id)),
-            }),
-        ));
+        budget_raised = true;
     }
 
-    Err(not_implemented(
-        "Explore `continue` for model exchanges is not built yet (owned by packages X6–X13); pass `extra_queries`/`extra_papers`/`extra_model_calls` to record a budget increase.",
-    ))
+    let resume_stage = val.get("resume").and_then(Value::as_bool).unwrap_or(true);
+    let events = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
+    if !resume_stage {
+        return Ok((200, json!({ "ok": true, "budget_raised": budget_raised, "idea": idea_view::view(&events, is_turn_running(state, session_id)) })));
+    }
+    match crate::idea::next_stage(&events) {
+        Some(crate::idea::IdeaStage::Sharpen) => crate::idea_exchanges::handle_sharpen_op(state, ledger, session_id, body),
+        Some(crate::idea::IdeaStage::Search) => crate::idea_plan_search::handle_search_op(state, ledger, session_id, body),
+        Some(crate::idea::IdeaStage::Triage) => crate::idea_exchanges_triage::handle_triage_op(state, ledger, session_id, body),
+        _ if budget_raised => Ok((200, json!({ "ok": true, "budget_raised": true, "idea": idea_view::view(&events, is_turn_running(state, session_id)) }))),
+        other => Err(not_implemented(format!(
+            "Explore `continue` for stage `{}` is not built yet (owned by packages X9–X13); pass `extra_queries`/`extra_papers`/`extra_model_calls` to record a budget increase.",
+            other.map_or("done", crate::idea::IdeaStage::as_str),
+        ))),
+    }
 }
 
 fn opt_string<'a>(val: Option<&'a Value>, field: &str) -> Result<Option<&'a str>, (u16, String)> {

@@ -154,3 +154,70 @@ pub(crate) fn build_lean_router(
     let approver = Arc::new(UiApprover::new(state, "lean4".into(), false));
     Ok(Router::new(registry, research_policy(), ledger, session, approver))
 }
+
+/// Resolve the effective F11/X19 [`research_tools::lit_providers::ProviderConfig`] for Explore
+/// literature requests: saved OpenAlex sidecar + `OPENALEX_API_KEY` env fallback via X19
+/// [`crate::lit_settings::resolve_provider_config`], plus hermetic `SEMANTIC_SCHOLAR_API_KEY`.
+pub(crate) fn resolve_explore_provider_config(
+    state: &DesktopState,
+) -> research_tools::lit_providers::ProviderConfig {
+    let mut cfg = crate::lit_settings::resolve_provider_config(state);
+    cfg.semantic_scholar_api_key = state
+        .env_var("SEMANTIC_SCHOLAR_API_KEY")
+        .and_then(|v| v.into_string().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    cfg
+}
+
+/// Build the Explore router strictly from frozen profile `explore/1` (`explore.md` 5.2,
+/// Rule P5 & Rule P7). Verifies zero `ExecuteCode` or `WriteWorkspace` tools are registered
+/// and binds `UiApprover::with_session_network_grant(true)` for batched network approval.
+pub fn build_idea_router(
+    state: Arc<DesktopState>,
+    env: Arc<ResearchEnv>,
+    session: &str,
+) -> Result<Router, String> {
+    let profile = lookup_profile(research_tools::tool_profile::PROFILE_EXPLORE_V1)
+        .map_err(|e| e.to_string())?;
+    for def in &profile.defs {
+        if matches!(
+            def.effect,
+            policy::EffectClass::ExecuteCode | policy::EffectClass::WriteWorkspace
+        ) {
+            return Err(format!(
+                "Rule P7 violation: explore/1 must not register `{}` ({:?})",
+                def.id, def.effect
+            ));
+        }
+    }
+    let provider_cfg = resolve_explore_provider_config(&state);
+    let mut registry = Registry::new();
+    let noop_epoch: Arc<dyn WorkerEpoch> = Arc::new(WorkerEpochAdapter {
+        epoch: None,
+        contained: false,
+    });
+    let noop_sympy: Arc<dyn ToolHandler> =
+        Arc::new(|_: &CallCtx<'_>, _: &Value| Err("sympy_eval is not registered on explore/1".into()));
+    let policy = register_profile(
+        &profile,
+        &mut registry,
+        Arc::clone(&env),
+        ProfileHostTools::new(noop_epoch, noop_sympy),
+    )?;
+    // Bind hydrated sidecar + hermetic env ProviderConfig into `idea_search` with identical ToolDef.
+    registry.register(
+        research_tools::idea_tools::idea_search_def(),
+        research_tools::idea_tools::idea_search_handler_with_gate_and_config(
+            env,
+            None,
+            Some(provider_cfg),
+        ),
+    );
+    let ledger = state.open_ledger()?;
+    let approver = Arc::new(
+        UiApprover::new(state, "explore host".into(), false).with_session_network_grant(true),
+    );
+    Ok(Router::new(registry, policy, ledger, session, approver).with_tool_profile(profile.name))
+}
+

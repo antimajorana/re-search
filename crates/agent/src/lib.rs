@@ -12,6 +12,7 @@ pub(crate) mod autonomous_prompts;
 pub mod delegate;
 pub mod delegate_blind;
 pub(crate) mod dispatch;
+pub mod exchange;
 pub mod explore;
 pub mod gemini;
 pub mod guardrails;

@@ -14,6 +14,9 @@ export const BADGE_IN_LIBRARY = 'in your library';
 export const BADGE_OWNED_LIBRARY = 'owned';
 export const STAGE_IDLE_LABEL = 'Idle';
 export const EXPLORE_SUBMIT_LABEL = 'Explore';
+// `00-overview.md` 3.2 row 18: never show the word "brief" on screen in Explore.
+export const SHARPENED_IDEA_TITLE = 'Sharpened idea';
+export const TRIAGE_BASIS_LABEL = 'from abstract';
 
 export const EMPTY_STATE_MESSAGES = Object.freeze({
   offline_library_only: 'Offline: showing library matches only; nothing was searched',
@@ -177,17 +180,149 @@ export function ideaReducer(state, action) {
       }
       if (action.kind === 'idea.stated' && payload.text) {
         const hasMap = Array.isArray(state.view.map?.nodes) && state.view.map.nodes.length > 0;
+        const prevWil = state.view.where_i_looked || {};
         return {
           ...state,
-          view: { ...state.view, statement: payload, map_stale: hasMap || Boolean(state.view.map_stale) },
+          view: {
+            ...state.view,
+            statement: payload,
+            brief: null,
+            sharpened_idea: null,
+            triage: null,
+            reading_list_override: null,
+            candidates: [],
+            search_plan: null,
+            plan_approval: null,
+            empty_state: null,
+            where_i_looked: { ...prevWil, queries: [], providers: [], not_searched: [] },
+            question_answers: {},
+            map_stale: hasMap || Boolean(state.view.map_stale),
+          },
+        };
+      }
+      if (action.kind === 'idea.triage' && payload && typeof payload === 'object') {
+        return {
+          ...state,
+          view: { ...state.view, triage: payload, reading_list_override: null },
         };
       }
       if (action.kind === 'idea.stage' && payload.stage) {
         return { ...state, view: applyStageEventToView(state.view, payload) };
       }
-      if (action.kind === 'idea.search_finished' && Array.isArray(payload.results)) {
-        const wil = { ...(state.view.where_i_looked || {}), queries: payload.results };
+      if (action.kind === 'approval_requested' && payload.call_id) {
+        const prev = Array.isArray(state.pendingApprovals) ? state.pendingApprovals : [];
+        const rest = prev.filter((p) => p.call_id !== payload.call_id);
+        return { ...state, pendingApprovals: [...rest, payload] };
+      }
+      if (action.kind === 'approval_resolved' && payload.call_id) {
+        const prev = Array.isArray(state.pendingApprovals) ? state.pendingApprovals : [];
+        return { ...state, pendingApprovals: prev.filter((p) => p.call_id !== payload.call_id) };
+      }
+      if (action.kind === 'idea.search_planned' && Array.isArray(payload.queries)) {
+        return { ...state, view: { ...state.view, search_plan: payload } };
+      }
+      if (action.kind === 'idea.query_result' && payload.qid) {
+        const prevQ = Array.isArray(state.view.where_i_looked?.queries)
+          ? state.view.where_i_looked.queries
+          : [];
+        const idx = prevQ.findIndex((q) => q.qid === payload.qid);
+        const nextQ = idx >= 0 ? prevQ.map((q, i) => (i === idx ? payload : q)) : [...prevQ, payload];
+        return {
+          ...state,
+          view: {
+            ...state.view,
+            where_i_looked: { ...(state.view.where_i_looked || {}), queries: nextQ },
+          },
+        };
+      }
+      if (action.kind === 'idea.search_finished') {
+        const incoming = Array.isArray(payload.queries)
+          ? payload.queries
+          : (Array.isArray(payload.results) ? payload.results : []);
+        const prevQ = Array.isArray(state.view.where_i_looked?.queries)
+          ? state.view.where_i_looked.queries
+          : [];
+        const mergedQ = [...prevQ];
+        for (const row of incoming) {
+          const idx = row?.qid ? mergedQ.findIndex((q) => q.qid === row.qid) : -1;
+          if (idx >= 0) mergedQ[idx] = row;
+          else mergedQ.push(row);
+        }
+        const wil = {
+          ...(state.view.where_i_looked || {}),
+          queries: mergedQ,
+          ...(payload.library ? { library: payload.library } : {}),
+        };
         return { ...state, view: { ...state.view, where_i_looked: wil } };
+      }
+      if (action.kind === 'idea.budget_raised' && payload && typeof payload === 'object') {
+        const b = state.view.budget || {};
+        const nextBudget = {
+          ...b,
+          max_queries: (Number(b.max_queries) || 0) + (Number(payload.extra_queries) || 0),
+          max_papers: (Number(b.max_papers) || 0) + (Number(payload.extra_papers) || 0),
+          max_model_calls: (Number(b.max_model_calls) || 0) + (Number(payload.extra_model_calls) || 0),
+        };
+        return { ...state, view: { ...state.view, budget: nextBudget } };
+      }
+      if (action.kind === 'idea.brief' && payload && typeof payload === 'object') {
+        const normalized = { ...payload, heading: SHARPENED_IDEA_TITLE, answers: {} };
+        return {
+          ...state,
+          view: {
+            ...state.view,
+            brief: normalized,
+            sharpened_idea: normalized,
+            question_answers: {},
+          },
+        };
+      }
+      if (action.kind === 'idea.answer' && payload && typeof payload === 'object') {
+        const prev = state.view.sharpened_idea || state.view.brief;
+        const nextAnswers = { ...(state.view.question_answers || {}) };
+        if (Array.isArray(payload.answers)) {
+          for (const item of payload.answers) {
+            if (item?.question_id && item?.answer) {
+              nextAnswers[String(item.question_id)] = String(item.answer);
+            }
+          }
+        } else if (payload.answers && typeof payload.answers === 'object') {
+          Object.assign(nextAnswers, payload.answers);
+        } else if (payload.question_id && payload.answer) {
+          nextAnswers[String(payload.question_id)] = String(payload.answer);
+        }
+        const merged = prev
+          ? {
+              ...prev,
+              ...(payload.restatement ? { restatement: payload.restatement } : {}),
+              ...(Array.isArray(payload.assumptions) ? { assumptions: payload.assumptions } : {}),
+              ...(Array.isArray(payload.perspectives) ? { perspectives: payload.perspectives } : {}),
+              ...(Array.isArray(payload.exclusions) ? { exclusions: payload.exclusions } : {}),
+              answers: nextAnswers,
+            }
+          : prev;
+        const isQuick =
+          Number(state.view.budget?.max_papers ?? 1) === 0 ||
+          Boolean(state.view.triage?.quick_abstract_only);
+        const hasRl = !isQuick && Array.isArray(payload.reading_list);
+        const nextTriage =
+          hasRl && state.view.triage
+            ? { ...state.view.triage, reading_list: payload.reading_list }
+            : state.view.triage;
+        return {
+          ...state,
+          view: {
+            ...state.view,
+            brief: merged,
+            sharpened_idea: merged,
+            question_answers: nextAnswers,
+            triage: nextTriage,
+            ...(hasRl ? { reading_list_override: payload.reading_list } : {}),
+            ...(typeof payload.pause_before_reading === 'boolean'
+              ? { pause_before_reading: payload.pause_before_reading }
+              : {}),
+          },
+        };
       }
       return state;
     }
@@ -380,3 +515,43 @@ export function highlightTermsSegments(text, terms) {
   if (cursor < source.length) out.push({ text: source.slice(cursor), match: false });
   return out;
 }
+
+/**
+ * Split the user's verbatim idea text into non-overlapping segments highlighting every exact
+ * `subclaim.idea_quote` span (`explore.md` 3 & 4.1). Pure, zero innerHTML.
+ */
+export function highlightSubclaimQuotes(text, subclaims) {
+  const source = String(text ?? '');
+  if (!source) return [];
+  const list = Array.isArray(subclaims) ? subclaims : [];
+  const spans = [];
+  let searchFrom = 0;
+  for (const sc of list) {
+    const q = String(sc?.idea_quote || '');
+    if (!q) continue;
+    let idx = source.indexOf(q, searchFrom);
+    if (idx < 0) idx = source.indexOf(q);
+    if (idx < 0) continue;
+    spans.push({ start: idx, end: idx + q.length, subclaimId: String(sc?.id || '') });
+    searchFrom = idx + q.length;
+  }
+  spans.sort((a, b) => a.start - b.start || b.end - a.end);
+  const nonOverlapping = [];
+  let cursor = 0;
+  for (const sp of spans) {
+    if (sp.start < cursor) continue;
+    nonOverlapping.push(sp);
+    cursor = sp.end;
+  }
+  if (nonOverlapping.length === 0) return [{ text: source, subclaimId: null }];
+  const out = [];
+  let pos = 0;
+  for (const sp of nonOverlapping) {
+    if (sp.start > pos) out.push({ text: source.slice(pos, sp.start), subclaimId: null });
+    out.push({ text: source.slice(sp.start, sp.end), subclaimId: sp.subclaimId });
+    pos = sp.end;
+  }
+  if (pos < source.length) out.push({ text: source.slice(pos), subclaimId: null });
+  return out;
+}
+

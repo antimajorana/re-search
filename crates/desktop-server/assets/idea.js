@@ -2,11 +2,18 @@
 // Renders verbatim Idea card, 7-stage rail mapped through F9 run states, shared F6 run_bar.js
 // cost line, no-model notice, empty/failure states, candidate list, and "Where I looked" skeleton.
 // Zero innerHTML writes. Rule S8: zero "verified", "new", "novel", or "proved" strings in DOM.
-import { getExploreSession, postIdeaOp } from './api_idea.js';
-import { renderCandidateCards, renderCandidateList, renderWhereILooked } from './idea_search.js';
+import { decideIdeaApproval, getExploreSession, postIdeaOp } from './api_idea.js';
+import {
+  renderCandidateCards,
+  renderCandidateList,
+  renderSearchPlanApproval,
+  renderWhereILooked,
+} from './idea_search.js';
 import {
   NO_MODEL_NOTICE,
+  SHARPENED_IDEA_TITLE,
   createInitialIdeaState,
+  highlightSubclaimQuotes,
   ideaReducer,
   selectEmptyState,
   selectFilteredCandidates,
@@ -158,8 +165,9 @@ export function renderExploreSession(hostEl, state, callbacks = {}) {
     shell.append(banner);
   }
 
-  // 5. Verbatim Idea card (`explore.md` 3 & 4.1).
+  // 5. Verbatim Idea card with highlighted subclaim `idea_quote` spans (`explore.md` 3 & 4.1).
   const stmt = view.statement;
+  const sharpened = view.sharpened_idea || view.brief || null;
   const ideaCard = el('section', 'idea-verbatim-card');
   ideaCard.setAttribute('data-idea-section', 'idea-card');
   const ideaHead = el('div', 'idea-card-head');
@@ -168,25 +176,68 @@ export function renderExploreSession(hostEl, state, callbacks = {}) {
     createBadge({ text: 'you', icon: 'user', tone: 'neutral' }),
   );
   ideaCard.append(ideaHead);
-  ideaCard.append(el('p', 'idea-verbatim-text', stmt?.text || 'No idea statement recorded.'));
+  const ideaTextEl = el('p', 'idea-verbatim-text');
+  const rawIdeaText = stmt?.text || 'No idea statement recorded.';
+  const quoteSegments = highlightSubclaimQuotes(rawIdeaText, sharpened?.subclaims);
+  for (const seg of quoteSegments) {
+    if (seg.subclaimId) {
+      const mark = document.createElement('mark');
+      mark.className = 'idea-quote-mark';
+      mark.setAttribute('data-subclaim-id', seg.subclaimId);
+      mark.title = seg.subclaimId;
+      mark.textContent = seg.text;
+      ideaTextEl.appendChild(mark);
+    } else {
+      const span = document.createElement('span');
+      span.textContent = seg.text;
+      ideaTextEl.appendChild(span);
+    }
+  }
+  ideaCard.append(ideaTextEl);
   if (view.map_stale) {
     ideaCard.append(createBadge({ text: 'Map stale after revision', icon: 'warn', tone: 'warn' }));
   }
   shell.append(ideaCard);
 
-  // 6. Candidate list (`idea_search.js`).
+  // 5b. "Sharpened idea" card (NEVER the word "brief" on screen — `00-overview.md` 3.2 row 18).
+  if (sharpened) {
+    const sharpenedCard = renderSharpenedIdeaCard(sharpened, {
+      answers: view.question_answers,
+      onSave: callbacks.onSaveAnswer,
+      onPlan: callbacks.onPlan,
+    });
+    if (sharpenedCard) shell.append(sharpenedCard);
+  }
+
+  // 5c. Search plan approval card via shared read-only `approval_card.js` (package X7).
+  const liveApprovals = Array.isArray(state?.pendingApprovals) ? state.pendingApprovals : [];
+  const effectiveApproval = buildEffectivePlanApproval(view.plan_approval, liveApprovals);
+  if (effectiveApproval) {
+    const planCard = renderSearchPlanApproval(effectiveApproval, {
+      onAllowGrant: callbacks.onAllowGrant,
+      onDenyGrant: callbacks.onDenyGrant,
+    });
+    if (planCard) shell.append(planCard);
+  }
+
+  // 6. Candidate list (`idea_search.js`: flat before Triage, grouped with reading list after Triage).
   const candidates = selectFilteredCandidates(state);
   const terms = extractHighlightTerms(view);
+  const onSaveReadingList = callbacks.onSaveReadingList
+    || (callbacks.onSaveAnswer ? (reading_list) => callbacks.onSaveAnswer({ reading_list }) : null);
+  const onTogglePauseBeforeReading = callbacks.onTogglePauseBeforeReading
+    || (callbacks.onSaveAnswer ? (pause_before_reading) => callbacks.onSaveAnswer({ pause_before_reading }) : null);
   shell.append(
     renderCandidateList(candidates, {
-      highlightTerms: terms,
-      filters: state?.filters,
-      onFilterChange: callbacks.onFilterChange,
+      highlightTerms: terms, filters: state?.filters, onFilterChange: callbacks.onFilterChange,
+      triage: view.triage, maxPapers: view.budget?.max_papers,
+      pauseBeforeReading: Boolean(view.pause_before_reading),
+      onSaveReadingList, onTogglePauseBeforeReading,
     }),
   );
 
-  // 7. "Where I looked" skeleton (`idea_search.js`).
-  shell.append(renderWhereILooked(view.where_i_looked));
+  // 7. Live "Where I looked" panel (`idea_search.js`).
+  shell.append(renderWhereILooked(view.where_i_looked, { onRetryService: callbacks.onRetryService }));
 
   // 8. Map placeholder (F6 GraphView populated in X11/X12).
   const mapNodes = Array.isArray(view.map?.nodes) ? view.map.nodes : [];
@@ -208,12 +259,34 @@ export function renderExploreSession(hostEl, state, callbacks = {}) {
   return shell;
 }
 
+function buildEffectivePlanApproval(planApproval, pendingApprovals) {
+  const live = pendingApprovals.filter(
+    (p) => p && p.call_id && (p.tool_id === 'idea_search' || String(p.caller || '').startsWith('host:idea:')),
+  );
+  if (live.length === 0) return planApproval || null;
+  const base = planApproval && typeof planApproval === 'object' ? planApproval : { round: 1, queries: [], services: [] };
+  const grants = live.map((p) => ({
+    id: String(p.call_id),
+    kind: p.allow_session_approve ? 'session_capability' : 'worker_session',
+    label: `Allow ${p.tool_id || 'idea_search'} (${p.effect || 'network-read'})`,
+    caller: p.caller || null,
+    tool_id: p.tool_id || 'idea_search',
+    effect: p.effect || 'network-read',
+    call_id: String(p.call_id),
+    digest: String(p.digest || ''),
+    granted: false,
+    status: 'pending',
+  }));
+  return { ...base, grants };
+}
+
 /**
  * Stateful Explore session controller coordinating REST ops, focus-safe filters, and SSE updates.
  */
 export function createExploreSessionController(hostEl, deps = {}) {
   const fetchSession = deps.getExploreSession || getExploreSession;
   const runOp = deps.postIdeaOp || postIdeaOp;
+  const sendApproval = deps.decideIdeaApproval || decideIdeaApproval;
   let state = createInitialIdeaState({ hasModel: Boolean(deps.hasModel) });
   let loadSeq = 0;
 
@@ -224,7 +297,7 @@ export function createExploreSessionController(hostEl, deps = {}) {
     if (!section || !oldCards) return false;
     const filtered = selectFilteredCandidates(state);
     if (countEl) countEl.textContent = `Candidates (${filtered.length})`;
-    const freshCards = renderCandidateCards(filtered, extractHighlightTerms(state.view));
+    const freshCards = renderCandidateCards(filtered, extractHighlightTerms(state.view), { triage: state.view?.triage, maxPapers: state.view?.budget?.max_papers, onSaveReadingList: (reading_list) => void invokeOp('answer', { reading_list }) });
     const idx = Array.isArray(section.children) ? section.children.indexOf(oldCards) : -1;
     if (typeof oldCards.replaceWith === 'function') {
       oldCards.replaceWith(freshCards);
@@ -249,15 +322,36 @@ export function createExploreSessionController(hostEl, deps = {}) {
       onStop: () => void invokeOp('stop'),
       onContinue: () => void handleContinueClick(),
       onRetry: () => void handleRetryClick(),
+      onSaveAnswer: (payload) => void invokeOp('answer', payload),
+      onPlan: () => void invokeOp('plan', {}),
+      onRetryService: (provider) => void invokeOp('search', { provider }),
+      onAllowGrant: async (grant) => {
+        if (grant?.call_id && state.sessionId) {
+          const res = await sendApproval(state.sessionId, grant.call_id, {
+            approved: true, digest: grant.digest || '',
+            approve_for_session: grant.kind === 'session_capability',
+          });
+          return { approved: Boolean(res?.ok !== false && res?.approved !== false) };
+        }
+        // Start planned search asynchronously so approval_card releases `busy` for live UiApprover prompts.
+        void invokeOp('search', {});
+        return { approved: false };
+      },
+      onDenyGrant: async (grant) => {
+        if (grant?.call_id && state.sessionId) {
+          await sendApproval(state.sessionId, grant.call_id, { approved: false, digest: grant.digest || '' });
+          return;
+        }
+        await invokeOp('stop', {});
+      },
     });
   }
 
   async function handleContinueClick() {
     const rb = selectRunBarModel(state);
-    const payload = rb.state === 'paused'
-      ? { extra_queries: 6, extra_papers: 2, extra_model_calls: 6 }
-      : {};
-    return invokeOp('continue', payload);
+    const atCap = rb.state === 'paused' && (state.view?.budget?.state === 'stopped_at_cap'
+      || (state.view?.stages || []).some((s) => s.stored_state === 'stopped_at_cap'));
+    return invokeOp('continue', atCap ? { extra_queries: 6, extra_papers: 2, extra_model_calls: 6 } : {});
   }
 
   async function handleRetryClick() {
@@ -343,3 +437,157 @@ export function createExploreSessionController(hostEl, deps = {}) {
     getState: () => state,
   };
 }
+
+/**
+ * Render the `"Sharpened idea"` card (`00-overview.md` 3.2 row 18 — never show `"brief"` on
+ * screen): restatement, assumptions, checkable parts, terms/aliases, editable perspective queries,
+ * and clarifying questions with defaults. Zero `innerHTML`.
+ */
+export function renderSharpenedIdeaCard(sharpened, opts = {}) {
+  if (!sharpened || typeof sharpened !== 'object') return null;
+  const answersMap = { ...(sharpened.answers || {}), ...(opts.answers || {}) };
+  const onSave = typeof opts.onSave === 'function' ? opts.onSave : null;
+  const onPlan = typeof opts.onPlan === 'function' ? opts.onPlan : null;
+
+  const section = el('section', 'idea-setup-card');
+  section.setAttribute('data-idea-section', 'sharpened-idea');
+  section.setAttribute('aria-label', SHARPENED_IDEA_TITLE);
+
+  const head = el('div', 'idea-card-head');
+  head.append(
+    el('h3', 'idea-card-title', SHARPENED_IDEA_TITLE),
+    createBadge({ text: '(model)', icon: 'info', tone: 'info', border: 'dashed' }),
+  );
+  section.append(head);
+
+  const restateInput = el('textarea', 'idea-textarea');
+  restateInput.rows = 2;
+  restateInput.value = String(sharpened.restatement || '');
+  restateInput.setAttribute('aria-label', 'Restatement');
+  restateInput.setAttribute('data-sharpen-field', 'restatement');
+  section.append(el('span', 'idea-field-label', 'Restatement (model)'), restateInput);
+
+  const assumptions = Array.isArray(sharpened.assumptions) ? sharpened.assumptions : [];
+  if (assumptions.length > 0) {
+    const ul = el('ul', 'idea-not-searched');
+    for (const a of assumptions) ul.append(el('li', '', String(a)));
+    section.append(el('span', 'idea-field-label', 'Assumptions'), ul);
+  }
+
+  const subclaims = Array.isArray(sharpened.subclaims) ? sharpened.subclaims : [];
+  if (subclaims.length > 0) {
+    const list = el('div', 'idea-query-list');
+    list.setAttribute('data-sharpen-section', 'subclaims');
+    for (const sc of subclaims) {
+      const row = el('div', 'idea-query-chip');
+      row.setAttribute('data-subclaim-id', String(sc.id || ''));
+      row.append(
+        createBadge({ text: String(sc.id || 'sc'), icon: 'quote', tone: 'info' }),
+        el('span', '', String(sc.text || '')),
+        el('span', 'idea-card-meta', sc.idea_quote ? `"${sc.idea_quote}"` : ''),
+      );
+      list.append(row);
+    }
+    section.append(el('span', 'idea-field-label', 'Checkable parts'), list);
+  }
+
+  const terms = Array.isArray(sharpened.terms) ? sharpened.terms : [];
+  if (terms.length > 0) {
+    const row = el('div', 'idea-chip-row');
+    for (const tg of terms) {
+      const aliases = Array.isArray(tg.aliases) && tg.aliases.length > 0
+        ? ` (${tg.aliases.join(', ')})`
+        : '';
+      row.append(el('span', 'idea-chip', `${tg.term || ''}${aliases}`));
+    }
+    section.append(el('span', 'idea-field-label', 'Terms and aliases'), row);
+  }
+
+  const perspectives = Array.isArray(sharpened.perspectives) ? sharpened.perspectives : [];
+  const editedPerspectives = perspectives.map((p) => ({
+    id: String(p.id || ''),
+    kind: String(p.kind || 'exact'),
+    question: String(p.question || ''),
+    queries: (Array.isArray(p.queries) ? p.queries : []).map((q) => ({
+      provider: String(q.provider || 'arxiv'),
+      q: String(q.q || ''),
+    })),
+  }));
+  if (editedPerspectives.length > 0) {
+    const pWrap = el('div', 'idea-query-list');
+    pWrap.setAttribute('data-sharpen-section', 'perspectives');
+    for (const p of editedPerspectives) {
+      const card = el('div', 'idea-preview-box');
+      card.setAttribute('data-perspective-id', p.id);
+      card.append(el('strong', '', `${p.id} · ${p.kind}: ${p.question}`));
+      for (const q of p.queries) {
+        const qRow = el('div', 'idea-query-chip');
+        const qInput = el('input', 'text-input');
+        qInput.type = 'text';
+        qInput.value = q.q;
+        qInput.setAttribute('aria-label', `${p.id} ${q.provider} query`);
+        qInput.addEventListener('input', () => { q.q = qInput.value; });
+        qRow.append(el('span', 'idea-query-provider', q.provider), qInput);
+        card.append(qRow);
+      }
+      pWrap.append(card);
+    }
+    section.append(el('span', 'idea-field-label', 'Search perspectives and editable queries'), pWrap);
+  }
+
+  const questions = Array.isArray(sharpened.questions) ? sharpened.questions : [];
+  const currentAnswers = { ...answersMap };
+  if (questions.length > 0) {
+    const qWrap = el('div', 'idea-query-list');
+    qWrap.setAttribute('data-sharpen-section', 'questions');
+    for (const q of questions) {
+      const qid = String(q.id || '');
+      const selected = currentAnswers[qid] ?? String(q.default || '');
+      currentAnswers[qid] = selected;
+      const qRow = el('div', 'idea-query-chip');
+      const sel = el('select', 'text-input');
+      sel.setAttribute('aria-label', String(q.question || qid));
+      sel.setAttribute('data-question-id', qid);
+      for (const opt of Array.isArray(q.options) ? q.options : []) {
+        const o = el('option', '', String(opt));
+        o.value = String(opt);
+        if (String(opt) === selected) o.selected = true;
+        sel.append(o);
+      }
+      sel.value = selected;
+      sel.addEventListener('change', () => { currentAnswers[qid] = sel.value; });
+      qRow.append(el('span', '', String(q.question || '')), sel);
+      qWrap.append(qRow);
+    }
+    section.append(el('span', 'idea-field-label', 'Clarifying questions (defaults applied)'), qWrap);
+  }
+
+  if (onSave || onPlan) {
+    const actions = el('div', 'idea-controls-row');
+    if (onSave) {
+      const saveBtn = el('button', 'pill-btn sm', 'Save edits');
+      saveBtn.type = 'button';
+      saveBtn.setAttribute('data-action', 'save-sharpen-edits');
+      saveBtn.addEventListener('click', () => {
+        const payload = {};
+        const trimmedRestate = String(restateInput.value || '').trim();
+        if (trimmedRestate) payload.restatement = trimmedRestate;
+        if (editedPerspectives.length > 0) payload.perspectives = editedPerspectives;
+        if (Object.keys(currentAnswers).length > 0) payload.answers = currentAnswers;
+        onSave(payload);
+      });
+      actions.append(saveBtn);
+    }
+    if (onPlan) {
+      const planBtn = el('button', 'pill-btn sm primary', 'Prepare search plan');
+      planBtn.type = 'button';
+      planBtn.setAttribute('data-action', 'prepare-plan');
+      planBtn.addEventListener('click', () => onPlan());
+      actions.append(planBtn);
+    }
+    section.append(actions);
+  }
+
+  return section;
+}
+
