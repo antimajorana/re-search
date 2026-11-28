@@ -354,10 +354,14 @@ fn ocr_async_job_lifecycle_cross_session_isolation_and_cancel() {
     assert_eq!(st, 200);
     assert_eq!(inspect_png_dimensions(&png).unwrap(), (12, 8));
 
-    // Start a second async job and cancel it cleanly.
+    // Start a second async job, allow background completion, cancel BEFORE polling,
+    // and confirm subsequent GET never pins an empty 0-byte source into the ledger.
+    let ledger = Ledger::open(&tmp.path().join("data")).unwrap();
+    let events_before_cancel = ledger.read_session("s-ocr-job-a").unwrap().len();
     let (st, _, raw) = raw_http(port, "POST", "/api/sessions/s-ocr-job-a/ocr/ingest", &auth, &body);
     assert_eq!(st, 202);
     let job_id_2 = serde_json::from_slice::<Value>(&raw).unwrap()["job_id"].as_str().unwrap().to_string();
+    thread::sleep(Duration::from_millis(80));
     let cancel_path = format!("/api/sessions/s-ocr-job-a/ocr/jobs/{job_id_2}/cancel");
     let (st, _, raw) = raw_http(port, "POST", &cancel_path, &[("X-ReSearch-Token", tok.as_str())], b"");
     assert_eq!(st, 200, "cancel failed: {}", String::from_utf8_lossy(&raw));
@@ -365,5 +369,26 @@ fn ocr_async_job_lifecycle_cross_session_isolation_and_cancel() {
     assert_eq!(cancelled["job_id"], json!(job_id_2));
     assert_eq!(cancelled["cancelled"], json!(true));
     assert!(cancelled["snapshot"].is_object());
+
+    let poll_path_2 = format!("/api/sessions/s-ocr-job-a/ocr/jobs/{job_id_2}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let polled_cancelled = loop {
+        let (st, _, raw) = raw_http(port, "GET", &poll_path_2, &[("X-ReSearch-Token", tok.as_str())], b"");
+        assert_eq!(st, 200, "poll after cancel failed: {}", String::from_utf8_lossy(&raw));
+        let val: Value = serde_json::from_slice(&raw).unwrap();
+        if val["finished"] == json!(true) {
+            break val;
+        }
+        assert!(Instant::now() < deadline, "timed out polling cancelled job");
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(polled_cancelled["snapshot"]["stage"]["state"], json!("cancelled"));
+    assert!(polled_cancelled["source"].is_null(), "cancelled job must never pin source: {polled_cancelled}");
+    assert!(polled_cancelled["error"].is_null(), "cancelled job must not error: {polled_cancelled}");
+    assert_eq!(
+        ledger.read_session("s-ocr-job-a").unwrap().len(),
+        events_before_cancel,
+        "cancel-after-finish must not append a 0-byte source.ingested receipt"
+    );
     srv.shutdown();
 }

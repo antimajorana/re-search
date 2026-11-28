@@ -221,7 +221,8 @@ pub fn pin_ocr_outcome_to_session(
     };
 
     if let Some(lib) = library {
-        if outcome.document.status == PdfExtractStatus::Ok {
+        let is_full_doc = outcome.document.page_map.pages.len() == outcome.document.page_count;
+        if outcome.document.status == PdfExtractStatus::Ok && is_full_doc {
             let paper_key = PaperKey::from_file_bytes(raw_bytes);
             cache_pdf_ocr_in_library(lib, &paper_key, None, raw_bytes, &outcome, now_ms())?;
         }
@@ -264,6 +265,9 @@ pub fn pin_ocr_outcome_to_session(
 }
 
 fn enforce_user_pdf_cap(file_name: &str, len: usize) -> Result<(), String> {
+    if len == 0 {
+        return Err(format!("`{file_name}` is empty (0 bytes)"));
+    }
     if len > MAX_USER_PDF_BYTES {
         return Err(format!(
             "`{file_name}` ({len} bytes) exceeds {} MiB user PDF ingestion limit",

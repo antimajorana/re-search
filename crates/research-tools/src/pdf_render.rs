@@ -115,12 +115,13 @@ impl Default for RenderLimits {
 /// Pluggable PDF page-to-PNG renderer interface.
 pub trait PdfPageRenderer: Send + Sync {
     fn renderer_id(&self) -> &str;
+    fn render_limits(&self) -> RenderLimits { RenderLimits::default() }
     fn render_page(&self, pdf_bytes: &[u8], page_1based: usize, dpi: u16) -> Result<RenderedPage, String>;
 
     fn render_crop(&self, pdf_bytes: &[u8], page_1based: usize, dpi: u16, crop: CropRect) -> Result<RenderedPage, String> {
         let crop = crop.validate()?;
         let full = self.render_page(pdf_bytes, page_1based, dpi)?;
-        let (png, w, h) = crop_png(&full.png_bytes, &crop, &RenderLimits::default())?;
+        let (png, w, h) = crop_png(&full.png_bytes, &crop, &self.render_limits())?;
         Ok(RenderedPage::from_png(full.page, w, h, full.dpi, png, full.source_kind))
     }
 }
@@ -376,6 +377,7 @@ impl RasterXObjectRenderer {
 
 impl PdfPageRenderer for RasterXObjectRenderer {
     fn renderer_id(&self) -> &str { "pdf-raster-xobject/1" }
+    fn render_limits(&self) -> RenderLimits { self.limits }
 
     fn render_page(&self, pdf_bytes: &[u8], page_1based: usize, dpi: u16) -> Result<RenderedPage, String> {
         validate_request(pdf_bytes, page_1based, dpi, &self.limits)?;
@@ -436,6 +438,7 @@ impl ExternalCommandRenderer {
 }
 impl PdfPageRenderer for ExternalCommandRenderer {
     fn renderer_id(&self) -> &str { &self.id }
+    fn render_limits(&self) -> RenderLimits { self.limits }
     fn render_page(&self, pdf_bytes: &[u8], page_1based: usize, dpi: u16) -> Result<RenderedPage, String> {
         validate_request(pdf_bytes, page_1based, dpi, &self.limits)?;
         if !self.executable.is_file() { return Err(format!("external PDF renderer not found: {}", self.executable.display())); }
@@ -498,6 +501,7 @@ impl FallbackPageRenderer {
 }
 impl PdfPageRenderer for FallbackPageRenderer {
     fn renderer_id(&self) -> &str { self.primary.renderer_id() }
+    fn render_limits(&self) -> RenderLimits { self.primary.render_limits() }
     fn render_page(&self, pdf_bytes: &[u8], page_1based: usize, dpi: u16) -> Result<RenderedPage, String> {
         self.primary.render_page(pdf_bytes, page_1based, dpi).or_else(|pe| match &self.fallback {
             Some(fb) => fb.render_page(pdf_bytes, page_1based, dpi).map_err(|fe| format!("primary renderer failed ({pe}); fallback failed ({fe})")),
@@ -518,6 +522,7 @@ impl MapPageRenderer {
 }
 impl PdfPageRenderer for MapPageRenderer {
     fn renderer_id(&self) -> &str { "pdf-map-injected/1" }
+    fn render_limits(&self) -> RenderLimits { self.limits }
     fn render_page(&self, pdf_bytes: &[u8], page_1based: usize, dpi: u16) -> Result<RenderedPage, String> {
         validate_request(pdf_bytes, page_1based, dpi, &self.limits)?;
         let png = self.pages.get(&page_1based).ok_or_else(|| format!("no injected PNG for page {page_1based}"))?;

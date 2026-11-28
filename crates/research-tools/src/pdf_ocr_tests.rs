@@ -339,3 +339,49 @@ fn ingest_pdf_with_ocr_pins_provenance_caches_library_and_verifies_quotes() {
     assert_eq!(pinned.ocr_status, "applied");
     assert_eq!(pinned.pages_ocr_applied, vec![2, 4]);
 }
+
+#[test]
+fn empty_pdf_rejected_and_partial_page_range_does_not_overwrite_library_cache() {
+    let tmp = tempdir().unwrap();
+    let sandbox = WorkspaceSandbox::new(tmp.path().to_path_buf(), None);
+    let ledger = Mutex::new(Ledger::open(tmp.path()).unwrap());
+    let lib = Library::open(tmp.path()).unwrap();
+    let session = "s-ocr-range";
+    let pdf = build_mixed_four_page_pdf();
+    let renderer = mixed_renderer();
+    let runner = mixed_fake_runner();
+
+    let empty_req = OcrIngestRequest {
+        session_id: session,
+        file_name: "empty.pdf",
+        origin: "upload:empty.pdf",
+        raw_bytes: &[],
+        source_id_hint: None,
+        title: None,
+        ocr_opts: PdfOcrOptions::default(),
+    };
+    let err = ingest_pdf_with_ocr(&sandbox, &ledger, Some(&lib), &empty_req, &renderer, Some(&runner)).unwrap_err();
+    assert!(err.contains("empty"), "expected empty PDF rejection, got: {err}");
+
+    let partial_opts = PdfOcrOptions {
+        extract_opts: PdfExtractOptions::user_supplied().with_page_range(1, 2),
+        ..PdfOcrOptions::default()
+    };
+    let partial_req = OcrIngestRequest {
+        session_id: session,
+        file_name: "partial.pdf",
+        origin: "upload:partial.pdf",
+        raw_bytes: &pdf,
+        source_id_hint: Some("partial"),
+        title: Some("Partial Slice"),
+        ocr_opts: partial_opts,
+    };
+    let partial = ingest_pdf_with_ocr(&sandbox, &ledger, Some(&lib), &partial_req, &renderer, Some(&runner)).unwrap();
+    assert_eq!(partial.page_map.pages.len(), 2);
+    assert_eq!(partial.page_map.page_count, 4);
+    assert!(
+        lib.get_paper(&PaperKey::from_file_bytes(&pdf)).unwrap().is_none(),
+        "partial page-range OCR must not populate or overwrite full-document library paper_text cache"
+    );
+}
+

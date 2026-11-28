@@ -11,7 +11,7 @@ use research_tools::ingest_ocr::{
 use research_tools::library::Library;
 use research_tools::pdf::PdfError;
 use research_tools::pdf_ocr::{OcrPageRunner, PdfOcrOptions};
-use research_tools::pdf_ocr_job::{PdfOcrJob, PdfOcrJobSnapshot};
+use research_tools::pdf_ocr_job::{PdfOcrJob, PdfOcrJobSnapshot, PdfOcrStage};
 use research_tools::pdf_ocr_models::{
     effective_langs, format_ocr_engine_id, hash_local_traineddata, OcrLocalConfig,
     OcrModelProvenance,
@@ -98,9 +98,14 @@ struct OcrJobInner {
     final_snapshot: Option<PdfOcrJobSnapshot>,
     source: Option<OcrIngestedSource>,
     error: Option<String>,
+    cancelled: bool,
 }
 
 impl StoredOcrJob {
+    fn is_joined_nonblocking(&self) -> bool {
+        self.inner.try_lock().is_ok_and(|g| g.job.is_none())
+    }
+
     fn is_finished_nonblocking(&self) -> bool {
         self.inner.try_lock().is_ok_and(|g| g.job.as_ref().is_none_or(PdfOcrJob::is_finished))
     }
@@ -264,12 +269,16 @@ fn parse_ingest_request(
 fn register_ocr_job(job_id: String, slot: Arc<StoredOcrJob>) -> Result<(), (u16, String)> {
     let mut map = ocr_jobs().lock().map_err(|_| internal("OCR job registry lock poisoned"))?;
     if map.len() >= MAX_OCR_JOBS {
-        let oldest = map.iter().filter(|(_, s)| s.is_finished_nonblocking())
-            .min_by_key(|(_, s)| s.created_seq).map(|(k, _)| k.clone());
+        let oldest = map.iter().filter(|(_, s)| s.is_joined_nonblocking())
+            .min_by_key(|(_, s)| s.created_seq).map(|(k, _)| k.clone())
+            .or_else(|| {
+                map.iter().filter(|(_, s)| s.is_finished_nonblocking())
+                    .min_by_key(|(_, s)| s.created_seq).map(|(k, _)| k.clone())
+            });
         match oldest {
             Some(key) => { map.remove(&key); }
             None => {
-                slot.cancel_flag.store(true, Ordering::Relaxed);
+                slot.cancel_flag.store(true, Ordering::Release);
                 return Err(conflict("Too many concurrent OCR jobs are running; wait for one to finish."));
             }
         }
@@ -338,6 +347,7 @@ pub fn handle_ocr_ingest(
                 final_snapshot: None,
                 source: None,
                 error: None,
+                cancelled: false,
             }),
         });
         register_ocr_job(job_id.clone(), slot)?;
@@ -384,47 +394,53 @@ pub fn handle_ocr_job_status(state: &DesktopState, session: &str, job_id: &str) 
 
     if inner.job.as_ref().is_some_and(PdfOcrJob::is_finished) {
         if let Some(job) = inner.job.take() {
-            let snap = job.snapshot();
-            inner.final_snapshot = Some(snap);
+            let mut snap = job.snapshot();
             let raw_bytes = std::mem::take(&mut inner.raw_bytes);
-            match job.join() {
-                Ok(outcome) => {
-                    let pin_res = match state.ledger_write_lock.lock() {
-                        Ok(_write_lock) => match state.open_ledger() {
-                            Ok(opened) => {
-                                let sandbox = WorkspaceSandbox::new(
-                                    inner.data_dir.clone(),
-                                    inner.workspace_root.clone(),
-                                );
-                                let ledger = Mutex::new(opened);
-                                let library = Library::open(&inner.data_dir).ok();
-                                let meta = OcrIngestMeta {
-                                    session_id: &slot.session_id,
-                                    file_name: &inner.file_name,
-                                    origin: &inner.file_name,
-                                    source_id_hint: None,
-                                    title: inner.title.as_deref(),
-                                };
-                                pin_ocr_outcome_to_session(
-                                    &sandbox,
-                                    &ledger,
-                                    library.as_ref(),
-                                    &meta,
-                                    &raw_bytes,
-                                    outcome,
-                                )
-                            }
-                            Err(err) => Err(err),
-                        },
-                        Err(_) => Err("ledger write lock poisoned".into()),
-                    };
-                    match pin_res {
-                        Ok(ingested) => inner.source = Some(ingested),
-                        Err(err) => inner.error = Some(err),
+            if inner.cancelled || slot.cancel_flag.load(Ordering::Acquire) || raw_bytes.is_empty() {
+                let _ = job.join();
+                snap.stage = PdfOcrStage::Cancelled;
+                inner.final_snapshot = Some(snap);
+            } else {
+                inner.final_snapshot = Some(snap);
+                match job.join() {
+                    Ok(outcome) => {
+                        let pin_res = match state.ledger_write_lock.lock() {
+                            Ok(_write_lock) => match state.open_ledger() {
+                                Ok(opened) => {
+                                    let sandbox = WorkspaceSandbox::new(
+                                        inner.data_dir.clone(),
+                                        inner.workspace_root.clone(),
+                                    );
+                                    let ledger = Mutex::new(opened);
+                                    let library = Library::open(&inner.data_dir).ok();
+                                    let meta = OcrIngestMeta {
+                                        session_id: &slot.session_id,
+                                        file_name: &inner.file_name,
+                                        origin: &inner.file_name,
+                                        source_id_hint: None,
+                                        title: inner.title.as_deref(),
+                                    };
+                                    pin_ocr_outcome_to_session(
+                                        &sandbox,
+                                        &ledger,
+                                        library.as_ref(),
+                                        &meta,
+                                        &raw_bytes,
+                                        outcome,
+                                    )
+                                }
+                                Err(err) => Err(err),
+                            },
+                            Err(_) => Err("ledger write lock poisoned".into()),
+                        };
+                        match pin_res {
+                            Ok(ingested) => inner.source = Some(ingested),
+                            Err(err) => inner.error = Some(err),
+                        }
                     }
+                    Err(PdfError::Cancelled) => {}
+                    Err(err) => inner.error = Some(err.to_string()),
                 }
-                Err(PdfError::Cancelled) => {}
-                Err(err) => inner.error = Some(err.to_string()),
             }
         }
     }
@@ -447,8 +463,9 @@ pub fn handle_ocr_job_cancel(state: &DesktopState, session: &str, job_id: &str) 
     require_session(state, session)?;
     validate_job_id(job_id)?;
     let slot = lookup_session_job(&state.cfg.data_dir, session, job_id)?;
-    slot.cancel_flag.store(true, Ordering::Relaxed);
+    slot.cancel_flag.store(true, Ordering::Release);
     let mut inner = slot.inner.lock().map_err(|_| internal("OCR job state lock poisoned"))?;
+    inner.cancelled = true;
     inner.raw_bytes.clear();
     inner.raw_bytes.shrink_to_fit();
     let snapshot = if let Some(ref job) = inner.job {

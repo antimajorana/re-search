@@ -368,3 +368,26 @@ fn map_renderer_fallback_delegation_and_render_crop() {
     assert_eq!(cropped.sha256, ledger::sha256_hex(&cropped.png_bytes));
     assert_eq!(decode_png(&cropped.png_bytes, 16, 16, 256).unwrap().pixels, vec![10, 11, 14, 15]);
 }
+
+#[test]
+fn render_crop_enforces_renderer_limits() {
+    let scan_pdf = build_multipage_gray_pdf(&[(8, 8, &(0..64u8).collect::<Vec<_>>())]);
+    let full = RasterXObjectRenderer::default().render_page(&scan_pdf, 1, 200).unwrap();
+    let tight = RenderLimits {
+        max_png_bytes: full.png_bytes.len() + 16,
+        max_width: 8,
+        max_height: 8,
+        max_pixels: 64,
+        ..RenderLimits::default()
+    };
+    let mut pages = BTreeMap::new();
+    pages.insert(1, full.png_bytes);
+    let constrained = MapPageRenderer::new(pages).with_limits(tight);
+    assert_eq!(constrained.render_limits(), tight);
+    assert!(constrained.render_crop(&scan_pdf, 1, 200, CropRect::new(0.0, 0.0, 0.5, 0.5).unwrap()).is_ok());
+
+    let tiny_out = RenderLimits { max_png_bytes: 16, ..tight };
+    let raster_tiny = RasterXObjectRenderer::new(tiny_out);
+    assert!(raster_tiny.render_crop(&scan_pdf, 1, 200, CropRect::new(0.0, 0.0, 0.5, 0.5).unwrap()).is_err());
+}
+
