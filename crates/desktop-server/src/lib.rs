@@ -80,6 +80,7 @@ mod session_view;
 pub mod solve;
 pub mod solve_artifacts_route;
 pub mod solve_check_routes;
+pub mod solve_dag_labels;
 pub(crate) mod solve_host_hooks;
 pub mod solve_intake;
 pub mod solve_migrate;

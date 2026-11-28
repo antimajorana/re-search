@@ -547,3 +547,50 @@ fn solve_continue_handles_cli_orchestrator_blank_solver_independence_and_missing
     srv.shutdown();
     mock.finish();
 }
+
+#[test]
+fn dag_route_uses_solve_tiers_for_solve_sessions_and_preserves_research_statuses() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let ledger = Ledger::open(&data_dir).unwrap();
+    let (e1_sha, e2_sha) = (compute_entry_sha256(None, "Unchecked", "d1"), compute_entry_sha256(None, "Reviewed", "d2"));
+    ledger.append_with_hash("s-dag-solve", event_kinds::SOLVE_STARTED, 1, &json!({})).unwrap();
+    ledger.append_with_hash("s-dag-solve", event_kinds::SOLVE_SETUP, 1, &setup_payload()).unwrap();
+    ledger.append_with_hash("s-dag-solve", event_kinds::PROOF_ENTRY, 1, &json!({
+        "entry_id": "e-1", "entry_type": "derivation", "summary": "Unchecked", "details": "d1",
+        "depends_on": [], "entry_sha256": e1_sha, "origin": "solver"
+    })).unwrap();
+    ledger.append_with_hash("s-dag-solve", event_kinds::PROOF_ENTRY, 1, &json!({
+        "entry_id": "e-2", "entry_type": "result", "summary": "Reviewed", "details": "d2",
+        "depends_on": [], "entry_sha256": e2_sha, "origin": "solver"
+    })).unwrap();
+    ledger.append_with_hash("s-dag-solve", event_kinds::PROOF_VERIFICATION, 1, &json!({
+        "target_entry_id": "e-2", "verdict": "accepted", "independence": "same_model", "entry_sha256": e2_sha
+    })).unwrap();
+    ledger.append_with_hash("s-dag-solve", event_kinds::PROOF_ENTRY, 1, &json!({
+        "entry_id": "e-old", "entry_type": "derivation", "summary": "Old", "details": "d0", "depends_on": []
+    })).unwrap();
+    ledger.append_with_hash("s-dag-solve", event_kinds::PROOF_SUPERSEDE, 1, &json!({
+        "entry_id": "e-old", "replaced_by": "e-2", "reason": "fixed"
+    })).unwrap();
+    ledger.append_with_hash("s-dag-res", "session.start", 1, &json!({ "prompt": "Research" })).unwrap();
+    ledger.append_with_hash("s-dag-res", event_kinds::PROOF_ENTRY, 1, &json!({
+        "entry_id": "r-1", "entry_type": "derivation", "summary": "Acc", "details": "d", "depends_on": []
+    })).unwrap();
+    ledger.append_with_hash("s-dag-res", event_kinds::PROOF_VERIFICATION, 1, &json!({
+        "target_entry_id": "r-1", "verdict": "accepted"
+    })).unwrap();
+    let srv = start_desktop_server(test_cfg(&data_dir, None, None, None)).unwrap();
+    let auth = [("X-ReSearch-Token", srv.info.token.as_str())];
+    let (st1, _, b1) = raw_http(srv.addr.port(), "GET", "/api/sessions/s-dag-solve/dag", &auth, b"");
+    let (st2, _, b2) = raw_http(srv.addr.port(), "GET", "/api/sessions/s-dag-res/dag", &auth, b"");
+    assert_eq!((st1, st2), (200, 200));
+    let (d1, d2): (Value, Value) = (serde_json::from_slice(&b1).unwrap(), serde_json::from_slice(&b2).unwrap());
+    assert_eq!((&d1["entries"][0]["status"], &d1["entries"][0]["solve_tier"]), (&json!("Unchecked"), &json!("unchecked")));
+    assert_eq!((&d1["entries"][1]["status"], &d1["entries"][1]["solve_tier"]), (&json!("Model agreed (same model)"), &json!("model_agreed_same_model")));
+    assert_eq!(d1["entries"][2]["status"], "superseded");
+    assert!(d1["entries"][2].get("solve_tier").is_none());
+    assert_eq!(d2["entries"][0]["status"], "accepted");
+    assert!(d2["entries"][0].get("solve_tier").is_none());
+    srv.shutdown();
+}

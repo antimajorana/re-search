@@ -468,8 +468,11 @@ pub fn handle_dag(state: &DesktopState, session_id: &str) -> ApiResult {
         return Err(not_found(format!("session `{session_id}` not found")));
     }
     let ledger = state.open_ledger().map_err(internal)?;
-    let dag = read_proof_dag(&ledger, session_id).map_err(internal)?;
-    Ok((200, serde_json::to_value(dag).map_err(|e| internal(e.to_string()))?))
+    let mut dag = serde_json::to_value(read_proof_dag(&ledger, session_id).map_err(internal)?)
+        .map_err(|e| internal(e.to_string()))?;
+    let events = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
+    crate::solve_dag_labels::relabel_for_solve(&mut dag, &events);
+    Ok((200, dag))
 }
 
 pub fn handle_verify(state: &DesktopState, session_id: &str) -> ApiResult {
