@@ -243,3 +243,93 @@ fn gate_g6_and_g4_detect_verification_stuck_and_model_or_wall_caps() {
     let stuck = detect_g6_verification_stuck(&st, &evs).expect("expected G6 verification_stuck");
     assert_eq!(stuck.reason, PauseReason::VerificationStuck);
 }
+
+#[test]
+fn g3_blind_compute_gate_refuses_leaks_and_records_guardrail_blocked() {
+    let dir = TempDir::new().unwrap();
+    let env = Arc::new(ResearchEnv::new(dir.path()));
+    let ledger = Ledger::open(dir.path()).unwrap();
+    let sid = "s-g3-blind";
+    seed_setup(&ledger, sid, SolveBudgets::default());
+
+    // Valid call passes.
+    let valid = json!({
+        "inputs": ["poly_a@1"],
+        "operation": "Integrate poly_a from 0 to 1 with respect to x.",
+        "compare_with": "sum@1"
+    });
+    assert!(check_g3_blind_compute(&valid).is_ok());
+
+    // Identifier-boundary precision: `sum@1` must NOT false-positive on "assume".
+    let boundary_ok = json!({
+        "inputs": ["poly_a@1"],
+        "operation": "Assume x > 0 and expand poly_a.",
+        "compare_with": "sum@1"
+    });
+    assert!(check_g3_blind_compute(&boundary_ok).is_ok());
+
+    // Exact match in `inputs` -> refused.
+    let leak_input_exact = json!({
+        "inputs": ["poly_a@1", "ans@1"],
+        "operation": "Compute derivative of poly_a.",
+        "compare_with": "ans@1"
+    });
+    assert!(check_g3_blind_compute(&leak_input_exact).is_err());
+
+    // Same base name in `inputs` (different version) -> refused.
+    let leak_input_base = json!({
+        "inputs": ["ans@2"],
+        "operation": "Simplify input.",
+        "compare_with": "ans@1"
+    });
+    assert!(check_g3_blind_compute(&leak_input_base).is_err());
+
+    // `compare_with` handle or base token in `operation` -> refused.
+    let leak_op_handle = json!({
+        "inputs": ["poly_a@1"],
+        "operation": "Recompute ans@1 from poly_a.",
+        "compare_with": "ans@1"
+    });
+    assert!(check_g3_blind_compute(&leak_op_handle).is_err());
+
+    let leak_op_base = json!({
+        "inputs": ["poly_a@1"],
+        "operation": "Verify that derivative equals `ans`.",
+        "compare_with": "ans@1"
+    });
+    assert!(check_g3_blind_compute(&leak_op_base).is_err());
+
+    // Operation > 600 chars -> refused.
+    let too_long = json!({
+        "inputs": ["poly_a@1"],
+        "operation": "x".repeat(COMPUTE_BLIND_MAX_OPERATION_CHARS + 1),
+        "compare_with": "ans@1"
+    });
+    assert!(check_g3_blind_compute(&too_long).is_err());
+
+    // SolveGate::before returns GateDecision::Block with gate id "G3".
+    let gate = SolveGate::new(Arc::clone(&env), 0, 0);
+    let req = tools::GateRequest {
+        session: sid,
+        caller: "solver",
+        tool_id: COMPUTE_BLIND,
+        call_id: "c-g3-gate",
+        args: &leak_op_base,
+        canonical_args: "{}",
+        effect: policy::EffectClass::ExecuteCode,
+        approval_scope: tools::ApprovalScope::Once,
+    };
+    match gate.before(&req) {
+        GateDecision::Block(refusal) => assert_eq!(refusal.gate, "G3"),
+        other => panic!("expected G3 block, got {other:?}"),
+    }
+
+    // enforce_g3_blind_compute writes `guardrail.blocked` and increments `gate_bounces`.
+    let err = enforce_g3_blind_compute(&ledger, sid, "cb-1", &leak_input_exact).unwrap_err();
+    assert!(err.starts_with("GATE G3:"), "unexpected err: {err}");
+    let evs = ledger.read_session(sid).unwrap();
+    assert!(evs.iter().any(|e| {
+        e.kind == event_kinds::GUARDRAIL_BLOCKED && e.payload["gate"] == json!("G3")
+    }));
+    assert_eq!(SolveState::from_events(&evs).gate_bounces, 1);
+}

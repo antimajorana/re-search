@@ -20,9 +20,9 @@ def check_mode_stages(browser, binary):
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
 
-            # 1. Left-rail Solve and Explore buttons remain disabled with "not built yet" (F5).
-            expect(page.locator("#new-solve-btn")).to_be_disabled()
-            expect(page.locator("#new-solve-btn")).to_contain_text("not built yet")
+            # 1. Left-rail Solve is enabled by default (no localStorage override), while Explore stays disabled with "not built yet" (F5).
+            expect(page.locator("#new-solve-btn")).to_be_enabled()
+            assert "not built yet" not in page.locator("#new-solve-btn").inner_text()
             expect(page.locator("#new-explore-btn")).to_be_disabled()
             expect(page.locator("#new-explore-btn")).to_contain_text("not built yet")
 
@@ -46,21 +46,19 @@ def check_mode_stages(browser, binary):
                 "Explore spectral gap scaling in coupled harmonic chains"
             )
 
-            # 3. Create a Solve session via authenticated API and select it from the left rail ->
-            #    `mode_stages.js` mounts `solve_setup.js` in `#solve-session-stage`!
-            page.evaluate("""async () => {
-                const api = await import('/assets/api.js');
-                await api.createSession({ id: 's-browser-solve', mode: 'solve' });
-            }""")
-            page.reload()
-            page.locator("#session-list .session-item").filter(
-                has=page.locator('[data-mode-tag="solve"]')
-            ).click()
+            # 3. Click left-rail Solve directly (no reload/API workaround) ->
+            #    `mode_stages.js` mounts `solve_setup.js`, `solve_steps.js`, and `solve_transcribe.js` in `#solve-session-stage`!
+            page.locator("#new-solve-btn").click()
 
             solve_stage = page.locator("#solve-session-stage")
             expect(solve_stage).to_be_visible()
             expect(explore_stage).to_be_hidden()
             expect(solve_stage.locator('[data-testid="solve-setup-card"]')).to_be_visible()
+            expect(solve_stage.locator('[data-testid="solve-workspace"]')).to_be_visible()
+            transcribe_tab = solve_stage.locator('[data-tab-id="transcribe"]')
+            expect(transcribe_tab).to_be_visible()
+            transcribe_tab.click()
+            expect(solve_stage.locator('[data-testid="solve-transcribe-list"]')).to_be_visible()
             expect(solve_stage.locator('[data-testid="solve-approval-host"]')).to_contain_text(
                 "Approvals for this Solve run"
             )

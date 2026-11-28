@@ -7,18 +7,46 @@
 
 use policy::Policy;
 use research_tools::tool_profile::{
-    lookup as lookup_profile, register_profile, ProfileHostTools, PROFILE_RESEARCH_V1,
+    lookup as lookup_profile, register_profile, ProfileHostTools, SolveCheckHost,
+    PROFILE_RESEARCH_V1,
 };
 use research_tools::ResearchEnv;
 use serde_json::Value;
 use std::sync::Arc;
 use tools::{builtin, CallCtx, Registry, ToolDef, ToolHandler, WorkerEpoch};
 
+/// Environment variable naming the frozen tool profile served by `core.exe` (`00-overview.md` 2.2, F1).
+pub const CORE_TOOL_PROFILE_ENV: &str = "CORE_TOOL_PROFILE";
+
 fn cli_title_handler() -> Arc<dyn ToolHandler> {
     Arc::new(|ctx: &CallCtx<'_>, input: &Value| {
         let ledger = ctx.ledger.lock().map_err(|_| "ledger lock poisoned")?;
         record_cli_title(&ledger, ctx.session, input)
     })
+}
+
+/// Register the tools for `profile_name` plus MCP `set_session_title`, with optional Solve check
+/// host bindings, returning the profile's policy. Fails closed if `profile_name` is unbuilt or unknown.
+pub fn register_core_tools_for_profile_with_solve(
+    registry: &mut Registry,
+    sympy_epoch: Arc<dyn WorkerEpoch>,
+    sympy_handler: Arc<dyn ToolHandler>,
+    env: Arc<ResearchEnv>,
+    profile_name: &str,
+    solve_check: Option<SolveCheckHost>,
+) -> Result<Policy, String> {
+    let profile = lookup_profile(profile_name).map_err(|e| e.to_string())?;
+    register_profile(
+        &profile,
+        registry,
+        env,
+        ProfileHostTools {
+            sympy_epoch,
+            sympy_handler,
+            session_title_handler: Some(cli_title_handler()),
+            solve_check,
+        },
+    )
 }
 
 /// Register the tools for `profile_name` plus MCP `set_session_title`, returning the profile's
@@ -30,17 +58,13 @@ pub fn register_core_tools_for_profile(
     env: Arc<ResearchEnv>,
     profile_name: &str,
 ) -> Result<Policy, String> {
-    let profile = lookup_profile(profile_name).map_err(|e| e.to_string())?;
-    register_profile(
-        &profile,
+    register_core_tools_for_profile_with_solve(
         registry,
+        sympy_epoch,
+        sympy_handler,
         env,
-        ProfileHostTools {
-            sympy_epoch,
-            sympy_handler,
-            session_title_handler: Some(cli_title_handler()),
-            solve_check: None,
-        },
+        profile_name,
+        None,
     )
 }
 
@@ -124,11 +148,27 @@ pub fn core_tool_set(research: Option<Arc<ResearchEnv>>) -> CoreToolSet {
     CoreToolSet { defs: registry.defs().into_iter().cloned().collect(), policy_version: policy.version }
 }
 
-/// Ids of the tools `core.exe` serves for a launch environment: with research tools when
-/// `CORE_ENABLE_RESEARCH_TOOLS=1` is in `core_env` (as on every desktop session), else the
-/// built-in pair. Used where a tool config must name the tools (Antigravity's
-/// `enabledTools`).
+/// Ids of the tools `core.exe` serves for a launch environment:
+/// - If `CORE_TOOL_PROFILE` is set and non-empty, resolves via [`core_tool_set_for_profile`]
+///   (tolerating `NoWorker` cleanly during tool-ID enumeration); falls back fail-closed to the
+///   minimal built-in pair (`ledger_note`, `sympy_eval`) without panicking on unknown/unbuilt
+///   profiles so it never widens permissions.
+/// - Otherwise honours legacy `CORE_ENABLE_RESEARCH_TOOLS=1`, else the built-in pair.
+///
+/// Used where a tool config must name the tools (Antigravity's `enabledTools`).
 pub fn core_tool_ids_for(core_env: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+    if let Some(profile_name) = core_env
+        .get(CORE_TOOL_PROFILE_ENV)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let env = Arc::new(ResearchEnv::new(std::env::temp_dir()));
+        return match core_tool_set_for_profile(env, profile_name) {
+            Ok(set) => set.defs.into_iter().map(|d| d.id).collect(),
+            Err(_) => core_tool_set(None).defs.into_iter().map(|d| d.id).collect(),
+        };
+    }
     let research = core_env.get("CORE_ENABLE_RESEARCH_TOOLS").is_some_and(|v| v == "1");
     let env = research.then(|| Arc::new(ResearchEnv::new(std::env::temp_dir())));
     core_tool_set(env).defs.into_iter().map(|d| d.id).collect()
@@ -137,6 +177,7 @@ pub fn core_tool_ids_for(core_env: &std::collections::BTreeMap<String, String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn cli_can_title_an_eligible_session_once() {
@@ -192,5 +233,48 @@ mod tests {
         let err = core_tool_set_for_profile(env, research_tools::tool_profile::PROFILE_EXPLORE_V1)
             .unwrap_err();
         assert!(err.contains("profile not built yet"), "{err}");
+    }
+
+    #[test]
+    fn core_tool_ids_for_honors_solve_v1_profile_and_excludes_non_solve_tools() {
+        let env = BTreeMap::from([(
+            CORE_TOOL_PROFILE_ENV.to_string(),
+            research_tools::tool_profile::PROFILE_SOLVE_V1.to_string(),
+        )]);
+        let ids = core_tool_ids_for(&env);
+        let expected: Vec<String> = research_tools::tool_profile::solve_v1()
+            .mcp_defs()
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        assert_eq!(ids.len(), 17);
+        assert_eq!(ids, expected);
+        assert!(ids.iter().any(|id| id == builtin::SET_SESSION_TITLE));
+        for forbidden in ["doc_ingest", "ledger_append", "lean_check", "fs_write", "search_formal_library"] {
+            assert!(!ids.iter().any(|id| id == forbidden), "solve/1 must exclude {forbidden}");
+        }
+    }
+
+    #[test]
+    fn core_tool_ids_for_falls_back_cleanly_on_invalid_or_unbuilt_profile() {
+        for bad in ["explore/1", "unknown/99"] {
+            let env = BTreeMap::from([
+                (CORE_TOOL_PROFILE_ENV.to_string(), bad.to_string()),
+                ("CORE_ENABLE_RESEARCH_TOOLS".to_string(), "1".to_string()),
+            ]);
+            let ids = core_tool_ids_for(&env);
+            assert_eq!(ids, vec!["ledger_note".to_string(), "sympy_eval".to_string()]);
+        }
+    }
+
+    #[test]
+    fn core_tool_ids_for_preserves_legacy_research_flag_when_profile_absent() {
+        let legacy_on = BTreeMap::from([("CORE_ENABLE_RESEARCH_TOOLS".to_string(), "1".to_string())]);
+        let ids_on = core_tool_ids_for(&legacy_on);
+        assert!(ids_on.iter().any(|id| id == "fs_write"));
+        assert!(ids_on.iter().any(|id| id == builtin::SET_SESSION_TITLE));
+
+        let legacy_off = BTreeMap::new();
+        assert_eq!(core_tool_ids_for(&legacy_off), vec!["ledger_note".to_string(), "sympy_eval".to_string()]);
     }
 }

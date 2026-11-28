@@ -3,8 +3,7 @@
 use crate::approver::UiApprover;
 use crate::state::DesktopState;
 use research_tools::tool_profile::{
-    active_profile_for_session_events, lookup as lookup_profile, register_profile,
-    ProfileHostTools,
+    lookup as lookup_profile, register_profile, ProfileHostTools, PROFILE_SOLVE_V1,
 };
 use research_tools::{register_lean_tool, research_policy, ResearchEnv};
 use serde_json::Value;
@@ -60,6 +59,7 @@ fn build_desktop_worker(state: &DesktopState, session: &str) -> Result<Option<Wo
             scratch,
             pycache,
             startup_timeout: Duration::from_secs(90),
+            job_memory_limit_bytes: None,
         },
         sandbox,
     )))
@@ -77,7 +77,7 @@ pub(crate) fn build_desktop_router(
 ) -> Result<(Router, String, bool), String> {
     let ledger = state.open_ledger()?;
     let existing = ledger.read_session(session).map_err(|e| e.to_string())?;
-    let profile = active_profile_for_session_events(&existing)?;
+    let profile = crate::session_mode::profile_for_session(&existing)?;
     build_desktop_router_for_profile(state, env, session, profile.name)
 }
 
@@ -87,6 +87,10 @@ pub(crate) fn build_desktop_router_for_profile(
     session: &str,
     profile_name: &str,
 ) -> Result<(Router, String, bool), String> {
+    if profile_name == PROFILE_SOLVE_V1 {
+        let bundle = crate::solve_runtime::build_solve_router(state, env, session)?;
+        return Ok((bundle.router, bundle.containment, bundle.contained));
+    }
     let profile = lookup_profile(profile_name).map_err(|e| e.to_string())?;
     let worker = build_desktop_worker(&state, session)?;
     let epoch_handle = worker.as_ref().map(Worker::epoch_handle);

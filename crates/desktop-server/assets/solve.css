@@ -427,3 +427,57 @@
   gap: 8px;
 }
 
+/* S13 derivation workspace, badges, Why popover, Expressions table */
+.solve-workspace { display: flex; flex-direction: column; gap: 12px; }
+.solve-workspace-grid { display: grid; grid-template-columns: minmax(320px, 1.25fr) minmax(300px, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 960px) { .solve-workspace-grid { grid-template-columns: 1fr; } }
+.solve-derivation-col, .solve-canvas-col, .solve-steps-list { display: flex; flex-direction: column; gap: 10px; }
+.solve-steps-toolbar, .solve-step-head, .solve-result-head, .solve-why-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.solve-step-card, .solve-result-sheet, .solve-why-popover, .solve-legend { background: var(--bg-elevated, #ffffff); border: 1px solid var(--border-subtle, #dce1e8); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.solve-step-card.is-selected { border-color: var(--accent, #0b57d0); box-shadow: 0 0 0 1px var(--accent, #0b57d0); }
+.solve-step-card.is-superseded { opacity: 0.6; }
+.solve-badge-group { display: flex; flex-direction: column; gap: 4px; }
+.solve-badge-row, .solve-badge-flags, .solve-step-deps, .solve-tab-bar, .solve-why-actions, .solve-legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.solve-flag-chip, .solve-sublabel-chip, .solve-dep-chip { font-size: 11px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border-subtle, #dce1e8); background: var(--bg-surface, #f8fafd); color: var(--ink-secondary, #444746); }
+.solve-rests-on-line, .solve-legend-verified-note, .solve-result-counts, .solve-receipt-line { font-size: 12px; color: var(--ink-muted, #606569); margin: 0; }
+.solve-step-link, .solve-step-id-btn { border: none; background: transparent; color: var(--accent, #0b57d0); font-family: var(--font-mono, monospace); font-size: 12px; cursor: pointer; padding: 0 4px; text-decoration: underline; }
+.solve-step-equations, .solve-result-answer { padding: 8px 10px; border-radius: 8px; background: var(--bg-surface, #f8fafd); overflow-x: auto; }
+.solve-math-unavailable { font-size: 12px; color: var(--status-warn, #b06000); font-style: italic; }
+.solve-why-check { border: 1px solid var(--border-subtle, #dce1e8); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.solve-why-check--stale { border-style: dashed; opacity: 0.8; }
+.solve-why-code { margin: 0; padding: 8px; font-size: 11.5px; border-radius: 6px; background: var(--bg-surface, #f8fafd); overflow-x: auto; }
+.solve-why-form { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle, #dce1e8); }
+.solve-exprs-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.solve-exprs-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.solve-exprs-table th, .solve-exprs-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border-subtle, #dce1e8); vertical-align: top; }
+.solve-border--solid { border-left: 3px solid var(--status-ok, #137333); padding-left: 8px; }
+.solve-border--dashed { border-left: 3px dashed var(--ink-muted, #606569); padding-left: 8px; }
+.solve-border--plain { border-left: 3px solid var(--border-subtle, #dce1e8); padding-left: 8px; }
+.solve-border--none { border-left: 3px solid transparent; padding-left: 8px; }
+.solve-series-order { margin-left: 8px; font-size: 11.5px; color: var(--ink-muted, #606569); font-family: var(--font-mono, monospace); }
+.solve-why-host { margin-top: 8px; }
+.solve-why-tier-diff { font-size: 12px; font-weight: 500; color: var(--ink-secondary, #444746); }
+.solve-why-evidence-list { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; font-size: 12px; }
+.solve-why-evidence-key { color: var(--ink-muted, #606569); font-family: var(--font-mono, monospace); }
+.solve-why-evidence-val { margin: 0; word-break: break-word; }
+.gv-root { display: flex; flex-direction: column; gap: 8px; }
+.gv-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
+.gv-filter-group, .gv-zoom-controls, .gv-legend-items { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.gv-viewport { min-height: 280px; border: 1px solid var(--border-subtle, #dce1e8); border-radius: 10px; overflow: hidden; background: var(--bg-surface, #f8fafd); }
+.gv-svg { width: 100%; height: 100%; display: block; }
+.gv-legend-core { margin: 0; font-size: 11.5px; color: var(--ink-muted, #606569); }
+
+/* S17b Check-a-derivation two-column intake & confirmation cards */
+.solve-transcribe-view, .solve-transcribe-list, .solve-transcribe-form { display: flex; flex-direction: column; gap: 10px; }
+.solve-transcribe-header, .solve-transcribe-header-actions, .solve-transcribe-controls, .solve-transcribe-card-head, .solve-transcribe-confirm-slot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.solve-transcribe-input { width: 100%; font-family: var(--font-mono, monospace); font-size: 12px; padding: 8px; border: 1px solid var(--border-subtle, #dce1e8); border-radius: 8px; }
+.solve-transcribe-card { background: var(--bg-elevated, #ffffff); border: 1px solid var(--border-subtle, #dce1e8); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.solve-transcribe-card--failed { border-color: var(--status-err, #b3261e); background: var(--status-err-bg, #fce8e6); }
+.solve-transcribe-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 720px) { .solve-transcribe-cols { grid-template-columns: 1fr; } }
+.solve-transcribe-col { background: var(--bg-surface, #f8fafd); border: 1px solid var(--border-subtle, #dce1e8); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.solve-transcribe-col-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted, #606569); }
+.solve-transcribe-raw { margin: 0; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono, monospace); }
+.solve-transcribe-pair { font-size: 11.5px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border-subtle, #dce1e8); background: var(--bg-surface, #f8fafd); cursor: pointer; }
+.solve-transcribe-pair--failed { border-color: var(--status-err, #b3261e); color: var(--status-err, #b3261e); font-weight: 600; }
+.solve-status-note { font-size: 12px; color: var(--status-ok, #137333); }
