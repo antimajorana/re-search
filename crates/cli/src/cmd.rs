@@ -1,5 +1,8 @@
 //! CLI argument parsing, usage text, and subcommand dispatch helpers.
 
+#[path = "cmd_writeup.rs"]
+mod cmd_writeup;
+
 use crate::api_session;
 use crate::cmd_ext;
 use crate::session;
@@ -30,6 +33,7 @@ pub const USAGE: &str = "usage:
   re-search fork SESSION --at-seq N [--assumption TEXT] [--data-dir DIR]
   re-search diff BASE_SESSION TARGET_SESSION [--data-dir DIR]
   re-search export SESSION --format tex|html|zip --out PATH [--data-dir DIR]
+  re-search writeup SESSION --format tex|md|bib --out PATH [--no-inline-marks] [--data-dir DIR]
   re-search show SESSION [--data-dir DIR]
   re-search sessions [--data-dir DIR]
   re-search verify [SESSION] [--data-dir DIR]
@@ -402,6 +406,13 @@ where
     let mut positional = Vec::new();
     while let Some(arg) = args.next() {
         match arg.strip_prefix("--") {
+            Some("no-inline-marks") => {
+                flags.insert("no-inline-marks".to_string(), "true".to_string());
+            }
+            Some(rest) if rest.starts_with("no-inline-marks=") => {
+                let val = rest.trim_start_matches("no-inline-marks=");
+                flags.insert("no-inline-marks".to_string(), val.to_string());
+            }
             Some(name) => {
                 let value = args.next().ok_or(format!("--{name} needs a value\n{USAGE}"))?;
                 flags.insert(name.to_string(), value);
@@ -441,6 +452,7 @@ where
         "fork" => cmd_ext::fork_command(positional, flags, data_dir),
         "diff" => cmd_ext::diff_command(positional, flags, data_dir),
         "export" => cmd_ext::export_command(positional, flags, data_dir),
+        "writeup" => cmd_writeup::writeup_command(positional, flags, data_dir),
         "show" => {
             reject_unknown_flags(&flags)?;
             let session = positional.first().ok_or(format!("show needs a session id\n{USAGE}"))?;

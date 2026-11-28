@@ -15,6 +15,7 @@
 //! `Error::LegacyUnchainedSchema` on `append*` / `verify*`.
 
 pub mod fulltext_cache;
+pub mod lessons_b_store;
 pub mod lessons_db;
 mod lessons_rows;
 pub mod library_db;
@@ -32,6 +33,7 @@ pub mod zotero_reader;
 pub use fulltext_cache::{
     FulltextCache, FulltextEntry, FULLTEXT_TABLE, LIBRARY_DB_NAME, LIBRARY_DIR_NAME,
 };
+pub use lessons_b_store::UserLessonRow;
 pub use lessons_db::{LessonsDb, LESSONS_DB_NAME, LESSONS_SCHEMA_VERSION};
 pub use library_db::LibraryDb;
 pub use library_schema::{

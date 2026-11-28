@@ -1,16 +1,15 @@
 //! Unified literature provider query runners (package F11).
 //!
-//! Supports the four allowlisted scholarly services (arXiv, INSPIRE-HEP, Semantic Scholar,
-//! Crossref) with abstracts, paging, and citation relations, keyed by F2 [`PaperKey`] /
-//! [`PaperRef`]. OpenAlex (`api.openalex.org`) and TheoremSearch are not allowlisted in
-//! `http_client.rs` (deferred to package X19) and return [`QueryStatus::Disabled`] without
-//! touching the network.
+//! Supports the five allowlisted scholarly services (arXiv, INSPIRE-HEP, Semantic Scholar,
+//! Crossref, and OpenAlex [X19 Part 1]) with abstracts, paging, and citation relations, keyed
+//! by F2 [`PaperKey`] / [`PaperRef`]. TheoremSearch remains disabled (not allowlisted) and
+//! returns [`QueryStatus::Disabled`] without touching the network.
 //!
 //! Every outgoing HTTP request goes strictly through
 //! [`crate::http_client::fetch_response_with_options_and_gate`] backed by F3's [`NetRateGate`].
 
 #[path = "lit_providers_parse.rs"]
-mod parse;
+pub(crate) mod parse;
 #[path = "lit_providers_url.rs"]
 mod url;
 
@@ -54,11 +53,12 @@ pub enum LitProvider {
 }
 
 impl LitProvider {
-    pub const ALL_ALLOWLISTED: [LitProvider; 4] = [
+    pub const ALL_ALLOWLISTED: [LitProvider; 5] = [
         Self::Arxiv,
         Self::Inspire,
         Self::SemanticScholar,
         Self::Crossref,
+        Self::OpenAlex,
     ];
     pub const ALL: [LitProvider; 6] = [
         Self::Arxiv,
@@ -99,7 +99,8 @@ impl LitProvider {
             Self::Inspire => Some(Service::Inspire),
             Self::SemanticScholar => Some(Service::SemanticScholar),
             Self::Crossref => Some(Service::Crossref),
-            Self::OpenAlex | Self::TheoremSearch => None,
+            Self::OpenAlex => Some(Service::OpenAlex),
+            Self::TheoremSearch => None,
         }
     }
 
@@ -197,16 +198,17 @@ impl LitQuery {
 #[derive(Clone, Default)]
 pub struct ProviderConfig {
     pub semantic_scholar_api_key: Option<String>,
+    pub openalex_api_key: Option<String>,
     pub request_timeout: Option<Duration>,
 }
 
 impl fmt::Debug for ProviderConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s2 = self.semantic_scholar_api_key.as_ref().map(|_| "<redacted>");
+        let oa = self.openalex_api_key.as_ref().map(|_| "<redacted>");
         f.debug_struct("ProviderConfig")
-            .field(
-                "semantic_scholar_api_key",
-                &self.semantic_scholar_api_key.as_ref().map(|_| "<redacted>"),
-            )
+            .field("semantic_scholar_api_key", &s2)
+            .field("openalex_api_key", &oa)
             .field("request_timeout", &self.request_timeout)
             .finish()
     }
@@ -564,15 +566,19 @@ fn query_label(query: &LitQuery) -> String {
 
 fn build_http_options(provider: LitProvider, config: &ProviderConfig) -> HttpRequestOptions {
     let mut extra_headers = Vec::new();
-    if provider == LitProvider::SemanticScholar {
-        if let Some(key) = config
-            .semantic_scholar_api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|k| !k.is_empty())
-        {
-            extra_headers.push(("x-api-key".to_string(), key.to_string()));
+    match provider {
+        LitProvider::SemanticScholar => {
+            if let Some(key) = config
+                .semantic_scholar_api_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+            {
+                extra_headers.push(("x-api-key".to_string(), key.to_string()));
+            }
         }
+        LitProvider::OpenAlex => crate::lit_openalex::apply_auth_header(config, &mut extra_headers),
+        _ => {}
     }
     HttpRequestOptions {
         extra_headers,

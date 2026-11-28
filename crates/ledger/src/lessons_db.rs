@@ -19,7 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const LESSONS_DB_NAME: &str = "lessons.db";
 
 /// Current SQLite `PRAGMA user_version` for `lessons.db` (forward-only migrations).
-pub const LESSONS_SCHEMA_VERSION: u32 = 1;
+pub const LESSONS_SCHEMA_VERSION: u32 = 2;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -96,6 +96,12 @@ pub use crate::lessons_rows::{
 pub struct LessonsDb {
     conn: Connection,
     db_path: PathBuf,
+}
+
+impl LessonsDb {
+    pub(crate) fn conn(&self) -> &Connection {
+        &self.conn
+    }
 }
 
 impl LessonsDb {
@@ -531,15 +537,24 @@ fn migrate_lessons_db(conn: &mut Connection) -> Result<()> {
         return Ok(());
     }
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    tx.execute_batch(SCHEMA_V1)?;
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis().min(i64::MAX as u128) as i64)
         .unwrap_or(0);
-    tx.execute(
-        "INSERT OR REPLACE INTO schema_migrations (version, applied_ms) VALUES (?1, ?2)",
-        params![LESSONS_SCHEMA_VERSION as i64, now_ms],
-    )?;
+    if cur < 1 {
+        tx.execute_batch(SCHEMA_V1)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO schema_migrations (version, applied_ms) VALUES (?1, ?2)",
+            params![1_i64, now_ms],
+        )?;
+    }
+    if cur < 2 {
+        crate::lessons_b_store::migrate_v2(&tx)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO schema_migrations (version, applied_ms) VALUES (?1, ?2)",
+            params![2_i64, now_ms],
+        )?;
+    }
     tx.pragma_update(None, "user_version", LESSONS_SCHEMA_VERSION)?;
     tx.commit()?;
     Ok(())

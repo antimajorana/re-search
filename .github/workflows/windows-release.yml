@@ -100,7 +100,7 @@ jobs:
             Copy-Item -LiteralPath (Join-Path 'python' $name) -Destination $worker.FullName
           }
           $checks = New-Item -ItemType Directory -Path (Join-Path $worker.FullName 'checks')
-          foreach ($name in '__init__.py', 'srepr_safe.py') {
+          foreach ($name in '__init__.py', 'srepr_safe.py', 'algebra.py', 'algebra_probe.py', 'physics.py', 'physics_helpers.py', 'physics_matrix.py') {
             Copy-Item -LiteralPath (Join-Path 'python/checks' $name) -Destination $checks.FullName
           }
           python packaging/windows/stage_runtime.py --output (Join-Path $stage 'runtime')

@@ -54,8 +54,31 @@ export function initSessionRail(opts = {}) {
   }
 }
 
+let lastRailCtx = null;
+
+if (typeof globalThis !== 'undefined') {
+  globalThis.__reSearchSessionRail = {
+    async upsertSession(session, { select = false } = {}) {
+      if (!lastRailCtx || !session?.id) return false;
+      const opts = lastRailCtx.opts || {};
+      if (Array.isArray(opts.sessions)) {
+        const idx = opts.sessions.findIndex((s) => s?.id === session.id);
+        if (idx >= 0) opts.sessions[idx] = { ...opts.sessions[idx], ...session };
+        else opts.sessions.unshift(session);
+      }
+      if (select && typeof opts.onSelect === 'function') {
+        await opts.onSelect(session.id);
+        return true;
+      }
+      renderSessionRailList(lastRailCtx.containerEl, { ...opts, activeSessionId: session.id });
+      return false;
+    },
+  };
+}
+
 export function renderSessionRailList(containerEl, opts = {}) {
   if (!containerEl) return;
+  lastRailCtx = { containerEl, opts };
   const sessions = Array.isArray(opts.sessions) ? opts.sessions : [];
   const activeSessionId = opts.activeSessionId || null;
   globalThis.__reSearchModeStages?.syncFromRail?.(activeSessionId, sessions);

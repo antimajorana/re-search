@@ -18,6 +18,10 @@ pub mod latex_compile;
 pub mod latex_repair;
 pub mod lean_check;
 pub mod lessons;
+pub mod lessons_backup;
+pub mod lessons_capture;
+pub mod lessons_draft;
+pub mod lessons_prompt;
 pub mod lessons_schema;
 pub mod lessons_select;
 pub mod lines_sent;
@@ -28,6 +32,7 @@ mod library_rebuild;
 mod library_rebuild_lit;
 pub mod library_schema;
 pub mod lit_abstracts;
+pub mod lit_openalex;
 pub mod lit_providers;
 pub mod literature;
 pub mod map_authors_claim;
@@ -71,6 +76,7 @@ pub mod skeleton;
 mod solve_badge;
 pub mod solve_checks;
 pub mod solve_defs;
+pub mod solve_derivation;
 pub mod solve_done;
 pub mod solve_exprs;
 mod solve_exprs_show;
@@ -162,6 +168,11 @@ use tools::{Registry, ToolDef};
 
 pub const DEFAULT_LATEX_COMPILE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Default production base URL for OpenAlex (`api.openalex.org`, X19 Part 1).
+pub fn default_openalex_api_base() -> String {
+    "https://api.openalex.org".to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LiteratureEndpoints {
     pub arxiv_api_base: String,
@@ -169,6 +180,8 @@ pub struct LiteratureEndpoints {
     pub inspire_api_base: String,
     pub crossref_api_base: String,
     pub semantic_scholar_api_base: String,
+    #[serde(default = "default_openalex_api_base")]
+    pub openalex_api_base: String,
 }
 
 impl Default for LiteratureEndpoints {
@@ -179,6 +192,7 @@ impl Default for LiteratureEndpoints {
             inspire_api_base: "https://inspirehep.net".to_string(),
             crossref_api_base: "https://api.crossref.org".to_string(),
             semantic_scholar_api_base: "https://api.semanticscholar.org".to_string(),
+            openalex_api_base: default_openalex_api_base(),
         }
     }
 }
@@ -196,7 +210,8 @@ impl LiteratureEndpoints {
             arxiv_eprint_base: trimmed.clone(),
             inspire_api_base: trimmed.clone(),
             crossref_api_base: trimmed.clone(),
-            semantic_scholar_api_base: trimmed,
+            semantic_scholar_api_base: trimmed.clone(),
+            openalex_api_base: format!("{trimmed}/openalex"),
         })
     }
 }

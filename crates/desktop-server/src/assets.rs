@@ -171,9 +171,33 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/solve_setup.js"),
         }),
+        "/assets/solve_badges.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_badges.js"),
+        }),
+        "/assets/solve_steps.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_steps.js"),
+        }),
+        "/assets/solve_why.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_why.js"),
+        }),
+        "/assets/solve_exprs.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_exprs.js"),
+        }),
+        "/assets/solve_transcribe.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_transcribe.js"),
+        }),
         "/assets/solve_artifacts.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/solve_artifacts.js"),
+        }),
+        "/assets/writeup_btn.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/writeup_btn.js"),
         }),
         "/assets/solve.css" => Some(StaticAsset {
             content_type: "text/css; charset=utf-8",
@@ -411,6 +435,14 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/library_send_back.js"),
         }),
+        "/assets/lessons.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/lessons.js"),
+        }),
+        "/assets/lesson_remember.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/lesson_remember.js"),
+        }),
         "/assets/projects.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/projects.js"),
@@ -459,87 +491,7 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../vendor/katex/katex.min.css"),
         }),
-        "/vendor/katex/fonts/KaTeX_AMS-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_AMS-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Caligraphic-Bold.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Caligraphic-Bold.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Caligraphic-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Caligraphic-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Fraktur-Bold.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Fraktur-Bold.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Fraktur-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Fraktur-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Main-Bold.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Main-Bold.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Main-BoldItalic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Main-BoldItalic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Main-Italic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Main-Italic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Main-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Main-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Math-BoldItalic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Math-BoldItalic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Math-Italic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Math-Italic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_SansSerif-Bold.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_SansSerif-Bold.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_SansSerif-Italic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_SansSerif-Italic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_SansSerif-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_SansSerif-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Script-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Script-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Size1-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Size1-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Size2-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Size2-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Size3-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Size3-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Size4-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Size4-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2"),
-        }),
-        _ => None,
+        _ => crate::assets_fonts::lookup_katex_font(clean),
     }
 }
 

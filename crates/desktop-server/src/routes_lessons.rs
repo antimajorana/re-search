@@ -62,16 +62,7 @@ pub fn handle_lessons(
         ("DELETE", ["ocr-overlays"]) => handle_delete_ocr_overlay(state, body),
         ("GET", ["backup"]) => handle_export_backup(state, query),
         ("POST", ["restore"]) => handle_restore_backup(state, body),
-        _ => {
-            let suffix = if rest.is_empty() {
-                String::new()
-            } else {
-                format!("/{}", rest.join("/"))
-            };
-            Err(not_found(format!(
-                "unknown lessons endpoint: {method} /api/lessons{suffix}"
-            )))
-        }
+        _ => crate::routes_lessons_ui::handle_lessons_ui(state, method, rest, query, body),
     }
 }
 
