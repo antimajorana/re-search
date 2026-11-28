@@ -1,0 +1,566 @@
+{
+  "format_version": 1,
+  "notes": "Self-authored synthetic fixed-tier Set I literature service recording for I-01..I-10 (arXiv, INSPIRE-HEP, Crossref, Semantic Scholar, OpenAlex). Zero third-party paper text; paywalled library-only papers (I-03, I-08) are intentionally absent from all external services.",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3A1%2B1D%20AND%20all%3ALuttinger%20AND%20all%3A%22logarithmic%20negativity%22%20AND%20all%3A%22disjoint%20intervals%22&start=0&max_results=15",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>2</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2401.90101v1</id>\n    <title>Algebraic Negativity Scaling in Zero-Temperature Luttinger Liquids</title>\n    <summary>We compute the logarithmic negativity of two disjoint intervals in a zero-temperature 1+1D Luttinger liquid and prove that it decays algebraically with separation, with power-law exponent directly proportional to the Luttinger parameter K.</summary>\n    <published>2024-03-15T00:00:00Z</published>\n    <author><name>K. Lindholm</name></author>\n    <author><name>R. Sato</name></author>\n    <doi>10.9999/eval.i01.luttinger</doi>\n  </entry>\n  <entry>\n    <id>http://arxiv.org/abs/2305.90102v1</id>\n    <title>Single-Interval Entanglement Entropy in Bosonized One-Dimensional Wires</title>\n    <summary>We review single-interval Renyi entropies for free bosonic chains at finite temperature without evaluating disjoint-interval negativity.</summary>\n    <published>2023-03-15T00:00:00Z</published>\n    <author><name>M. Hara</name></author>\n    <doi>10.9999/eval.i01.bg</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=1%2B1D%20Luttinger%20%22logarithmic%20negativity%22%20%22disjoint%20intervals%22%20%22liquid%20decays%22&size=15&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9980101\",\"metadata\":{\"titles\":[{\"title\":\"Algebraic Negativity Scaling in Zero-Temperature Luttinger Liquids\"}],\"authors\":[{\"full_name\":\"K. Lindholm\"},{\"full_name\":\"R. Sato\"}],\"preprint_date\":\"2024-03-15\",\"abstracts\":[{\"value\":\"We compute the logarithmic negativity of two disjoint intervals in a zero-temperature 1+1D Luttinger liquid and prove that it decays algebraically with separation, with power-law exponent directly proportional to the Luttinger parameter K.\"}],\"citation_count\":27,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2401.90101\"}],\"dois\":[{\"value\":\"10.9999/eval.i01.luttinger\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/works",
+      "query": "query=1%2B1D%20Luttinger%20logarithmic%20negativity%20disjoint%20intervals%20liquid%20decays%20decays%20algebraically&rows=10&offset=0",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"message\":{\"total-results\":1,\"items\":[{\"DOI\":\"10.9999/eval.i01.bg\",\"title\":[\"Single-Interval Entanglement Entropy in Bosonized One-Dimensional Wires\"],\"author\":[{\"given\":\"M.\",\"family\":\"Hara\"}],\"published-print\":{\"date-parts\":[[2023]]},\"abstract\":\"<jats:p>We review single-interval Renyi entropies for free bosonic chains at finite temperature without evaluating disjoint-interval negativity.</jats:p>\",\"is-referenced-by-count\":9}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/graph/v1/paper/search",
+      "query": "query=1%2B1D%20Luttinger%20logarithmic%20negativity%20disjoint%20intervals%20liquid%20decays%20decays%20algebraically&limit=10&offset=0&fields=paperId,title,authors,year,abstract,citationCount,externalIds,url",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"total\":2,\"offset\":0,\"data\":[{\"paperId\":\"a1b2c3d4e5f60101000000000000000000000101\",\"title\":\"Algebraic Negativity Scaling in Zero-Temperature Luttinger Liquids\",\"authors\":[{\"name\":\"K. Lindholm\"},{\"name\":\"R. Sato\"}],\"year\":2024,\"abstract\":\"We compute the logarithmic negativity of two disjoint intervals in a zero-temperature 1+1D Luttinger liquid and prove that it decays algebraically with separation, with power-law exponent directly proportional to the Luttinger parameter K.\",\"citationCount\":27,\"externalIds\":{\"ArXiv\":\"2401.90101\",\"DOI\":\"10.9999/eval.i01.luttinger\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60101000000000000000000000101\"},{\"paperId\":\"a1b2c3d4e5f60102000000000000000000000102\",\"title\":\"Single-Interval Entanglement Entropy in Bosonized One-Dimensional Wires\",\"authors\":[{\"name\":\"M. Hara\"}],\"year\":2023,\"abstract\":\"We review single-interval Renyi entropies for free bosonic chains at finite temperature without evaluating disjoint-interval negativity.\",\"citationCount\":9,\"externalIds\":{\"ArXiv\":\"2305.90102\",\"DOI\":\"10.9999/eval.i01.bg\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60102000000000000000000000102\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/openalex/works",
+      "query": "search=1%2B1D%20Luttinger%20logarithmic%20negativity%20disjoint%20intervals%20liquid%20decays%20decays%20algebraically&per-page=10&page=1",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"meta\":{\"count\":1,\"page\":1,\"per_page\":10},\"results\":[{\"id\":\"https://openalex.org/W9980101\",\"ids\":{\"openalex\":\"https://openalex.org/W9980101\",\"doi\":\"https://doi.org/10.9999/eval.i01.luttinger\"},\"title\":\"Algebraic Negativity Scaling in Zero-Temperature Luttinger Liquids\",\"publication_year\":2024,\"cited_by_count\":27,\"authorships\":[{\"author\":{\"display_name\":\"K. Lindholm\"}},{\"author\":{\"display_name\":\"R. Sato\"}}],\"abstract_inverted_index\":{\"We\":[0],\"compute\":[1],\"the\":[2,29],\"logarithmic\":[3],\"negativity\":[4],\"of\":[5],\"two\":[6],\"disjoint\":[7],\"intervals\":[8],\"in\":[9],\"a\":[10],\"zero-temperature\":[11],\"1+1D\":[12],\"Luttinger\":[13,30],\"liquid\":[14],\"and\":[15],\"prove\":[16],\"that\":[17],\"it\":[18],\"decays\":[19],\"algebraically\":[20],\"with\":[21,23],\"separation,\":[22],\"power-law\":[24],\"exponent\":[25],\"directly\":[26],\"proportional\":[27],\"to\":[28],\"parameter\":[31],\"K.\":[32]},\"doi\":\"https://doi.org/10.9999/eval.i01.luttinger\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3ALuttinger%20liquid%20logarithmic%20negativity%20disjoint%20intervals&start=0&max_results=10",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2401.90101v1</id>\n    <title>Algebraic Negativity Scaling in Zero-Temperature Luttinger Liquids</title>\n    <summary>We compute the logarithmic negativity of two disjoint intervals in a zero-temperature 1+1D Luttinger liquid and prove that it decays algebraically with separation, with power-law exponent directly proportional to the Luttinger parameter K.</summary>\n    <published>2024-03-15T00:00:00Z</published>\n    <author><name>K. Lindholm</name></author>\n    <author><name>R. Sato</name></author>\n    <doi>10.9999/eval.i01.luttinger</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=partial%20transpose%20entanglement%20Luttinger%20parameter&size=10&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":2,\"hits\":[{\"id\":\"9980101\",\"metadata\":{\"titles\":[{\"title\":\"Algebraic Negativity Scaling in Zero-Temperature Luttinger Liquids\"}],\"authors\":[{\"full_name\":\"K. Lindholm\"},{\"full_name\":\"R. Sato\"}],\"preprint_date\":\"2024-03-15\",\"abstracts\":[{\"value\":\"We compute the logarithmic negativity of two disjoint intervals in a zero-temperature 1+1D Luttinger liquid and prove that it decays algebraically with separation, with power-law exponent directly proportional to the Luttinger parameter K.\"}],\"citation_count\":27,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2401.90101\"}],\"dois\":[{\"value\":\"10.9999/eval.i01.luttinger\"}]}},{\"id\":\"9980102\",\"metadata\":{\"titles\":[{\"title\":\"Single-Interval Entanglement Entropy in Bosonized One-Dimensional Wires\"}],\"authors\":[{\"full_name\":\"M. Hara\"}],\"preprint_date\":\"2023-03-15\",\"abstracts\":[{\"value\":\"We review single-interval Renyi entropies for free bosonic chains at finite temperature without evaluating disjoint-interval negativity.\"}],\"citation_count\":9,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2305.90102\"}],\"dois\":[{\"value\":\"10.9999/eval.i01.bg\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3AFloquet%20AND%20all%3AMagnus%20AND%20all%3AHeisenberg%20AND%20all%3A%22high%2Dfrequency%20expansion%22&start=0&max_results=15",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2211.90202v1</id>\n    <title>Static Frustration on Square-Lattice Heisenberg Antiferromagnets</title>\n    <summary>We study undriven square-lattice spin models and compute static magnon spectra in the linear spin-wave approximation.</summary>\n    <published>2022-03-15T00:00:00Z</published>\n    <author><name>L. Weber</name></author>\n    <doi>10.9999/eval.i02.bg</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=Floquet%20Magnus%20Heisenberg%20%22high%2Dfrequency%20expansion%22%20%22effective%20three%2Dspin%22&size=15&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9980202\",\"metadata\":{\"titles\":[{\"title\":\"Static Frustration on Square-Lattice Heisenberg Antiferromagnets\"}],\"authors\":[{\"full_name\":\"L. Weber\"}],\"preprint_date\":\"2022-03-15\",\"abstracts\":[{\"value\":\"We study undriven square-lattice spin models and compute static magnon spectra in the linear spin-wave approximation.\"}],\"citation_count\":8,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2211.90202\"}],\"dois\":[{\"value\":\"10.9999/eval.i02.bg\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/works",
+      "query": "query=Floquet%20Magnus%20Heisenberg%20high%2Dfrequency%20expansion%20effective%20three%2Dspin%20three%2Dspin%20chiral&rows=10&offset=0",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"message\":{\"total-results\":1,\"items\":[{\"DOI\":\"10.9999/eval.i02.chiral\",\"title\":[\"Floquet-Engineered Scalar Spin Chirality on Triangular Lattices\"],\"author\":[{\"given\":\"M.\",\"family\":\"Okafor\"},{\"given\":\"T.\",\"family\":\"Novak\"}],\"published-print\":{\"date-parts\":[[2023]]},\"abstract\":\"<jats:p>Applying a Floquet Magnus high-frequency expansion to a periodically driven triangular Heisenberg antiferromagnet yields an effective three-spin scalar chiral interaction proportional to inverse driving frequency.</jats:p>\",\"is-referenced-by-count\":31}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/graph/v1/paper/search",
+      "query": "query=Floquet%20Magnus%20Heisenberg%20high%2Dfrequency%20expansion%20effective%20three%2Dspin%20three%2Dspin%20chiral&limit=10&offset=0&fields=paperId,title,authors,year,abstract,citationCount,externalIds,url",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"total\":2,\"offset\":0,\"data\":[{\"paperId\":\"a1b2c3d4e5f60201000000000000000000000201\",\"title\":\"Floquet-Engineered Scalar Spin Chirality on Triangular Lattices\",\"authors\":[{\"name\":\"M. Okafor\"},{\"name\":\"T. Novak\"}],\"year\":2023,\"abstract\":\"Applying a Floquet Magnus high-frequency expansion to a periodically driven triangular Heisenberg antiferromagnet yields an effective three-spin scalar chiral interaction proportional to inverse driving frequency.\",\"citationCount\":31,\"externalIds\":{\"DOI\":\"10.9999/eval.i02.chiral\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60201000000000000000000000201\"},{\"paperId\":\"a1b2c3d4e5f60202000000000000000000000202\",\"title\":\"Static Frustration on Square-Lattice Heisenberg Antiferromagnets\",\"authors\":[{\"name\":\"L. Weber\"}],\"year\":2022,\"abstract\":\"We study undriven square-lattice spin models and compute static magnon spectra in the linear spin-wave approximation.\",\"citationCount\":8,\"externalIds\":{\"ArXiv\":\"2211.90202\",\"DOI\":\"10.9999/eval.i02.bg\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60202000000000000000000000202\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/openalex/works",
+      "query": "search=Floquet%20Magnus%20Heisenberg%20high%2Dfrequency%20expansion%20effective%20three%2Dspin%20three%2Dspin%20chiral&per-page=10&page=1",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"meta\":{\"count\":1,\"page\":1,\"per_page\":10},\"results\":[{\"id\":\"https://openalex.org/W9980201\",\"ids\":{\"openalex\":\"https://openalex.org/W9980201\",\"doi\":\"https://doi.org/10.9999/eval.i02.chiral\"},\"title\":\"Floquet-Engineered Scalar Spin Chirality on Triangular Lattices\",\"publication_year\":2023,\"cited_by_count\":31,\"authorships\":[{\"author\":{\"display_name\":\"M. Okafor\"}},{\"author\":{\"display_name\":\"T. Novak\"}}],\"abstract_inverted_index\":{\"Applying\":[0],\"a\":[1,7],\"Floquet\":[2],\"Magnus\":[3],\"high-frequency\":[4],\"expansion\":[5],\"to\":[6,21],\"periodically\":[8],\"driven\":[9],\"triangular\":[10],\"Heisenberg\":[11],\"antiferromagnet\":[12],\"yields\":[13],\"an\":[14],\"effective\":[15],\"three-spin\":[16],\"scalar\":[17],\"chiral\":[18],\"interaction\":[19],\"proportional\":[20],\"inverse\":[22],\"driving\":[23],\"frequency.\":[24]},\"doi\":\"https://doi.org/10.9999/eval.i02.chiral\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/works",
+      "query": "query=Floquet%20Magnus%20triangular%20Heisenberg%20three%2Dspin%20chiral&rows=10&offset=0",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"message\":{\"total-results\":1,\"items\":[{\"DOI\":\"10.9999/eval.i02.chiral\",\"title\":[\"Floquet-Engineered Scalar Spin Chirality on Triangular Lattices\"],\"author\":[{\"given\":\"M.\",\"family\":\"Okafor\"},{\"given\":\"T.\",\"family\":\"Novak\"}],\"published-print\":{\"date-parts\":[[2023]]},\"abstract\":\"<jats:p>Applying a Floquet Magnus high-frequency expansion to a periodically driven triangular Heisenberg antiferromagnet yields an effective three-spin scalar chiral interaction proportional to inverse driving frequency.</jats:p>\",\"is-referenced-by-count\":31}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3Ahigh%2Dfrequency%20scalar%20spin%20chirality%20driven%20antiferromagnet&start=0&max_results=10",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2211.90202v1</id>\n    <title>Static Frustration on Square-Lattice Heisenberg Antiferromagnets</title>\n    <summary>We study undriven square-lattice spin models and compute static magnon spectra in the linear spin-wave approximation.</summary>\n    <published>2022-03-15T00:00:00Z</published>\n    <author><name>L. Weber</name></author>\n    <doi>10.9999/eval.i02.bg</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3A%22exact%20two%2Dloop%22%20AND%20all%3A%22two%2Dloop%20anomalous%22%20AND%20all%3A%22anomalous%20dimension%22%20AND%20all%3A%22quartic%20strain%22&start=0&max_results=15",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2104.90302v1</id>\n    <title>One-Loop Flexural Rigidity of Isotropic Crystalline Sheets</title>\n    <summary>We analyze one-loop phonon self-energies in isotropic elastic sheets without treating anisotropic membranes or two-loop quartic strain dimensions.</summary>\n    <published>2021-03-15T00:00:00Z</published>\n    <author><name>P. Adler</name></author>\n    <doi>10.9999/eval.i03.bg</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=%22exact%20two%2Dloop%22%20%22two%2Dloop%20anomalous%22%20%22anomalous%20dimension%22%20%22quartic%20strain%22%20%22strain%20operator%22&size=15&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9980302\",\"metadata\":{\"titles\":[{\"title\":\"One-Loop Flexural Rigidity of Isotropic Crystalline Sheets\"}],\"authors\":[{\"full_name\":\"P. Adler\"}],\"preprint_date\":\"2021-03-15\",\"abstracts\":[{\"value\":\"We analyze one-loop phonon self-energies in isotropic elastic sheets without treating anisotropic membranes or two-loop quartic strain dimensions.\"}],\"citation_count\":11,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2104.90302\"}],\"dois\":[{\"value\":\"10.9999/eval.i03.bg\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/works",
+      "query": "query=exact%20two%2Dloop%20two%2Dloop%20anomalous%20anomalous%20dimension%20quartic%20strain%20strain%20operator%20anisotropic%20elastic&rows=10&offset=0",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"message\":{\"total-results\":1,\"items\":[{\"DOI\":\"10.9999/eval.i03.bg\",\"title\":[\"One-Loop Flexural Rigidity of Isotropic Crystalline Sheets\"],\"author\":[{\"given\":\"P.\",\"family\":\"Adler\"}],\"published-print\":{\"date-parts\":[[2021]]},\"abstract\":\"<jats:p>We analyze one-loop phonon self-energies in isotropic elastic sheets without treating anisotropic membranes or two-loop quartic strain dimensions.</jats:p>\",\"is-referenced-by-count\":11}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/graph/v1/paper/search",
+      "query": "query=exact%20two%2Dloop%20two%2Dloop%20anomalous%20anomalous%20dimension%20quartic%20strain%20strain%20operator%20anisotropic%20elastic&limit=10&offset=0&fields=paperId,title,authors,year,abstract,citationCount,externalIds,url",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"total\":1,\"offset\":0,\"data\":[{\"paperId\":\"a1b2c3d4e5f60302000000000000000000000302\",\"title\":\"One-Loop Flexural Rigidity of Isotropic Crystalline Sheets\",\"authors\":[{\"name\":\"P. Adler\"}],\"year\":2021,\"abstract\":\"We analyze one-loop phonon self-energies in isotropic elastic sheets without treating anisotropic membranes or two-loop quartic strain dimensions.\",\"citationCount\":11,\"externalIds\":{\"ArXiv\":\"2104.90302\",\"DOI\":\"10.9999/eval.i03.bg\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60302000000000000000000000302\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/openalex/works",
+      "query": "search=exact%20two%2Dloop%20two%2Dloop%20anomalous%20anomalous%20dimension%20quartic%20strain%20strain%20operator%20anisotropic%20elastic&per-page=10&page=1",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"meta\":{\"count\":1,\"page\":1,\"per_page\":10},\"results\":[{\"id\":\"https://openalex.org/W9980302\",\"ids\":{\"openalex\":\"https://openalex.org/W9980302\",\"doi\":\"https://doi.org/10.9999/eval.i03.bg\"},\"title\":\"One-Loop Flexural Rigidity of Isotropic Crystalline Sheets\",\"publication_year\":2021,\"cited_by_count\":11,\"authorships\":[{\"author\":{\"display_name\":\"P. Adler\"}}],\"abstract_inverted_index\":{\"We\":[0],\"analyze\":[1],\"one-loop\":[2],\"phonon\":[3],\"self-energies\":[4],\"in\":[5],\"isotropic\":[6],\"elastic\":[7],\"sheets\":[8],\"without\":[9],\"treating\":[10],\"anisotropic\":[11],\"membranes\":[12],\"or\":[13],\"two-loop\":[14],\"quartic\":[15],\"strain\":[16],\"dimensions.\":[17]},\"doi\":\"https://doi.org/10.9999/eval.i03.bg\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3Atwo%2Dloop%20anomalous%20dimension%20quartic%20strain%20anisotropic%20membrane&start=0&max_results=10",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2104.90302v1</id>\n    <title>One-Loop Flexural Rigidity of Isotropic Crystalline Sheets</title>\n    <summary>We analyze one-loop phonon self-energies in isotropic elastic sheets without treating anisotropic membranes or two-loop quartic strain dimensions.</summary>\n    <published>2021-03-15T00:00:00Z</published>\n    <author><name>P. Adler</name></author>\n    <doi>10.9999/eval.i03.bg</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=flexural%20renormalization%20anisotropic%20crystalline%20sheet&size=10&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9980302\",\"metadata\":{\"titles\":[{\"title\":\"One-Loop Flexural Rigidity of Isotropic Crystalline Sheets\"}],\"authors\":[{\"full_name\":\"P. Adler\"}],\"preprint_date\":\"2021-03-15\",\"abstracts\":[{\"value\":\"We analyze one-loop phonon self-energies in isotropic elastic sheets without treating anisotropic membranes or two-loop quartic strain dimensions.\"}],\"citation_count\":11,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2104.90302\"}],\"dois\":[{\"value\":\"10.9999/eval.i03.bg\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3ALanczos%20AND%20all%3AKrylov%20AND%20all%3AMajorana%20AND%20all%3A%22growth%20rate%22&start=0&max_results=15",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2302.90402v1</id>\n    <title>Unitary Krylov Dynamics in Integrable Spin Chains</title>\n    <summary>We analyze closed unitary evolution of local operators without projective measurements or entanglement phase transitions.</summary>\n    <published>2023-03-15T00:00:00Z</published>\n    <author><name>J. Meyer</name></author>\n    <doi>10.9999/eval.i04.bg</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=Lanczos%20Krylov%20Majorana%20%22growth%20rate%22%20%22measurement%2Dinduced%20entanglement%22&size=15&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":2,\"hits\":[{\"id\":\"9980401\",\"metadata\":{\"titles\":[{\"title\":\"Spread Complexity Saturation Across Monitored Free-Fermion Transitions\"}],\"authors\":[{\"full_name\":\"D. Alvarez\"},{\"full_name\":\"S. Cho\"}],\"preprint_date\":\"2024-03-15\",\"abstracts\":[{\"value\":\"We show that spread complexity, defined from the tridiagonal recurrence growth rate in monitored Majorana chains, exhibits linear growth in the volume-law phase and saturates across the measurement-induced entanglement transition.\"}],\"citation_count\":22,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2404.90401\"}],\"dois\":[{\"value\":\"10.9999/eval.i04.spread\"}]}},{\"id\":\"9980402\",\"metadata\":{\"titles\":[{\"title\":\"Unitary Krylov Dynamics in Integrable Spin Chains\"}],\"authors\":[{\"full_name\":\"J. Meyer\"}],\"preprint_date\":\"2023-03-15\",\"abstracts\":[{\"value\":\"We analyze closed unitary evolution of local operators without projective measurements or entanglement phase transitions.\"}],\"citation_count\":13,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2302.90402\"}],\"dois\":[{\"value\":\"10.9999/eval.i04.bg\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/works",
+      "query": "query=Lanczos%20Krylov%20Majorana%20growth%20rate%20measurement%2Dinduced%20entanglement%20entanglement%20transition&rows=10&offset=0",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"message\":{\"total-results\":1,\"items\":[{\"DOI\":\"10.9999/eval.i04.bg\",\"title\":[\"Unitary Krylov Dynamics in Integrable Spin Chains\"],\"author\":[{\"given\":\"J.\",\"family\":\"Meyer\"}],\"published-print\":{\"date-parts\":[[2023]]},\"abstract\":\"<jats:p>We analyze closed unitary evolution of local operators without projective measurements or entanglement phase transitions.</jats:p>\",\"is-referenced-by-count\":13}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/graph/v1/paper/search",
+      "query": "query=Lanczos%20Krylov%20Majorana%20growth%20rate%20measurement%2Dinduced%20entanglement%20entanglement%20transition&limit=10&offset=0&fields=paperId,title,authors,year,abstract,citationCount,externalIds,url",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"total\":2,\"offset\":0,\"data\":[{\"paperId\":\"a1b2c3d4e5f60401000000000000000000000401\",\"title\":\"Spread Complexity Saturation Across Monitored Free-Fermion Transitions\",\"authors\":[{\"name\":\"D. Alvarez\"},{\"name\":\"S. Cho\"}],\"year\":2024,\"abstract\":\"We show that spread complexity, defined from the tridiagonal recurrence growth rate in monitored Majorana chains, exhibits linear growth in the volume-law phase and saturates across the measurement-induced entanglement transition.\",\"citationCount\":22,\"externalIds\":{\"ArXiv\":\"2404.90401\",\"DOI\":\"10.9999/eval.i04.spread\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60401000000000000000000000401\"},{\"paperId\":\"a1b2c3d4e5f60402000000000000000000000402\",\"title\":\"Unitary Krylov Dynamics in Integrable Spin Chains\",\"authors\":[{\"name\":\"J. Meyer\"}],\"year\":2023,\"abstract\":\"We analyze closed unitary evolution of local operators without projective measurements or entanglement phase transitions.\",\"citationCount\":13,\"externalIds\":{\"ArXiv\":\"2302.90402\",\"DOI\":\"10.9999/eval.i04.bg\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60402000000000000000000000402\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/openalex/works",
+      "query": "search=Lanczos%20Krylov%20Majorana%20growth%20rate%20measurement%2Dinduced%20entanglement%20entanglement%20transition&per-page=10&page=1",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"meta\":{\"count\":1,\"page\":1,\"per_page\":10},\"results\":[{\"id\":\"https://openalex.org/W9980401\",\"ids\":{\"openalex\":\"https://openalex.org/W9980401\",\"doi\":\"https://doi.org/10.9999/eval.i04.spread\"},\"title\":\"Spread Complexity Saturation Across Monitored Free-Fermion Transitions\",\"publication_year\":2024,\"cited_by_count\":22,\"authorships\":[{\"author\":{\"display_name\":\"D. Alvarez\"}},{\"author\":{\"display_name\":\"S. Cho\"}}],\"abstract_inverted_index\":{\"We\":[0],\"show\":[1],\"that\":[2],\"spread\":[3],\"complexity,\":[4],\"defined\":[5],\"from\":[6],\"the\":[7,20,26],\"tridiagonal\":[8],\"recurrence\":[9],\"growth\":[10,18],\"rate\":[11],\"in\":[12,19],\"monitored\":[13],\"Majorana\":[14],\"chains,\":[15],\"exhibits\":[16],\"linear\":[17],\"volume-law\":[21],\"phase\":[22],\"and\":[23],\"saturates\":[24],\"across\":[25],\"measurement-induced\":[27],\"entanglement\":[28],\"transition.\":[29]},\"doi\":\"https://doi.org/10.9999/eval.i04.spread\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3AKrylov%20Lanczos%20monitored%20Majorana%20entanglement%20transition&start=0&max_results=10",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2302.90402v1</id>\n    <title>Unitary Krylov Dynamics in Integrable Spin Chains</title>\n    <summary>We analyze closed unitary evolution of local operators without projective measurements or entanglement phase transitions.</summary>\n    <published>2023-03-15T00:00:00Z</published>\n    <author><name>J. Meyer</name></author>\n    <doi>10.9999/eval.i04.bg</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=spread%20complexity%20monitored%20Majorana%20chain&size=10&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9980401\",\"metadata\":{\"titles\":[{\"title\":\"Spread Complexity Saturation Across Monitored Free-Fermion Transitions\"}],\"authors\":[{\"full_name\":\"D. Alvarez\"},{\"full_name\":\"S. Cho\"}],\"preprint_date\":\"2024-03-15\",\"abstracts\":[{\"value\":\"We show that spread complexity, defined from the tridiagonal recurrence growth rate in monitored Majorana chains, exhibits linear growth in the volume-law phase and saturates across the measurement-induced entanglement transition.\"}],\"citation_count\":22,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2404.90401\"}],\"dois\":[{\"value\":\"10.9999/eval.i04.spread\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3AEstablish%20AND%20all%3A%22non%2Dperturbative%20spectral%22%20AND%20all%3A%22frustration%2Dfree%20spin%22%20AND%20all%3A%22spin%20ladders%22&start=0&max_results=15",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2109.90502v1</id>\n    <title>Perturbative Spin-Wave Gaps in Antiferromagnetic Chains</title>\n    <summary>We evaluate second-order perturbative excitation gaps in gapped spin chains with explicit single-ion anisotropy.</summary>\n    <published>2021-03-15T00:00:00Z</published>\n    <author><name>A. Klein</name></author>\n    <doi>10.9999/eval.i05.bg</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=Establish%20%22non%2Dperturbative%20spectral%22%20%22frustration%2Dfree%20spin%22%20%22spin%20ladders%22%20%22recursive%20subspace%22&size=15&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9980502\",\"metadata\":{\"titles\":[{\"title\":\"Perturbative Spin-Wave Gaps in Antiferromagnetic Chains\"}],\"authors\":[{\"full_name\":\"A. Klein\"}],\"preprint_date\":\"2021-03-15\",\"abstracts\":[{\"value\":\"We evaluate second-order perturbative excitation gaps in gapped spin chains with explicit single-ion anisotropy.\"}],\"citation_count\":7,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2109.90502\"}],\"dois\":[{\"value\":\"10.9999/eval.i05.bg\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/works",
+      "query": "query=Establish%20non%2Dperturbative%20spectral%20frustration%2Dfree%20spin%20spin%20ladders%20recursive%20subspace%20subspace%20martingale&rows=10&offset=0",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"message\":{\"total-results\":1,\"items\":[{\"DOI\":\"10.9999/eval.i05.bg\",\"title\":[\"Perturbative Spin-Wave Gaps in Antiferromagnetic Chains\"],\"author\":[{\"given\":\"A.\",\"family\":\"Klein\"}],\"published-print\":{\"date-parts\":[[2021]]},\"abstract\":\"<jats:p>We evaluate second-order perturbative excitation gaps in gapped spin chains with explicit single-ion anisotropy.</jats:p>\",\"is-referenced-by-count\":7}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/graph/v1/paper/search",
+      "query": "query=Establish%20non%2Dperturbative%20spectral%20frustration%2Dfree%20spin%20spin%20ladders%20recursive%20subspace%20subspace%20martingale&limit=10&offset=0&fields=paperId,title,authors,year,abstract,citationCount,externalIds,url",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"total\":2,\"offset\":0,\"data\":[{\"paperId\":\"a1b2c3d4e5f60501000000000000000000000501\",\"title\":\"Detectability Lemma and Finite-Size Gap Criteria for Spin Ladders\",\"authors\":[{\"name\":\"P. Rossi\"},{\"name\":\"N. Mehta\"}],\"year\":2022,\"abstract\":\"Using the detectability lemma and finite-size Knabe threshold inequalities for local ground projectors, we derive a non-perturbative spectral gap lower bound for frustration-free quantum spin ladders.\",\"citationCount\":29,\"externalIds\":{\"DOI\":\"10.9999/eval.i05.knabe\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60501000000000000000000000501\"},{\"paperId\":\"a1b2c3d4e5f60502000000000000000000000502\",\"title\":\"Perturbative Spin-Wave Gaps in Antiferromagnetic Chains\",\"authors\":[{\"name\":\"A. Klein\"}],\"year\":2021,\"abstract\":\"We evaluate second-order perturbative excitation gaps in gapped spin chains with explicit single-ion anisotropy.\",\"citationCount\":7,\"externalIds\":{\"ArXiv\":\"2109.90502\",\"DOI\":\"10.9999/eval.i05.bg\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60502000000000000000000000502\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/openalex/works",
+      "query": "search=Establish%20non%2Dperturbative%20spectral%20frustration%2Dfree%20spin%20spin%20ladders%20recursive%20subspace%20subspace%20martingale&per-page=10&page=1",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"meta\":{\"count\":1,\"page\":1,\"per_page\":10},\"results\":[{\"id\":\"https://openalex.org/W9980501\",\"ids\":{\"openalex\":\"https://openalex.org/W9980501\",\"doi\":\"https://doi.org/10.9999/eval.i05.knabe\"},\"title\":\"Detectability Lemma and Finite-Size Gap Criteria for Spin Ladders\",\"publication_year\":2022,\"cited_by_count\":29,\"authorships\":[{\"author\":{\"display_name\":\"P. Rossi\"}},{\"author\":{\"display_name\":\"N. Mehta\"}}],\"abstract_inverted_index\":{\"Using\":[0],\"the\":[1],\"detectability\":[2],\"lemma\":[3],\"and\":[4],\"finite-size\":[5],\"Knabe\":[6],\"threshold\":[7],\"inequalities\":[8],\"for\":[9,21],\"local\":[10],\"ground\":[11],\"projectors,\":[12],\"we\":[13],\"derive\":[14],\"a\":[15],\"non-perturbative\":[16],\"spectral\":[17],\"gap\":[18],\"lower\":[19],\"bound\":[20],\"frustration-free\":[22],\"quantum\":[23],\"spin\":[24],\"ladders.\":[25]},\"doi\":\"https://doi.org/10.9999/eval.i05.knabe\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3Afrustration%2Dfree%20spin%20ladders%20martingale%20spectral%20gap&start=0&max_results=10",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2109.90502v1</id>\n    <title>Perturbative Spin-Wave Gaps in Antiferromagnetic Chains</title>\n    <summary>We evaluate second-order perturbative excitation gaps in gapped spin chains with explicit single-ion anisotropy.</summary>\n    <published>2021-03-15T00:00:00Z</published>\n    <author><name>A. Klein</name></author>\n    <doi>10.9999/eval.i05.bg</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/openalex/works",
+      "query": "search=detectability%20lemma%20finite%2Dsize%20gap%20spin%20ladders&per-page=10&page=1",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"meta\":{\"count\":1,\"page\":1,\"per_page\":10},\"results\":[{\"id\":\"https://openalex.org/W9980501\",\"ids\":{\"openalex\":\"https://openalex.org/W9980501\",\"doi\":\"https://doi.org/10.9999/eval.i05.knabe\"},\"title\":\"Detectability Lemma and Finite-Size Gap Criteria for Spin Ladders\",\"publication_year\":2022,\"cited_by_count\":29,\"authorships\":[{\"author\":{\"display_name\":\"P. Rossi\"}},{\"author\":{\"display_name\":\"N. Mehta\"}}],\"abstract_inverted_index\":{\"Using\":[0],\"the\":[1],\"detectability\":[2],\"lemma\":[3],\"and\":[4],\"finite-size\":[5],\"Knabe\":[6],\"threshold\":[7],\"inequalities\":[8],\"for\":[9,21],\"local\":[10],\"ground\":[11],\"projectors,\":[12],\"we\":[13],\"derive\":[14],\"a\":[15],\"non-perturbative\":[16],\"spectral\":[17],\"gap\":[18],\"lower\":[19],\"bound\":[20],\"frustration-free\":[22],\"quantum\":[23],\"spin\":[24],\"ladders.\":[25]},\"doi\":\"https://doi.org/10.9999/eval.i05.knabe\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3AConstruct%20AND%20all%3A%22fault%2Dtolerant%20transversal%22%20AND%20all%3A%22transversal%20non%2Dclifford%22%20AND%20all%3A%22hyperbolic%20surface%22&start=0&max_results=15",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>2</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2406.90601v1</id>\n    <title>Constant-Rate Hyperbolic Surface Codes with Transversal T Gates</title>\n    <summary>We construct a fault-tolerant transversal non-Clifford T gate on hyperbolic surface codes achieving constant encoding rate, while the code distance scales only logarithmically rather than linearly with block length.</summary>\n    <published>2024-03-15T00:00:00Z</published>\n    <author><name>L. Berg</name></author>\n    <author><name>Y. Tan</name></author>\n    <doi>10.9999/eval.i06.hyperbolic</doi>\n  </entry>\n  <entry>\n    <id>http://arxiv.org/abs/2301.90602v1</id>\n    <title>Decoding Thresholds of Planar Surface Codes Under Depolarizing Noise</title>\n    <summary>We benchmark minimum-weight matching decoders on planar surface codes encoding a single logical qubit.</summary>\n    <published>2023-03-15T00:00:00Z</published>\n    <author><name>H. Kim</name></author>\n    <doi>10.9999/eval.i06.bg</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=Construct%20%22fault%2Dtolerant%20transversal%22%20%22transversal%20non%2Dclifford%22%20%22hyperbolic%20surface%22%20%22surface%20codes%22&size=15&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9980601\",\"metadata\":{\"titles\":[{\"title\":\"Constant-Rate Hyperbolic Surface Codes with Transversal T Gates\"}],\"authors\":[{\"full_name\":\"L. Berg\"},{\"full_name\":\"Y. Tan\"}],\"preprint_date\":\"2024-03-15\",\"abstracts\":[{\"value\":\"We construct a fault-tolerant transversal non-Clifford T gate on hyperbolic surface codes achieving constant encoding rate, while the code distance scales only logarithmically rather than linearly with block length.\"}],\"citation_count\":35,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2406.90601\"}],\"dois\":[{\"value\":\"10.9999/eval.i06.hyperbolic\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/works",
+      "query": "query=Construct%20fault%2Dtolerant%20transversal%20transversal%20non%2Dclifford%20hyperbolic%20surface%20surface%20codes%20constant%20encoding&rows=10&offset=0",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"message\":{\"total-results\":1,\"items\":[{\"DOI\":\"10.9999/eval.i06.bg\",\"title\":[\"Decoding Thresholds of Planar Surface Codes Under Depolarizing Noise\"],\"author\":[{\"given\":\"H.\",\"family\":\"Kim\"}],\"published-print\":{\"date-parts\":[[2023]]},\"abstract\":\"<jats:p>We benchmark minimum-weight matching decoders on planar surface codes encoding a single logical qubit.</jats:p>\",\"is-referenced-by-count\":14}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/graph/v1/paper/search",
+      "query": "query=Construct%20fault%2Dtolerant%20transversal%20transversal%20non%2Dclifford%20hyperbolic%20surface%20surface%20codes%20constant%20encoding&limit=10&offset=0&fields=paperId,title,authors,year,abstract,citationCount,externalIds,url",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"total\":1,\"offset\":0,\"data\":[{\"paperId\":\"a1b2c3d4e5f60601000000000000000000000601\",\"title\":\"Constant-Rate Hyperbolic Surface Codes with Transversal T Gates\",\"authors\":[{\"name\":\"L. Berg\"},{\"name\":\"Y. Tan\"}],\"year\":2024,\"abstract\":\"We construct a fault-tolerant transversal non-Clifford T gate on hyperbolic surface codes achieving constant encoding rate, while the code distance scales only logarithmically rather than linearly with block length.\",\"citationCount\":35,\"externalIds\":{\"ArXiv\":\"2406.90601\",\"DOI\":\"10.9999/eval.i06.hyperbolic\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60601000000000000000000000601\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/openalex/works",
+      "query": "search=Construct%20fault%2Dtolerant%20transversal%20transversal%20non%2Dclifford%20hyperbolic%20surface%20surface%20codes%20constant%20encoding&per-page=10&page=1",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"meta\":{\"count\":1,\"page\":1,\"per_page\":10},\"results\":[{\"id\":\"https://openalex.org/W9980601\",\"ids\":{\"openalex\":\"https://openalex.org/W9980601\",\"doi\":\"https://doi.org/10.9999/eval.i06.hyperbolic\"},\"title\":\"Constant-Rate Hyperbolic Surface Codes with Transversal T Gates\",\"publication_year\":2024,\"cited_by_count\":35,\"authorships\":[{\"author\":{\"display_name\":\"L. Berg\"}},{\"author\":{\"display_name\":\"Y. Tan\"}}],\"abstract_inverted_index\":{\"We\":[0],\"construct\":[1],\"a\":[2],\"fault-tolerant\":[3],\"transversal\":[4],\"non-Clifford\":[5],\"T\":[6],\"gate\":[7],\"on\":[8],\"hyperbolic\":[9],\"surface\":[10],\"codes\":[11],\"achieving\":[12],\"constant\":[13],\"encoding\":[14],\"rate,\":[15],\"while\":[16],\"the\":[17],\"code\":[18],\"distance\":[19],\"scales\":[20],\"only\":[21],\"logarithmically\":[22],\"rather\":[23],\"than\":[24],\"linearly\":[25],\"with\":[26],\"block\":[27],\"length.\":[28]},\"doi\":\"https://doi.org/10.9999/eval.i06.hyperbolic\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3Atransversal%20non%2DClifford%20hyperbolic%20surface%20codes%20linear%20distance&start=0&max_results=10",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2406.90601v1</id>\n    <title>Constant-Rate Hyperbolic Surface Codes with Transversal T Gates</title>\n    <summary>We construct a fault-tolerant transversal non-Clifford T gate on hyperbolic surface codes achieving constant encoding rate, while the code distance scales only logarithmically rather than linearly with block length.</summary>\n    <published>2024-03-15T00:00:00Z</published>\n    <author><name>L. Berg</name></author>\n    <author><name>Y. Tan</name></author>\n    <doi>10.9999/eval.i06.hyperbolic</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=constant%2Drate%20hyperbolic%20LDPC%20transversal%20CCZ&size=10&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":2,\"hits\":[{\"id\":\"9980601\",\"metadata\":{\"titles\":[{\"title\":\"Constant-Rate Hyperbolic Surface Codes with Transversal T Gates\"}],\"authors\":[{\"full_name\":\"L. Berg\"},{\"full_name\":\"Y. Tan\"}],\"preprint_date\":\"2024-03-15\",\"abstracts\":[{\"value\":\"We construct a fault-tolerant transversal non-Clifford T gate on hyperbolic surface codes achieving constant encoding rate, while the code distance scales only logarithmically rather than linearly with block length.\"}],\"citation_count\":35,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2406.90601\"}],\"dois\":[{\"value\":\"10.9999/eval.i06.hyperbolic\"}]}},{\"id\":\"9980602\",\"metadata\":{\"titles\":[{\"title\":\"Decoding Thresholds of Planar Surface Codes Under Depolarizing Noise\"}],\"authors\":[{\"full_name\":\"H. Kim\"}],\"preprint_date\":\"2023-03-15\",\"abstracts\":[{\"value\":\"We benchmark minimum-weight matching decoders on planar surface codes encoding a single logical qubit.\"}],\"citation_count\":14,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2301.90602\"}],\"dois\":[{\"value\":\"10.9999/eval.i06.bg\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3AHubbard%20AND%20all%3A%22non%2Dhermitian%20skin%22%20AND%20all%3A%22skin%20effect%22%20AND%20all%3A%22effect%20boundary%22&start=0&max_results=15",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2407.90701v1</id>\n    <title>Disorder-Robust Non-Hermitian Skin Localization in Hatano-Nelson Chains</title>\n    <summary>We prove that non-Hermitian skin effect boundary modes remain exponentially localized in the presence of bounded reciprocal hopping disorder in non-interacting chains.</summary>\n    <published>2024-03-15T00:00:00Z</published>\n    <author><name>F. Demir</name></author>\n    <author><name>G. Wu</name></author>\n    <doi>10.9999/eval.i07.disorder</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=Hubbard%20%22non%2Dhermitian%20skin%22%20%22skin%20effect%22%20%22effect%20boundary%22%20%22boundary%20modes%22&size=15&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9980701\",\"metadata\":{\"titles\":[{\"title\":\"Disorder-Robust Non-Hermitian Skin Localization in Hatano-Nelson Chains\"}],\"authors\":[{\"full_name\":\"F. Demir\"},{\"full_name\":\"G. Wu\"}],\"preprint_date\":\"2024-03-15\",\"abstracts\":[{\"value\":\"We prove that non-Hermitian skin effect boundary modes remain exponentially localized in the presence of bounded reciprocal hopping disorder in non-interacting chains.\"}],\"citation_count\":19,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2407.90701\"}],\"dois\":[{\"value\":\"10.9999/eval.i07.disorder\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/works",
+      "query": "query=Hubbard%20non%2Dhermitian%20skin%20skin%20effect%20effect%20boundary%20boundary%20modes%20exponentially%20localized&rows=10&offset=0",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"message\":{\"total-results\":1,\"items\":[{\"DOI\":\"10.9999/eval.i07.disorder\",\"title\":[\"Disorder-Robust Non-Hermitian Skin Localization in Hatano-Nelson Chains\"],\"author\":[{\"given\":\"F.\",\"family\":\"Demir\"},{\"given\":\"G.\",\"family\":\"Wu\"}],\"published-print\":{\"date-parts\":[[2024]]},\"abstract\":\"<jats:p>We prove that non-Hermitian skin effect boundary modes remain exponentially localized in the presence of bounded reciprocal hopping disorder in non-interacting chains.</jats:p>\",\"is-referenced-by-count\":19}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/graph/v1/paper/search",
+      "query": "query=Hubbard%20non%2Dhermitian%20skin%20skin%20effect%20effect%20boundary%20boundary%20modes%20exponentially%20localized&limit=10&offset=0&fields=paperId,title,authors,year,abstract,citationCount,externalIds,url",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"total\":2,\"offset\":0,\"data\":[{\"paperId\":\"a1b2c3d4e5f60701000000000000000000000701\",\"title\":\"Disorder-Robust Non-Hermitian Skin Localization in Hatano-Nelson Chains\",\"authors\":[{\"name\":\"F. Demir\"},{\"name\":\"G. Wu\"}],\"year\":2024,\"abstract\":\"We prove that non-Hermitian skin effect boundary modes remain exponentially localized in the presence of bounded reciprocal hopping disorder in non-interacting chains.\",\"citationCount\":19,\"externalIds\":{\"ArXiv\":\"2407.90701\",\"DOI\":\"10.9999/eval.i07.disorder\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60701000000000000000000000701\"},{\"paperId\":\"a1b2c3d4e5f60702000000000000000000000702\",\"title\":\"Weak-Coupling Interaction Effects on Non-Hermitian Boundary Modes\",\"authors\":[{\"name\":\"C. Patel\"},{\"name\":\"A. Braun\"}],\"year\":2025,\"abstract\":\"We examine perturbative weak Hubbard interactions on non-Hermitian skin boundary modes and find partial survival of localization at small U, leaving strong Hubbard coupling open.\",\"citationCount\":6,\"externalIds\":{\"DOI\":\"10.9999/eval.i07.hubbard\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60702000000000000000000000702\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/openalex/works",
+      "query": "search=Hubbard%20non%2Dhermitian%20skin%20skin%20effect%20effect%20boundary%20boundary%20modes%20exponentially%20localized&per-page=10&page=1",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"meta\":{\"count\":1,\"page\":1,\"per_page\":10},\"results\":[{\"id\":\"https://openalex.org/W9980701\",\"ids\":{\"openalex\":\"https://openalex.org/W9980701\",\"doi\":\"https://doi.org/10.9999/eval.i07.disorder\"},\"title\":\"Disorder-Robust Non-Hermitian Skin Localization in Hatano-Nelson Chains\",\"publication_year\":2024,\"cited_by_count\":19,\"authorships\":[{\"author\":{\"display_name\":\"F. Demir\"}},{\"author\":{\"display_name\":\"G. Wu\"}}],\"abstract_inverted_index\":{\"We\":[0],\"prove\":[1],\"that\":[2],\"non-Hermitian\":[3],\"skin\":[4],\"effect\":[5],\"boundary\":[6],\"modes\":[7],\"remain\":[8],\"exponentially\":[9],\"localized\":[10],\"in\":[11,19],\"the\":[12],\"presence\":[13],\"of\":[14],\"bounded\":[15],\"reciprocal\":[16],\"hopping\":[17],\"disorder\":[18],\"non-interacting\":[20],\"chains.\":[21]},\"doi\":\"https://doi.org/10.9999/eval.i07.disorder\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3Anon%2DHermitian%20skin%20effect%20disorder%20Hubbard%20localization&start=0&max_results=10",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2407.90701v1</id>\n    <title>Disorder-Robust Non-Hermitian Skin Localization in Hatano-Nelson Chains</title>\n    <summary>We prove that non-Hermitian skin effect boundary modes remain exponentially localized in the presence of bounded reciprocal hopping disorder in non-interacting chains.</summary>\n    <published>2024-03-15T00:00:00Z</published>\n    <author><name>F. Demir</name></author>\n    <author><name>G. Wu</name></author>\n    <doi>10.9999/eval.i07.disorder</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/graph/v1/paper/search",
+      "query": "query=Hatano%2DNelson%20boundary%20modes%20interaction%20localization&limit=10&offset=0&fields=paperId,title,authors,year,abstract,citationCount,externalIds,url",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"total\":2,\"offset\":0,\"data\":[{\"paperId\":\"a1b2c3d4e5f60701000000000000000000000701\",\"title\":\"Disorder-Robust Non-Hermitian Skin Localization in Hatano-Nelson Chains\",\"authors\":[{\"name\":\"F. Demir\"},{\"name\":\"G. Wu\"}],\"year\":2024,\"abstract\":\"We prove that non-Hermitian skin effect boundary modes remain exponentially localized in the presence of bounded reciprocal hopping disorder in non-interacting chains.\",\"citationCount\":19,\"externalIds\":{\"ArXiv\":\"2407.90701\",\"DOI\":\"10.9999/eval.i07.disorder\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60701000000000000000000000701\"},{\"paperId\":\"a1b2c3d4e5f60702000000000000000000000702\",\"title\":\"Weak-Coupling Interaction Effects on Non-Hermitian Boundary Modes\",\"authors\":[{\"name\":\"C. Patel\"},{\"name\":\"A. Braun\"}],\"year\":2025,\"abstract\":\"We examine perturbative weak Hubbard interactions on non-Hermitian skin boundary modes and find partial survival of localization at small U, leaving strong Hubbard coupling open.\",\"citationCount\":6,\"externalIds\":{\"DOI\":\"10.9999/eval.i07.hubbard\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60702000000000000000000000702\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3AHall%20AND%20all%3A%22universal%20thermal%22%20AND%20all%3A%22conductivity%20quantization%22%20AND%20all%3A%22quantization%20formula%22&start=0&max_results=15",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>2</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2408.90801v1</id>\n    <title>Quantized Thermal Hall Response in Disordered Chiral p-Wave Superconductors</title>\n    <summary>We derive a universal thermal Hall conductivity quantization formula for disordered chiral p-wave superconductors in the purely electronic Bogoliubov-de Gennes limit, neglecting lattice phonon drag.</summary>\n    <published>2024-03-15T00:00:00Z</published>\n    <author><name>R. Keller</name></author>\n    <author><name>J. Park</name></author>\n    <doi>10.9999/eval.i08.thermalhall</doi>\n  </entry>\n  <entry>\n    <id>http://arxiv.org/abs/2203.90802v1</id>\n    <title>Impurity Band Broadening in S-Wave Superconducting Films</title>\n    <summary>We calculate density-of-states broadening in conventional s-wave thin films with magnetic impurities.</summary>\n    <published>2022-03-15T00:00:00Z</published>\n    <author><name>T. Ota</name></author>\n    <doi>10.9999/eval.i08.bg</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=Hall%20%22universal%20thermal%22%20%22conductivity%20quantization%22%20%22quantization%20formula%22%20%22disordered%20chiral%22&size=15&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9980801\",\"metadata\":{\"titles\":[{\"title\":\"Quantized Thermal Hall Response in Disordered Chiral p-Wave Superconductors\"}],\"authors\":[{\"full_name\":\"R. Keller\"},{\"full_name\":\"J. Park\"}],\"preprint_date\":\"2024-03-15\",\"abstracts\":[{\"value\":\"We derive a universal thermal Hall conductivity quantization formula for disordered chiral p-wave superconductors in the purely electronic Bogoliubov-de Gennes limit, neglecting lattice phonon drag.\"}],\"citation_count\":24,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2408.90801\"}],\"dois\":[{\"value\":\"10.9999/eval.i08.thermalhall\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/works",
+      "query": "query=Hall%20universal%20thermal%20conductivity%20quantization%20quantization%20formula%20disordered%20chiral%20chiral%20p%2Dwave&rows=10&offset=0",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"message\":{\"total-results\":1,\"items\":[{\"DOI\":\"10.9999/eval.i08.bg\",\"title\":[\"Impurity Band Broadening in S-Wave Superconducting Films\"],\"author\":[{\"given\":\"T.\",\"family\":\"Ota\"}],\"published-print\":{\"date-parts\":[[2022]]},\"abstract\":\"<jats:p>We calculate density-of-states broadening in conventional s-wave thin films with magnetic impurities.</jats:p>\",\"is-referenced-by-count\":5}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/graph/v1/paper/search",
+      "query": "query=Hall%20universal%20thermal%20conductivity%20quantization%20quantization%20formula%20disordered%20chiral%20chiral%20p%2Dwave&limit=10&offset=0&fields=paperId,title,authors,year,abstract,citationCount,externalIds,url",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"total\":1,\"offset\":0,\"data\":[{\"paperId\":\"a1b2c3d4e5f60801000000000000000000000801\",\"title\":\"Quantized Thermal Hall Response in Disordered Chiral p-Wave Superconductors\",\"authors\":[{\"name\":\"R. Keller\"},{\"name\":\"J. Park\"}],\"year\":2024,\"abstract\":\"We derive a universal thermal Hall conductivity quantization formula for disordered chiral p-wave superconductors in the purely electronic Bogoliubov-de Gennes limit, neglecting lattice phonon drag.\",\"citationCount\":24,\"externalIds\":{\"ArXiv\":\"2408.90801\",\"DOI\":\"10.9999/eval.i08.thermalhall\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60801000000000000000000000801\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/openalex/works",
+      "query": "search=Hall%20universal%20thermal%20conductivity%20quantization%20quantization%20formula%20disordered%20chiral%20chiral%20p%2Dwave&per-page=10&page=1",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"meta\":{\"count\":1,\"page\":1,\"per_page\":10},\"results\":[{\"id\":\"https://openalex.org/W9980801\",\"ids\":{\"openalex\":\"https://openalex.org/W9980801\",\"doi\":\"https://doi.org/10.9999/eval.i08.thermalhall\"},\"title\":\"Quantized Thermal Hall Response in Disordered Chiral p-Wave Superconductors\",\"publication_year\":2024,\"cited_by_count\":24,\"authorships\":[{\"author\":{\"display_name\":\"R. Keller\"}},{\"author\":{\"display_name\":\"J. Park\"}}],\"abstract_inverted_index\":{\"We\":[0],\"derive\":[1],\"a\":[2],\"universal\":[3],\"thermal\":[4],\"Hall\":[5],\"conductivity\":[6],\"quantization\":[7],\"formula\":[8],\"for\":[9],\"disordered\":[10],\"chiral\":[11],\"p-wave\":[12],\"superconductors\":[13],\"in\":[14],\"the\":[15],\"purely\":[16],\"electronic\":[17],\"Bogoliubov-de\":[18],\"Gennes\":[19],\"limit,\":[20],\"neglecting\":[21],\"lattice\":[22],\"phonon\":[23],\"drag.\":[24]},\"doi\":\"https://doi.org/10.9999/eval.i08.thermalhall\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3Athermal%20Hall%20quantization%20disordered%20chiral%20p%2Dwave%20superconductor&start=0&max_results=10",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2408.90801v1</id>\n    <title>Quantized Thermal Hall Response in Disordered Chiral p-Wave Superconductors</title>\n    <summary>We derive a universal thermal Hall conductivity quantization formula for disordered chiral p-wave superconductors in the purely electronic Bogoliubov-de Gennes limit, neglecting lattice phonon drag.</summary>\n    <published>2024-03-15T00:00:00Z</published>\n    <author><name>R. Keller</name></author>\n    <author><name>J. Park</name></author>\n    <doi>10.9999/eval.i08.thermalhall</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=phonon%20drag%20thermal%20transport%20chiral%20superconductor&size=10&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9980802\",\"metadata\":{\"titles\":[{\"title\":\"Impurity Band Broadening in S-Wave Superconducting Films\"}],\"authors\":[{\"full_name\":\"T. Ota\"}],\"preprint_date\":\"2022-03-15\",\"abstracts\":[{\"value\":\"We calculate density-of-states broadening in conventional s-wave thin films with magnetic impurities.\"}],\"citation_count\":5,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2203.90802\"}],\"dois\":[{\"value\":\"10.9999/eval.i08.bg\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3AConstruct%20AND%20all%3A3%2B1D%20AND%20all%3ABF%20AND%20all%3A%22exact%20dual%22&start=0&max_results=15",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>2</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2310.90901v1</id>\n    <title>Mobility Constraints and Foliated Excitations in 3+1D Checkerboard Models</title>\n    <summary>We classify subdimensional excitations in the 3+1D fracton checkerboard model via foliated tensor networks without constructing a dual BF gauge theory.</summary>\n    <published>2023-03-15T00:00:00Z</published>\n    <author><name>V. Nair</name></author>\n    <author><name>K. Lund</name></author>\n    <doi>10.9999/eval.i09.bg1</doi>\n  </entry>\n  <entry>\n    <id>http://arxiv.org/abs/2208.90902v1</id>\n    <title>Invertible Surface Defects in Standard 2+1D Abelian BF Theory</title>\n    <summary>We analyze invertible braiding defects in 2+1D topological BF gauge theory with ordinary global zero-form symmetries.</summary>\n    <published>2022-03-15T00:00:00Z</published>\n    <author><name>S. Moreau</name></author>\n    <doi>10.9999/eval.i09.bg2</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=Construct%203%2B1D%20BF%20%22exact%20dual%22%20%22dual%20lattice%22&size=15&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9980901\",\"metadata\":{\"titles\":[{\"title\":\"Mobility Constraints and Foliated Excitations in 3+1D Checkerboard Models\"}],\"authors\":[{\"full_name\":\"V. Nair\"},{\"full_name\":\"K. Lund\"}],\"preprint_date\":\"2023-03-15\",\"abstracts\":[{\"value\":\"We classify subdimensional excitations in the 3+1D fracton checkerboard model via foliated tensor networks without constructing a dual BF gauge theory.\"}],\"citation_count\":17,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2310.90901\"}],\"dois\":[{\"value\":\"10.9999/eval.i09.bg1\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/works",
+      "query": "query=Construct%203%2B1D%20BF%20exact%20dual%20dual%20lattice%20lattice%20gauge&rows=10&offset=0",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"message\":{\"total-results\":1,\"items\":[{\"DOI\":\"10.9999/eval.i09.bg2\",\"title\":[\"Invertible Surface Defects in Standard 2+1D Abelian BF Theory\"],\"author\":[{\"given\":\"S.\",\"family\":\"Moreau\"}],\"published-print\":{\"date-parts\":[[2022]]},\"abstract\":\"<jats:p>We analyze invertible braiding defects in 2+1D topological BF gauge theory with ordinary global zero-form symmetries.</jats:p>\",\"is-referenced-by-count\":12}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/graph/v1/paper/search",
+      "query": "query=Construct%203%2B1D%20BF%20exact%20dual%20dual%20lattice%20lattice%20gauge&limit=10&offset=0&fields=paperId,title,authors,year,abstract,citationCount,externalIds,url",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"total\":2,\"offset\":0,\"data\":[{\"paperId\":\"a1b2c3d4e5f60901000000000000000000000901\",\"title\":\"Mobility Constraints and Foliated Excitations in 3+1D Checkerboard Models\",\"authors\":[{\"name\":\"V. Nair\"},{\"name\":\"K. Lund\"}],\"year\":2023,\"abstract\":\"We classify subdimensional excitations in the 3+1D fracton checkerboard model via foliated tensor networks without constructing a dual BF gauge theory.\",\"citationCount\":17,\"externalIds\":{\"ArXiv\":\"2310.90901\",\"DOI\":\"10.9999/eval.i09.bg1\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60901000000000000000000000901\"},{\"paperId\":\"a1b2c3d4e5f60902000000000000000000000902\",\"title\":\"Invertible Surface Defects in Standard 2+1D Abelian BF Theory\",\"authors\":[{\"name\":\"S. Moreau\"}],\"year\":2022,\"abstract\":\"We analyze invertible braiding defects in 2+1D topological BF gauge theory with ordinary global zero-form symmetries.\",\"citationCount\":12,\"externalIds\":{\"ArXiv\":\"2208.90902\",\"DOI\":\"10.9999/eval.i09.bg2\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f60902000000000000000000000902\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/openalex/works",
+      "query": "search=Construct%203%2B1D%20BF%20exact%20dual%20dual%20lattice%20lattice%20gauge&per-page=10&page=1",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"meta\":{\"count\":1,\"page\":1,\"per_page\":10},\"results\":[{\"id\":\"https://openalex.org/W9980901\",\"ids\":{\"openalex\":\"https://openalex.org/W9980901\",\"doi\":\"https://doi.org/10.9999/eval.i09.bg1\"},\"title\":\"Mobility Constraints and Foliated Excitations in 3+1D Checkerboard Models\",\"publication_year\":2023,\"cited_by_count\":17,\"authorships\":[{\"author\":{\"display_name\":\"V. Nair\"}},{\"author\":{\"display_name\":\"K. Lund\"}}],\"abstract_inverted_index\":{\"We\":[0],\"classify\":[1],\"subdimensional\":[2],\"excitations\":[3],\"in\":[4],\"the\":[5],\"3+1D\":[6],\"fracton\":[7],\"checkerboard\":[8],\"model\":[9],\"via\":[10],\"foliated\":[11],\"tensor\":[12],\"networks\":[13],\"without\":[14],\"constructing\":[15],\"a\":[16],\"dual\":[17],\"BF\":[18],\"gauge\":[19],\"theory.\":[20]},\"doi\":\"https://doi.org/10.9999/eval.i09.bg1\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3A3%2B1D%20fracton%20checkerboard%20dual%20BF%20theory%20non%2Dinvertible&start=0&max_results=10",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>2</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2310.90901v1</id>\n    <title>Mobility Constraints and Foliated Excitations in 3+1D Checkerboard Models</title>\n    <summary>We classify subdimensional excitations in the 3+1D fracton checkerboard model via foliated tensor networks without constructing a dual BF gauge theory.</summary>\n    <published>2023-03-15T00:00:00Z</published>\n    <author><name>V. Nair</name></author>\n    <author><name>K. Lund</name></author>\n    <doi>10.9999/eval.i09.bg1</doi>\n  </entry>\n  <entry>\n    <id>http://arxiv.org/abs/2208.90902v1</id>\n    <title>Invertible Surface Defects in Standard 2+1D Abelian BF Theory</title>\n    <summary>We analyze invertible braiding defects in 2+1D topological BF gauge theory with ordinary global zero-form symmetries.</summary>\n    <published>2022-03-15T00:00:00Z</published>\n    <author><name>S. Moreau</name></author>\n    <doi>10.9999/eval.i09.bg2</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=subsystem%20dipole%20conservation%20foliated%20gauge%20duality&size=10&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9980901\",\"metadata\":{\"titles\":[{\"title\":\"Mobility Constraints and Foliated Excitations in 3+1D Checkerboard Models\"}],\"authors\":[{\"full_name\":\"V. Nair\"},{\"full_name\":\"K. Lund\"}],\"preprint_date\":\"2023-03-15\",\"abstracts\":[{\"value\":\"We classify subdimensional excitations in the 3+1D fracton checkerboard model via foliated tensor networks without constructing a dual BF gauge theory.\"}],\"citation_count\":17,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2310.90901\"}],\"dois\":[{\"value\":\"10.9999/eval.i09.bg1\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3ALieb%2DRobinson%20AND%20all%3A%22sharp%20finite%2Dtemperature%22%20AND%20all%3A%22velocity%20bound%22%20AND%20all%3A%22vanishes%20logarithmically%22&start=0&max_results=15",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>2</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2311.91001v1</id>\n    <title>Zero-Temperature Lieb-Robinson Light Cones for Power-Law Interactions with Alpha Greater Than Two</title>\n    <summary>We establish polynomial Lieb-Robinson light-cone bounds for zero-temperature two-dimensional lattice systems with power-law interactions decaying faster than distance squared (alpha &gt; 2), without obtaining a finite-temperature bound that vanishes with system size.</summary>\n    <published>2023-03-15T00:00:00Z</published>\n    <author><name>B. Novak</name></author>\n    <author><name>E. Lind</name></author>\n    <doi>10.9999/eval.i10.bg1</doi>\n  </entry>\n  <entry>\n    <id>http://arxiv.org/abs/2206.91002v1</id>\n    <title>Finite-Temperature Butterfly Velocities in Short-Range Spin Chains</title>\n    <summary>We compute finite-temperature Lieb-Robinson and butterfly velocity bounds in one-dimensional nearest-neighbor spin chains without power-law decaying interactions.</summary>\n    <published>2022-03-15T00:00:00Z</published>\n    <author><name>C. Wu</name></author>\n    <doi>10.9999/eval.i10.bg2</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=Lieb%2DRobinson%20%22sharp%20finite%2Dtemperature%22%20%22velocity%20bound%22%20%22vanishes%20logarithmically%22%20%22system%20size%22&size=15&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9981001\",\"metadata\":{\"titles\":[{\"title\":\"Zero-Temperature Lieb-Robinson Light Cones for Power-Law Interactions with Alpha Greater Than Two\"}],\"authors\":[{\"full_name\":\"B. Novak\"},{\"full_name\":\"E. Lind\"}],\"preprint_date\":\"2023-03-15\",\"abstracts\":[{\"value\":\"We establish polynomial Lieb-Robinson light-cone bounds for zero-temperature two-dimensional lattice systems with power-law interactions decaying faster than distance squared (alpha > 2), without obtaining a finite-temperature bound that vanishes with system size.\"}],\"citation_count\":21,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2311.91001\"}],\"dois\":[{\"value\":\"10.9999/eval.i10.bg1\"}]}}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/works",
+      "query": "query=Lieb%2DRobinson%20sharp%20finite%2Dtemperature%20velocity%20bound%20vanishes%20logarithmically%20system%20size%20power%2Dlaw%20decaying&rows=10&offset=0",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"message\":{\"total-results\":1,\"items\":[{\"DOI\":\"10.9999/eval.i10.bg2\",\"title\":[\"Finite-Temperature Butterfly Velocities in Short-Range Spin Chains\"],\"author\":[{\"given\":\"C.\",\"family\":\"Wu\"}],\"published-print\":{\"date-parts\":[[2022]]},\"abstract\":\"<jats:p>We compute finite-temperature Lieb-Robinson and butterfly velocity bounds in one-dimensional nearest-neighbor spin chains without power-law decaying interactions.</jats:p>\",\"is-referenced-by-count\":10}]}}"
+    },
+    {
+      "method": "GET",
+      "path": "/graph/v1/paper/search",
+      "query": "query=Lieb%2DRobinson%20sharp%20finite%2Dtemperature%20velocity%20bound%20vanishes%20logarithmically%20system%20size%20power%2Dlaw%20decaying&limit=10&offset=0&fields=paperId,title,authors,year,abstract,citationCount,externalIds,url",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"total\":2,\"offset\":0,\"data\":[{\"paperId\":\"a1b2c3d4e5f61001000000000000000000001001\",\"title\":\"Zero-Temperature Lieb-Robinson Light Cones for Power-Law Interactions with Alpha Greater Than Two\",\"authors\":[{\"name\":\"B. Novak\"},{\"name\":\"E. Lind\"}],\"year\":2023,\"abstract\":\"We establish polynomial Lieb-Robinson light-cone bounds for zero-temperature two-dimensional lattice systems with power-law interactions decaying faster than distance squared (alpha > 2), without obtaining a finite-temperature bound that vanishes with system size.\",\"citationCount\":21,\"externalIds\":{\"ArXiv\":\"2311.91001\",\"DOI\":\"10.9999/eval.i10.bg1\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f61001000000000000000000001001\"},{\"paperId\":\"a1b2c3d4e5f61002000000000000000000001002\",\"title\":\"Finite-Temperature Butterfly Velocities in Short-Range Spin Chains\",\"authors\":[{\"name\":\"C. Wu\"}],\"year\":2022,\"abstract\":\"We compute finite-temperature Lieb-Robinson and butterfly velocity bounds in one-dimensional nearest-neighbor spin chains without power-law decaying interactions.\",\"citationCount\":10,\"externalIds\":{\"ArXiv\":\"2206.91002\",\"DOI\":\"10.9999/eval.i10.bg2\"},\"url\":\"https://www.semanticscholar.org/paper/a1b2c3d4e5f61002000000000000000000001002\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/openalex/works",
+      "query": "search=Lieb%2DRobinson%20sharp%20finite%2Dtemperature%20velocity%20bound%20vanishes%20logarithmically%20system%20size%20power%2Dlaw%20decaying&per-page=10&page=1",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"meta\":{\"count\":1,\"page\":1,\"per_page\":10},\"results\":[{\"id\":\"https://openalex.org/W9981001\",\"ids\":{\"openalex\":\"https://openalex.org/W9981001\",\"doi\":\"https://doi.org/10.9999/eval.i10.bg1\"},\"title\":\"Zero-Temperature Lieb-Robinson Light Cones for Power-Law Interactions with Alpha Greater Than Two\",\"publication_year\":2023,\"cited_by_count\":21,\"authorships\":[{\"author\":{\"display_name\":\"B. Novak\"}},{\"author\":{\"display_name\":\"E. Lind\"}}],\"abstract_inverted_index\":{\"We\":[0],\"establish\":[1],\"polynomial\":[2],\"Lieb-Robinson\":[3],\"light-cone\":[4],\"bounds\":[5],\"for\":[6],\"zero-temperature\":[7],\"two-dimensional\":[8],\"lattice\":[9],\"systems\":[10],\"with\":[11,29],\"power-law\":[12],\"interactions\":[13],\"decaying\":[14],\"faster\":[15],\"than\":[16],\"distance\":[17],\"squared\":[18],\"(alpha\":[19],\">\":[20],\"2),\":[21],\"without\":[22],\"obtaining\":[23],\"a\":[24],\"finite-temperature\":[25],\"bound\":[26],\"that\":[27],\"vanishes\":[28],\"system\":[30],\"size.\":[31]},\"doi\":\"https://doi.org/10.9999/eval.i10.bg1\"}]}"
+    },
+    {
+      "method": "GET",
+      "path": "/api/query",
+      "query": "search_query=all%3Afinite%2Dtemperature%20Lieb%2DRobinson%20bound%20power%2Dlaw%20alpha%203%2F2&start=0&max_results=10",
+      "status": 200,
+      "content_type": "application/atom+xml",
+      "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\">\n  <opensearch:totalResults>1</opensearch:totalResults>\n  <opensearch:startIndex>0</opensearch:startIndex>\n  <entry>\n    <id>http://arxiv.org/abs/2311.91001v1</id>\n    <title>Zero-Temperature Lieb-Robinson Light Cones for Power-Law Interactions with Alpha Greater Than Two</title>\n    <summary>We establish polynomial Lieb-Robinson light-cone bounds for zero-temperature two-dimensional lattice systems with power-law interactions decaying faster than distance squared (alpha &gt; 2), without obtaining a finite-temperature bound that vanishes with system size.</summary>\n    <published>2023-03-15T00:00:00Z</published>\n    <author><name>B. Novak</name></author>\n    <author><name>E. Lind</name></author>\n    <doi>10.9999/eval.i10.bg1</doi>\n  </entry>\n</feed>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/literature",
+      "query": "q=thermal%20butterfly%20velocity%20long%2Drange%20two%2Ddimensional%20spin&size=10&page=1&fields=control_number,texkeys,titles,authors,citation_count,dois,arxiv_eprints,preprint_date,publication_info,abstracts,withdrawn",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"hits\":{\"total\":1,\"hits\":[{\"id\":\"9981002\",\"metadata\":{\"titles\":[{\"title\":\"Finite-Temperature Butterfly Velocities in Short-Range Spin Chains\"}],\"authors\":[{\"full_name\":\"C. Wu\"}],\"preprint_date\":\"2022-03-15\",\"abstracts\":[{\"value\":\"We compute finite-temperature Lieb-Robinson and butterfly velocity bounds in one-dimensional nearest-neighbor spin chains without power-law decaying interactions.\"}],\"citation_count\":10,\"withdrawn\":false,\"arxiv_eprints\":[{\"value\":\"2206.91002\"}],\"dois\":[{\"value\":\"10.9999/eval.i10.bg2\"}]}}]}}"
+    }
+  ]
+}
