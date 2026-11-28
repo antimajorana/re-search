@@ -11,6 +11,7 @@ pub mod idea_evidence;
 pub mod idea_fetch;
 pub mod idea_map;
 pub mod idea_map_validate;
+pub mod idea_net;
 pub mod idea_queries;
 pub mod idea_rank;
 pub mod idea_terms;
