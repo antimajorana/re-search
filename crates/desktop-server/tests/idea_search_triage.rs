@@ -14,9 +14,7 @@ use desktop_server::idea::{
     append_explore_session_start, build_idea_statement, IdeaPreset, EVENT_IDEA_ANSWER,
     EVENT_IDEA_BRIEF, EVENT_IDEA_EXCHANGE, EVENT_IDEA_STAGE,
 };
-use desktop_server::idea_exchanges::{
-    run_sharpen_with_transport, SharpenRunResult, CLI_ROUTE_UNSUPPORTED_MSG,
-};
+use desktop_server::idea_exchanges::{run_sharpen_with_transport, SharpenRunResult};
 use desktop_server::{idea_view, start_desktop_server};
 use ledger::Ledger;
 use research_tools::run_budget::{count_model_calls, RunScope};
@@ -133,15 +131,16 @@ fn x6_sharpen_repairs_bad_quote_writes_brief_and_applies_answers_and_cli_guard()
     let (status, _, raw_create) = raw_http(port, "POST", "/api/sessions", &auth, &create_body);
     assert_eq!(status, 200, "{}", String::from_utf8_lossy(&raw_create));
 
-    // 2. Calling Sharpen on CLI-subscription routes (`claude-cli`, `antigravity`) returns clear X18 message.
-    for cli_prov in ["claude-cli", "antigravity"] {
-        let req_body = serde_json::to_vec(&json!({ "provider": cli_prov })).unwrap();
-        let (cli_status, _, cli_body) =
-            raw_http(port, "POST", "/api/sessions/s-x6-flow/idea/sharpen", &auth, &req_body);
-        assert_eq!(cli_status, 400);
-        let cli_txt = String::from_utf8_lossy(&cli_body);
-        assert!(cli_txt.contains(CLI_ROUTE_UNSUPPORTED_MSG), "{cli_txt}");
-    }
+    // 2. X18 CLI routes enforce Antigravity acknowledgement (403) and refuse missing/blocked Claude CLI (400).
+    let agy_req = serde_json::to_vec(&json!({ "provider": "antigravity" })).unwrap();
+    let (agy_st, _, agy_body) =
+        raw_http(port, "POST", "/api/sessions/s-x6-flow/idea/sharpen", &auth, &agy_req);
+    assert_eq!(agy_st, 403, "{}", String::from_utf8_lossy(&agy_body));
+    assert!(String::from_utf8_lossy(&agy_body).contains("acknowledgement"));
+    let claude_req = serde_json::to_vec(&json!({ "provider": "claude-cli" })).unwrap();
+    let (cl_st, _, cl_body) =
+        raw_http(port, "POST", "/api/sessions/s-x6-flow/idea/sharpen", &auth, &claude_req);
+    assert_eq!(cl_st, 400, "{}", String::from_utf8_lossy(&cl_body));
 
     // 3. Run Sharpen directly via scripted transport: attempt 1 has bad substring quote, attempt 2 succeeds.
     let ledger = Ledger::open(&data_dir).unwrap();
@@ -259,8 +258,8 @@ fn x6_rule_p1_stage_gate_revise_reset_and_cli_session_route_consistency() {
     let override_req = serde_json::to_vec(&json!({ "provider": "anthropic" })).unwrap();
     let (st, _, raw) =
         raw_http(port, "POST", "/api/sessions/s-x6-cli-bound/idea/sharpen", &auth, &override_req);
-    assert_eq!(st, 400);
-    assert!(String::from_utf8_lossy(&raw).contains(CLI_ROUTE_UNSUPPORTED_MSG));
+    assert_eq!(st, 409, "{}", String::from_utf8_lossy(&raw));
+    assert!(String::from_utf8_lossy(&raw).contains("claude-cli"));
 
     // 2. Normal Explore session: run Sharpen once, then verify Rule P1 rejects a second Sharpen
     // BEFORE appending any `idea.stage(sharpen, requested)` or calling the provider.
