@@ -491,7 +491,6 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/idea_read_ui.js"),
         }),
-<<<<<<< HEAD
         "/assets/idea_map.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/idea_map.js"),
