@@ -40,6 +40,13 @@ pub const EXPLORE_CHAT_STATEMENT_REQUIRED_MSG: &str =
 pub const EXPLORE_CHAT_CLI_UNSUPPORTED_MSG: &str =
     "Explore Conversation turns require an API or ChatGPT provider until CLI turns land in X18.";
 
+fn is_cli_provider_str(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "claude-cli" | "antigravity"
+    )
+}
+
 /// Pre-turn synchronous guard invoked by `turn_runner.rs` before reserving/spawning an Explore
 /// Conversation turn (`POST /api/sessions/{id}/messages`).
 pub fn validate_explore_turn_preconditions(
@@ -51,11 +58,40 @@ pub fn validate_explore_turn_preconditions(
     if latest_statement_seq(pre_events) == 0 {
         return Err((400, EXPLORE_CHAT_STATEMENT_REQUIRED_MSG.to_string()));
     }
-    let req_prov = req.get("provider").and_then(Value::as_str).map(str::trim);
-    let bound_route = state.load_meta(session_id).and_then(|m| m.route);
-    if matches!(req_prov, Some("claude-cli" | "antigravity"))
-        || matches!(bound_route.as_deref(), Some("claude-cli" | "antigravity"))
+    let meta = state.load_meta(session_id);
+    let ui = state.load_ui_settings();
+    if meta
+        .as_ref()
+        .and_then(|m| m.route.as_deref())
+        .is_some_and(is_cli_provider_str)
     {
+        return Err((400, EXPLORE_CHAT_CLI_UNSUPPORTED_MSG.to_string()));
+    }
+    let req_prov = req
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let effective_prov = req_prov
+        .or_else(|| {
+            meta.as_ref()
+                .and_then(|m| m.default_provider.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .or_else(|| {
+            ui.agent_models
+                .get("orchestrator")
+                .map(|r| r.provider.trim())
+                .filter(|s| !s.is_empty())
+        })
+        .or_else(|| {
+            ui.default_provider
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        });
+    if effective_prov.is_some_and(is_cli_provider_str) {
         return Err((400, EXPLORE_CHAT_CLI_UNSUPPORTED_MSG.to_string()));
     }
     let budget = budget_snapshot(pre_events, false);

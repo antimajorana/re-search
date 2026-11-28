@@ -169,22 +169,21 @@ fn build_ingested_papers_block(events: &[Event]) -> Option<String> {
         }
     }
 
-    let mut rows = Vec::new();
-    let mut seen_sid = std::collections::BTreeSet::new();
+    let mut latest_ingested: BTreeMap<String, &Event> = BTreeMap::new();
     for ev in events {
         if ev.kind != "source.ingested" {
             continue;
         }
-        let Some(sid) = ev.payload.get("source_id").and_then(Value::as_str).filter(|s| !s.is_empty())
-        else {
-            continue;
-        };
-        if !seen_sid.insert(sid.to_string()) {
-            continue;
+        if let Some(sid) = ev.payload.get("source_id").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            latest_ingested.insert(sid.to_string(), ev);
         }
+    }
+
+    let mut rows = Vec::new();
+    for (sid, ev) in latest_ingested {
         let primary_path = ev.payload.get("primary_path").and_then(Value::as_str).unwrap_or("");
         let (key_opt, basis, total_lines) = paper_meta_by_sid
-            .get(sid)
+            .get(&sid)
             .cloned()
             .unwrap_or_else(|| {
                 let fallback_key = ev
@@ -194,7 +193,7 @@ fn build_ingested_papers_block(events: &[Event]) -> Option<String> {
                     .map(str::to_string);
                 (fallback_key, "tex".to_string(), None)
             });
-        let key_str = key_opt.as_deref().unwrap_or(sid);
+        let key_str = key_opt.as_deref().unwrap_or(&sid);
         let lines_note = total_lines
             .map(|n| format!(", {n} lines"))
             .unwrap_or_default();

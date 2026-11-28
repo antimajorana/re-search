@@ -177,6 +177,24 @@ pub fn parse_multi_paper_line_citations(text: &str) -> Vec<ParsedPaperCitation> 
     out
 }
 
+fn canonical_paper_key(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(pk) = PaperKey::parse(trimmed) {
+        return Some(pk.as_str().to_string());
+    }
+    let stripped = trimmed
+        .strip_prefix("arxiv:")
+        .or_else(|| trimmed.strip_prefix("arXiv:"))
+        .or_else(|| trimmed.strip_prefix("ARXIV:"))
+        .unwrap_or(trimmed);
+    research_tools::paper_fetch::parse_paper_input(stripped)
+        .ok()
+        .map(|r| r.key.as_str().to_string())
+}
+
 fn collect_ingested_papers(events: &[Event]) -> Vec<IngestedPaperInfo> {
     let mut meta_by_sid: BTreeMap<String, (Option<String>, String)> = BTreeMap::new();
     for ev in events {
@@ -186,7 +204,7 @@ fn collect_ingested_papers(events: &[Event]) -> Vec<IngestedPaperInfo> {
                     .payload
                     .get("key")
                     .and_then(Value::as_str)
-                    .map(|k| PaperKey::parse(k).map_or_else(|_| k.to_string(), |pk| pk.as_str().to_string()));
+                    .map(|k| canonical_paper_key(k).unwrap_or_else(|| k.to_string()));
                 let basis = ev
                     .payload
                     .get("text_basis")
@@ -258,7 +276,7 @@ fn collect_ingested_papers(events: &[Event]) -> Vec<IngestedPaperInfo> {
             .get("paper_key")
             .or_else(|| ev.payload.get("origin"))
             .and_then(Value::as_str)
-            .and_then(|s| PaperKey::parse(s).ok().map(|pk| pk.as_str().to_string()));
+            .and_then(canonical_paper_key);
         let paper_key = idea_key.or(fallback_key);
         let text_basis = if !pdf_pages.is_empty() && idea_basis == "tex" {
             "pdf_text".to_string()
@@ -282,32 +300,63 @@ fn collect_ingested_papers(events: &[Event]) -> Vec<IngestedPaperInfo> {
     by_sid.into_values().collect()
 }
 
-fn resolve_paper_ref<'a>(
+fn resolve_matching_papers<'a>(
     papers: &'a [IngestedPaperInfo],
     raw_ref: &str,
-) -> Option<&'a IngestedPaperInfo> {
+) -> Vec<&'a IngestedPaperInfo> {
     let trimmed = raw_ref.trim();
     if trimmed.is_empty() {
-        return None;
+        return Vec::new();
     }
-    if let Some(found) = papers.iter().find(|p| p.source_id == trimmed) {
-        return Some(found);
+    let by_sid: Vec<&IngestedPaperInfo> =
+        papers.iter().filter(|p| p.source_id == trimmed).collect();
+    if !by_sid.is_empty() {
+        return by_sid;
     }
-    let canon = PaperKey::parse(trimmed).ok().map(|pk| pk.as_str().to_string());
-    if let Some(ref key) = canon {
-        if let Some(found) = papers
+    if let Some(canon) = canonical_paper_key(trimmed) {
+        let by_key: Vec<&IngestedPaperInfo> = papers
             .iter()
-            .find(|p| p.paper_key.as_deref() == Some(key.as_str()))
-        {
-            return Some(found);
+            .filter(|p| p.paper_key.as_deref() == Some(canon.as_str()))
+            .collect();
+        if !by_key.is_empty() {
+            return by_key;
         }
     }
     let lowered = trimmed.to_ascii_lowercase();
-    papers.iter().find(|p| {
-        p.paper_key
-            .as_deref()
-            .is_some_and(|k| k.to_ascii_lowercase() == lowered)
-    })
+    papers
+        .iter()
+        .filter(|p| {
+            p.paper_key
+                .as_deref()
+                .is_some_and(|k| k.to_ascii_lowercase() == lowered)
+        })
+        .collect()
+}
+
+fn pdf_page_and_basis_for_range<'a>(
+    paper: &'a IngestedPaperInfo,
+    start_line: usize,
+    end_line: usize,
+) -> (Option<usize>, &'a str, Option<String>) {
+    let mut first_page: Option<usize> = None;
+    let mut any_ocr_basis: Option<&'a str> = None;
+    let mut first_basis: Option<&'a str> = None;
+    for (pg, first, last, basis) in &paper.pdf_pages {
+        if *first <= end_line && *last >= start_line {
+            if first_page.is_none() {
+                first_page = Some(*pg);
+                first_basis = Some(basis.as_str());
+            }
+            if matches!(basis.as_str(), "scan_text_layer" | "ocr") {
+                any_ocr_basis = Some(basis.as_str());
+            }
+        }
+    }
+    let eff_basis = any_ocr_basis
+        .or(first_basis)
+        .unwrap_or(paper.text_basis.as_str());
+    let ocr_tag = matches!(eff_basis, "scan_text_layer" | "ocr").then(|| "OCR".to_string());
+    (first_page, eff_basis, ocr_tag)
 }
 
 fn unread_citation(parsed: ParsedPaperCitation, reason: &str) -> CheckedPaperCitation {
@@ -331,8 +380,9 @@ fn unread_citation(parsed: ParsedPaperCitation, reason: &str) -> CheckedPaperCit
 /// Check every `[paper_key: Lstart-end]` / `[source_id: Lstart-end]` citation in `answer_text`
 /// strictly via F4 [`research_tools::lines_sent::lines_sent_with_ledger`] across every
 /// `(source_id, path, file_sha256)` sent to `caller` during Conversation turns (`session.start`
-/// onward). Unread ranges, wrong-paper ranges, and uningested papers are explicitly flagged
-/// `status: "unread"` (`matched: false`), never `"matched"` and never `"verified"`.
+/// onward; fails closed with empty sent ranges when no `session.start` exists after the latest
+/// `idea.started`). Unread ranges, wrong-paper ranges, and uningested papers are explicitly
+/// flagged `status: "unread"` (`matched: false`), never `"matched"` and never `"verified"`.
 pub fn check_explore_answer_citations(
     ledger: Option<&Ledger>,
     events: &[Event],
@@ -340,10 +390,14 @@ pub fn check_explore_answer_citations(
     answer_text: &str,
 ) -> ExploreChatCitationReport {
     let papers = collect_ingested_papers(events);
-    let chat_slice = events
+    let explore_start_idx = events
+        .iter()
+        .rposition(|e| e.kind == research_tools::tool_profile::MARKER_IDEA_STARTED)
+        .unwrap_or(0);
+    let chat_slice = events[explore_start_idx..]
         .iter()
         .position(|e| e.kind == "session.start")
-        .map_or(events, |idx| &events[idx..]);
+        .map_or(&[][..], |rel| &events[explore_start_idx + rel..]);
     let sent = lines_sent_with_ledger(chat_slice, ledger, None);
 
     let mut seen: HashSet<(String, usize, usize)> = HashSet::new();
@@ -366,44 +420,40 @@ pub fn check_explore_answer_citations(
             continue;
         }
 
-        let Some(paper) = resolve_paper_ref(&papers, &parsed.paper_ref) else {
+        let candidates = resolve_matching_papers(&papers, &parsed.paper_ref);
+        if candidates.is_empty() {
             unread_count += 1;
             citations.push(unread_citation(
                 parsed,
                 "cited paper is not ingested in this session",
             ));
             continue;
-        };
+        }
 
-        let matched_path = if caller.trim().is_empty() {
+        let matched_pair = if caller.trim().is_empty() {
             None
         } else {
-            paper
-                .files
-                .iter()
-                .find(|(path, sha)| {
-                    sent.covers(
-                        caller,
-                        &paper.source_id,
-                        path,
-                        sha,
-                        parsed.start_line,
-                        parsed.end_line,
-                    )
-                })
-                .map(|(path, _)| path.clone())
+            candidates.iter().find_map(|paper| {
+                paper
+                    .files
+                    .iter()
+                    .find(|(path, sha)| {
+                        sent.covers(
+                            caller,
+                            &paper.source_id,
+                            path,
+                            sha,
+                            parsed.start_line,
+                            parsed.end_line,
+                        )
+                    })
+                    .map(|(path, _)| (*paper, path.clone()))
+            })
         };
 
-        let (page, page_basis) = paper
-            .pdf_pages
-            .iter()
-            .find(|(_, first, last, _)| parsed.start_line >= *first && parsed.start_line <= *last)
-            .map(|(pg, _, _, basis)| (Some(*pg), Some(basis.as_str())))
-            .unwrap_or((None, None));
-        let eff_basis = page_basis.unwrap_or(paper.text_basis.as_str());
-        let ocr_tag = matches!(eff_basis, "scan_text_layer" | "ocr").then(|| "OCR".to_string());
-
-        if let Some(path) = matched_path {
+        if let Some((paper, path)) = matched_pair {
+            let (page, eff_basis, ocr_tag) =
+                pdf_page_and_basis_for_range(paper, parsed.start_line, parsed.end_line);
             matched_count += 1;
             citations.push(CheckedPaperCitation {
                 raw: parsed.raw,
@@ -421,6 +471,9 @@ pub fn check_explore_answer_citations(
                 text_basis: Some(eff_basis.to_string()),
             });
         } else {
+            let paper = candidates[0];
+            let (page, eff_basis, ocr_tag) =
+                pdf_page_and_basis_for_range(paper, parsed.start_line, parsed.end_line);
             unread_count += 1;
             citations.push(CheckedPaperCitation {
                 raw: parsed.raw,

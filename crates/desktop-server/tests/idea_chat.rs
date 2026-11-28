@@ -527,3 +527,67 @@ fn explore_chat_gates_network_tools_via_ui_approver_and_enforces_f9_budget_and_c
     assert!(budget_err.contains("budget exhausted"), "{budget_err}");
     assert_eq!(zero_tr.calls(), 0);
 }
+
+#[test]
+fn carbon_audit_m1_m2_m3_m5_citation_regressions() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let sid = "s-x15-carbon-regs";
+    let ledger = seed_two_paper_explore(&data_dir, sid, IdeaPreset::Standard);
+
+    // M5: before `session.start`, check_explore_answer_citations fails closed (0 matched).
+    let pre_evs = ledger.read_session(sid).unwrap();
+    let pre_rep = check_explore_answer_citations(
+        Some(&ledger), &pre_evs, "idea_reader:src-p1", "Pre-chat [arxiv:2501.00001: L25-26].",
+    );
+    assert_eq!((pre_rep.matched_count, pre_rep.unread_count), (0, 1));
+
+    // M2 + M3: add a SECOND source sharing `arxiv:2501.00001` with page 1 text_layer (L1-2) and
+    // page 2 scan_text_layer (L4-6, with separator line 3).
+    let (dup_rel, dup_sha) = seed_paper(
+        &data_dir,
+        &ledger,
+        sid,
+        "src-p1-pdf",
+        "arxiv:2501.00001",
+        "dup.txt",
+        "p1 l1\np1 l2\n\x0c\np2 l4\np2 l5\np2 l6\n",
+        "pdf_text",
+        Some(json!([
+            { "page": 1, "first_line": 1, "last_line": 2, "basis": "text_layer" },
+            { "page": 2, "first_line": 4, "last_line": 6, "basis": "scan_text_layer" }
+        ])),
+    );
+
+    // Start conversation and credit lines 1..=5 of `src-p1-pdf` to the chat caller.
+    let caller = format!("agent:anthropic:{sid}");
+    ledger.append(sid, "session.start", 1, &json!({ "route": "api", "provider": "anthropic" })).unwrap();
+    let supplied = ContextSuppliedPayload::new(
+        "chat-1",
+        caller.clone(),
+        vec![SuppliedRange {
+            source_id: "src-p1-pdf".into(),
+            path: dup_rel,
+            file_sha256: dup_sha,
+            start_line: 1,
+            end_line: 5,
+        }],
+    )
+    .unwrap();
+    ledger.append(sid, CONTEXT_SUPPLIED_EVENT, 1, &serde_json::to_value(supplied).unwrap()).unwrap();
+
+    // M1 (versioned arxiv:2501.00001v2), M2 (resolves to second source_id `src-p1-pdf`),
+    // and M3 (range L2-5 starts on text_layer page 1 and crosses onto scan_text_layer page 2 -> OCR).
+    let evs = ledger.read_session(sid).unwrap();
+    let rep = check_explore_answer_citations(
+        Some(&ledger),
+        &evs,
+        &caller,
+        "Cross-page versioned cite [arxiv:2501.00001v2: L2-5].",
+    );
+    assert_eq!((rep.matched_count, rep.unread_count), (1, 0), "{rep:?}");
+    let c = &rep.citations[0];
+    assert_eq!(c.source_id.as_deref(), Some("src-p1-pdf"));
+    assert_eq!(c.page, Some(1));
+    assert_eq!(c.ocr_tag.as_deref(), Some("OCR"));
+}
