@@ -227,7 +227,7 @@ pub fn build_where_i_looked(
                 .unwrap_or((0, 0, 0, 0));
             let state = if offline {
                 "offline"
-            } else if matches!(id, "openalex" | "theoremsearch") {
+            } else if id == "theoremsearch" {
                 "disabled"
             } else if let Some(cp) = cov_prov {
                 match cp.state {
@@ -238,14 +238,14 @@ pub fn build_where_i_looked(
                     ProviderCoverageState::NotConfigured => "not_configured",
                     ProviderCoverageState::Disabled => "disabled",
                     ProviderCoverageState::NotAttempted => {
-                        if matches!(id, "arxiv" | "inspire" | "crossref") {
+                        if matches!(id, "arxiv" | "inspire" | "crossref" | "openalex") {
                             "not_attempted"
                         } else {
                             "not_configured"
                         }
                     }
                 }
-            } else if matches!(id, "arxiv" | "inspire" | "crossref") {
+            } else if matches!(id, "arxiv" | "inspire" | "crossref" | "openalex") {
                 "not_attempted"
             } else {
                 "not_configured"

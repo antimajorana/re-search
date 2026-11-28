@@ -95,7 +95,7 @@ const DESKTOP_MODE_SOLVE_ENABLED: bool = true;
 /// Desktop-server gate for bare Explore session creation and Conversation turns (`explore/1`
 /// tool profile is frozen in package X7 and used directly by `build_idea_router`, while bare
 /// Explore sessions and `/messages` Conversation turns land in X15).
-const DESKTOP_MODE_EXPLORE_ENABLED: bool = false;
+pub(crate) const DESKTOP_MODE_EXPLORE_ENABLED: bool = false;
 
 /// Resolve the built [`ToolProfile`] for a mode, returning a plain user-facing error when
 /// that mode's desktop session flow or tool profile has not been built yet (never faking

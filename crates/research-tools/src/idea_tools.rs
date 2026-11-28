@@ -376,8 +376,13 @@ fn default_provider_config() -> ProviderConfig {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let oa_key = std::env::var("OPENALEX_API_KEY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     ProviderConfig {
         semantic_scholar_api_key: s2_key,
+        openalex_api_key: oa_key,
         request_timeout: None,
     }
 }
@@ -426,7 +431,7 @@ pub fn idea_search_handler_with_gate_and_config(
                     "has_more": false,
                     "raw_blob": Value::Null,
                     "retry_after_secs": Value::Null,
-                    "error": format!("provider `{}` is disabled in this build (awaiting X19)", q.provider),
+                    "error": format!("provider `{}` is disabled in this build", q.provider),
                     "papers": [],
                     "edges": [],
                 }));

@@ -6,7 +6,7 @@
 
 use crate::idea::{
     append_explore_session_start, build_idea_statement, is_single_paper_identifier,
-    normalize_fields, preview_first_queries, resolve_stages, run_first_search,
+    normalize_fields, preview_first_queries, resolve_stages,
     search_library_matches, validate_first_queries, IdeaPreset, SubmittedFirstQuery,
     EVENT_IDEA_BUDGET_RAISED, EVENT_IDEA_NOTE, EVENT_IDEA_STAGE, EVENT_IDEA_STATED,
     MAX_NOTE_COMMENT_CHARS, MAX_PREVIEW_LIBRARY_MATCHES, NOTE_ACTIONS, NOTE_TARGET_KINDS,
@@ -259,7 +259,8 @@ pub fn create_explore_session(state: &Arc<DesktopState>, val: &Value) -> ApiResu
     let guard = ActiveExploreGuard::acquire(state, &id)?;
     let sse = Arc::clone(&state.sse);
     let sid_for_sse = id.clone();
-    let search_res = run_first_search(
+    let provider_cfg = crate::routers::resolve_explore_provider_config(state);
+    let search_res = crate::idea::search::run_first_search_with_config(
         &state.cfg.data_dir,
         &state.cfg.literature_endpoints,
         &ledger,
@@ -267,6 +268,7 @@ pub fn create_explore_session(state: &Arc<DesktopState>, val: &Value) -> ApiResu
         &stmt,
         &planned,
         offline,
+        &provider_cfg,
         Some(&guard.cancel),
         move |kind, payload| {
             sse.emit(

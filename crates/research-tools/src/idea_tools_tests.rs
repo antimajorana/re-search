@@ -80,13 +80,13 @@ fn idea_search_disabled_services_return_disabled_and_stub_fetch_fails_closed() {
     register_explore_v1_tools(&mut reg, env, None);
     let router = Router::new(reg, research_policy(), ledger, "s-disabled", Arc::new(ApproveAll));
 
+    // After X19 Part 1, OpenAlex is allowlisted while TheoremSearch remains disabled.
     let out = router
         .try_call(
             "host:idea:s-disabled",
             IDEA_SEARCH,
             &json!({
                 "queries": [
-                    { "qid": "q-oa", "provider": "openalex", "q": "Krylov complexity" },
                     { "qid": "q-ts", "provider": "theoremsearch", "q": "Majorana chain" }
                 ]
             }),
@@ -94,7 +94,6 @@ fn idea_search_disabled_services_return_disabled_and_stub_fetch_fails_closed() {
         .unwrap();
     let CallOutcome::Ok(val) = out else { panic!("expected Ok, got {out:?}") };
     assert_eq!(val["results"][0]["status"], "disabled");
-    assert_eq!(val["results"][1]["status"], "disabled");
     assert_eq!(val["total_returned"], 0);
 
     let fetch_out = router
@@ -141,6 +140,7 @@ fn idea_search_runs_through_router_records_f11_blob_respects_denial_and_rule_p8_
             Some(Arc::new(NetRateGate::new(Arc::new(crate::net_rate::FakeRateClock::new())))),
             Some(ProviderConfig {
                 semantic_scholar_api_key: Some("secret-s2-key-rule-p8".into()),
+                openalex_api_key: None,
                 request_timeout: None,
             }),
         ),
@@ -170,6 +170,7 @@ fn idea_search_runs_through_router_records_f11_blob_respects_denial_and_rule_p8_
             Some(Arc::new(NetRateGate::new(Arc::new(crate::net_rate::FakeRateClock::new())))),
             Some(ProviderConfig {
                 semantic_scholar_api_key: Some("secret-s2-key-rule-p8".into()),
+                openalex_api_key: None,
                 request_timeout: None,
             }),
         ),
@@ -223,4 +224,88 @@ fn idea_search_runs_through_router_records_f11_blob_respects_denial_and_rule_p8_
         )
         .unwrap();
     assert!(matches!(bad, CallOutcome::Error(msg) if msg.contains("unknown field")));
+}
+
+#[test]
+fn idea_search_openalex_returns_rebuilt_non_verbatim_abstract_and_sends_bearer_header() {
+    let oa_body = json!({
+        "meta": { "count": 1, "page": 1, "per_page": 5 },
+        "results": [{
+            "id": "https://openalex.org/W9000001",
+            "doi": "https://doi.org/10.1234/synthetic.oa.1",
+            "ids": {
+                "openalex": "https://openalex.org/W9000001",
+                "doi": "https://doi.org/10.1234/synthetic.oa.1"
+            },
+            "display_name": "Synthetic OpenAlex Work on Operator Growth",
+            "publication_year": 2025,
+            "cited_by_count": 4,
+            "is_retracted": false,
+            "authorships": [{ "author": { "display_name": "B. Theorist" } }],
+            "abstract_inverted_index": {
+                "Synthetic": [0],
+                "rebuilt": [1],
+                "abstract": [2],
+                "for": [3],
+                "Rule": [4],
+                "C3.": [5]
+            }
+        }]
+    })
+    .to_string();
+    let (base_url, srv_handle) = spawn_one_shot_http(200, "application/json", oa_body);
+
+    let tmp = TempDir::new().unwrap();
+    let mut env = ResearchEnv::new(tmp.path());
+    env.network_endpoints = LiteratureEndpoints::loopback_mock(&base_url).unwrap();
+    let env = Arc::new(env);
+
+    let mut reg = Registry::new();
+    reg.register(
+        idea_search_def(),
+        idea_search_handler_with_gate_and_config(
+            env,
+            Some(Arc::new(NetRateGate::new(Arc::new(crate::net_rate::FakeRateClock::new())))),
+            Some(ProviderConfig {
+                semantic_scholar_api_key: None,
+                openalex_api_key: Some("secret-oa-key-rule-p8".into()),
+                request_timeout: None,
+            }),
+        ),
+    );
+    let router = Router::new(
+        reg,
+        research_policy(),
+        Ledger::open(tmp.path()).unwrap(),
+        "s-oa",
+        Arc::new(ApproveAll),
+    );
+    let out = router
+        .try_call(
+            "host:idea:s-oa",
+            IDEA_SEARCH,
+            &json!({
+                "run_id": "run-x19",
+                "queries": [{ "qid": "q-oa", "provider": "openalex", "q": "operator growth", "max_results": 5 }]
+            }),
+        )
+        .unwrap();
+    let CallOutcome::Ok(val) = out else { panic!("expected Ok, got {out:?}") };
+    assert_eq!(val["results"][0]["status"], "ok");
+    assert_eq!(val["results"][0]["returned"], 1);
+    assert_eq!(val["results"][0]["papers"][0]["abstract_ref"]["verbatim"], false);
+    assert_eq!(
+        val["results"][0]["papers"][0]["abstract_text"],
+        "Synthetic rebuilt abstract for Rule C3."
+    );
+
+    let req_text = srv_handle.join().unwrap();
+    let first_line = req_text.lines().next().unwrap_or("");
+    assert!(!first_line.contains("secret-oa-key-rule-p8"), "OpenAlex key leaked into URL: {first_line}");
+    assert!(
+        req_text.to_ascii_lowercase().contains("authorization: bearer secret-oa-key-rule-p8"),
+        "expected Authorization Bearer header: {req_text}"
+    );
+    let dumped = serde_json::to_string(&Ledger::open(tmp.path()).unwrap().read_session("s-oa").unwrap()).unwrap();
+    assert!(!dumped.contains("secret-oa-key-rule-p8"), "OpenAlex key leaked into ledger!");
 }

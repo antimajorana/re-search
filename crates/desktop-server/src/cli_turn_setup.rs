@@ -269,6 +269,12 @@ pub(crate) fn path_str(p: &Path) -> String {
 /// Detect the session's mode and active frozen [`ToolProfile`] from its ledger events.
 pub fn resolve_cli_turn_profile(events: &[ledger::Event]) -> Result<(Mode, ToolProfile), String> {
     let mode = session_mode_from_events(events);
+    if mode == Mode::Explore && !crate::session_mode::DESKTOP_MODE_EXPLORE_ENABLED {
+        return Err(
+            "Explore CLI turns are not built yet (awaiting X18; CLI profile not built yet)"
+                .to_string(),
+        );
+    }
     let profile = active_profile_for_session_events(events)?;
     Ok((mode, profile))
 }
@@ -343,6 +349,7 @@ pub fn core_env_for_profile(
         ("RE_SEARCH_INSPIRE_BASE", &ep.inspire_api_base, &def.inspire_api_base),
         ("RE_SEARCH_CROSSREF_BASE", &ep.crossref_api_base, &def.crossref_api_base),
         ("RE_SEARCH_S2_BASE", &ep.semantic_scholar_api_base, &def.semantic_scholar_api_base),
+        ("RE_SEARCH_OPENALEX_BASE", &ep.openalex_api_base, &def.openalex_api_base),
     ] {
         if val != default {
             env.insert(name.into(), val.clone());
