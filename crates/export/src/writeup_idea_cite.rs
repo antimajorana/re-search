@@ -173,12 +173,27 @@ impl<'a> IdeaCiteResolver<'a> {
             return Ok(None);
         };
 
+        if quote_sha256(raw_quote) != stored_ref.quote_sha256 {
+            self.record_rejection(
+                section_title,
+                expected_paper.as_str(),
+                "quote_hash_mismatch",
+                format!("`evidence.quote` seq {seq} quote text does not match stored quote_sha256"),
+            );
+            return Ok(None);
+        }
+
+        let clipped = clip_quote(raw_quote);
+        let verify_ref = QuoteRef {
+            quote_sha256: quote_sha256(clipped),
+            ..stored_ref
+        };
         let verified = match verify_quote_ref(
             self.sandbox,
             self.session_id,
             self.events,
-            &stored_ref,
-            raw_quote,
+            &verify_ref,
+            clipped,
         ) {
             Ok(v) => v,
             Err(fault) => {
@@ -190,35 +205,9 @@ impl<'a> IdeaCiteResolver<'a> {
                 return Ok(None);
             }
         };
-
-        let clipped = clip_quote(raw_quote);
-        let final_qref = if clipped.len() != raw_quote.len() {
-            let clipped_ref = QuoteRef {
-                quote_sha256: quote_sha256(clipped),
-                ..verified.quote_ref.clone()
-            };
-            match verify_quote_ref(
-                self.sandbox,
-                self.session_id,
-                self.events,
-                &clipped_ref,
-                clipped,
-            ) {
-                Ok(cv) => cv.quote_ref,
-                Err(fault) => {
-                    self.rejected_quotes.push(RejectedWriteupQuote {
-                        section_title: section_title.to_string(),
-                        cite_key: expected_paper.to_string(),
-                        fault,
-                    });
-                    return Ok(None);
-                }
-            }
-        } else {
-            QuoteRef {
-                quote_sha256: quote_sha256(clipped),
-                ..verified.quote_ref
-            }
+        let final_qref = QuoteRef {
+            quote_sha256: quote_sha256(clipped),
+            ..verified.quote_ref
         };
 
         let ingested_ev = self.ingested_by_source.get(&final_qref.source_id).copied();
