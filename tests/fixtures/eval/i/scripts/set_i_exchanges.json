@@ -1,0 +1,581 @@
+{
+  "format_version": 1,
+  "cases": {
+    "I-01": {
+      "sharpen_input": {
+        "restatement": "Determine whether disjoint-interval logarithmic negativity in a zero-temperature 1+1D Luttinger liquid decays algebraically with exponent proportional to K.",
+        "assumptions": [
+          "Zero temperature",
+          "1+1D Luttinger liquid"
+        ],
+        "subclaims": [
+          {
+            "text": "Logarithmic negativity of disjoint intervals decays algebraically at zero temperature",
+            "idea_quote": "logarithmic negativity of disjoint intervals in a 1+1D Luttinger liquid decays algebraically"
+          },
+          {
+            "text": "Algebraic decay exponent is proportional to the Luttinger parameter K",
+            "idea_quote": "exponent proportional to the Luttinger parameter K"
+          }
+        ],
+        "terms": [
+          {
+            "term": "logarithmic negativity",
+            "aliases": [
+              "partial transpose entanglement"
+            ]
+          }
+        ],
+        "questions": [],
+        "exclusions": [],
+        "perspectives": [
+          {
+            "kind": "exact",
+            "question": "Direct prior work for I-01",
+            "queries": [
+              {
+                "provider": "arxiv",
+                "q": "Luttinger liquid logarithmic negativity disjoint intervals"
+              }
+            ]
+          },
+          {
+            "kind": "other_names",
+            "question": "Alternative terminology for I-01",
+            "queries": [
+              {
+                "provider": "inspire",
+                "q": "partial transpose entanglement Luttinger parameter"
+              }
+            ]
+          }
+        ]
+      },
+      "triage_core": [
+        {
+          "key": "arxiv:2401.90101",
+          "subclaim_ids": [
+            "sc-1",
+            "sc-2"
+          ],
+          "abstract_quote": "power-law exponent directly proportional to the Luttinger parameter K"
+        }
+      ]
+    },
+    "I-02": {
+      "sharpen_input": {
+        "restatement": "Check whether a Floquet Magnus high-frequency expansion yields an effective three-spin chiral term on a driven triangular Heisenberg antiferromagnet.",
+        "assumptions": [
+          "High-frequency periodic driving"
+        ],
+        "subclaims": [
+          {
+            "text": "Use a Floquet Magnus high-frequency expansion to derive an effective three-spin chiral interaction in a periodically driven triangular Heisenberg antiferromagnet.",
+            "idea_quote": "Use a Floquet Magnus high-frequency expansion to derive an effective three-spin chiral interaction in a periodically driven triangular Heisenberg antiferromagnet"
+          }
+        ],
+        "terms": [
+          {
+            "term": "three-spin chiral interaction",
+            "aliases": [
+              "scalar spin chirality"
+            ]
+          }
+        ],
+        "questions": [],
+        "exclusions": [],
+        "perspectives": [
+          {
+            "kind": "exact",
+            "question": "Direct prior work for I-02",
+            "queries": [
+              {
+                "provider": "crossref",
+                "q": "Floquet Magnus triangular Heisenberg three-spin chiral"
+              }
+            ]
+          },
+          {
+            "kind": "other_names",
+            "question": "Alternative terminology for I-02",
+            "queries": [
+              {
+                "provider": "arxiv",
+                "q": "high-frequency scalar spin chirality driven antiferromagnet"
+              }
+            ]
+          }
+        ]
+      },
+      "triage_core": [
+        {
+          "key": "doi:10.9999/eval.i02.chiral",
+          "subclaim_ids": [
+            "sc-1"
+          ],
+          "abstract_quote": "effective three-spin scalar chiral interaction proportional to inverse driving frequency"
+        }
+      ]
+    },
+    "I-03": {
+      "sharpen_input": {
+        "restatement": "Check prior two-loop dimensional regularization computations of the quartic strain anomalous dimension in anisotropic elastic membranes.",
+        "assumptions": [
+          "Dimensional regularization near d=4"
+        ],
+        "subclaims": [
+          {
+            "text": "Compute the exact two-loop anomalous dimension of the quartic strain operator in an anisotropic elastic membrane using dimensional regularization.",
+            "idea_quote": "Compute the exact two-loop anomalous dimension of the quartic strain operator in an anisotropic elastic membrane using dimensional regularization"
+          }
+        ],
+        "terms": [
+          {
+            "term": "anisotropic elastic membrane",
+            "aliases": [
+              "anisotropic crystalline sheet"
+            ]
+          }
+        ],
+        "questions": [],
+        "exclusions": [],
+        "perspectives": [
+          {
+            "kind": "exact",
+            "question": "Direct prior work for I-03",
+            "queries": [
+              {
+                "provider": "arxiv",
+                "q": "two-loop anomalous dimension quartic strain anisotropic membrane"
+              }
+            ]
+          },
+          {
+            "kind": "other_names",
+            "question": "Alternative terminology for I-03",
+            "queries": [
+              {
+                "provider": "inspire",
+                "q": "flexural renormalization anisotropic crystalline sheet"
+              }
+            ]
+          }
+        ]
+      },
+      "triage_core": [
+        {
+          "key": "doi:10.9999/eval.i03.paywalled",
+          "subclaim_ids": [
+            "sc-1"
+          ],
+          "abstract_quote": null
+        }
+      ]
+    },
+    "I-04": {
+      "sharpen_input": {
+        "restatement": "Determine whether Lanczos growth rate in operator Krylov space detects the measurement-induced transition in a monitored Majorana chain.",
+        "assumptions": [
+          "Free-fermion monitored dynamics"
+        ],
+        "subclaims": [
+          {
+            "text": "Use the growth rate of Lanczos coefficients in operator Krylov space to detect the measurement-induced entanglement transition in a monitored Majorana chain.",
+            "idea_quote": "Use the growth rate of Lanczos coefficients in operator Krylov space to detect the measurement-induced entanglement transition in a monitored Majorana chain"
+          }
+        ],
+        "terms": [
+          {
+            "term": "Krylov space",
+            "aliases": [
+              "spread complexity"
+            ]
+          }
+        ],
+        "questions": [],
+        "exclusions": [],
+        "perspectives": [
+          {
+            "kind": "exact",
+            "question": "Direct prior work for I-04",
+            "queries": [
+              {
+                "provider": "arxiv",
+                "q": "Krylov Lanczos monitored Majorana entanglement transition"
+              }
+            ]
+          },
+          {
+            "kind": "other_names",
+            "question": "Alternative terminology for I-04",
+            "queries": [
+              {
+                "provider": "inspire",
+                "q": "spread complexity monitored Majorana chain"
+              }
+            ]
+          }
+        ]
+      },
+      "triage_core": [
+        {
+          "key": "arxiv:2404.90401",
+          "subclaim_ids": [
+            "sc-1"
+          ],
+          "abstract_quote": "spread complexity, defined from the tridiagonal recurrence growth rate"
+        }
+      ]
+    },
+    "I-05": {
+      "sharpen_input": {
+        "restatement": "Check prior non-perturbative spectral gap bounds for frustration-free spin ladders using recursive subspace projections.",
+        "assumptions": [
+          "Frustration-free local Hamiltonian"
+        ],
+        "subclaims": [
+          {
+            "text": "Non-perturbative spectral gap bound for frustration-free spin ladders via recursive subspace martingale projections",
+            "idea_quote": "non-perturbative spectral gap bound for frustration-free spin ladders via recursive subspace martingale projections"
+          }
+        ],
+        "terms": [
+          {
+            "term": "recursive subspace martingale projections",
+            "aliases": [
+              "detectability lemma"
+            ]
+          }
+        ],
+        "questions": [],
+        "exclusions": [],
+        "perspectives": [
+          {
+            "kind": "exact",
+            "question": "Direct prior work for I-05",
+            "queries": [
+              {
+                "provider": "arxiv",
+                "q": "frustration-free spin ladders martingale spectral gap"
+              }
+            ]
+          },
+          {
+            "kind": "other_names",
+            "question": "Alternative terminology for I-05",
+            "queries": [
+              {
+                "provider": "openalex",
+                "q": "detectability lemma finite-size gap spin ladders"
+              }
+            ]
+          }
+        ]
+      },
+      "triage_core": [
+        {
+          "key": "doi:10.9999/eval.i05.knabe",
+          "subclaim_ids": [
+            "sc-1"
+          ],
+          "abstract_quote": null
+        }
+      ]
+    },
+    "I-06": {
+      "sharpen_input": {
+        "restatement": "Determine whether hyperbolic surface codes admit a transversal non-Clifford gate with both constant rate and linear distance.",
+        "assumptions": [
+          "2D hyperbolic tessellation"
+        ],
+        "subclaims": [
+          {
+            "text": "Transversal non-Clifford gate on hyperbolic surface codes with constant encoding rate",
+            "idea_quote": "transversal non-Clifford T gate on hyperbolic surface codes with constant encoding rate"
+          },
+          {
+            "text": "Simultaneous linear distance scaling",
+            "idea_quote": "linear distance"
+          }
+        ],
+        "terms": [
+          {
+            "term": "transversal non-Clifford T gate",
+            "aliases": [
+              "transversal CCZ"
+            ]
+          }
+        ],
+        "questions": [],
+        "exclusions": [],
+        "perspectives": [
+          {
+            "kind": "exact",
+            "question": "Direct prior work for I-06",
+            "queries": [
+              {
+                "provider": "arxiv",
+                "q": "transversal non-Clifford hyperbolic surface codes linear distance"
+              }
+            ]
+          },
+          {
+            "kind": "other_names",
+            "question": "Alternative terminology for I-06",
+            "queries": [
+              {
+                "provider": "inspire",
+                "q": "constant-rate hyperbolic LDPC transversal CCZ"
+              }
+            ]
+          }
+        ]
+      },
+      "triage_core": [
+        {
+          "key": "arxiv:2406.90601",
+          "subclaim_ids": [
+            "sc-1"
+          ],
+          "abstract_quote": "distance scales only logarithmically rather than linearly with block length"
+        }
+      ]
+    },
+    "I-07": {
+      "sharpen_input": {
+        "restatement": "Check whether non-Hermitian skin boundary modes stay exponentially localized under reciprocal hopping disorder and strong Hubbard interactions.",
+        "assumptions": [
+          "Open boundary conditions"
+        ],
+        "subclaims": [
+          {
+            "text": "Skin boundary modes stay exponentially localized under reciprocal hopping disorder",
+            "idea_quote": "non-Hermitian skin effect boundary modes remain exponentially localized under both reciprocal hopping disorder"
+          },
+          {
+            "text": "Boundary localization survives strong Hubbard interactions",
+            "idea_quote": "strong Hubbard interactions"
+          }
+        ],
+        "terms": [
+          {
+            "term": "non-Hermitian skin effect",
+            "aliases": [
+              "Hatano-Nelson boundary modes"
+            ]
+          }
+        ],
+        "questions": [],
+        "exclusions": [],
+        "perspectives": [
+          {
+            "kind": "exact",
+            "question": "Direct prior work for I-07",
+            "queries": [
+              {
+                "provider": "arxiv",
+                "q": "non-Hermitian skin effect disorder Hubbard localization"
+              }
+            ]
+          },
+          {
+            "kind": "other_names",
+            "question": "Alternative terminology for I-07",
+            "queries": [
+              {
+                "provider": "semantic_scholar",
+                "q": "Hatano-Nelson boundary modes interaction localization"
+              }
+            ]
+          }
+        ]
+      },
+      "triage_core": [
+        {
+          "key": "arxiv:2407.90701",
+          "subclaim_ids": [
+            "sc-1"
+          ],
+          "abstract_quote": "remain exponentially localized in the presence of bounded reciprocal hopping disorder"
+        },
+        {
+          "key": "doi:10.9999/eval.i07.hubbard",
+          "subclaim_ids": [
+            "sc-2"
+          ],
+          "abstract_quote": "partial survival of localization at small U, leaving strong Hubbard coupling open"
+        }
+      ]
+    },
+    "I-08": {
+      "sharpen_input": {
+        "restatement": "Check prior derivations of quantized thermal Hall conductivity in disordered chiral p-wave superconductors with phonon drag corrections.",
+        "assumptions": [
+          "Two-dimensional chiral p-wave pairing"
+        ],
+        "subclaims": [
+          {
+            "text": "Universal thermal Hall conductivity quantization for disordered chiral p-wave superconductors",
+            "idea_quote": "universal thermal Hall conductivity quantization formula for disordered chiral p-wave superconductors"
+          },
+          {
+            "text": "Includes acoustic phonon drag corrections",
+            "idea_quote": "phonon drag corrections"
+          }
+        ],
+        "terms": [
+          {
+            "term": "thermal Hall conductivity",
+            "aliases": [
+              "chiral heat transport"
+            ]
+          }
+        ],
+        "questions": [],
+        "exclusions": [],
+        "perspectives": [
+          {
+            "kind": "exact",
+            "question": "Direct prior work for I-08",
+            "queries": [
+              {
+                "provider": "arxiv",
+                "q": "thermal Hall quantization disordered chiral p-wave superconductor"
+              }
+            ]
+          },
+          {
+            "kind": "other_names",
+            "question": "Alternative terminology for I-08",
+            "queries": [
+              {
+                "provider": "inspire",
+                "q": "phonon drag thermal transport chiral superconductor"
+              }
+            ]
+          }
+        ]
+      },
+      "triage_core": [
+        {
+          "key": "arxiv:2408.90801",
+          "subclaim_ids": [
+            "sc-1"
+          ],
+          "abstract_quote": "universal thermal Hall conductivity quantization formula for disordered chiral p-wave superconductors"
+        },
+        {
+          "key": "doi:10.9999/eval.i08.paywalled",
+          "subclaim_ids": [
+            "sc-2"
+          ],
+          "abstract_quote": null
+        }
+      ]
+    },
+    "I-09": {
+      "sharpen_input": {
+        "restatement": "Search for an exact duality mapping a 3+1D fracton checkerboard model with dipole conservation to a BF theory with non-invertible defects.",
+        "assumptions": [
+          "3+1D cubic lattice",
+          "Subsystem dipole conservation"
+        ],
+        "subclaims": [
+          {
+            "text": "Construct an exact dual lattice gauge theory mapping a 3+1D fracton checkerboard model with subsystem dipole conservation to a topological BF theory.",
+            "idea_quote": "Construct an exact dual lattice gauge theory mapping a 3+1D fracton checkerboard model with subsystem dipole conservation to a topological BF theory"
+          },
+          {
+            "text": "Endow the dual topological BF theory with non-invertible defects.",
+            "idea_quote": "with non-invertible defects"
+          }
+        ],
+        "terms": [
+          {
+            "term": "fracton checkerboard model",
+            "aliases": [
+              "foliated fracton phase"
+            ]
+          }
+        ],
+        "questions": [],
+        "exclusions": [],
+        "perspectives": [
+          {
+            "kind": "exact",
+            "question": "Direct prior work for I-09",
+            "queries": [
+              {
+                "provider": "arxiv",
+                "q": "3+1D fracton checkerboard dual BF theory non-invertible"
+              }
+            ]
+          },
+          {
+            "kind": "other_names",
+            "question": "Alternative terminology for I-09",
+            "queries": [
+              {
+                "provider": "inspire",
+                "q": "subsystem dipole conservation foliated gauge duality"
+              }
+            ]
+          }
+        ]
+      },
+      "triage_core": []
+    },
+    "I-10": {
+      "sharpen_input": {
+        "restatement": "Search for a sharp finite-temperature Lieb-Robinson velocity bound vanishing logarithmically in system size for 2D alpha = 3/2 power-law interactions.",
+        "assumptions": [
+          "Two spatial dimensions",
+          "Power-law exponent alpha = 3/2"
+        ],
+        "subclaims": [
+          {
+            "text": "Prove a sharp finite-temperature Lieb-Robinson velocity bound for power-law decaying interactions with exponent alpha = 3/2 in two dimensions.",
+            "idea_quote": "Prove a sharp finite-temperature Lieb-Robinson velocity bound"
+          },
+          {
+            "text": "Show that the finite-temperature velocity bound vanishes logarithmically in system size for exponent alpha = 3/2 in two dimensions.",
+            "idea_quote": "that vanishes logarithmically in system size for power-law decaying interactions with exponent alpha = 3/2 in two dimensions"
+          }
+        ],
+        "terms": [
+          {
+            "term": "Lieb-Robinson velocity bound",
+            "aliases": [
+              "thermal butterfly velocity"
+            ]
+          }
+        ],
+        "questions": [],
+        "exclusions": [],
+        "perspectives": [
+          {
+            "kind": "exact",
+            "question": "Direct prior work for I-10",
+            "queries": [
+              {
+                "provider": "arxiv",
+                "q": "finite-temperature Lieb-Robinson bound power-law alpha 3/2"
+              }
+            ]
+          },
+          {
+            "kind": "other_names",
+            "question": "Alternative terminology for I-10",
+            "queries": [
+              {
+                "provider": "inspire",
+                "q": "thermal butterfly velocity long-range two-dimensional spin"
+              }
+            ]
+          }
+        ]
+      },
+      "triage_core": []
+    }
+  }
+}

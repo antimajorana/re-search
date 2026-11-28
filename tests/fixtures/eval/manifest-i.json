@@ -1,0 +1,413 @@
+{
+  "format_version": 1,
+  "set": "I",
+  "tier": "fixed",
+  "cases": [
+    {
+      "id": "I-01",
+      "mode": "explore",
+      "input": {
+        "kind": "idea",
+        "text": "Show that the logarithmic negativity of disjoint intervals in a 1+1D Luttinger liquid decays algebraically with exponent proportional to the Luttinger parameter K at zero temperature."
+      },
+      "answer_key": {
+        "category": "done",
+        "library_only_key_paper": false,
+        "parts": [
+          {
+            "id": "sc-1",
+            "text": "The logarithmic negativity of disjoint intervals in a zero-temperature 1+1D Luttinger liquid decays algebraically.",
+            "idea_quote": "the logarithmic negativity of disjoint intervals in a 1+1D Luttinger liquid decays algebraically",
+            "expected_status": "judged_same",
+            "key_papers": [
+              "arxiv:2401.90101"
+            ],
+            "other_name": null
+          },
+          {
+            "id": "sc-2",
+            "text": "The algebraic decay exponent is proportional to the Luttinger parameter K at zero temperature.",
+            "idea_quote": "with exponent proportional to the Luttinger parameter K at zero temperature",
+            "expected_status": "judged_same",
+            "key_papers": [
+              "arxiv:2401.90101"
+            ],
+            "other_name": null
+          }
+        ],
+        "expected_key_papers": [
+          {
+            "key": "arxiv:2401.90101",
+            "library_only": false,
+            "available_in": [
+              "arxiv",
+              "inspire",
+              "openalex",
+              "semantic_scholar"
+            ]
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set I evaluation case (done): key paper available on keyless arXiv/INSPIRE plus keyed services."
+    },
+    {
+      "id": "I-02",
+      "mode": "explore",
+      "input": {
+        "kind": "idea",
+        "text": "Use a Floquet Magnus high-frequency expansion to derive an effective three-spin chiral interaction in a periodically driven triangular Heisenberg antiferromagnet."
+      },
+      "answer_key": {
+        "category": "done",
+        "library_only_key_paper": false,
+        "parts": [
+          {
+            "id": "sc-1",
+            "text": "Use a Floquet Magnus high-frequency expansion to derive an effective three-spin chiral interaction in a periodically driven triangular Heisenberg antiferromagnet.",
+            "idea_quote": "Use a Floquet Magnus high-frequency expansion to derive an effective three-spin chiral interaction in a periodically driven triangular Heisenberg antiferromagnet",
+            "expected_status": "judged_same",
+            "key_papers": [
+              "doi:10.9999/eval.i02.chiral"
+            ],
+            "other_name": null
+          }
+        ],
+        "expected_key_papers": [
+          {
+            "key": "doi:10.9999/eval.i02.chiral",
+            "library_only": false,
+            "available_in": [
+              "crossref",
+              "openalex",
+              "semantic_scholar"
+            ]
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set I evaluation case (done): DOI-only journal paper found via keyless Crossref plus keyed services."
+    },
+    {
+      "id": "I-03",
+      "mode": "explore",
+      "input": {
+        "kind": "idea",
+        "text": "Compute the exact two-loop anomalous dimension of the quartic strain operator in an anisotropic elastic membrane using dimensional regularization."
+      },
+      "answer_key": {
+        "category": "done",
+        "library_only_key_paper": true,
+        "parts": [
+          {
+            "id": "sc-1",
+            "text": "Compute the exact two-loop anomalous dimension of the quartic strain operator in an anisotropic elastic membrane using dimensional regularization.",
+            "idea_quote": "Compute the exact two-loop anomalous dimension of the quartic strain operator in an anisotropic elastic membrane using dimensional regularization",
+            "expected_status": "judged_same",
+            "key_papers": [
+              "doi:10.9999/eval.i03.paywalled"
+            ],
+            "other_name": null
+          }
+        ],
+        "expected_key_papers": [
+          {
+            "key": "doi:10.9999/eval.i03.paywalled",
+            "library_only": true,
+            "available_in": [
+              "user_library"
+            ]
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set I evaluation case (done, library-only paywalled #1): key paper exists strictly in F10/F13a user library."
+    },
+    {
+      "id": "I-04",
+      "mode": "explore",
+      "input": {
+        "kind": "idea",
+        "text": "Use the growth rate of Lanczos coefficients in operator Krylov space to detect the measurement-induced entanglement transition in a monitored Majorana chain."
+      },
+      "answer_key": {
+        "category": "done_other_name",
+        "library_only_key_paper": false,
+        "parts": [
+          {
+            "id": "sc-1",
+            "text": "Use the growth rate of Lanczos coefficients in operator Krylov space to detect the measurement-induced entanglement transition in a monitored Majorana chain.",
+            "idea_quote": "Use the growth rate of Lanczos coefficients in operator Krylov space to detect the measurement-induced entanglement transition in a monitored Majorana chain",
+            "expected_status": "judged_other_name",
+            "key_papers": [
+              "arxiv:2404.90401"
+            ],
+            "other_name": "spread complexity"
+          }
+        ],
+        "expected_key_papers": [
+          {
+            "key": "arxiv:2404.90401",
+            "library_only": false,
+            "available_in": [
+              "inspire",
+              "openalex",
+              "semantic_scholar"
+            ]
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set I evaluation case (done under another name): key paper uses 'spread complexity' on INSPIRE plus keyed services."
+    },
+    {
+      "id": "I-05",
+      "mode": "explore",
+      "input": {
+        "kind": "idea",
+        "text": "Establish a non-perturbative spectral gap bound for frustration-free spin ladders via recursive subspace martingale projections."
+      },
+      "answer_key": {
+        "category": "done_other_name",
+        "library_only_key_paper": false,
+        "parts": [
+          {
+            "id": "sc-1",
+            "text": "Establish a non-perturbative spectral gap bound for frustration-free spin ladders via recursive subspace martingale projections.",
+            "idea_quote": "Establish a non-perturbative spectral gap bound for frustration-free spin ladders via recursive subspace martingale projections",
+            "expected_status": "judged_other_name",
+            "key_papers": [
+              "doi:10.9999/eval.i05.knabe"
+            ],
+            "other_name": "detectability lemma"
+          }
+        ],
+        "expected_key_papers": [
+          {
+            "key": "doi:10.9999/eval.i05.knabe",
+            "library_only": false,
+            "available_in": [
+              "openalex",
+              "semantic_scholar"
+            ]
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set I evaluation case (done under another name): key paper uses 'detectability lemma', available only via keyed OpenAlex/Semantic Scholar."
+    },
+    {
+      "id": "I-06",
+      "mode": "explore",
+      "input": {
+        "kind": "idea",
+        "text": "Construct a fault-tolerant transversal non-Clifford T gate on hyperbolic surface codes with constant encoding rate and linear distance."
+      },
+      "answer_key": {
+        "category": "done_partly",
+        "library_only_key_paper": false,
+        "parts": [
+          {
+            "id": "sc-1",
+            "text": "Construct a fault-tolerant transversal non-Clifford gate on hyperbolic surface codes with constant encoding rate.",
+            "idea_quote": "Construct a fault-tolerant transversal non-Clifford T gate on hyperbolic surface codes with constant encoding rate",
+            "expected_status": "judged_same",
+            "key_papers": [
+              "arxiv:2406.90601"
+            ],
+            "other_name": null
+          },
+          {
+            "id": "sc-2",
+            "text": "Achieve linear code distance on constant-rate hyperbolic surface codes.",
+            "idea_quote": "linear distance",
+            "expected_status": "none_in_scope",
+            "key_papers": [],
+            "other_name": null
+          }
+        ],
+        "expected_key_papers": [
+          {
+            "key": "arxiv:2406.90601",
+            "library_only": false,
+            "available_in": [
+              "arxiv",
+              "inspire",
+              "openalex",
+              "semantic_scholar"
+            ]
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set I evaluation case (done partly): constant rate + transversal T gate achieved, linear distance open."
+    },
+    {
+      "id": "I-07",
+      "mode": "explore",
+      "input": {
+        "kind": "idea",
+        "text": "Prove that non-Hermitian skin effect boundary modes remain exponentially localized under both reciprocal hopping disorder and strong Hubbard interactions."
+      },
+      "answer_key": {
+        "category": "done_partly",
+        "library_only_key_paper": false,
+        "parts": [
+          {
+            "id": "sc-1",
+            "text": "Non-Hermitian skin effect boundary modes remain exponentially localized under reciprocal hopping disorder.",
+            "idea_quote": "non-Hermitian skin effect boundary modes remain exponentially localized under both reciprocal hopping disorder",
+            "expected_status": "judged_same",
+            "key_papers": [
+              "arxiv:2407.90701"
+            ],
+            "other_name": null
+          },
+          {
+            "id": "sc-2",
+            "text": "Non-Hermitian skin effect boundary modes remain exponentially localized under strong Hubbard interactions.",
+            "idea_quote": "and strong Hubbard interactions",
+            "expected_status": "judged_partial",
+            "key_papers": [
+              "doi:10.9999/eval.i07.hubbard"
+            ],
+            "other_name": null
+          }
+        ],
+        "expected_key_papers": [
+          {
+            "key": "arxiv:2407.90701",
+            "library_only": false,
+            "available_in": [
+              "arxiv",
+              "crossref",
+              "inspire",
+              "openalex",
+              "semantic_scholar"
+            ]
+          },
+          {
+            "key": "doi:10.9999/eval.i07.hubbard",
+            "library_only": false,
+            "available_in": [
+              "semantic_scholar"
+            ]
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set I evaluation case (done partly): disorder paper keyless, weak-Hubbard paper on Semantic Scholar only."
+    },
+    {
+      "id": "I-08",
+      "mode": "explore",
+      "input": {
+        "kind": "idea",
+        "text": "Derive a universal thermal Hall conductivity quantization formula for disordered chiral p-wave superconductors including phonon drag corrections."
+      },
+      "answer_key": {
+        "category": "done_partly",
+        "library_only_key_paper": true,
+        "parts": [
+          {
+            "id": "sc-1",
+            "text": "Derive a universal thermal Hall conductivity quantization formula for disordered chiral p-wave superconductors.",
+            "idea_quote": "Derive a universal thermal Hall conductivity quantization formula for disordered chiral p-wave superconductors",
+            "expected_status": "judged_same",
+            "key_papers": [
+              "arxiv:2408.90801"
+            ],
+            "other_name": null
+          },
+          {
+            "id": "sc-2",
+            "text": "Include phonon drag corrections in the thermal Hall conductivity of disordered chiral p-wave superconductors.",
+            "idea_quote": "including phonon drag corrections",
+            "expected_status": "judged_partial",
+            "key_papers": [
+              "doi:10.9999/eval.i08.paywalled"
+            ],
+            "other_name": null
+          }
+        ],
+        "expected_key_papers": [
+          {
+            "key": "arxiv:2408.90801",
+            "library_only": false,
+            "available_in": [
+              "arxiv",
+              "inspire",
+              "openalex",
+              "semantic_scholar"
+            ]
+          },
+          {
+            "key": "doi:10.9999/eval.i08.paywalled",
+            "library_only": true,
+            "available_in": [
+              "user_library"
+            ]
+          }
+        ]
+      },
+      "notes": "Fixed-tier Set I evaluation case (done partly, library-only paywalled #2): electronic quantization on arXiv/INSPIRE, phonon drag paper strictly in F10/F13a user library."
+    },
+    {
+      "id": "I-09",
+      "mode": "explore",
+      "input": {
+        "kind": "idea",
+        "text": "Construct an exact dual lattice gauge theory mapping a 3+1D fracton checkerboard model with subsystem dipole conservation to a topological BF theory with non-invertible defects."
+      },
+      "answer_key": {
+        "category": "open_as_far_as_known",
+        "library_only_key_paper": false,
+        "parts": [
+          {
+            "id": "sc-1",
+            "text": "Construct an exact dual lattice gauge theory mapping a 3+1D fracton checkerboard model with subsystem dipole conservation to a topological BF theory.",
+            "idea_quote": "Construct an exact dual lattice gauge theory mapping a 3+1D fracton checkerboard model with subsystem dipole conservation to a topological BF theory",
+            "expected_status": "none_in_scope",
+            "key_papers": [],
+            "other_name": null
+          },
+          {
+            "id": "sc-2",
+            "text": "Endow the dual topological BF theory with non-invertible defects.",
+            "idea_quote": "with non-invertible defects",
+            "expected_status": "none_in_scope",
+            "key_papers": [],
+            "other_name": null
+          }
+        ],
+        "expected_key_papers": []
+      },
+      "notes": "Fixed-tier Set I evaluation case (open as far as known): services answer 200 OK with background papers only."
+    },
+    {
+      "id": "I-10",
+      "mode": "explore",
+      "input": {
+        "kind": "idea",
+        "text": "Prove a sharp finite-temperature Lieb-Robinson velocity bound that vanishes logarithmically in system size for power-law decaying interactions with exponent alpha = 3/2 in two dimensions."
+      },
+      "answer_key": {
+        "category": "open_as_far_as_known",
+        "library_only_key_paper": false,
+        "parts": [
+          {
+            "id": "sc-1",
+            "text": "Prove a sharp finite-temperature Lieb-Robinson velocity bound for power-law decaying interactions with exponent alpha = 3/2 in two dimensions.",
+            "idea_quote": "Prove a sharp finite-temperature Lieb-Robinson velocity bound",
+            "expected_status": "none_in_scope",
+            "key_papers": [],
+            "other_name": null
+          },
+          {
+            "id": "sc-2",
+            "text": "Show that the finite-temperature velocity bound vanishes logarithmically in system size for exponent alpha = 3/2 in two dimensions.",
+            "idea_quote": "that vanishes logarithmically in system size for power-law decaying interactions with exponent alpha = 3/2 in two dimensions",
+            "expected_status": "none_in_scope",
+            "key_papers": [],
+            "other_name": null
+          }
+        ],
+        "expected_key_papers": []
+      },
+      "notes": "Fixed-tier Set I evaluation case (open as far as known): services answer 200 OK with background papers only."
+    }
+  ]
+}
