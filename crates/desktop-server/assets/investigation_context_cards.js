@@ -4,7 +4,7 @@
 
 import { buildTaskPayload } from './investigation_orient_ui.js';
 import { createQuoteChip } from './quote_chip.js';
-import { createRunBar, normalizeRunState } from './run_bar.js';
+import { createRunBar, describeRunError, normalizeRunState } from './run_bar.js';
 import { BORDER_DASHED, BORDER_SOLID, PROVENANCE_STYLES, createBadge } from './ui_badge.js';
 
 export const PREREQUISITES_FOCUS = 'prerequisites';
@@ -261,12 +261,18 @@ export function renderContextCardsSection(opts = {}) {
     const activeFocus = String(taskObj.focus || '').trim().toLowerCase().includes('compare')
       ? COMPARE_HYPOTHESES_FOCUS
       : PREREQUISITES_FOCUS;
+    const mc = taskObj.model_calls && typeof taskObj.model_calls === 'object' ? taskObj.model_calls : null;
+    const modelCallsUsed = mc
+      ? mc.used
+      : (typeof taskObj.model_calls === 'number' ? taskObj.model_calls : undefined);
+    const modelCallsMax = mc?.cap ?? taskObj.cap;
+    const errNote = describeRunError(taskObj.error, taskNorm?.key, taskObj.model_calls);
     createRunBar(barHost, {
       state: taskNorm?.key || 'paused',
       detail,
-      modelCallsUsed: taskObj.model_calls,
-      modelCallsMax: taskObj.cap,
-      extras: taskObj.error ? [String(taskObj.error)] : [],
+      modelCallsUsed,
+      modelCallsMax,
+      extras: errNote ? [errNote] : [],
     }, {
       onStop: typeof onStopTask === 'function' ? () => onStopTask() : undefined,
       onContinue: selectedTag && modelConnected && typeof onStartContextTask === 'function'

@@ -1,7 +1,11 @@
 // Standalone Investigate V7 Orient UI helpers: RunBar state/actions, Auto-orient toggle,
 // selected model propagation, and startup/connect DOM watcher (00-overview §3.3, investigate §3/§6.19).
 
-import { createRunBar, normalizeRunState } from './run_bar.js';
+import { createRunBar, describeRunError, normalizeRunState } from './run_bar.js';
+
+const ORIENT_CAP_MIN = 4;
+const ORIENT_CAP_MAX = 24;
+const ORIENT_CAP_DEFAULT = 8;
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -26,6 +30,12 @@ export function isOrientTaskRunning(task) {
   if (!raw) return false;
   const norm = normalizeRunState(raw);
   return norm.key === 'running' || norm.key === 'waiting';
+}
+
+export function orientReason(latest) {
+  if (!latest || typeof latest !== 'object') return '';
+  const rawState = latest.run_state ?? latest.status ?? latest.state ?? 'done';
+  return describeRunError(latest.reason || latest.error, rawState, latest.model_calls);
 }
 
 export function buildTaskPayload(hooks, base) {
@@ -67,8 +77,11 @@ export function mountOrientControls({ toolbar, statusHost, orientBtn, apiMod, se
   const latest = findLatestOrientTask(mv);
   const running = isOrientTaskRunning(latest);
 
-  const startOrient = (isAuto = false) => {
-    const req = apiMod?.startInvestigationTask?.(sessionId, buildOrientPayload(hooks));
+  const startOrient = (isAuto = false, continueFrom = null) => {
+    const base = continueFrom != null
+      ? { task: 'orient', continue_from: continueFrom }
+      : { task: 'orient' };
+    const req = apiMod?.startInvestigationTask?.(sessionId, buildTaskPayload(hooks, base));
     void req?.then(onRefresh)?.catch((err) => {
       if (isAuto && err?.status === 409) {
         onRefresh?.();
@@ -114,6 +127,44 @@ export function mountOrientControls({ toolbar, statusHost, orientBtn, apiMod, se
     });
     label.append(box, el('span', '', 'Auto-orient on open'));
     toolbar.appendChild(label);
+
+    const rawCap = Number(mv?.orient_call_cap);
+    let savedCap = Number.isInteger(rawCap) && rawCap >= ORIENT_CAP_MIN && rawCap <= ORIENT_CAP_MAX
+      ? rawCap
+      : ORIENT_CAP_DEFAULT;
+    const capLabel = el('label', 'inv-v7-orient-cap-setting');
+    const capInput = el('input', 'inv-v7-orient-cap-input');
+    capInput.type = 'number';
+    capInput.min = String(ORIENT_CAP_MIN);
+    capInput.max = String(ORIENT_CAP_MAX);
+    capInput.setAttribute('min', String(ORIENT_CAP_MIN));
+    capInput.setAttribute('max', String(ORIENT_CAP_MAX));
+    capInput.setAttribute('data-setting', 'orient_call_cap');
+    capInput.setAttribute('aria-label', 'Orient call cap');
+    capInput.value = String(savedCap);
+    capInput.addEventListener('change', async () => {
+      const rawVal = String(capInput.value ?? '').trim();
+      const next = Number(rawVal);
+      if (!rawVal || !Number.isInteger(next) || next < ORIENT_CAP_MIN || next > ORIENT_CAP_MAX) {
+        capInput.value = String(savedCap);
+        hooks?.showStatus?.(`Orient call cap must be a whole number from ${ORIENT_CAP_MIN} to ${ORIENT_CAP_MAX}.`);
+        return;
+      }
+      capInput.disabled = true;
+      try {
+        await apiMod.putInvestigateSettings({ orient_call_cap: next });
+        savedCap = next;
+        capInput.value = String(savedCap);
+        if (mv && typeof mv === 'object') mv.orient_call_cap = savedCap;
+      } catch (err) {
+        capInput.value = String(savedCap);
+        hooks?.showStatus?.(err?.message || 'Could not update Orient call cap.');
+      } finally {
+        capInput.disabled = false;
+      }
+    });
+    capLabel.append(el('span', '', 'Orient cap'), capInput);
+    toolbar.appendChild(capLabel);
   }
 
   if (statusHost) {
@@ -125,6 +176,11 @@ export function mountOrientControls({ toolbar, statusHost, orientBtn, apiMod, se
       const mc = latest.model_calls && typeof latest.model_calls === 'object' ? latest.model_calls : null;
       const callsUsed = mc ? mc.used : (latest.model_calls_used ?? latest.model_calls);
       const callsMax = mc ? mc.cap : (latest.cap ?? latest.model_calls_max);
+      const continueCap = Number(mv?.orient_call_cap) || Number(callsMax) || ORIENT_CAP_DEFAULT;
+      const unresolvedRejected = Math.floor(Number(latest.unresolved_rejected_items) || 0);
+      const extras = unresolvedRejected > 0
+        ? [`${unresolvedRejected} section(s) not saved (quote outside section)`]
+        : [];
       const detail = latest.detail || latest.focus || (
         typeof latest.saved_items === 'number' && latest.saved_items > 0
           ? `Orient (${latest.saved_items} readings)`
@@ -135,17 +191,19 @@ export function mountOrientControls({ toolbar, statusHost, orientBtn, apiMod, se
       createRunBar(statusHost, {
         state: rawState,
         detail,
-        reason: latest.reason || latest.error || '',
+        reason: orientReason(latest),
+        extras,
         elapsedMs: latest.elapsed_ms,
         modelCallsUsed: callsUsed,
         modelCallsMax: callsMax,
         openItems: Array.isArray(latest.open_items) ? latest.open_items : [],
       }, {
+        continueLabel: `Continue (up to ${continueCap} more model calls)`,
         onStop: () => {
           void apiMod?.stopTurn?.(sessionId)?.then?.(onRefresh)
             ?.catch?.((err) => hooks?.showStatus?.(err?.message || 'Could not stop Orient.'));
         },
-        onContinue: () => startOrient(false),
+        onContinue: () => startOrient(false, latest.request_seq != null ? latest.request_seq : null),
         onRetry: () => startOrient(false),
       });
     }

@@ -116,8 +116,7 @@ test('renders three provenance styles, quote chips, hypothesis anchors, and zero
       tags: ['n-thm1'],
       focus: PREREQUISITES_FOCUS,
       run_state: 'done',
-      model_calls: 2,
-      cap: 8,
+      model_calls: { cap: 8, used: 2, remaining: 6 },
       saved_items: 3,
     }],
     nodes: [{
@@ -166,6 +165,8 @@ test('renders three provenance styles, quote chips, hypothesis anchors, and zero
   assert.equal(dom.innerHtmlCount(), 0);
   const fullText = collectText(section);
   assert.equal(fullText.toLowerCase().includes('verified'), false);
+  assert.match(fullText, /\bDone\b/);
+  assert.match(fullText, /2 of at most 8 model calls/);
   assert.match(fullText, /From this paper/);
   assert.match(fullText, /Outside this paper: Smith 2024, Thm\. 1/);
   assert.match(fullText, /Model background, not checked/);
@@ -253,8 +254,7 @@ test('escapes XSS payloads via textContent with zero innerHTML and wires RunBar 
       tags: ['n-1'],
       focus: COMPARE_HYPOTHESES_FOCUS,
       run_state: 'paused',
-      model_calls: 3,
-      cap: 8,
+      model_calls: { cap: 8, used: 3, remaining: 5 },
       saved_items: 1,
     }],
     nodes: [{
@@ -283,10 +283,46 @@ test('escapes XSS payloads via textContent with zero innerHTML and wires RunBar 
   assert.equal(allEls.some((e) => ['SCRIPT', 'IMG', 'B'].includes(e.tagName)), false);
   const text = collectText(sec);
   assert.equal(text.includes('<img src=x onerror=alert(1)>'), true);
+  assert.match(text, /3 of at most 8 model calls/);
 
   const continueBtn = findAll(sec, (n) => n.tagName === 'BUTTON' && n.textContent === 'Continue')[0];
   assert.ok(continueBtn);
   continueBtn.click();
   assert.deepEqual(actions, [['start', COMPARE_HYPOTHESES_FOCUS, 'n-1']]);
+});
+
+test('paused context task renders nested model_calls budget and plain error without max_turns jargon', () => {
+  const dom = makeFakeDom();
+  globalThis.document = dom.document;
+  writeHideUncheckedPref(false);
+
+  const mv = {
+    paper: { title: 'Budget Paper' },
+    tasks: [{
+      request_seq: 25,
+      task: 'context',
+      tags: ['n-2'],
+      focus: PREREQUISITES_FOCUS,
+      run_state: 'paused',
+      stored_status: 'partial',
+      model_calls: { cap: 8, used: 8, remaining: 0 },
+      error: 'reached max_turns (8) before model completed',
+      saved_items: 1,
+    }],
+    nodes: [{ id: 'n-2', label: 'Lemma 2', context_cards: [] }],
+  };
+
+  const sec = renderContextCardsSection({
+    mv,
+    selectedTag: 'n-2',
+    modelConnected: true,
+    onStartContextTask: () => {},
+  });
+  assert.equal(dom.innerHtmlCount(), 0);
+  const text = collectText(sec);
+  assert.match(text, /8 of at most 8 model calls/);
+  assert.match(text, /model-call limit reached/);
+  assert.doesNotMatch(text, /max_turns|model completed/i);
+  assert.doesNotMatch(text, /\bverified\b/i);
 });
 

@@ -130,6 +130,23 @@ export function formatModelCallBudget(used, max) {
   return `${u} ${noun}`;
 }
 
+// Map raw backend error strings to plain user-facing wording without internal jargon.
+export function describeRunError(err, state, _modelCalls) {
+  const raw = err && typeof err === 'object' && 'message' in err ? err.message : err;
+  const text = String(raw ?? '').trim();
+  if (!text) return '';
+  if (/max_turns|model completed|call cap|step cap|model-call limit/i.test(text)) {
+    return 'model-call limit reached';
+  }
+  if (/stopped by (the )?user|stopped by you|cancelled|canceled/i.test(text)) {
+    return 'stopped by you';
+  }
+  if (state != null && String(state).trim() !== '' && normalizeRunState(state).key === 'paused') {
+    return 'stopped early';
+  }
+  return text;
+}
+
 export function formatRunStateLabel(stateObj = {}) {
   const def = normalizeRunState(stateObj.state);
   const reason = String(stateObj.reason ?? '').trim();
@@ -231,7 +248,8 @@ export function renderRunBar(stateObj = {}, callbacks = {}) {
     actions.appendChild(makeActionButton(RUN_ACTION_STOP, 'stop', callbacks.onStop, stateObj.busy));
   }
   if (def.canContinue && typeof callbacks.onContinue === 'function') {
-    actions.appendChild(makeActionButton(RUN_ACTION_CONTINUE, 'continue', callbacks.onContinue, stateObj.busy));
+    const continueLabel = String(callbacks.continueLabel ?? '').trim() || RUN_ACTION_CONTINUE;
+    actions.appendChild(makeActionButton(continueLabel, 'continue', callbacks.onContinue, stateObj.busy));
   }
   if (def.canRetry && typeof callbacks.onRetry === 'function') {
     actions.appendChild(makeActionButton(RUN_ACTION_RETRY, 'retry', callbacks.onRetry, stateObj.busy));
