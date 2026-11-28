@@ -70,12 +70,8 @@
         ],
         "subclaims": [
           {
-            "text": "Floquet Magnus high-frequency expansion derives an effective three-spin chiral interaction",
-            "idea_quote": "Floquet Magnus high-frequency expansion to derive an effective three-spin chiral interaction"
-          },
-          {
-            "text": "Derived on a periodically driven triangular Heisenberg antiferromagnet",
-            "idea_quote": "periodically driven triangular Heisenberg antiferromagnet"
+            "text": "Use a Floquet Magnus high-frequency expansion to derive an effective three-spin chiral interaction in a periodically driven triangular Heisenberg antiferromagnet.",
+            "idea_quote": "Use a Floquet Magnus high-frequency expansion to derive an effective three-spin chiral interaction in a periodically driven triangular Heisenberg antiferromagnet"
           }
         ],
         "terms": [
@@ -115,8 +111,7 @@
         {
           "key": "doi:10.9999/eval.i02.chiral",
           "subclaim_ids": [
-            "sc-1",
-            "sc-2"
+            "sc-1"
           ],
           "abstract_quote": "effective three-spin scalar chiral interaction proportional to inverse driving frequency"
         }
@@ -130,8 +125,8 @@
         ],
         "subclaims": [
           {
-            "text": "Exact two-loop anomalous dimension of the quartic strain operator in an anisotropic elastic membrane",
-            "idea_quote": "exact two-loop anomalous dimension of the quartic strain operator in an anisotropic elastic membrane"
+            "text": "Compute the exact two-loop anomalous dimension of the quartic strain operator in an anisotropic elastic membrane using dimensional regularization.",
+            "idea_quote": "Compute the exact two-loop anomalous dimension of the quartic strain operator in an anisotropic elastic membrane using dimensional regularization"
           }
         ],
         "terms": [
@@ -167,7 +162,15 @@
           }
         ]
       },
-      "triage_core": []
+      "triage_core": [
+        {
+          "key": "doi:10.9999/eval.i03.paywalled",
+          "subclaim_ids": [
+            "sc-1"
+          ],
+          "abstract_quote": null
+        }
+      ]
     },
     "I-04": {
       "sharpen_input": {
@@ -177,12 +180,8 @@
         ],
         "subclaims": [
           {
-            "text": "Lanczos growth rate detects the measurement-induced entanglement transition",
-            "idea_quote": "growth rate of Lanczos coefficients in operator Krylov space to detect the measurement-induced entanglement transition"
-          },
-          {
-            "text": "Evaluated on a monitored Majorana chain",
-            "idea_quote": "monitored Majorana chain"
+            "text": "Use the growth rate of Lanczos coefficients in operator Krylov space to detect the measurement-induced entanglement transition in a monitored Majorana chain.",
+            "idea_quote": "Use the growth rate of Lanczos coefficients in operator Krylov space to detect the measurement-induced entanglement transition in a monitored Majorana chain"
           }
         ],
         "terms": [
@@ -222,8 +221,7 @@
         {
           "key": "arxiv:2404.90401",
           "subclaim_ids": [
-            "sc-1",
-            "sc-2"
+            "sc-1"
           ],
           "abstract_quote": "spread complexity, defined from the tridiagonal recurrence growth rate"
         }
@@ -465,6 +463,13 @@
             "sc-1"
           ],
           "abstract_quote": "universal thermal Hall conductivity quantization formula for disordered chiral p-wave superconductors"
+        },
+        {
+          "key": "doi:10.9999/eval.i08.paywalled",
+          "subclaim_ids": [
+            "sc-2"
+          ],
+          "abstract_quote": null
         }
       ]
     },
@@ -477,12 +482,12 @@
         ],
         "subclaims": [
           {
-            "text": "Exact dual lattice gauge theory mapping for 3+1D fracton checkerboard model with dipole conservation",
-            "idea_quote": "exact dual lattice gauge theory mapping a 3+1D fracton checkerboard model with subsystem dipole conservation"
+            "text": "Construct an exact dual lattice gauge theory mapping a 3+1D fracton checkerboard model with subsystem dipole conservation to a topological BF theory.",
+            "idea_quote": "Construct an exact dual lattice gauge theory mapping a 3+1D fracton checkerboard model with subsystem dipole conservation to a topological BF theory"
           },
           {
-            "text": "Dual is a topological BF theory with non-invertible defects",
-            "idea_quote": "topological BF theory with non-invertible defects"
+            "text": "Endow the dual topological BF theory with non-invertible defects.",
+            "idea_quote": "with non-invertible defects"
           }
         ],
         "terms": [
@@ -529,8 +534,12 @@
         ],
         "subclaims": [
           {
-            "text": "Sharp finite-temperature Lieb-Robinson velocity bound vanishing logarithmically in system size",
-            "idea_quote": "sharp finite-temperature Lieb-Robinson velocity bound that vanishes logarithmically in system size"
+            "text": "Prove a sharp finite-temperature Lieb-Robinson velocity bound for power-law decaying interactions with exponent alpha = 3/2 in two dimensions.",
+            "idea_quote": "Prove a sharp finite-temperature Lieb-Robinson velocity bound"
+          },
+          {
+            "text": "Show that the finite-temperature velocity bound vanishes logarithmically in system size for exponent alpha = 3/2 in two dimensions.",
+            "idea_quote": "that vanishes logarithmically in system size for power-law decaying interactions with exponent alpha = 3/2 in two dimensions"
           }
         ],
         "terms": [
