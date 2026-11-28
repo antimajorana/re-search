@@ -7,6 +7,8 @@ pub mod formal_library;
 pub mod fs_tools;
 pub mod http_client;
 pub mod idea_brief;
+pub mod idea_directions;
+pub mod idea_directions_validate;
 pub mod idea_evidence;
 pub mod idea_fetch;
 pub mod idea_map;

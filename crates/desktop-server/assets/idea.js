@@ -3,6 +3,8 @@
 // cost line, no-model notice, empty/failure states, candidate list, and "Where I looked" skeleton.
 // Zero innerHTML writes. Rule S8: zero "verified", "new", "novel", or "proved" strings in DOM.
 import { decideIdeaApproval, getExploreSession, postIdeaOp } from './api_idea.js';
+import { executeExploreHandoff, fetchExploreHandoffsSafe, openChildSessionDefault, renderIdeaDirectionsSection } from './idea_directions.js';
+import { openExplorePageImage, openExploreSource, renderIdeaMapSection } from './idea_map.js';
 import {
   renderCandidateCards,
   renderCandidateList,
@@ -239,21 +241,11 @@ export function renderExploreSession(hostEl, state, callbacks = {}) {
   // 7. Live "Where I looked" panel (`idea_search.js`).
   shell.append(renderWhereILooked(view.where_i_looked, { onRetryService: callbacks.onRetryService }));
 
-  // 8. Map placeholder (F6 GraphView populated in X11/X12).
-  const mapNodes = Array.isArray(view.map?.nodes) ? view.map.nodes : [];
-  const mapBox = el('section', 'idea-where-panel');
-  mapBox.setAttribute('data-idea-section', 'map-placeholder');
-  mapBox.append(
-    el('h3', 'idea-card-title', 'Concept map'),
-    el(
-      'p',
-      'idea-card-meta',
-      mapNodes.length === 0
-        ? 'No concept map yet. Sharpening, reading, and mapping build the map once a model is connected.'
-        : `${mapNodes.length} map node(s) recorded.`,
-    ),
-  );
-  shell.append(mapBox);
+  // 8. Map & verdict UI via F6 GraphView, quote_chip.js, and ui_badge.js (package X12).
+  shell.append(renderIdeaMapSection(view, callbacks));
+
+  // 9. Directions cards & F7 hand-over buttons (package X13).
+  shell.append(renderIdeaDirectionsSection(view, callbacks));
 
   hostEl.replaceChildren(shell);
   return shell;
@@ -280,15 +272,15 @@ function buildEffectivePlanApproval(planApproval, pendingApprovals) {
   return { ...base, grants };
 }
 
-/**
- * Stateful Explore session controller coordinating REST ops, focus-safe filters, and SSE updates.
- */
+/** Stateful Explore session controller coordinating REST ops, focus-safe filters, and SSE updates. */
 export function createExploreSessionController(hostEl, deps = {}) {
   const fetchSession = deps.getExploreSession || getExploreSession;
   const runOp = deps.postIdeaOp || postIdeaOp;
   const sendApproval = deps.decideIdeaApproval || decideIdeaApproval;
   let state = createInitialIdeaState({ hasModel: Boolean(deps.hasModel) });
   let loadSeq = 0;
+  let selectedMapNodeId = null;
+  let handoffsView = null;
 
   function patchCandidateCardsOnly() {
     const countEl = hostEl?.querySelector?.('[data-idea-candidate-count="true"]');
@@ -299,21 +291,32 @@ export function createExploreSessionController(hostEl, deps = {}) {
     if (countEl) countEl.textContent = `Candidates (${filtered.length})`;
     const freshCards = renderCandidateCards(filtered, extractHighlightTerms(state.view), { triage: state.view?.triage, papers: state.view?.papers, maxPapers: state.view?.budget?.max_papers, onSaveReadingList: (reading_list) => void invokeOp('answer', { reading_list }), onAttachPdf: deps.onAttachPdf });
     const idx = Array.isArray(section.children) ? section.children.indexOf(oldCards) : -1;
-    if (typeof oldCards.replaceWith === 'function') {
-      oldCards.replaceWith(freshCards);
-      return true;
-    }
-    if (idx >= 0 && Array.isArray(section.children)) {
-      section.children.splice(idx, 1, freshCards);
-      return true;
-    }
+    if (typeof oldCards.replaceWith === 'function') { oldCards.replaceWith(freshCards); return true; }
+    if (idx >= 0 && Array.isArray(section.children)) { section.children.splice(idx, 1, freshCards); return true; }
     return false;
   }
 
   function dispatch(action, { candidatesOnly = false } = {}) {
+    if (action?.type === 'SET_IDEA_VIEW' && action.sessionId && action.sessionId !== state.sessionId) {
+      selectedMapNodeId = null;
+      handoffsView = null;
+    }
     state = ideaReducer(state, action);
     if (candidatesOnly && patchCandidateCardsOnly()) return;
     render();
+  }
+
+  function runHandoff(payload) {
+    const sid = state.sessionId;
+    if (!sid) return Promise.resolve(null);
+    return executeExploreHandoff({
+      sessionId: sid,
+      payload,
+      invokeOp,
+      getExploreHandoffsFn: deps.getExploreHandoffs,
+      onHandoffsUpdated: (next) => { if (state.sessionId === sid) { handoffsView = next; render(); } },
+      onOpenChildSession: deps.onOpenChildSession || openChildSessionDefault,
+    });
   }
 
   function render() {
@@ -325,6 +328,16 @@ export function createExploreSessionController(hostEl, deps = {}) {
       onSaveAnswer: (payload) => void invokeOp('answer', payload),
       onPlan: () => void invokeOp('plan', {}),
       onRetryService: (provider) => void invokeOp('search', { provider }),
+      onNote: (payload) => void invokeOp('note', payload),
+      onRemap: (payload) => void invokeOp('map', payload || {}),
+      initialSelectedNodeId: selectedMapNodeId,
+      onSelectNode: (node) => { selectedMapNodeId = node?.id || null; deps.onSelectNode?.(node); },
+      onOpenSource: deps.onOpenSource || ((target) => void openExploreSource(state.sessionId, target)),
+      onOpenPageImage: deps.onOpenPageImage || ((target) => void openExplorePageImage(hostEl, state.sessionId, target)),
+      handoffs: handoffsView,
+      onOpenChildSession: deps.onOpenChildSession || openChildSessionDefault,
+      onOpenInSolve: deps.onOpenInSolve || (({ direction_id }) => void runHandoff({ action: 'open_in_solve', direction_id })),
+      onInvestigatePaper: deps.onInvestigatePaper || (({ paper_key, node_id }) => void runHandoff({ action: 'investigate_paper', paper_key, node_id })),
       onAllowGrant: async (grant) => {
         if (grant?.call_id && state.sessionId) {
           const res = await sendApproval(state.sessionId, grant.call_id, {
@@ -333,7 +346,6 @@ export function createExploreSessionController(hostEl, deps = {}) {
           });
           return { approved: Boolean(res?.ok !== false && res?.approved !== false) };
         }
-        // Start planned search asynchronously so approval_card releases `busy` for live UiApprover prompts.
         void invokeOp('search', {});
         return { approved: false };
       },
@@ -354,9 +366,7 @@ export function createExploreSessionController(hostEl, deps = {}) {
     return invokeOp('continue', atCap ? { extra_queries: 6, extra_papers: 2, extra_model_calls: 6 } : {});
   }
 
-  async function handleRetryClick() {
-    return invokeOp('continue', {});
-  }
+  async function handleRetryClick() { return invokeOp('continue', {}); }
 
   async function invokeOp(op, payload = {}) {
     const sid = state.sessionId;
@@ -368,22 +378,15 @@ export function createExploreSessionController(hostEl, deps = {}) {
     try {
       const res = await runOp(sid, op, payload);
       if (seq !== loadSeq || state.sessionId !== sid) return null;
-      if (res && res.idea) {
-        dispatch({ type: 'SET_IDEA_VIEW', sessionId: sid, view: res.idea });
-      }
+      if (res && res.idea) dispatch({ type: 'SET_IDEA_VIEW', sessionId: sid, view: res.idea });
       return res;
     } catch (err) {
       if (seq !== loadSeq || state.sessionId !== sid) return null;
-      if (err?.status === 501) {
-        dispatch({ type: 'SET_NOTICE', notice: err.message });
-      } else {
-        dispatch({ type: 'SET_ERROR', error: err?.message || `Operation ${op} failed` });
-      }
+      if (err?.status === 501) dispatch({ type: 'SET_NOTICE', notice: err.message });
+      else dispatch({ type: 'SET_ERROR', error: err?.message || `Operation ${op} failed` });
       return null;
     } finally {
-      if (seq === loadSeq && state.sessionId === sid) {
-        dispatch({ type: 'SET_BUSY', busy: false });
-      }
+      if (seq === loadSeq && state.sessionId === sid) dispatch({ type: 'SET_BUSY', busy: false });
     }
   }
 
@@ -395,6 +398,9 @@ export function createExploreSessionController(hostEl, deps = {}) {
       const data = await fetchSession(sessionId);
       if (seq !== loadSeq) return null;
       dispatch({ type: 'SET_IDEA_VIEW', sessionId, view: data?.idea || null });
+      void fetchExploreHandoffsSafe(sessionId, deps.getExploreHandoffs).then((next) => {
+        if (next && seq === loadSeq && state.sessionId === sessionId) { handoffsView = next; render(); }
+      });
       return data;
     } catch (err) {
       if (seq !== loadSeq) return null;
@@ -412,30 +418,17 @@ export function createExploreSessionController(hostEl, deps = {}) {
   }
 
   function handleSseEvent(kindOrEnvelope, maybePayload) {
-    const kind =
-      kindOrEnvelope && typeof kindOrEnvelope === 'object'
-        ? kindOrEnvelope.kind
-        : kindOrEnvelope;
-    const payload =
-      kindOrEnvelope && typeof kindOrEnvelope === 'object'
-        ? (kindOrEnvelope.payload ?? kindOrEnvelope.data ?? {})
-        : (maybePayload || {});
+    const kind = kindOrEnvelope && typeof kindOrEnvelope === 'object' ? kindOrEnvelope.kind : kindOrEnvelope;
+    const payload = kindOrEnvelope && typeof kindOrEnvelope === 'object'
+      ? (kindOrEnvelope.payload ?? kindOrEnvelope.data ?? {})
+      : (maybePayload || {});
     if (!kind) return;
     dispatch({ type: 'APPLY_SSE_EVENT', kind, payload });
   }
 
-  function resetFilters() {
-    dispatch({ type: 'RESET_FILTERS' });
-  }
+  function resetFilters() { dispatch({ type: 'RESET_FILTERS' }); }
 
-  return {
-    loadSession,
-    setSessionView,
-    handleSseEvent,
-    invokeOp,
-    resetFilters,
-    getState: () => state,
-  };
+  return { loadSession, setSessionView, handleSseEvent, invokeOp, resetFilters, getState: () => state };
 }
 
 /**

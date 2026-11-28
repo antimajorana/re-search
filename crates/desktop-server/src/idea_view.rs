@@ -166,6 +166,7 @@ pub fn view(events: &[Event], running: bool) -> Value {
             EVENT_IDEA_MAP => {
                 latest_map_seq = ev.seq;
                 latest_map = Some(ev.payload.clone());
+                latest_directions.clear();
             }
             EVENT_IDEA_VERDICT => latest_verdicts = Some(ev.payload.clone()),
             EVENT_IDEA_DIRECTIONS => {
@@ -184,6 +185,8 @@ pub fn view(events: &[Event], running: bool) -> Value {
                     "target_id": ev.payload.get("target_id").and_then(Value::as_str).unwrap_or(""),
                     "action": ev.payload.get("action").and_then(Value::as_str).unwrap_or(""),
                     "comment": ev.payload.get("comment").and_then(Value::as_str).unwrap_or(""),
+                    "subclaim_id": ev.payload.get("subclaim_id").cloned().unwrap_or(Value::Null),
+                    "map_seq": ev.payload.get("map_seq").cloned().unwrap_or(Value::Null),
                 }));
             }
             _ => {}
@@ -238,7 +241,7 @@ pub fn view(events: &[Event], running: bool) -> Value {
         .iter()
         .filter(|e| {
             e.kind == research_tools::quote_core::EVIDENCE_ABSTRACT_EVENT
-                && e.seq > latest_statement_seq
+                && (e.seq > latest_statement_seq || map_stale)
         })
         .map(|e| {
             json!({
@@ -259,7 +262,7 @@ pub fn view(events: &[Event], running: bool) -> Value {
         .iter()
         .filter(|e| {
             e.kind == research_tools::quote_core::EVIDENCE_QUOTE_EVENT
-                && e.seq > latest_statement_seq
+                && (e.seq > latest_statement_seq || map_stale)
         })
         .map(|e| {
             let p = &e.payload;

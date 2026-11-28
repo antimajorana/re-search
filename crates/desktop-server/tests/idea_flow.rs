@@ -414,12 +414,8 @@ fn idea_recorder_refused_outside_stage_and_resumes_after_crash() {
     let bad_bump = serde_json::to_vec(&json!({ "extra_queries": -3 })).unwrap();
     assert_eq!(raw_http(port, "POST", "/api/sessions/s-stage-test/idea/continue", &auth, &bad_bump).0, 400);
 
-    for op in ["directions", "handoff"] {
-        let (st, _, raw) = raw_http(port, "POST", &format!("/api/sessions/s-stage-test/idea/{op}"), &auth, b"{}");
-        assert_eq!(st, 501, "op `{op}` must return 501 not built yet");
-        let msg = serde_json::from_slice::<Value>(&raw).unwrap()["error"].as_str().unwrap().to_string();
-        assert!(msg.contains("not built yet"), "op `{op}` message: {msg}");
-    }
+    // All Explore ops (directions/handoff in X13, more in X16) are now wired; unknown op returns 404.
+    assert_eq!(raw_http(port, "POST", "/api/sessions/s-stage-test/idea/nonexistent_op", &auth, b"{}").0, 404);
     let _ = idea_view::view(&ledger.read_session("s-stage-test").unwrap(), false);
 }
 
