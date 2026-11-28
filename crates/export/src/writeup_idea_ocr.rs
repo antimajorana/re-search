@@ -2,12 +2,16 @@
 //! write-up adapter (`writeup_idea.rs`, `00-overview.md` 2.12 & 2.13 rule 6, 8.3 Q3, `explore.md` C8).
 
 use crate::writeup::QuoteLocator;
-use ledger::Event;
-use research_tools::paper_key::{split_arxiv_id, PaperIds, PaperKey};
+use ledger::{sha256_hex, Event};
+use research_tools::library::Library;
+use research_tools::paper_key::{split_arxiv_id, PaperIds, PaperKey, PaperKeyKind, PaperRef};
 use research_tools::pdf_pages::{page_of_line, PageRecord};
 use research_tools::prior_work::TextBasis;
+use research_tools::quote_core::QuoteRef;
+use research_tools::sandbox::{SandboxRoot, WorkspaceSandbox};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 
 /// Candidate/literature fallback metadata folded from session ledger events for `.bib` entries.
 #[derive(Debug, Clone, Default)]
@@ -30,6 +34,9 @@ pub(crate) fn make_locator(page: Option<usize>, start_line: usize, end_line: usi
 /// Detect OCR provenance and physical 1-based PDF page across `idea.paper.text_basis`,
 /// `evidence.quote`, and `source.ingested` (`pdf_pages` with `PageBasis::Ocr`/`ScanTextLayer`/
 /// `None` OR raw strings, `pdf_page_lines`, and PDF scan flags).
+///
+/// When a multi-page quote spans both clean and scanned pages, prefers the scanned physical page
+/// so the `(OCR)` tag always names a scanned page (Audit M1).
 pub(crate) fn detect_ocr_and_page(
     paper_ocr: bool,
     eq_payload: &Value,
@@ -73,6 +80,7 @@ fn detect_ingested_ocr_and_page(
     fallback_page: Option<usize>,
 ) -> (bool, Option<usize>) {
     let mut matched_pages: Vec<usize> = Vec::new();
+    let mut scanned_pages: Vec<usize> = Vec::new();
     let mut any_scan = false;
 
     let parsed_pages = payload
@@ -89,6 +97,9 @@ fn detect_ingested_ocr_and_page(
                     }
                     if pg.basis.is_scan() {
                         any_scan = true;
+                        if !scanned_pages.contains(&pg.page) {
+                            scanned_pages.push(pg.page);
+                        }
                     }
                 }
             }
@@ -105,6 +116,9 @@ fn detect_ingested_ocr_and_page(
                     }
                     if item.get("basis").and_then(Value::as_str).is_some_and(is_scan_basis_str) {
                         any_scan = true;
+                        if !scanned_pages.contains(&p) {
+                            scanned_pages.push(p);
+                        }
                     }
                 }
             }
@@ -137,16 +151,24 @@ fn detect_ingested_ocr_and_page(
     };
     if !any_scan && !pages_to_check.is_empty() {
         if let Some(pages) = &parsed_pages {
-            if pages.iter().any(|pg| pages_to_check.contains(&pg.page) && pg.basis.is_scan()) {
-                any_scan = true;
+            for pg in pages {
+                if pages_to_check.contains(&pg.page) && pg.basis.is_scan() {
+                    any_scan = true;
+                    if !scanned_pages.contains(&pg.page) {
+                        scanned_pages.push(pg.page);
+                    }
+                }
             }
         } else if let Some(arr) = raw_pages_arr {
             for item in arr {
                 let page = item.get("page").and_then(Value::as_u64).map(|n| n as usize);
-                if page.is_some_and(|p| pages_to_check.contains(&p))
-                    && item.get("basis").and_then(Value::as_str).is_some_and(is_scan_basis_str)
-                {
-                    any_scan = true;
+                if let Some(p) = page.filter(|p| pages_to_check.contains(p)) {
+                    if item.get("basis").and_then(Value::as_str).is_some_and(is_scan_basis_str) {
+                        any_scan = true;
+                        if !scanned_pages.contains(&p) {
+                            scanned_pages.push(p);
+                        }
+                    }
                 }
             }
         }
@@ -173,7 +195,12 @@ fn detect_ingested_ocr_and_page(
         }
     }
 
-    (any_scan, matched_pages.first().copied())
+    let chosen_page = if any_scan {
+        scanned_pages.first().copied().or_else(|| matched_pages.first().copied())
+    } else {
+        matched_pages.first().copied()
+    };
+    (any_scan, chosen_page)
 }
 
 pub(crate) fn collect_meta_from_candidates(p: &Value, map: &mut BTreeMap<PaperKey, PaperFallbackMeta>) {
@@ -243,6 +270,7 @@ pub(crate) fn collect_meta_from_lit_fetched(p: &Value, map: &mut BTreeMap<PaperK
 pub(crate) fn collect_meta_from_idea_paper(
     p: &Value,
     text_basis: &mut BTreeMap<PaperKey, TextBasis>,
+    paper_source_ids: &mut BTreeMap<PaperKey, BTreeSet<String>>,
     map: &mut BTreeMap<PaperKey, PaperFallbackMeta>,
 ) {
     let Some(key) = p.get("key").and_then(Value::as_str).and_then(|s| PaperKey::parse(s).ok())
@@ -252,12 +280,19 @@ pub(crate) fn collect_meta_from_idea_paper(
     if let Some(tb) = p.get("text_basis").and_then(Value::as_str).and_then(TextBasis::parse) {
         text_basis.insert(key.clone(), tb);
     }
+    if let Some(sid) = p.get("source_id").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
+        paper_source_ids.entry(key.clone()).or_default().insert(sid.to_string());
+    }
     if let Some(ver) = p.get("version").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
         map.entry(key).or_default().version = Some(ver.to_string());
     }
 }
 
-pub(crate) fn collect_meta_from_ingested(p: &Value, map: &mut BTreeMap<PaperKey, PaperFallbackMeta>) {
+pub(crate) fn collect_meta_from_ingested(
+    p: &Value,
+    source_origin_keys: &mut BTreeMap<String, PaperKey>,
+    map: &mut BTreeMap<PaperKey, PaperFallbackMeta>,
+) {
     let title = p.get("title").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
     let key = p
         .get("origin")
@@ -269,10 +304,15 @@ pub(crate) fn collect_meta_from_ingested(p: &Value, map: &mut BTreeMap<PaperKey,
                 .and_then(|cid| split_arxiv_id(cid).ok())
                 .and_then(|(base, _)| PaperKey::from_arxiv(&base).ok())
         });
-    if let (Some(k), Some(t)) = (key, title) {
-        let entry = map.entry(k).or_default();
-        if entry.title.is_empty() {
-            entry.title = t.to_string();
+    if let Some(ref k) = key {
+        if let Some(sid) = p.get("source_id").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
+            source_origin_keys.insert(sid.to_string(), k.clone());
+        }
+        if let Some(t) = title {
+            let entry = map.entry(k.clone()).or_default();
+            if entry.title.is_empty() {
+                entry.title = t.to_string();
+            }
         }
     }
 }
@@ -298,4 +338,112 @@ fn push_alias_keys(ids: &PaperIds, out: &mut Vec<PaperKey>) {
             out.push(k);
         }
     }
+}
+
+pub(crate) fn extract_quote_ref(p: &Value, seq: u64) -> Option<QuoteRef> {
+    let source_id = p.get("source_id")?.as_str()?.to_string();
+    let path = p.get("path")?.as_str()?.to_string();
+    let start_line = p.get("start_line")?.as_u64()? as usize;
+    let end_line = p.get("end_line")?.as_u64()? as usize;
+    let file_sha256 = p.get("file_sha256")?.as_str()?.to_string();
+    let quote_sha = p.get("quote_sha256")?.as_str()?.to_string();
+    if source_id.is_empty()
+        || start_line == 0
+        || end_line < start_line
+        || !is_sha256_hex(&file_sha256)
+        || !is_sha256_hex(&quote_sha)
+    {
+        return None;
+    }
+    Some(QuoteRef {
+        source_id,
+        path,
+        start_line,
+        end_line,
+        file_sha256,
+        quote_sha256: quote_sha,
+        evidence_seq: Some(seq),
+    })
+}
+
+pub(crate) fn full_quote_present_in_verified_file(
+    sandbox: &WorkspaceSandbox,
+    session_id: &str,
+    qref: &QuoteRef,
+    raw_quote: &str,
+) -> bool {
+    let Ok(resolved) = sandbox.resolve_existing(SandboxRoot::Sources, session_id, &qref.path, false)
+    else {
+        return false;
+    };
+    let Ok(bytes) = fs::read(&resolved.canonical_target) else {
+        return false;
+    };
+    if sha256_hex(&bytes) != qref.file_sha256 {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let folded_file: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let folded_quote: String = raw_quote.split_whitespace().collect::<Vec<_>>().join(" ");
+    !folded_quote.is_empty() && folded_file.contains(&folded_quote)
+}
+
+pub(crate) fn build_paper_ref(
+    lib: Option<&Library>,
+    candidate: &PaperKey,
+    fallback_ids: &PaperIds,
+    version: Option<String>,
+) -> Result<PaperRef, String> {
+    if let Some(l) = lib {
+        if let Some(detail) = l.get_paper(candidate)? {
+            let ids = PaperIds {
+                arxiv: detail.paper.ids.arxiv.clone().or_else(|| fallback_ids.arxiv.clone()),
+                doi: detail.paper.ids.doi.clone().or_else(|| fallback_ids.doi.clone()),
+                inspire: detail.paper.ids.inspire.clone().or_else(|| fallback_ids.inspire.clone()),
+                s2: detail.paper.ids.s2.clone().or_else(|| fallback_ids.s2.clone()),
+            };
+            let ver = version.or_else(|| {
+                detail
+                    .source_items
+                    .iter()
+                    .find_map(|it| it.version.clone())
+                    .filter(|v| !v.is_empty())
+            });
+            return PaperRef::from_ids_or(ids, ver, Some(detail.paper.key));
+        }
+    }
+
+    let mut ids = fallback_ids.clone();
+    let fallback = match candidate.kind() {
+        PaperKeyKind::Arxiv => {
+            if ids.arxiv.is_none() {
+                ids.arxiv = Some(candidate.value().to_string());
+            }
+            None
+        }
+        PaperKeyKind::Doi => {
+            if ids.doi.is_none() {
+                ids.doi = Some(candidate.value().to_string());
+            }
+            None
+        }
+        PaperKeyKind::Inspire => {
+            if ids.inspire.is_none() {
+                ids.inspire = Some(candidate.value().to_string());
+            }
+            None
+        }
+        PaperKeyKind::S2 => {
+            if ids.s2.is_none() {
+                ids.s2 = Some(candidate.value().to_string());
+            }
+            None
+        }
+        PaperKeyKind::Openalex | PaperKeyKind::File => Some(candidate.clone()),
+    };
+    PaperRef::from_ids_or(ids, version, fallback)
+}
+
+pub(crate) fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }

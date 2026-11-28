@@ -3,12 +3,12 @@
 //! 3.2 rows 17–24, 7.2 Set W, 7.3, 8.1, 8.3 Q3 & Q10; `explore.md` 4.1–4.4, 6 C1–C9/V1–V10/
 //! D1–D3/S8–S9, 9 X17).
 //!
-//! - Recomputes F12 [`research_tools::search_coverage::SearchCoverage`] and per-subclaim
-//!   [`research_tools::prior_work::PriorWorkVerdict`] via `idea_verdict::compute` (Rules V7, V9, V10)
-//!   and fails closed if a stored `idea.verdict` disagrees or if `idea.stated`/`idea.brief` is absent.
-//! - Re-verifies every `xe-*` quote via F4 `verify_quote_ref` and every `xa-*` abstract quote
-//!   against its pinned `raw_blob`, dropping unverified quotes and clipping to `<= 300` UTF-8 chars.
-//! - Tags every OCR/scanned quote and OCR-backed `judged_*` verdict with `"(OCR)"` and physical page.
+//! - Verifies any stored `idea.verdict` at its own ledger head (Rules V7 & V10, fail-closed).
+//! - Pre-verifies every referenced `xe-*` quote via F4 `verify_quote_ref` (plus ownership and
+//!   over-300-char tail checks) and every `xa-*` abstract quote strictly against its pinned
+//!   `raw_blob` via F11 `extract_abstract_from_blob`, then recomputes `idea_verdict::compute`
+//!   without any dropped quotes so statuses, sentences, and `.bib` entries honestly downgrade (Audit C1/C2).
+//! - Tags every OCR/scanned quote and primary OCR-backed verdict with `"(OCR)"` and physical page.
 //! - Emits unconditional status line, `"Where I looked"` coverage paragraph, and closing
 //!   `"How each statement was checked"` table with zero `"verified"` anywhere in Explore output.
 
@@ -18,17 +18,18 @@ mod cite;
 mod ocr;
 #[path = "writeup_idea_sections.rs"]
 mod sections;
+#[path = "writeup_idea_verify.rs"]
+mod verify;
 
 use crate::writeup::{
     writeup_wording, CheckTableRow, HowChecked, ProseBasis, RejectedWriteupQuote, Writeup,
     WriteupBlock, WriteupMode, WriteupSection,
 };
-use cite::{format_verified_abstract_line, open_existing_library, IdeaCiteResolver};
+use cite::{open_existing_library, IdeaCiteResolver, VerifiedAbstractData, VerifiedFullTextData};
 use ledger::{Event, Ledger};
 use research_tools::idea_brief::{EVENT_IDEA_ANSWER, EVENT_IDEA_BRIEF, UI_SHARPENED_IDEA_LABEL};
-use research_tools::idea_verdict::{self, IdeaVerdictPayload};
-use research_tools::paper_key::Mode;
-use research_tools::prior_work::{EvidenceId, PriorWorkVerdict, IDEA_VERDICT_EVENT};
+use research_tools::paper_key::{Mode, PaperKey};
+use research_tools::prior_work::{EvidenceId, PriorWorkVerdict};
 use research_tools::sandbox::WorkspaceSandbox;
 use research_tools::search_coverage::IDEA_STATED_EVENT;
 use research_tools::tool_profile::session_mode_from_events;
@@ -36,10 +37,12 @@ use research_tools::validate_session_id;
 use sections::{
     append_directions_sections, build_coverage_paragraph, build_status_line, clip_title,
     derive_title, format_ocr_tag_and_pages, map_display_grade, push_unique, validate_model_prose,
+    validate_no_verified_word,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
+use verify::{enforce_explore_honesty, verify_and_recompute_verdicts, verify_stored_verdict_parity};
 
 /// Centralized Explore write-up wording constants governed by accepted owner decisions
 /// (`00-overview.md` 0.1, 2.9–2.10, 2.13, 3.2 rows 17–24, 8.1, 8.3 Q3 & Q10; `explore.md` 3 & S8).
@@ -171,11 +174,6 @@ pub fn build_explore_writeup_detailed(
     // Rules V7 & V10 fail-closed check: verify stored `idea.verdict` at its own ledger head.
     verify_stored_verdict_parity(events, latest_stmt_seq)?;
 
-    // Recompute current verdicts & coverage purely over verified events (reflecting any
-    // post-verdict Rule V6 `confirm_same` / `reject_same` notes while ignoring F16 lessons).
-    let current = idea_verdict::compute(events, None);
-    let coverage_paragraph = build_coverage_paragraph(&current.coverage)?;
-
     let lib = open_existing_library(data_dir);
     let sandbox = WorkspaceSandbox::new(data_dir, None);
     let mut cite_resolver = IdeaCiteResolver::new(
@@ -186,6 +184,12 @@ pub fn build_explore_writeup_detailed(
         &sandbox,
         lib.as_ref(),
     );
+
+    // Audit C2: pre-verify all referenced `xe-*`/`xa-*` quotes before emitting prose or `.bib`,
+    // filtering out any quote that fails disk/blob verification and recomputing verdicts cleanly.
+    let verified_state = verify_and_recompute_verdicts(events, &brief_view, &mut cite_resolver);
+    let current = verified_state.current;
+    let coverage_paragraph = build_coverage_paragraph(&current.coverage)?;
 
     let mut sections = Vec::new();
     let mut check_table = Vec::new();
@@ -202,9 +206,18 @@ pub fn build_explore_writeup_detailed(
             .get(&verdict.subclaim_id)
             .map(String::as_str)
             .unwrap_or(verdict.subclaim_id.as_str());
+        validate_no_verified_word(subclaim_text, "idea.brief.subclaims")?;
+        let dropped = verified_state
+            .dropped_by_subclaim
+            .get(&verdict.subclaim_id)
+            .copied()
+            .unwrap_or(0);
         let sec = build_subclaim_section(
             verdict,
             subclaim_text,
+            dropped,
+            &verified_state.verified_xe,
+            &verified_state.verified_xa,
             &mut cite_resolver,
             &mut check_table,
         )?;
@@ -244,10 +257,12 @@ pub fn build_explore_writeup_detailed(
     })
 }
 
-struct ActiveBriefView {
-    restatement: String,
-    assumptions: Vec<String>,
-    subclaim_texts: BTreeMap<String, String>,
+pub(crate) struct ActiveBriefView {
+    pub restatement: String,
+    pub restatement_by_user: bool,
+    pub assumptions: Vec<String>,
+    pub assumptions_by_user: bool,
+    pub subclaim_texts: BTreeMap<String, String>,
 }
 
 fn fold_active_brief(events: &[Event], latest_stmt_seq: u64, brief_ev: &Event) -> ActiveBriefView {
@@ -258,6 +273,7 @@ fn fold_active_brief(events: &[Event], latest_stmt_seq: u64, brief_ev: &Event) -
         .unwrap_or("")
         .trim()
         .to_string();
+    let mut restatement_by_user = false;
     let mut assumptions: Vec<String> = brief_ev
         .payload
         .get("assumptions")
@@ -271,6 +287,7 @@ fn fold_active_brief(events: &[Event], latest_stmt_seq: u64, brief_ev: &Event) -
                 .collect()
         })
         .unwrap_or_default();
+    let mut assumptions_by_user = false;
     let mut subclaim_texts = BTreeMap::new();
     if let Some(arr) = brief_ev.payload.get("subclaims").and_then(Value::as_array) {
         for sc in arr {
@@ -288,6 +305,7 @@ fn fold_active_brief(events: &[Event], latest_stmt_seq: u64, brief_ev: &Event) -
         }
         if let Some(r) = ev.payload.get("restatement").and_then(Value::as_str) {
             restatement = r.trim().to_string();
+            restatement_by_user = true;
         }
         if let Some(arr) = ev.payload.get("assumptions").and_then(Value::as_array) {
             assumptions = arr
@@ -297,43 +315,16 @@ fn fold_active_brief(events: &[Event], latest_stmt_seq: u64, brief_ev: &Event) -
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
                 .collect();
+            assumptions_by_user = true;
         }
     }
     ActiveBriefView {
         restatement,
+        restatement_by_user,
         assumptions,
+        assumptions_by_user,
         subclaim_texts,
     }
-}
-
-/// Rule V7 & V10 fail-closed verification: if an `idea.verdict` exists in the active revision,
-/// its stored payload must exactly match pure ledger recomputation at that event's ledger head.
-fn verify_stored_verdict_parity(events: &[Event], latest_stmt_seq: u64) -> Result<(), String> {
-    let Some((verdict_idx, verdict_ev)) = events
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, e)| e.kind == IDEA_VERDICT_EVENT && e.seq > latest_stmt_seq)
-    else {
-        return Ok(());
-    };
-    let stored: IdeaVerdictPayload =
-        serde_json::from_value(verdict_ev.payload.clone()).map_err(|e| {
-            format!("Explore write-up refused (Rule V7): stored `idea.verdict` is malformed ({e})")
-        })?;
-    let recomputed = idea_verdict::compute(&events[..verdict_idx], None);
-    let map_seq_ok = stored.map_seq.is_none_or(|ms| Some(ms) == recomputed.map_seq);
-    if stored.verdicts != recomputed.verdicts
-        || stored.coverage != recomputed.coverage
-        || stored.origin_paper != recomputed.origin_paper
-        || !map_seq_ok
-    {
-        return Err(
-            "Explore write-up refused (Rule V7): stored `idea.verdict` disagrees with pure ledger recomputation"
-                .to_string(),
-        );
-    }
-    Ok(())
 }
 
 fn build_idea_section(
@@ -346,15 +337,19 @@ fn build_idea_section(
         basis: ProseBasis::User,
     }];
     if !brief.restatement.is_empty() {
-        validate_model_prose(&brief.restatement, "idea.brief.restatement")?;
+        if !brief.restatement_by_user {
+            validate_no_verified_word(&brief.restatement, "idea.brief.restatement")?;
+        }
         blocks.push(WriteupBlock::Prose {
             text: format!("{UI_SHARPENED_IDEA_LABEL}: {}", brief.restatement),
-            basis: ProseBasis::Model,
+            basis: if brief.restatement_by_user { ProseBasis::User } else { ProseBasis::Model },
         });
     }
     if !brief.assumptions.is_empty() {
-        for assumption in &brief.assumptions {
-            validate_model_prose(assumption, "idea.brief.assumptions")?;
+        if !brief.assumptions_by_user {
+            for assumption in &brief.assumptions {
+                validate_no_verified_word(assumption, "idea.brief.assumptions")?;
+            }
         }
         blocks.push(WriteupBlock::Prose {
             text: format!(
@@ -362,7 +357,7 @@ fn build_idea_section(
                 explore_writeup_wording::ASSUMPTIONS_LABEL,
                 brief.assumptions.join("; ")
             ),
-            basis: ProseBasis::Model,
+            basis: if brief.assumptions_by_user { ProseBasis::User } else { ProseBasis::Model },
         });
     }
     if let Some(orig) = origin_paper.filter(|s| !s.trim().is_empty()) {
@@ -381,39 +376,36 @@ fn build_idea_section(
 fn build_subclaim_section(
     verdict: &PriorWorkVerdict,
     subclaim_text: &str,
+    dropped_count: usize,
+    verified_xe: &BTreeMap<(PaperKey, u64), Option<VerifiedFullTextData>>,
+    verified_xa: &BTreeMap<(PaperKey, u64), Option<VerifiedAbstractData>>,
     cite_resolver: &mut IdeaCiteResolver<'_>,
     check_table: &mut Vec<CheckTableRow>,
 ) -> Result<WriteupSection, String> {
-    let sec_title = format!(
-        "Part {}: {}",
-        verdict.subclaim_id,
-        clip_title(subclaim_text, 64)
-    );
+    let sec_title = format!("Part {}: {}", verdict.subclaim_id, clip_title(subclaim_text, 64));
     let mut quote_blocks: Vec<WriteupBlock> = Vec::new();
     let mut diff_rows: Vec<CheckTableRow> = Vec::new();
     let mut rests_on: Vec<String> = Vec::new();
     let mut any_ocr = verdict.has_ocr_evidence;
     let mut ocr_pages: Vec<usize> = Vec::new();
-    let mut dropped_count = 0usize;
 
     for (ov_idx, overlap) in verdict.overlaps.iter().enumerate() {
+        let is_primary = overlap.relation.to_status() == verdict.status;
         for eid in &overlap.evidence_ids {
             if let EvidenceId::FullText(seq) = *eid {
-                match cite_resolver.resolve_full_text_quote(&sec_title, &overlap.paper_key, seq)? {
-                    Some(resolved) => {
-                        if resolved.ocr {
-                            any_ocr = true;
-                            if let Some(pg) = resolved.page {
-                                if !ocr_pages.contains(&pg) {
-                                    ocr_pages.push(pg);
-                                }
+                if let Some(Some(data)) = verified_xe.get(&(overlap.paper_key.clone(), seq)) {
+                    let resolved = cite_resolver.commit_full_text_quote(data.clone())?;
+                    if resolved.ocr && is_primary {
+                        any_ocr = true;
+                        if let Some(pg) = resolved.page {
+                            if !ocr_pages.contains(&pg) {
+                                ocr_pages.push(pg);
                             }
                         }
-                        push_unique(&mut rests_on, format!("xe-{seq}"));
-                        push_unique(&mut rests_on, resolved.quote.cite_key.clone());
-                        quote_blocks.push(WriteupBlock::Quote(Box::new(resolved.quote)));
                     }
-                    None => dropped_count += 1,
+                    push_unique(&mut rests_on, format!("xe-{seq}"));
+                    push_unique(&mut rests_on, resolved.quote.cite_key.clone());
+                    quote_blocks.push(WriteupBlock::Quote(Box::new(resolved.quote)));
                 }
             }
         }
@@ -434,10 +426,7 @@ fn build_subclaim_section(
             });
             diff_rows.push(CheckTableRow {
                 id: format!("{}-diff-{}", verdict.subclaim_id, ov_idx + 1),
-                statement: format!(
-                    "{} ({paper_label})",
-                    explore_writeup_wording::WHAT_DIFFERS_LABEL
-                ),
+                statement: format!("{} ({paper_label})", explore_writeup_wording::WHAT_DIFFERS_LABEL),
                 how_checked: HowChecked::ModelStatement,
                 own_tier: None,
                 rests_on: vec![paper_label],
@@ -452,16 +441,16 @@ fn build_subclaim_section(
 
     for abs in &verdict.abstract_matches {
         if let EvidenceId::Abstract(seq) = abs.evidence_id {
-            match cite_resolver.resolve_abstract_quote(&sec_title, &abs.paper_key, seq)? {
-                Some(resolved_abs) => {
-                    push_unique(&mut rests_on, resolved_abs.evidence_id.clone());
-                    push_unique(&mut rests_on, resolved_abs.cite_key.clone());
-                    quote_blocks.push(WriteupBlock::Prose {
-                        text: format_verified_abstract_line(&resolved_abs),
-                        basis: ProseBasis::App,
-                    });
-                }
-                None => dropped_count += 1,
+            if let Some(Some(data)) = verified_xa.get(&(abs.paper_key.clone(), seq)) {
+                let resolved_abs = cite_resolver.commit_abstract_quote(data.clone())?;
+                push_unique(&mut rests_on, resolved_abs.evidence_id.clone());
+                push_unique(&mut rests_on, resolved_abs.cite_key.clone());
+                quote_blocks.push(WriteupBlock::AbstractQuote {
+                    evidence_id: resolved_abs.evidence_id,
+                    cite_key: resolved_abs.cite_key,
+                    provider_label: resolved_abs.provider_label,
+                    text: resolved_abs.text,
+                });
             }
         }
     }
@@ -470,9 +459,7 @@ fn build_subclaim_section(
         rests_on.push("coverage gate".to_string());
     }
 
-    let how_checked = map_display_grade(
-        verdict.status.display_grade(verdict.confirmed_by_user, any_ocr),
-    );
+    let how_checked = map_display_grade(verdict.status.display_grade(verdict.confirmed_by_user, any_ocr));
     let ocr_suffix = format_ocr_tag_and_pages(any_ocr, &ocr_pages);
     let mut note_parts = vec![verdict.chip.clone()];
     if let Some(ref ocr_str) = ocr_suffix {
@@ -522,24 +509,4 @@ fn build_subclaim_section(
         label: Some(format!("sec:{}", verdict.subclaim_id)),
         blocks,
     })
-}
-
-fn enforce_explore_honesty(doc: &Writeup) -> Result<(), String> {
-    if doc.status_line.to_ascii_lowercase().contains("verified") {
-        return Err("Explore write-up status_line must not contain \"verified\" (Rule S8)".into());
-    }
-    if let Some(cov) = doc.coverage_paragraph.as_deref() {
-        if cov.to_ascii_lowercase().contains("verified") {
-            return Err("Explore coverage paragraph must not contain \"verified\" (Rule S8)".into());
-        }
-    }
-    for row in doc.derived_check_table() {
-        if row.badge_text().to_ascii_lowercase().contains("verified") {
-            return Err(format!(
-                "Explore check table row `{}` must not contain \"verified\" (Rule S8)",
-                row.id
-            ));
-        }
-    }
-    Ok(())
 }

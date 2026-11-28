@@ -17,7 +17,7 @@ use research_tools::quote_core::clip_to_chars;
 use research_tools::run_budget::{explore_stage_run_state, ExploreStageState, RunState};
 use research_tools::search_coverage::SearchCoverage;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const EVENT_IDEA_STAGE: &str = "idea.stage";
 const EVENT_IDEA_DIRECTIONS: &str = "idea.directions";
@@ -38,13 +38,16 @@ pub(crate) fn append_directions_sections(
     sections: &mut Vec<WriteupSection>,
     check_table: &mut Vec<CheckTableRow>,
 ) -> Result<(), String> {
+    // Audit M3: bind `idea.directions` strictly to the current active map revision.
     let dir_ev = events.iter().rev().find(|e| {
         if e.kind != EVENT_IDEA_DIRECTIONS || e.seq <= latest_stmt_seq {
             return false;
         }
         match (e.payload.get("map_seq").and_then(Value::as_u64), latest_map_seq) {
-            (Some(dm), Some(lm)) => dm == lm,
-            _ => true,
+            (Some(dm), Some(lm)) => dm == lm && e.seq > lm,
+            (None, Some(lm)) => e.seq > lm,
+            (Some(_), None) => false,
+            (None, None) => true,
         }
     });
     let Some(ev) = dir_ev else { return Ok(()) };
@@ -55,28 +58,36 @@ pub(crate) fn append_directions_sections(
         return Ok(());
     }
 
+    let mut used_ids: BTreeSet<String> = check_table.iter().map(|r| r.id.clone()).collect();
     let mut concrete_blocks = Vec::new();
+    let mut concrete_rows = Vec::new();
     let mut sketch_blocks = Vec::new();
+    let mut sketch_rows = Vec::new();
+
     for (idx, item) in arr.iter().enumerate() {
+        if !item.is_object() {
+            continue;
+        }
         let is_concrete = item
             .get("concreteness")
             .and_then(Value::as_str)
             .is_some_and(|s| s.eq_ignore_ascii_case("concrete"));
-        let target = if is_concrete { &mut concrete_blocks } else { &mut sketch_blocks };
-        let concreteness_label = if is_concrete {
-            explore_writeup_wording::CONCRETE_LABEL
+        let (target_blocks, target_rows, label) = if is_concrete {
+            (&mut concrete_blocks, &mut concrete_rows, explore_writeup_wording::CONCRETE_LABEL)
         } else {
-            explore_writeup_wording::SKETCH_LABEL
+            (&mut sketch_blocks, &mut sketch_rows, explore_writeup_wording::SKETCH_LABEL)
         };
-        append_one_direction(item, idx, concreteness_label, target, check_table)?;
+        append_one_direction(item, idx, label, &mut used_ids, target_blocks, target_rows)?;
     }
 
+    // Emit sections and check-table rows in Concrete-then-Sketch document order (Audit M3).
     if !concrete_blocks.is_empty() {
         sections.push(WriteupSection {
             title: explore_writeup_wording::SECTION_DIRECTIONS.to_string(),
             label: Some(explore_writeup_wording::LABEL_DIRECTIONS.to_string()),
             blocks: concrete_blocks,
         });
+        check_table.extend(concrete_rows);
     }
     if !sketch_blocks.is_empty() {
         sections.push(WriteupSection {
@@ -84,6 +95,7 @@ pub(crate) fn append_directions_sections(
             label: Some(explore_writeup_wording::LABEL_LOOSE_IDEAS.to_string()),
             blocks: sketch_blocks,
         });
+        check_table.extend(sketch_rows);
     }
     Ok(())
 }
@@ -92,16 +104,18 @@ fn append_one_direction(
     item: &Value,
     idx: usize,
     concreteness_label: &str,
+    used_ids: &mut BTreeSet<String>,
     blocks: &mut Vec<WriteupBlock>,
-    check_table: &mut Vec<CheckTableRow>,
+    rows: &mut Vec<CheckTableRow>,
 ) -> Result<(), String> {
-    let id = item
+    let base_id = item
         .get("id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| format!("r-{}", idx + 1));
+    validate_model_prose(&base_id, "direction.id")?;
     let title = item.get("title").and_then(Value::as_str).unwrap_or("").trim();
     let question = item.get("question").and_then(Value::as_str).unwrap_or("").trim();
     validate_model_prose(title, "direction.title")?;
@@ -120,8 +134,15 @@ fn append_one_direction(
         prose_lines.push(format!("Stop if: {stop_if}"));
     }
 
-    let heading_text = if title.is_empty() {
-        question.to_string()
+    if title.is_empty() && question.is_empty() && prose_lines.is_empty() {
+        return Ok(());
+    }
+
+    let id = deduplicate_id(&base_id, used_ids);
+    let heading_text = if title.is_empty() && question.is_empty() {
+        format!("{id} ({concreteness_label})")
+    } else if title.is_empty() {
+        format!("{question} ({concreteness_label})")
     } else if question.is_empty() {
         format!("{title} ({concreteness_label})")
     } else {
@@ -131,7 +152,7 @@ fn append_one_direction(
         "{concreteness_label}; {}",
         explore_writeup_wording::SUGGESTION_NOTE
     ));
-    check_table.push(CheckTableRow {
+    rows.push(CheckTableRow {
         id: id.clone(),
         statement: if title.is_empty() { id.clone() } else { title.to_string() },
         how_checked: HowChecked::ModelStatement,
@@ -156,6 +177,20 @@ fn append_one_direction(
     Ok(())
 }
 
+fn deduplicate_id(base: &str, used: &mut BTreeSet<String>) -> String {
+    if used.insert(base.to_string()) {
+        return base.to_string();
+    }
+    let mut n = 2usize;
+    loop {
+        let candidate = format!("{base}-{n}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 fn collect_direction_known(
     item: &Value,
     refs: &mut Vec<String>,
@@ -168,6 +203,7 @@ fn collect_direction_known(
         validate_model_prose(txt, "direction.known")?;
         let nids = extract_string_array(k.get("node_ids"));
         for nid in &nids {
+            validate_model_prose(nid, "direction.known.node_ids")?;
             push_unique(refs, nid.clone());
         }
         if !txt.is_empty() {
@@ -195,8 +231,14 @@ fn collect_direction_missing(
         let txt = m.get("text").and_then(Value::as_str).unwrap_or("").trim();
         validate_model_prose(txt, "direction.missing")?;
         if let Some(basis) = m.get("basis").and_then(Value::as_str) {
-            if let Some(qid) = basis.strip_prefix("open_question(").and_then(|s| s.strip_suffix(')')) {
-                push_unique(refs, qid.trim().to_string());
+            if let Some(qid) = basis
+                .strip_prefix("open_question(")
+                .and_then(|s| s.strip_suffix(')'))
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                validate_model_prose(qid, "direction.missing.basis")?;
+                push_unique(refs, qid.to_string());
             }
         }
         if !txt.is_empty() {
@@ -220,8 +262,11 @@ fn collect_direction_first_calc(
     let expected = fc.get("expected_form").and_then(Value::as_str).unwrap_or("").trim();
     let effort = fc.get("effort").and_then(Value::as_str).unwrap_or("").trim();
     validate_model_prose(setup, "direction.first_calculation.setup")?;
+    validate_model_prose(method, "direction.first_calculation.method")?;
     validate_model_prose(expected, "direction.first_calculation.expected_form")?;
+    validate_model_prose(effort, "direction.first_calculation.effort")?;
     for inp in extract_string_array(fc.get("inputs")) {
+        validate_model_prose(&inp, "direction.first_calculation.inputs")?;
         push_unique(refs, inp);
     }
     let mut fc_parts = Vec::new();
@@ -237,6 +282,7 @@ fn collect_direction_first_calc(
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
+            validate_model_prose(rep, "direction.first_calculation.check.reproduces")?;
             push_unique(refs, rep.to_string());
             if !ctxt.is_empty() {
                 fc_parts.push(format!("check first: {ctxt} [{rep}]"));
@@ -263,6 +309,7 @@ fn collect_direction_risks(
         let txt = r.get("text").and_then(Value::as_str).unwrap_or("").trim();
         validate_model_prose(txt, "direction.risks")?;
         for nid in extract_string_array(r.get("node_ids")) {
+            validate_model_prose(&nid, "direction.risks.node_ids")?;
             push_unique(refs, nid);
         }
         if !txt.is_empty() {
@@ -342,12 +389,18 @@ pub(crate) fn build_status_line(
         } else {
             raw_state
         };
+        // Audit H4: drop any reason containing substring "verified" (e.g. "unverified") so
+        // `Writeup::validate()`'s status_line substring guard is never self-triggered.
         let reason = ev
             .payload
             .get("reason")
             .and_then(Value::as_str)
             .map(str::trim)
-            .filter(|s| !s.is_empty() && contains_forbidden_word(s, false).is_none())
+            .filter(|s| {
+                !s.is_empty()
+                    && contains_forbidden_word(s, false).is_none()
+                    && !s.to_ascii_lowercase().contains("verified")
+            })
             .map(str::to_string);
         latest_by_stage.insert(stage.to_ascii_lowercase(), (effective, reason));
     }
@@ -393,6 +446,31 @@ pub(crate) fn build_status_line(
     )
 }
 
+/// Case-insensitive ASCII word-boundary match (rejects `"verified"`, permits `"unverified"`).
+pub(crate) fn contains_ascii_word_ci(haystack: &str, needle: &str) -> bool {
+    let h = haystack.to_ascii_lowercase();
+    let n = needle.to_ascii_lowercase();
+    if n.is_empty() {
+        return false;
+    }
+    let hb = h.as_bytes();
+    let nlen = n.len();
+    let mut off = 0;
+    while let Some(pos) = h[off..].find(&n) {
+        let start = off + pos;
+        let end = start + nlen;
+        let left_ok = start == 0 || !hb[start - 1].is_ascii_alphanumeric();
+        let right_ok = end == hb.len() || !hb[end].is_ascii_alphanumeric();
+        if left_ok && right_ok {
+            return true;
+        }
+        off = start + 1;
+    }
+    false
+}
+
+/// Enforce Rule V8 banned novelty/proof phrases + Rule S8 word-boundary `"verified"` on model prose
+/// (`overlap.difference` and `idea.directions` fields).
 pub(crate) fn validate_model_prose(text: &str, field: &str) -> Result<(), String> {
     if text.trim().is_empty() {
         return Ok(());
@@ -403,7 +481,12 @@ pub(crate) fn validate_model_prose(text: &str, field: &str) -> Result<(), String
             hits.join(", ")
         ));
     }
-    if text.to_ascii_lowercase().contains("verified") {
+    validate_no_verified_word(text, field)
+}
+
+/// Enforce Rule S8 word-boundary `"verified"` check without applying Rule V8 novelty-phrase rules.
+pub(crate) fn validate_no_verified_word(text: &str, field: &str) -> Result<(), String> {
+    if !text.trim().is_empty() && contains_ascii_word_ci(text, "verified") {
         return Err(format!(
             "Explore write-up refused (Rule S8): `{field}` must not contain the word \"verified\""
         ));
@@ -441,10 +524,13 @@ pub(crate) fn derive_title(idea_text: &str, restatement: &str, session: &str) ->
         idea_text.trim()
     };
     let clean = clip_title(src, 72);
-    if clean.is_empty() || clean.to_ascii_lowercase().contains("verified") {
+    if !clean.is_empty() && !contains_ascii_word_ci(&clean, "verified") {
+        return format!("{}: {clean}", explore_writeup_wording::TITLE_PREFIX);
+    }
+    if !session.trim().is_empty() && !contains_ascii_word_ci(session, "verified") {
         format!("{} ({session})", explore_writeup_wording::TITLE_PREFIX)
     } else {
-        format!("{}: {clean}", explore_writeup_wording::TITLE_PREFIX)
+        explore_writeup_wording::TITLE_PREFIX.to_string()
     }
 }
 
