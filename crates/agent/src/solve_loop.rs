@@ -4,7 +4,7 @@
 //! transport failure emits `solve.paused` v1 and returns [`SessionOutcome::Paused`].
 
 #[path = "solve_loop_tools.rs"]
-mod loop_tools;
+pub(crate) mod loop_tools;
 
 use crate::dispatch::collect_text;
 use crate::interaction::{ask_user_tool_spec, inject_pending_steers, HumanChannel};

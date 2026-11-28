@@ -187,6 +187,7 @@ fn seed_portable_handle(ledger: &Ledger, sid: &str, name: &str, srepr: &str, cal
         latex: srepr.into(), str_preview: srepr.into(), free_symbols: vec![],
         produced_by: ReceiptRef { call_id: call_id.into(), result_seq: rseq },
         owner_entry: None, portable: true,
+        unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
     };
     ledger.append_with_hash(sid, event_kinds::SOLVE_EXPR, 1, &serde_json::to_value(&expr).unwrap()).unwrap();
 }
@@ -441,7 +442,7 @@ fn solve_wire_over_tcp_approver_and_real_python_workers_enforces_auto_checks_and
         env, ledger, sid, Arc::clone(&epoch), sympy_handler, epoch, checker.clone(), checker, approver,
     ).unwrap();
 
-    // 1. Solver runs sympy_eval saving lhs & rhs; SympyHarvestGate harvests lhs@1 & rhs@1 automatically.
+    // 1. Solver runs sympy_eval saving distinct expression pairs; SympyHarvestGate harvests them automatically.
     let mut eval_val = match wired.router.call(&cli_caller, "sympy_eval", &json!({
         "code": "import sympy as sp\nx = sp.Symbol('x', real=True)\nsave_expr('lhs', x**2 - 1)\nsave_expr('rhs', (x - 1)*(x + 1))\n1"
     })) {
@@ -473,15 +474,22 @@ fn solve_wire_over_tcp_approver_and_real_python_workers_enforces_auto_checks_and
 
     // 3. Human approves host:check on the relay -> Verified symbolic computation + FinalAnswer -> solve_finish!
     decider.approve_host_check.store(true, Ordering::SeqCst);
+    let eval_val2 = match wired.router.call(&cli_caller, "sympy_eval", &json!({
+        "code": "import sympy as sp\nx = sp.Symbol('x', real=True)\nsave_expr('lhs2', x**2 - 4)\nsave_expr('rhs2', (x - 2)*(x + 2))\nsave_expr('lhs3', x**2 - 9)\nsave_expr('rhs3', (x - 3)*(x + 3))\n1"
+    })) {
+        CallOutcome::Ok(v) => v,
+        other => panic!("sympy_eval 2 failed: {other:?}"),
+    };
+    let call_id2 = eval_val2["tool_call_ref"].as_str().unwrap().to_string();
     let step2 = match wired.router.call(&cli_caller, "step_record", &json!({
         "entry_type": StepEntryType::SymbolicComputation,
-        "summary": "Factor x^2 - 1 = (x - 1)(x + 1)",
+        "summary": "Factor x^2 - 4 = (x - 2)(x + 2)",
         "details": "Exact algebraic identity",
         "depends_on": [],
-        "tool_call_refs": [call_id],
+        "tool_call_refs": [call_id2],
         "claims": [{
-            "form": ClaimForm::Equation, "lhs": HandleRef::parse("lhs@1").unwrap(),
-            "rhs": HandleRef::parse("rhs@1").unwrap(), "relation": ClaimRelation::Eq
+            "form": ClaimForm::Equation, "lhs": HandleRef::parse("lhs2@1").unwrap(),
+            "rhs": HandleRef::parse("rhs2@1").unwrap(), "relation": ClaimRelation::Eq
         }]
     })) {
         CallOutcome::Ok(v) => v,
@@ -495,13 +503,13 @@ fn solve_wire_over_tcp_approver_and_real_python_workers_enforces_auto_checks_and
 
     let final_step = match wired.router.call(&cli_caller, "step_record", &json!({
         "entry_type": StepEntryType::FinalAnswer,
-        "summary": "Final identity x^2 - 1 = (x - 1)(x + 1)",
-        "details": "Restates the checked identity as the final answer.",
+        "summary": "Final identity x^2 - 9 = (x - 3)(x + 3)",
+        "details": "Checked final identity resting on step2.",
         "depends_on": [step2_id],
-        "tool_call_refs": [call_id],
+        "tool_call_refs": [call_id2],
         "claims": [{
-            "form": ClaimForm::Equation, "lhs": HandleRef::parse("lhs@1").unwrap(),
-            "rhs": HandleRef::parse("rhs@1").unwrap(), "relation": ClaimRelation::Eq
+            "form": ClaimForm::Equation, "lhs": HandleRef::parse("lhs3@1").unwrap(),
+            "rhs": HandleRef::parse("rhs3@1").unwrap(), "relation": ClaimRelation::Eq
         }]
     })) {
         CallOutcome::Ok(v) => v,

@@ -536,8 +536,12 @@ fn load_portable_handle(
         .handles
         .get(href)
         .ok_or_else(|| format!("unknown handle `{href}` in {context}"))?;
-    load_handle_srepr(ledger, expr)?
-        .ok_or_else(|| format!("handle `{href}` in {context} is non-portable"))
+    let srepr = load_handle_srepr(ledger, expr)?
+        .ok_or_else(|| format!("handle `{href}` in {context} is non-portable"))?;
+    if let Some(uneval) = expr.unevaluated_srepr.as_deref().filter(|s| !s.is_empty()) {
+        return Ok(uneval.to_string());
+    }
+    Ok(srepr)
 }
 
 pub(super) fn attach_code_hashes(prepared: &PreparedCheck, evidence: &mut Value) {

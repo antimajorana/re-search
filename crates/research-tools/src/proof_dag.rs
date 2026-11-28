@@ -261,6 +261,7 @@ fn handle_supersede(ctx: &CallCtx<'_>, args: &Value) -> Result<Value, String> {
         .read_session(ctx.session)
         .map_err(|e| format!("cannot read session `{}`: {e}", ctx.session))?;
 
+    let is_solve_session = events.iter().any(|ev| ev.kind == "solve.setup");
     let mut types_by_id: BTreeMap<String, String> = BTreeMap::new();
     for ev in &events {
         if ev.kind == "proof.entry" {
@@ -273,15 +274,21 @@ fn handle_supersede(ctx: &CallCtx<'_>, args: &Value) -> Result<Value, String> {
         }
     }
 
-    if !types_by_id.contains_key(entry_id) {
+    let Some(orig_type) = types_by_id.get(entry_id) else {
         return Err(format!("unknown `entry_id` `{entry_id}`"));
-    }
+    };
     let Some(repl_type) = types_by_id.get(replaced_by) else {
         return Err(format!("unknown `replaced_by` entry `{replaced_by}`"));
     };
-    if repl_type != "correction" {
+    let like_for_like_allowed = is_solve_session && repl_type == orig_type;
+    if repl_type != "correction" && !like_for_like_allowed {
+        let expected = if is_solve_session {
+            format!("`correction` or `{orig_type}`")
+        } else {
+            "`correction`".to_string()
+        };
         return Err(format!(
-            "`replaced_by` `{replaced_by}` must have entry_type `correction` (found `{repl_type}`)"
+            "`replaced_by` `{replaced_by}` must have entry_type {expected} (found `{repl_type}`)"
         ));
     }
 

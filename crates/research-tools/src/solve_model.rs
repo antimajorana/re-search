@@ -29,6 +29,7 @@ pub mod event_kinds {
     pub const SOLVE_ACK: &str = "solve.ack";
     pub const SOLVE_PAUSED: &str = "solve.paused";
     pub const SOLVE_CHECKPOINT: &str = "solve.checkpoint";
+    pub const SOLVE_REPAIR_ROUND: &str = "solve.repair_round";
     pub const SOLVE_DONE: &str = "solve.done";
     pub const SOLVE_ARTIFACT: &str = "solve.artifact";
     /// Owner decision 10 (shared stored-quote event kind, package F4).
@@ -367,6 +368,12 @@ pub struct SolveExpr {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_entry: Option<String>,
     pub portable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unevaluated_srepr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unevaluated_srepr_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_expr: Option<String>,
 }
 
 impl SolveExpr {
@@ -382,6 +389,7 @@ pub enum CheckOutcome {
     Fail,
     Inconclusive,
     NotRun,
+    Trivial,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

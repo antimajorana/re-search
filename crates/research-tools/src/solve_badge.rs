@@ -55,6 +55,7 @@ pub mod wording {
     pub const SUBLABEL_TWO_RUNS_AGREE: &str = "two runs agree, same solver";
     pub const SUBLABEL_INDEPENDENT_RECOMPUTE: &str = "independent recompute";
     pub const SUBLABEL_SAMPLED_NO_COUNTEREXAMPLE: &str = "sampled, no counterexample";
+    pub const SUBLABEL_TRIVIAL_IDENTICAL: &str = "both sides identical — nothing checked";
     pub const SUBLABEL_RAN: &str = "ran";
 
     /// Flags shown on the badge and never hidden (`solve.md` 4.4).
@@ -93,6 +94,7 @@ pub mod wording {
         SUBLABEL_TWO_RUNS_AGREE,
         SUBLABEL_INDEPENDENT_RECOMPUTE,
         SUBLABEL_SAMPLED_NO_COUNTEREXAMPLE,
+        SUBLABEL_TRIVIAL_IDENTICAL,
         SUBLABEL_RAN,
         FLAG_TRANSCRIPTION_UNCONFIRMED,
         FLAG_SAME_MODEL,
@@ -266,8 +268,12 @@ pub struct StepTier {
     pub effective: Tier,
     pub lowered_by: Vec<String>,
     pub broken_by: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unchecked_deps: Vec<String>,
     pub sublabels: Vec<String>,
     pub flags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_note: Option<String>,
     pub stale: bool,
 }
 
@@ -290,8 +296,12 @@ pub struct StepBadge {
     pub provenance_tag: Option<String>,
     pub lowered_by: Vec<String>,
     pub broken_by: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unchecked_deps: Vec<String>,
     pub sublabels: Vec<String>,
     pub flags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_note: Option<String>,
     pub stale: bool,
 }
 
@@ -309,11 +319,15 @@ pub fn badge_for_step(state: &SolveState, entry_id: &str) -> Option<StepBadge> {
     let own_check_line = (tier.own == Tier::Verified && tier.effective != Tier::Verified)
         .then(|| wording::OWN_CHECK_VERIFIED.to_string());
 
+    let rests_on_ids: &[String] = if !tier.lowered_by.is_empty() {
+        &tier.lowered_by
+    } else {
+        &tier.unchecked_deps
+    };
     let rests_on_line = if tier.effective == Tier::Failed && tier.own != Tier::Failed {
         None
-    } else if !tier.lowered_by.is_empty() {
-        let parts: Vec<String> = tier
-            .lowered_by
+    } else if !rests_on_ids.is_empty() {
+        let parts: Vec<String> = rests_on_ids
             .iter()
             .map(|dep_id| {
                 let dep_label = if state.entry(dep_id).is_some_and(|e| e.superseded_by.is_some()) {
@@ -358,8 +372,10 @@ pub fn badge_for_step(state: &SolveState, entry_id: &str) -> Option<StepBadge> {
         provenance_tag,
         lowered_by: tier.lowered_by.clone(),
         broken_by: tier.broken_by.clone(),
+        unchecked_deps: tier.unchecked_deps.clone(),
         sublabels: tier.sublabels.clone(),
         flags: tier.flags.clone(),
+        check_note: tier.check_note.clone(),
         stale: tier.stale,
     })
 }

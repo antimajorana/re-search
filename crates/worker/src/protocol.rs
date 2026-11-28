@@ -242,13 +242,15 @@ pub fn parse_canonical_expr(value: &Value) -> Result<CanonicalExpr, String> {
     })
 }
 
-/// Extract protocol 2 `exprs_out` (`{name: srepr}`) from an `evaluate` result object.
+/// Extract protocol 2 `exprs_out` (`{name: srepr}` or `{name: {srepr, ...}}`) from an `evaluate` result.
 /// Returns an empty map for protocol 1 results that lack `exprs_out`.
 pub fn extract_exprs_out(result: &Value) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     if let Some(obj) = result.get("exprs_out").and_then(Value::as_object) {
         for (k, v) in obj {
             if let Some(s) = v.as_str() {
+                out.insert(k.clone(), s.to_string());
+            } else if let Some(s) = v.get("srepr").and_then(Value::as_str) {
                 out.insert(k.clone(), s.to_string());
             }
         }

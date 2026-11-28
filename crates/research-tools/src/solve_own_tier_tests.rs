@@ -118,6 +118,7 @@ impl Harness {
             produced_by: ReceiptRef { call_id: produced_by.0.into(), result_seq: produced_by.1 },
             owner_entry: None,
             portable: true,
+            unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
         };
         let handle = expr.handle().unwrap();
         self.emit(event_kinds::SOLVE_EXPR, serde_json::to_value(expr).unwrap());

@@ -283,6 +283,7 @@ impl Gate for AutoCheckGate {
                 continue;
             }
 
+            // `trivial` (identical sides before simplification) must NEVER trigger numeric fallback.
             if matches!(form, ClaimForm::Equation | ClaimForm::Value)
                 && outcome.as_deref() == Some("inconclusive")
             {
@@ -324,6 +325,7 @@ impl Gate for AutoCheckGate {
 
         let updated_events = ledger.read_session(ctx.session).map_err(|e| e.to_string())?;
         let updated_state = SolveState::from_events(&updated_events);
+        let attention = build_auto_check_attention(&auto_checks, claims.len());
         attach_auto_checks_only(ctx.result, auto_checks);
         if let Some(obj) = ctx.result.as_object_mut() {
             if let Some(badge) = badge_for_step(&updated_state, &entry_id) {
@@ -332,10 +334,80 @@ impl Gate for AutoCheckGate {
             if let Some(tier) = updated_state.tier(&entry_id) {
                 obj.insert("own_tier".into(), json!(tier.own));
                 obj.insert("effective_tier".into(), json!(tier.effective));
+                if let Some(reason) = crate::solve_steps::explain_unchecked_own_tier(
+                    &updated_state,
+                    &entry_id,
+                    tier,
+                ) {
+                    obj.insert("own_tier_reason".into(), json!(reason));
+                } else {
+                    obj.remove("own_tier_reason");
+                }
+            }
+            if let Some(msg) = attention {
+                obj.insert("attention".into(), json!(msg));
             }
         }
         Ok(())
     }
+}
+
+fn build_auto_check_attention(auto_checks: &[Value], claim_count: usize) -> Option<String> {
+    let mut trivial_idx = Vec::new();
+    let mut inconclusive_idx = Vec::new();
+    let mut not_run_idx = Vec::new();
+    for idx in 0..claim_count {
+        let mut passed_primary = false;
+        let mut saw_trivial = false;
+        let mut saw_inconclusive = false;
+        let mut saw_not_run = false;
+        for chk in auto_checks
+            .iter()
+            .filter(|c| c.get("claim_index").and_then(Value::as_u64) == Some(idx as u64))
+        {
+            let name = chk.get("check").and_then(Value::as_str).unwrap_or("");
+            if name == "dimensions" {
+                if chk.get("outcome").and_then(Value::as_str) == Some("not_run") {
+                    saw_not_run = true;
+                }
+                continue;
+            }
+            match chk.get("outcome").and_then(Value::as_str) {
+                Some("pass") => passed_primary = true,
+                Some("trivial") => saw_trivial = true,
+                Some("inconclusive") => saw_inconclusive = true,
+                Some("not_run") => saw_not_run = true,
+                _ => {}
+            }
+        }
+        if saw_trivial {
+            trivial_idx.push(idx);
+        } else if !passed_primary && saw_inconclusive {
+            inconclusive_idx.push(idx);
+        } else if !passed_primary && saw_not_run {
+            not_run_idx.push(idx);
+        }
+    }
+    let mut parts = Vec::new();
+    if !trivial_idx.is_empty() {
+        parts.push(format!(
+            "claim(s) {:?} returned `trivial` because both sides are identical before simplification — derive LHS and RHS independently (keep LHS unevaluated via `UnevaluatedExpr` or string expression in `save_expr`) and supersede this step",
+            trivial_idx
+        ));
+    }
+    if !inconclusive_idx.is_empty() {
+        parts.push(format!(
+            "claim(s) {:?} ended `inconclusive` — inspect the residual, tighten symbol assumptions or split intermediate algebra, or run a targeted `check_run`",
+            inconclusive_idx
+        ));
+    }
+    if !not_run_idx.is_empty() {
+        parts.push(format!(
+            "claim(s) {:?} were `not_run` (check grant missing or denied)",
+            not_run_idx
+        ));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
 }
 
 fn invoke_auto_check(

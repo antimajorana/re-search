@@ -45,7 +45,10 @@ class Wp1WorkerProvenanceTests(unittest.TestCase):
 
         self.assertEqual(out["arith_str"], "Integer(5)")
         self.assertEqual(meta["arith_str"]["srepr"], "Integer(5)")
-        self.assertEqual(meta["arith_str"]["unevaluated_srepr"], "Add(Integer(2), Integer(3))")
+        self.assertEqual(
+            meta["arith_str"]["unevaluated_srepr"],
+            "UnevaluatedExpr(Add(Integer(2), Integer(3)))",
+        )
         self.assertEqual(meta["arith_str"]["source_expr"], "'2 + 3'")
 
         self.assertEqual(
@@ -100,6 +103,42 @@ class Wp1WorkerProvenanceTests(unittest.TestCase):
             "Pow(Add(Symbol('x', positive=True), Integer(1)), Integer(2))",
         )
         self.assertEqual(outbox["e"], encoded)
+
+    def test_unevaluated_string_survives_canonicalize_without_bypassing_trivial_atomic(self) -> None:
+        from checks.algebra import identity_symbolic
+        from checks.srepr_safe import canonicalize_srepr, parse_srepr_safe
+
+        ns = worker.make_namespace()
+        code = (
+            "r = assumed_symbol('r', real=True, positive=True)\n"
+            "theta = assumed_symbol('theta', real=True)\n"
+            "save_expr('L1', 'Abs(r*exp(I*theta))', locals={'r': r, 'theta': theta})\n"
+            "save_expr('R1', r)\n"
+            "save_expr('L2', 'r', locals={'r': r})\n"
+            "save_expr('R2', r)\n"
+        )
+        res = worker.evaluate(code, ns)
+        self.assertNotIn("error", res, msg=res)
+        meta = res["exprs_out_meta"]
+
+        c_l1 = canonicalize_srepr(meta["L1"]["unevaluated_srepr"])
+        c_r1 = canonicalize_srepr(meta["R1"]["srepr"])
+        self.assertTrue(c_l1["portable"])
+        self.assertNotEqual(c_l1["srepr_sha256"], c_r1["srepr_sha256"])
+        chk1 = identity_symbolic(
+            {"lhs": parse_srepr_safe(c_l1["srepr"]), "rhs": parse_srepr_safe(c_r1["srepr"])},
+            {},
+        )
+        self.assertEqual(chk1["outcome"], "pass")
+
+        c_l2 = canonicalize_srepr(meta["L2"]["unevaluated_srepr"])
+        c_r2 = canonicalize_srepr(meta["R2"]["srepr"])
+        self.assertEqual(c_l2["srepr_sha256"], c_r2["srepr_sha256"])
+        chk2 = identity_symbolic(
+            {"lhs": parse_srepr_safe(c_l2["srepr"]), "rhs": parse_srepr_safe(c_r2["srepr"])},
+            {},
+        )
+        self.assertEqual(chk2["outcome"], "trivial")
 
 
 if __name__ == "__main__":

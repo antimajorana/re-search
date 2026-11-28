@@ -85,6 +85,7 @@ fn record_expr_and_step(
                     produced_by: ReceiptRef { call_id: format!("sym-{eid}"), result_seq: rseq },
                     owner_entry: Some(eid.into()),
                     portable: true,
+                    unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
                 })
                 .unwrap(),
             )

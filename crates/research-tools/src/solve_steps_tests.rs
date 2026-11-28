@@ -182,7 +182,10 @@ fn step_record_enforces_r5_r9_r10_handles_and_derived_deps() {
         &sid,
         "call-2",
         true,
-        &[("lhs", 2, "x^3", "Pow(Symbol('x'), Integer(3))", true)],
+        &[
+            ("lhs", 2, "x^3", "Pow(Symbol('x'), Integer(3))", true),
+            ("rhs_alt", 1, "x \\cdot x^2", "Mul(Symbol('x'), Pow(Symbol('x'), Integer(2)))", true),
+        ],
     );
 
     assert!(run_step_record(
@@ -264,7 +267,7 @@ fn step_record_enforces_r5_r9_r10_handles_and_derived_deps() {
             "summary": "Use computed term",
             "details": "Algebra step",
             "depends_on": ["e-1"],
-            "claims": [{ "form": "equation", "lhs": "lhs@2", "rhs": "rhs@1", "relation": "eq" }]
+            "claims": [{ "form": "equation", "lhs": "lhs@2", "rhs": "rhs_alt@1", "relation": "eq" }]
         }),
     )
     .unwrap();

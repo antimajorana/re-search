@@ -368,7 +368,7 @@ fn s10_dimensions_autocheck_r8_and_finish_criterion() {
         ],
     );
 
-    let c1 = eval_harvest(&rig, "m = assumed_symbol('m', real=True, positive=True)\nv = assumed_symbol('v', real=True)\nsave_expr('L1', Rational(1, 2)*m*v**2 + Rational(1, 2)*m*v**2)\nsave_expr('R1', m*v**2)\nInteger(0)");
+    let c1 = eval_harvest(&rig, "m = assumed_symbol('m', real=True, positive=True)\nv = assumed_symbol('v', real=True)\nsave_expr('L1', 'Rational(1, 2)*m*v**2 + Rational(1, 2)*m*v**2', locals={'m': m, 'v': v})\nsave_expr('R1', m*v**2)\nInteger(0)");
     let s1 = record_claim(&rig, ClaimForm::Equation, ClaimRelation::Eq, "Kinetic energy term sum", &[], &c1, ("L1@1", "R1@1"));
     assert_eq!(s1["effective_tier"], "verified");
     let autos = s1["auto_checks"].as_array().unwrap();
@@ -472,11 +472,11 @@ fn s10_all_six_checks_r8_sublabel_only_failure_and_r19() {
     }
 
     // Failing S10 check on a symbolically Verified step flips it to Failed and breaks descendants (R8 + G7).
-    let c_ver = eval_harvest(&rig, "x = assumed_symbol('x', real=True)\nsave_expr('V1', (x + 1)**2)\nsave_expr('V2', x**2 + 2*x + 1)\nInteger(0)");
+    let c_ver = eval_harvest(&rig, "x = assumed_symbol('x', real=True)\nsave_expr('V1', (x + 1)**2)\nsave_expr('V2', x**2 + 2*x + 1)\nsave_expr('V3', (x + 2)**2)\nsave_expr('V4', x**2 + 4*x + 4)\nInteger(0)");
     let s_ver = record_claim(&rig, ClaimForm::Equation, ClaimRelation::Eq, "Verified polynomial", &[], &c_ver, ("V1@1", "V2@1"));
     assert_eq!(s_ver["effective_tier"], "verified");
     let v_id = s_ver["entry_id"].as_str().unwrap();
-    let s_dep = record_claim(&rig, ClaimForm::Equation, ClaimRelation::Eq, "Dependent verified step", &[v_id], &c_ver, ("V1@1", "V2@1"));
+    let s_dep = record_claim(&rig, ClaimForm::Equation, ClaimRelation::Eq, "Dependent verified step", &[v_id], &c_ver, ("V3@1", "V4@1"));
     let d_id = s_dep["entry_id"].as_str().unwrap();
 
     let sym_fail = run_check(&rig, v_id, "symmetry", json!({ "kind": "even", "variable": "x" }));

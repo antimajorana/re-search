@@ -15,62 +15,82 @@ use serde::Deserialize;
 use serde_json::Value;
 
 const NON_IDENTITY_CHECKS: &[&str] = &[
-    "dimensions",
-    "limit_case",
-    "symmetry",
-    "conservation",
-    "convergence",
-    "matrix_property",
+    "dimensions", "limit_case", "symmetry", "conservation", "convergence", "matrix_property",
+];
+
+const IDENTITY_TRIVIAL_CHECK_NAMES: &[&str] = &[
+    "identity_symbolic", "identity_numeric", "series_match", "vanishes_to_order",
 ];
 
 pub(crate) struct OwnEval {
     pub own: Tier,
     pub sublabels: Vec<String>,
     pub series_flags: Vec<String>,
+    pub check_note: Option<String>,
     pub ocr_source: bool,
     pub own_checks_stale: bool,
     pub has_transcription_ack: bool,
 }
 
-fn has_matching_ack(state: &SolveState, entry: &SolveEntry, kind: AckKind) -> bool {
-    let Some(ref esh) = entry.entry_sha256 else {
+/// True when a claim compares identical handles or two handles with the same non-empty
+/// pre-simplification expression hash (`unevaluated_srepr_sha256` falling back to `srepr_sha256`).
+pub fn claim_sides_identical(state: &SolveState, claim: &Claim) -> bool {
+    if claim.lhs == claim.rhs {
+        return true;
+    }
+    let (Some(lhs), Some(rhs)) = (state.handles.get(&claim.lhs), state.handles.get(&claim.rhs)) else {
         return false;
     };
-    state
-        .acks
-        .iter()
-        .any(|a| a.entry_id == entry.entry_id && a.kind == kind && a.entry_sha256 == *esh)
+    let lh = lhs.unevaluated_srepr_sha256.as_deref().filter(|s| !s.is_empty()).unwrap_or(&lhs.srepr_sha256);
+    let rh = rhs.unevaluated_srepr_sha256.as_deref().filter(|s| !s.is_empty()).unwrap_or(&rhs.srepr_sha256);
+    !lh.is_empty() && lh == rh
 }
 
-fn latest_matching_review<'a>(
-    state: &'a SolveState,
-    entry: &SolveEntry,
-) -> Option<&'a SolveReview> {
-    state
-        .reviews
-        .iter()
-        .filter(|r| {
-            r.target_entry_id == entry.entry_id
-                && matches!(r.verdict, ReviewVerdict::Accepted | ReviewVerdict::Rejected)
-                && match (&entry.entry_sha256, &r.entry_sha256) {
-                    (Some(e), Some(rv)) => e == rv,
-                    (None, None) => true,
-                    _ => false,
-                }
-        })
-        .max_by_key(|r| r.seq)
+/// True when a check returned `CheckOutcome::Trivial` or is a historical self-comparison on an
+/// identity/series check (`independent_recompute` is unaffected unless its own outcome is Trivial).
+pub fn check_is_trivial(state: &SolveState, check: &SolveCheck) -> bool {
+    if check.outcome == CheckOutcome::Trivial {
+        return true;
+    }
+    if !IDENTITY_TRIVIAL_CHECK_NAMES.contains(&check.name.as_str()) {
+        return false;
+    }
+    let entry = check.entry_id.as_deref().and_then(|id| state.entry(id)).or_else(|| {
+        state.entries.iter().find(|e| e.claim_sha256.as_deref() == Some(check.claim_sha256.as_str()))
+    });
+    entry.and_then(|e| e.claims.get(check.claim_index)).is_some_and(|c| claim_sides_identical(state, c))
 }
 
-fn matched_cited_quote<'a>(
-    state: &'a SolveState,
-    entry: &SolveEntry,
-) -> Option<&'a EvidenceQuoteRecord> {
+/// True when a review's `checks_cited` references any trivial or identical-side check.
+pub fn review_cites_trivial_check(state: &SolveState, review: &SolveReview) -> bool {
+    review.checks_cited.iter().any(|cid| {
+        state.checks.iter().any(|chk| chk.check_id == *cid && check_is_trivial(state, chk))
+    })
+}
+
+fn has_matching_ack(state: &SolveState, entry: &SolveEntry, kind: AckKind) -> bool {
+    let Some(ref esh) = entry.entry_sha256 else { return false };
+    state.acks.iter().any(|a| a.entry_id == entry.entry_id && a.kind == kind && a.entry_sha256 == *esh)
+}
+
+fn latest_matching_review<'a>(state: &'a SolveState, entry: &SolveEntry) -> Option<&'a SolveReview> {
+    state.reviews.iter().filter(|r| {
+        r.target_entry_id == entry.entry_id
+            && matches!(r.verdict, ReviewVerdict::Accepted | ReviewVerdict::Rejected)
+            && match (&entry.entry_sha256, &r.entry_sha256) {
+                (Some(e), Some(rv)) => e == rv,
+                (None, None) => true,
+                _ => false,
+            }
+    }).max_by_key(|r| r.seq)
+}
+
+fn matched_cited_quote<'a>(state: &'a SolveState, entry: &SolveEntry) -> Option<&'a EvidenceQuoteRecord> {
     if entry.entry_type != StepEntryType::ReferenceLookup {
         return None;
     }
     let qref = entry.source_ref.as_ref()?;
-    let seq = qref.evidence_seq?;
-    state.quotes.get(&seq).filter(|rec| rec.matches_ref(qref))
+    state.quotes.get(&qref.evidence_seq?).filter(|rec| rec.matches_ref(qref))
 }
 
 fn has_successful_cited_receipt(state: &SolveState, entry: &SolveEntry) -> bool {
@@ -160,14 +180,6 @@ fn parse_optional_bool(obj: &serde_json::Map<String, Value>, key: &str) -> Resul
 
 /// Fail-closed parser for the explicit comparison kind on `independent_recompute` (S20)
 /// and series checks (`series_match`, `vanishes_to_order`, S9) (`solve.md` 4.4).
-///
-/// Requires positive evidence for either `Exact` or `Numeric`:
-/// - `"comparison": "exact" | "numeric"` (canonical typed indicator for S9 and S20)
-/// - `"exact": true` (positive `Exact`; `"exact": false` is negative-only and never grants `Numeric`)
-/// - `"numeric_coefficients": true` (positive `Numeric` for series checks only; `false` is negative-only;
-///   rejected on `independent_recompute`)
-///
-/// Missing, unrecognized, malformed, or contradictory combinations return `None` (stays `Unchecked`).
 fn parse_comparison_kind(
     check: &SolveCheck,
     allow_numeric_coefficients: bool,
@@ -212,10 +224,7 @@ fn parse_comparison_kind(
     Some(kind)
 }
 
-/// Verify that a passing `solve.check` carries a non-empty check receipt reference, is not
-/// pointing at an in-flight tool call, and when that receipt is present in `state.receipts`,
-/// confirm it succeeded inside the dedicated check process (`ReceiptProcess::Check`, not
-/// `sympy_eval` / solver / verifier) (`solve.md` 4.4 guard (a) and "Inspecting a check").
+/// Verify that a passing `solve.check` carries a valid check-process receipt (`solve.md` 4.4).
 fn has_check_receipt(state: &SolveState, check: &SolveCheck) -> bool {
     let cid = check.receipt.call_id.as_str();
     if cid.is_empty() || cid.trim() != cid || check.receipt.result_seq == 0 {
@@ -305,20 +314,24 @@ pub(crate) fn evaluate_own(state: &SolveState, entry: &SolveEntry) -> OwnEval {
         }
     }
 
-    let mk = |own: Tier, sublabels: Vec<String>, series_flags: Vec<String>, ocr_source: bool| OwnEval {
+    let mk = |own: Tier,
+              sublabels: Vec<String>,
+              series_flags: Vec<String>,
+              check_note: Option<String>,
+              ocr_source: bool| OwnEval {
         own,
         sublabels,
         series_flags,
+        check_note,
         ocr_source,
         own_checks_stale,
         has_transcription_ack,
     };
 
     // Rule 1: Failed overrides everything and is never cleared by a later passing check.
-    // Includes any failed numeric guard on an otherwise symbolically verified equation (R8).
     let review_rejected = latest_review.is_some_and(|r| r.verdict == ReviewVerdict::Rejected);
     if any_claim_check_failed || review_rejected {
-        return mk(Tier::Failed, sublabels, series_flags, false);
+        return mk(Tier::Failed, sublabels, series_flags, None, false);
     }
 
     // Rule 5 (neutral bases & solver assumptions): Given, Cited, Assumed by model.
@@ -331,16 +344,16 @@ pub(crate) fn evaluate_own(state: &SolveState, entry: &SolveEntry) -> OwnEval {
             if is_given { Tier::Given } else { Tier::AssumedByModel },
             sublabels,
             series_flags,
+            None,
             false,
         );
     }
     if let Some(quote) = matched_cited_quote(state, entry) {
-        return mk(Tier::Cited, sublabels, series_flags, quote.ocr);
+        return mk(Tier::Cited, sublabels, series_flags, None, quote.ocr);
     }
 
     // Rule 3: Verified (4) or Checked numerically (3).
-    // Each claim gets the tier of its best passing identity check; the step gets the lowest
-    // tier among its claims (`solve.md` 4.4 rule 3).
+    let mut check_note: Option<String> = None;
     if let Some(computed_tier) = evaluate_claims_computed_tier(
         state,
         entry,
@@ -349,16 +362,19 @@ pub(crate) fn evaluate_own(state: &SolveState, entry: &SolveEntry) -> OwnEval {
         handle_redefined_stale,
         &mut sublabels,
         &mut series_flags,
+        &mut check_note,
     ) {
-        return mk(computed_tier, sublabels, series_flags, false);
+        return mk(computed_tier, sublabels, series_flags, None, false);
     }
 
     // Rule 4: Checked by you / Model agreed / Model agreed (same model).
     if has_hand_checked {
-        return mk(Tier::CheckedByYou, sublabels, series_flags, false);
+        return mk(Tier::CheckedByYou, sublabels, series_flags, check_note, false);
     }
-    if let Some(review) = latest_review.filter(|r| r.verdict == ReviewVerdict::Accepted) {
-        return mk(review_accepted_tier(state, review), sublabels, series_flags, false);
+    if let Some(review) = latest_review.filter(|r| {
+        r.verdict == ReviewVerdict::Accepted && !review_cites_trivial_check(state, r)
+    }) {
+        return mk(review_accepted_tier(state, review), sublabels, series_flags, check_note, false);
     }
 
     // Rule 6: Unchecked (with "ran" sublabel for computation step with receipt and no claims).
@@ -368,9 +384,10 @@ pub(crate) fn evaluate_own(state: &SolveState, entry: &SolveEntry) -> OwnEval {
     {
         push_unique(&mut sublabels, wording::SUBLABEL_RAN.to_string());
     }
-    mk(Tier::Unchecked, sublabels, series_flags, false)
+    mk(Tier::Unchecked, sublabels, series_flags, check_note, false)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn evaluate_claims_computed_tier(
     state: &SolveState,
     entry: &SolveEntry,
@@ -379,6 +396,7 @@ fn evaluate_claims_computed_tier(
     handle_redefined_stale: bool,
     sublabels: &mut Vec<String>,
     series_flags: &mut Vec<String>,
+    check_note: &mut Option<String>,
 ) -> Option<Tier> {
     let eligible = !entry.claims.is_empty()
         && all_portable
@@ -386,23 +404,43 @@ fn evaluate_claims_computed_tier(
         && entry.claim_sha256.is_some();
 
     let mut step_tier: Option<Tier> = if eligible { Some(Tier::Verified) } else { None };
+    let mut computed_sublabels: Vec<String> = Vec::new();
+    let mut computed_series_flags: Vec<String> = Vec::new();
+    let mut trivial_claims = 0usize;
+    let mut inconclusive_claims = 0usize;
 
     for (idx, claim) in entry.claims.iter().enumerate() {
         let mut best_claim_tier: Option<Tier> = None;
+        let sides_identical = claim_sides_identical(state, claim);
+        let mut saw_trivial = false;
+        let mut saw_inconclusive = false;
 
-        for check in matching_checks.iter().filter(|c| {
-            c.claim_index == idx && c.outcome == CheckOutcome::Pass && has_check_receipt(state, c)
-        }) {
+        for check in matching_checks.iter().filter(|c| c.claim_index == idx) {
+            if check.outcome == CheckOutcome::Trivial {
+                saw_trivial = true;
+                continue;
+            }
+            if matches!(check.outcome, CheckOutcome::Inconclusive | CheckOutcome::NotRun) {
+                saw_inconclusive = true;
+                continue;
+            }
+            if check.outcome != CheckOutcome::Pass || !has_check_receipt(state, check) {
+                continue;
+            }
+            if sides_identical && IDENTITY_TRIVIAL_CHECK_NAMES.contains(&check.name.as_str()) {
+                saw_trivial = true;
+                continue;
+            }
             match (claim.form, check.name.as_str()) {
                 (ClaimForm::Equation, "identity_symbolic") => {
                     best_claim_tier = best_of(best_claim_tier, Tier::Verified);
-                    push_unique(sublabels, wording::SUBLABEL_SYMBOLIC.to_string());
+                    push_unique(&mut computed_sublabels, wording::SUBLABEL_SYMBOLIC.to_string());
                 }
                 (ClaimForm::Equation, "identity_numeric") => {
                     if let Some((pts, digs)) = equation_numeric_evidence(check) {
                         best_claim_tier = best_of(best_claim_tier, Tier::CheckedNumerically);
                         push_unique(
-                            sublabels,
+                            &mut computed_sublabels,
                             wording::format_numeric_equation_sublabel(pts, digs),
                         );
                     }
@@ -414,7 +452,10 @@ fn evaluate_claims_computed_tier(
                             ComparisonKind::Numeric => Tier::CheckedNumerically,
                         };
                         best_claim_tier = best_of(best_claim_tier, t);
-                        push_unique(sublabels, wording::SUBLABEL_INDEPENDENT_RECOMPUTE.to_string());
+                        push_unique(
+                            &mut computed_sublabels,
+                            wording::SUBLABEL_INDEPENDENT_RECOMPUTE.to_string(),
+                        );
                     }
                 }
                 (ClaimForm::Series, "series_match" | "vanishes_to_order")
@@ -426,20 +467,20 @@ fn evaluate_claims_computed_tier(
                         best_claim_tier = best_of(best_claim_tier, t);
                         if let Some(ref o) = claim.order {
                             let order_text = wording::format_series_order(&o.variable, o.n);
-                            push_unique(series_flags, order_text.clone());
+                            push_unique(&mut computed_series_flags, order_text.clone());
                             let sub = if exact {
                                 order_text
                             } else {
                                 wording::format_series_numeric_sublabel(&o.variable, o.n)
                             };
-                            push_unique(sublabels, sub);
+                            push_unique(&mut computed_sublabels, sub);
                         } else {
                             let sub = if exact {
                                 wording::SUBLABEL_SERIES_FALLBACK
                             } else {
                                 wording::SUBLABEL_SERIES_NUMERIC_FALLBACK
                             };
-                            push_unique(sublabels, sub.to_string());
+                            push_unique(&mut computed_sublabels, sub.to_string());
                         }
                     }
                 }
@@ -447,7 +488,7 @@ fn evaluate_claims_computed_tier(
                     if value_two_runs_differ(state, claim, check) =>
                 {
                     best_claim_tier = best_of(best_claim_tier, Tier::CheckedNumerically);
-                    push_unique(sublabels, wording::SUBLABEL_TWO_RUNS_AGREE.to_string());
+                    push_unique(&mut computed_sublabels, wording::SUBLABEL_TWO_RUNS_AGREE.to_string());
                 }
                 (ClaimForm::Inequality, "counterexample_search") => {
                     // Rule 3 & R8: never grants a computed tier, only adds the sublabel.
@@ -460,14 +501,42 @@ fn evaluate_claims_computed_tier(
             }
         }
 
-        step_tier = match (step_tier, best_claim_tier) {
-            (Some(cur), Some(claim_t)) => {
-                if claim_t.lattice_rank() < cur.lattice_rank() {
-                    Some(claim_t)
-                } else {
-                    Some(cur)
-                }
+        if best_claim_tier.is_none() {
+            if saw_trivial || (sides_identical && claim.form != ClaimForm::Inequality) {
+                trivial_claims += 1;
+            } else if saw_inconclusive {
+                inconclusive_claims += 1;
             }
+        }
+        step_tier = match (step_tier, best_claim_tier) {
+            (Some(cur), Some(claim_t)) => Some(if claim_t.lattice_rank() < cur.lattice_rank() {
+                claim_t
+            } else {
+                cur
+            }),
+            _ => None,
+        };
+    }
+
+    if step_tier.is_some() {
+        for sub in computed_sublabels {
+            push_unique(sublabels, sub);
+        }
+        for flag in computed_series_flags {
+            push_unique(series_flags, flag);
+        }
+    } else if !entry.claims.is_empty() {
+        let total = entry.claims.len();
+        let plural = if total == 1 { "" } else { "s" };
+        if trivial_claims > 0 {
+            push_unique(sublabels, wording::SUBLABEL_TRIVIAL_IDENTICAL.to_string());
+        }
+        *check_note = match (trivial_claims, inconclusive_claims) {
+            (t, i) if t > 0 && i > 0 => Some(format!(
+                "both sides identical on {t} of {total} claim{plural}; checks inconclusive on {i} of {total} claim{plural}"
+            )),
+            (t, _) if t > 0 => Some(format!("both sides identical on {t} of {total} claim{plural}")),
+            (_, i) if i > 0 => Some(format!("checks inconclusive on {i} of {total} claim{plural}")),
             _ => None,
         };
     }

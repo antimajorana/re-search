@@ -103,25 +103,35 @@ fn property_sweep_r22_across_all_eleven_solve_tiers() {
                 append_done(&ledger, &sid, "e-1", tier, tier, SolveDoneStatus::Finished);
             }
             Tier::CheckedNumerically => {
-                let h1 = append_expr(&ledger, &sid, "x", 1, "x", "Symbol('x')", Some("e-1"), true);
+                let h1 = append_expr(&ledger, &sid, "xl", 1, "x + 0", "Add(Symbol('x'), Integer(0))", Some("e-1"), true);
+                let h2 = append_expr(&ledger, &sid, "xr", 1, "x", "Symbol('x')", Some("e-1"), true);
                 let claim = Claim {
-                    form: ClaimForm::Equation, lhs: HandleRef::new("x", 1).unwrap(),
-                    rhs: HandleRef::new("x", 1).unwrap(), relation: ClaimRelation::Eq,
+                    form: ClaimForm::Equation, lhs: HandleRef::new("xl", 1).unwrap(),
+                    rhs: HandleRef::new("xr", 1).unwrap(), relation: ClaimRelation::Eq,
                     order: None, domain: None, how: None,
                 };
-                let csha = compute_claim_sha256(std::slice::from_ref(&claim), |_| Some(h1.as_str())).unwrap();
+                let csha = compute_claim_sha256(std::slice::from_ref(&claim), |h| match h.name.as_str() {
+                    "xl" => Some(h1.as_str()),
+                    "xr" => Some(h2.as_str()),
+                    _ => None,
+                }).unwrap();
                 append_step(&ledger, &sid, "e-1", StepEntryType::FinalAnswer, StepOrigin::Solver, "Numeric step.", "", &[], &[claim], Some(&csha), None, None);
                 append_check(&ledger, &sid, "c-num", &csha, &math_sha, "identity_numeric", "pass", json!({ "points": 12, "digits": 50 }));
                 append_done(&ledger, &sid, "e-1", tier, tier, SolveDoneStatus::Finished);
             }
             Tier::Verified => {
-                let h1 = append_expr(&ledger, &sid, "x", 1, "x", "Symbol('x')", Some("e-1"), true);
+                let h1 = append_expr(&ledger, &sid, "xl", 1, "x + 0", "Add(Symbol('x'), Integer(0))", Some("e-1"), true);
+                let h2 = append_expr(&ledger, &sid, "xr", 1, "x", "Symbol('x')", Some("e-1"), true);
                 let claim = Claim {
-                    form: ClaimForm::Equation, lhs: HandleRef::new("x", 1).unwrap(),
-                    rhs: HandleRef::new("x", 1).unwrap(), relation: ClaimRelation::Eq,
+                    form: ClaimForm::Equation, lhs: HandleRef::new("xl", 1).unwrap(),
+                    rhs: HandleRef::new("xr", 1).unwrap(), relation: ClaimRelation::Eq,
                     order: None, domain: None, how: None,
                 };
-                let csha = compute_claim_sha256(std::slice::from_ref(&claim), |_| Some(h1.as_str())).unwrap();
+                let csha = compute_claim_sha256(std::slice::from_ref(&claim), |h| match h.name.as_str() {
+                    "xl" => Some(h1.as_str()),
+                    "xr" => Some(h2.as_str()),
+                    _ => None,
+                }).unwrap();
                 append_step(&ledger, &sid, "e-1", StepEntryType::FinalAnswer, StepOrigin::Solver, "Exact symbolic step.", "", &[], &[claim], Some(&csha), None, None);
                 append_check(&ledger, &sid, "c-sym", &csha, &math_sha, "identity_symbolic", "pass", json!({ "residual": "0" }));
                 append_done(&ledger, &sid, "e-1", tier, tier, SolveDoneStatus::Finished);
@@ -180,13 +190,18 @@ fn own_verified_resting_on_unchecked_keeps_status_honest_and_notes_own_check_in_
     let math_sha = append_setup(&ledger, sid, "Downgraded final step.", "Own vs Effective");
 
     append_step(&ledger, sid, "e-1", StepEntryType::Assumption, StepOrigin::Solver, "Unacknowledged model ansatz.", "", &[], &[], None, None, None);
-    let h1 = append_expr(&ledger, sid, "f", 1, "x^2", "Pow(x,2)", Some("e-2"), true);
+    let h1 = append_expr(&ledger, sid, "fl", 1, "x \\cdot x", "Mul(Symbol('x'), Symbol('x'))", Some("e-2"), true);
+    let h2 = append_expr(&ledger, sid, "fr", 1, "x^2", "Pow(Symbol('x'), Integer(2))", Some("e-2"), true);
     let claim = Claim {
-        form: ClaimForm::Equation, lhs: HandleRef::new("f", 1).unwrap(),
-        rhs: HandleRef::new("f", 1).unwrap(), relation: ClaimRelation::Eq,
+        form: ClaimForm::Equation, lhs: HandleRef::new("fl", 1).unwrap(),
+        rhs: HandleRef::new("fr", 1).unwrap(), relation: ClaimRelation::Eq,
         order: None, domain: None, how: None,
     };
-    let csha = compute_claim_sha256(std::slice::from_ref(&claim), |_| Some(h1.as_str())).unwrap();
+    let csha = compute_claim_sha256(std::slice::from_ref(&claim), |h| match h.name.as_str() {
+        "fl" => Some(h1.as_str()),
+        "fr" => Some(h2.as_str()),
+        _ => None,
+    }).unwrap();
     append_step(&ledger, sid, "e-2", StepEntryType::FinalAnswer, StepOrigin::Solver, "Exact symbolic step resting on e-1.", "", &["e-1"], &[claim], Some(&csha), None, None);
     append_check(&ledger, sid, "c-sym", &csha, &math_sha, "identity_symbolic", "pass", json!({ "residual": "0" }));
     append_done(&ledger, sid, "e-2", Tier::Verified, Tier::Unchecked, SolveDoneStatus::FinishedOpenItems);

@@ -117,6 +117,7 @@ fn compute_derived_deps_collects_handle_and_receipt_owners() {
             produced_by: ReceiptRef { call_id: "call-1".into(), result_seq: 10 },
             owner_entry: Some("e-3".into()),
             portable: true,
+            unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
         },
     );
     handles.insert(
@@ -132,6 +133,7 @@ fn compute_derived_deps_collects_handle_and_receipt_owners() {
             produced_by: ReceiptRef { call_id: "call-2".into(), result_seq: 12 },
             owner_entry: Some("e-4".into()),
             portable: true,
+            unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
         },
     );
 

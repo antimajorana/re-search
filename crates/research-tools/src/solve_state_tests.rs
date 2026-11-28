@@ -128,6 +128,7 @@ fn rich_session_events() -> Vec<Event> {
                 produced_by: ReceiptRef { call_id: "c-1".into(), result_seq: 6 },
                 owner_entry: Some("e-3".into()),
                 portable: true,
+                unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
             })
             .unwrap(),
         ),
@@ -145,6 +146,7 @@ fn rich_session_events() -> Vec<Event> {
                 produced_by: ReceiptRef { call_id: "c-1".into(), result_seq: 6 },
                 owner_entry: Some("e-3".into()),
                 portable: true,
+                unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
             })
             .unwrap(),
         ),

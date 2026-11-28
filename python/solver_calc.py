@@ -150,9 +150,17 @@ def save_expr(
     if isinstance(expr, str):
         local_dict = dict(locals) if locals is not None else _caller_sympy_locals(depth=2)
         uneval_obj = parse_expr(expr, local_dict=local_dict, evaluate=False)
-        unevaluated_srepr = srepr(uneval_obj)
         evaluated_obj = sympify(expr, locals=local_dict) if locals is not None else uneval_obj.doit()
         encoded = srepr(evaluated_obj)
+        raw_uneval = srepr(uneval_obj)
+        if (
+            raw_uneval != encoded
+            and isinstance(uneval_obj, sympy.Basic)
+            and not isinstance(uneval_obj, (sympy.UnevaluatedExpr, sympy.MatrixBase))
+        ):
+            unevaluated_srepr = srepr(sympy.UnevaluatedExpr(uneval_obj))
+        else:
+            unevaluated_srepr = raw_uneval
     else:
         sym_expr = sympify(expr)
         encoded = srepr(sym_expr)

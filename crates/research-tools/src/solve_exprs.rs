@@ -110,26 +110,50 @@ pub struct HarvestReport {
     pub total_srepr_bytes_in_run: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+struct RawOutboxMeta {
+    unevaluated_srepr: Option<String>,
+    source_expr: Option<String>,
+}
+
+const MAX_SOURCE_EXPR_CHARS: usize = 500;
+
 /// Extract protocol-2 `exprs_out` (`{ name: raw_srepr }`) from a `sympy_eval` result object.
 pub fn extract_exprs_out(sympy_result: &Value) -> BTreeMap<String, String> {
     extract_exprs_out_checked(sympy_result).0
 }
 
-fn extract_exprs_out_checked(sympy_result: &Value) -> (BTreeMap<String, String>, Vec<SkippedExpr>) {
+fn extract_exprs_out_checked(
+    sympy_result: &Value,
+) -> (BTreeMap<String, String>, BTreeMap<String, RawOutboxMeta>, Vec<SkippedExpr>) {
     let mut out = BTreeMap::new();
+    let mut meta = BTreeMap::new();
     let mut skipped = Vec::new();
+    let meta_obj = sympy_result.get("exprs_out_meta").and_then(Value::as_object);
     match sympy_result.get("exprs_out") {
         None | Some(Value::Null) => {}
         Some(Value::Object(obj)) => {
             for (k, v) in obj {
-                match v.as_str() {
-                    Some(s) => {
-                        out.insert(k.clone(), s.to_string());
+                if let Some(s) = v.as_str() {
+                    out.insert(k.clone(), s.to_string());
+                    if let Some(entry_meta) = meta_obj.and_then(|m| m.get(k)).and_then(Value::as_object) {
+                        meta.insert(k.clone(), parse_outbox_meta(entry_meta));
                     }
-                    None => skipped.push(SkippedExpr {
+                } else if let Some(entry_obj) = v.as_object() {
+                    if let Some(s) = entry_obj.get("srepr").and_then(Value::as_str) {
+                        out.insert(k.clone(), s.to_string());
+                        meta.insert(k.clone(), parse_outbox_meta(entry_obj));
+                    } else {
+                        skipped.push(SkippedExpr {
+                            name: k.clone(),
+                            reason: "exprs_out value must be a string srepr or object with string `srepr`".into(),
+                        });
+                    }
+                } else {
+                    skipped.push(SkippedExpr {
                         name: k.clone(),
                         reason: "exprs_out value must be a string srepr".into(),
-                    }),
+                    });
                 }
             }
         }
@@ -138,7 +162,22 @@ fn extract_exprs_out_checked(sympy_result: &Value) -> (BTreeMap<String, String>,
             reason: "exprs_out must be a JSON object mapping handle names to srepr strings".into(),
         }),
     }
-    (out, skipped)
+    (out, meta, skipped)
+}
+
+fn parse_outbox_meta(obj: &serde_json::Map<String, Value>) -> RawOutboxMeta {
+    let unevaluated_srepr = obj
+        .get("unevaluated_srepr")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let source_expr = obj
+        .get("source_expr")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| clip_utf8_chars(s, MAX_SOURCE_EXPR_CHARS).0);
+    RawOutboxMeta { unevaluated_srepr, source_expr }
 }
 
 struct PendingExprWrite {
@@ -161,15 +200,45 @@ pub fn harvest_exprs_out(
     raw_exprs: &BTreeMap<String, String>,
     canonicalizer: &dyn CheckCanonicalizer,
 ) -> Result<HarvestReport, String> {
+    harvest_exprs_out_with_meta(ledger, session, produced_by, raw_exprs, &BTreeMap::new(), canonicalizer)
+}
+
+fn harvest_exprs_out_with_meta(
+    ledger: &Ledger,
+    session: &str,
+    produced_by: ReceiptRef,
+    raw_exprs: &BTreeMap<String, String>,
+    raw_meta: &BTreeMap<String, RawOutboxMeta>,
+    canonicalizer: &dyn CheckCanonicalizer,
+) -> Result<HarvestReport, String> {
+    for attempt in 0..3 {
+        match harvest_exprs_out_once(ledger, session, produced_by.clone(), raw_exprs, raw_meta, canonicalizer) {
+            Ok(report) => return Ok(report),
+            Err((true, _)) if attempt < 2 => continue,
+            Err((_, msg)) => return Err(msg),
+        }
+    }
+    unreachable!()
+}
+
+fn harvest_exprs_out_once(
+    ledger: &Ledger,
+    session: &str,
+    produced_by: ReceiptRef,
+    raw_exprs: &BTreeMap<String, String>,
+    raw_meta: &BTreeMap<String, RawOutboxMeta>,
+    canonicalizer: &dyn CheckCanonicalizer,
+) -> Result<HarvestReport, (bool, String)> {
     let (mut head_hash, events) = match ledger.read_verified_session(session) {
         Ok((report, evs)) => (report.head_hash, evs),
         Err(LedgerError::UnknownSession(_)) => (GENESIS_HASH.to_string(), Vec::new()),
-        Err(e) => return Err(format!("cannot verify session `{session}` before harvesting: {e}")),
+        Err(e) => return Err((false, format!("cannot verify session `{session}` before harvesting: {e}"))),
     };
     let state = SolveState::from_events(&events);
 
     let mut total_handles = state.handles.len();
-    let mut total_srepr_bytes = count_existing_srepr_bytes(ledger, &state)?;
+    let mut total_srepr_bytes =
+        count_existing_srepr_bytes(ledger, &state).map_err(|e| (false, e))?;
     let mut latest_versions: BTreeMap<String, u32> = BTreeMap::new();
     for handle in state.handles.keys() {
         let entry = latest_versions.entry(handle.name.clone()).or_insert(0);
@@ -212,7 +281,8 @@ pub fn harvest_exprs_out(
             continue;
         };
 
-        let (solve_expr, srepr_bytes, error, rejected_constructor, added_bytes) =
+        let meta = raw_meta.get(name);
+        let (mut solve_expr, srepr_bytes, error, rejected_constructor, added_bytes) =
             match canonicalizer.canonicalize(raw_srepr) {
                 Ok(canon) if canon.portable => {
                     match prepare_portable_expr(name, next_version, &produced_by, canon, total_srepr_bytes) {
@@ -244,8 +314,26 @@ pub fn harvest_exprs_out(
                     0,
                 ),
             };
+        if let Some(m) = meta {
+            solve_expr.source_expr = m.source_expr.clone();
+            if solve_expr.portable {
+                if let Some(raw_uneval) = m.unevaluated_srepr.as_deref() {
+                    if raw_uneval.len() <= MAX_EXPR_SREPR_BYTES_PER_RUN {
+                        if let Ok(uc) = canonicalizer.canonicalize(raw_uneval) {
+                            if uc.portable
+                                && !uc.srepr.is_empty()
+                                && uc.srepr_sha256 == sha256_hex(uc.srepr.as_bytes())
+                            {
+                                solve_expr.unevaluated_srepr = Some(uc.srepr);
+                                solve_expr.unevaluated_srepr_sha256 = Some(uc.srepr_sha256);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
-        let handle = HandleRef::new(name.clone(), next_version)?;
+        let handle = HandleRef::new(name.clone(), next_version).map_err(|e| (false, e))?;
         total_handles += 1;
         total_srepr_bytes = total_srepr_bytes.saturating_add(added_bytes);
         latest_versions.insert(name.clone(), next_version);
@@ -263,13 +351,13 @@ pub fn harvest_exprs_out(
         if let Some(bytes) = &item.srepr_bytes {
             let stored = ledger
                 .put_blob(bytes)
-                .map_err(|e| format!("failed to store srepr blob for `{}`: {e}", item.handle))?;
+                .map_err(|e| (false, format!("failed to store srepr blob for `{}`: {e}", item.handle)))?;
             if stored != item.expr.srepr_blob {
-                return Err(format!("srepr blob hash mismatch while storing `{}`", item.handle));
+                return Err((false, format!("srepr blob hash mismatch while storing `{}`", item.handle)));
             }
         }
         let payload = serde_json::to_value(&item.expr)
-            .map_err(|e| format!("failed to serialize solve.expr: {e}"))?;
+            .map_err(|e| (false, format!("failed to serialize solve.expr: {e}")))?;
         let appended = ledger
             .append_at_head(
                 session,
@@ -278,7 +366,10 @@ pub fn harvest_exprs_out(
                 &payload,
                 &head_hash,
             )
-            .map_err(|e| format!("failed to append solve.expr: {e}"))?;
+            .map_err(|e| {
+                let retryable = harvested.is_empty() && matches!(e, LedgerError::SessionChanged(_));
+                (retryable, format!("failed to append solve.expr: {e}"))
+            })?;
         head_hash = appended.event_hash;
         harvested.push(HarvestedExpr {
             handle: item.handle,
@@ -305,8 +396,15 @@ pub fn harvest_from_sympy_result(
     sympy_result: &Value,
     canonicalizer: &dyn CheckCanonicalizer,
 ) -> Result<HarvestReport, String> {
-    let (raw_exprs, malformed) = extract_exprs_out_checked(sympy_result);
-    let mut report = harvest_exprs_out(ledger, session, produced_by, &raw_exprs, canonicalizer)?;
+    let (raw_exprs, raw_meta, malformed) = extract_exprs_out_checked(sympy_result);
+    let mut report = harvest_exprs_out_with_meta(
+        ledger,
+        session,
+        produced_by,
+        &raw_exprs,
+        &raw_meta,
+        canonicalizer,
+    )?;
     if !malformed.is_empty() {
         let mut combined = malformed;
         combined.extend(report.skipped);
@@ -335,6 +433,9 @@ pub fn attach_harvest_previews(sympy_result: &mut Value, report: &HarvestReport)
                 "free_symbols": h.expr.free_symbols,
                 "srepr_sha256": h.expr.srepr_sha256,
             });
+            if let Some(src) = &h.expr.source_expr {
+                item["source_expr"] = json!(src);
+            }
             if let Some(err) = &h.error {
                 item["error"] = json!(err);
             }
@@ -419,9 +520,7 @@ fn prepare_portable_expr(
     current_total_bytes: usize,
 ) -> PortableOutcome {
     if canon.srepr.is_empty() || canon.srepr_sha256.is_empty() {
-        return PortableOutcome::NonPortable(
-            "check process returned empty canonical srepr or srepr_sha256".into(),
-        );
+        return PortableOutcome::NonPortable("check process returned empty canonical srepr or srepr_sha256".into());
     }
     let bytes = canon.srepr.into_bytes();
     let actual_sha256 = sha256_hex(&bytes);
@@ -440,32 +539,20 @@ fn prepare_portable_expr(
     let (latex, _) = clip_utf8_chars(&canon.latex, MAX_EXPR_LATEX_CHARS);
     let (str_preview, _) = clip_utf8_chars(&canon.str_preview, MAX_STR_PREVIEW_CHARS);
     let expr = SolveExpr {
-        name: name.to_string(),
-        version,
-        srepr_blob: actual_sha256.clone(),
-        srepr_sha256: actual_sha256,
-        latex,
-        str_preview,
-        free_symbols: canon.free_symbols,
-        produced_by: produced_by.clone(),
-        owner_entry: None,
-        portable: true,
+        name: name.to_string(), version, srepr_blob: actual_sha256.clone(), srepr_sha256: actual_sha256,
+        latex, str_preview, free_symbols: canon.free_symbols, produced_by: produced_by.clone(),
+        owner_entry: None, portable: true,
+        unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
     };
     PortableOutcome::Ready(Box::new(expr), bytes)
 }
 
 fn non_portable_expr(name: &str, version: u32, produced_by: &ReceiptRef) -> SolveExpr {
     SolveExpr {
-        name: name.to_string(),
-        version,
-        srepr_blob: String::new(),
-        srepr_sha256: String::new(),
-        latex: String::new(),
-        str_preview: String::new(),
-        free_symbols: Vec::new(),
-        produced_by: produced_by.clone(),
-        owner_entry: None,
-        portable: false,
+        name: name.to_string(), version, srepr_blob: String::new(), srepr_sha256: String::new(),
+        latex: String::new(), str_preview: String::new(), free_symbols: Vec::new(),
+        produced_by: produced_by.clone(), owner_entry: None, portable: false,
+        unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
     }
 }
 
@@ -477,18 +564,13 @@ fn count_existing_srepr_bytes(ledger: &Ledger, state: &SolveState) -> Result<usi
             continue;
         }
         if expr.srepr_blob.is_empty() || expr.srepr_blob != expr.srepr_sha256 {
-            return Err(format!(
-                "existing portable handle `{}@{}` has invalid or mismatched srepr blob digest",
-                expr.name, expr.version
-            ));
+            return Err(format!("existing portable handle `{}@{}` has invalid or mismatched srepr blob digest", expr.name, expr.version));
         }
         let len = if let Some(&cached) = size_cache.get(expr.srepr_blob.as_str()) {
             cached
         } else {
-            let n = ledger
-                .get_blob(&expr.srepr_blob)
-                .map_err(|e| format!("cannot read existing srepr blob `{}`: {e}", expr.srepr_blob))?
-                .len();
+            let n = ledger.get_blob(&expr.srepr_blob)
+                .map_err(|e| format!("cannot read existing srepr blob `{}`: {e}", expr.srepr_blob))?.len();
             size_cache.insert(expr.srepr_blob.as_str(), n);
             n
         };

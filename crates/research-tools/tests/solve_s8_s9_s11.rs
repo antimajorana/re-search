@@ -112,8 +112,11 @@ fn s11_g4_g5_g6_pause_triggers_and_r15_finished_open_items() {
         SolveBudgets { max_model_calls: 2, max_wall_minutes: 10, max_model_calls_per_leg: 1, max_review_loops: 4, max_gate_bounces: 2 },
     );
 
-    let c1 = eval_and_harvest(&rig, "x = assumed_symbol('x', real=True)\nsave_expr('A', x)\nsave_expr('B', x)\nx");
-    let s1 = record_equation_step(&rig, StepEntryType::SymbolicComputation, "x = x", &[], &c1, ("A@1", "B@1"), None);
+    let c1 = eval_and_harvest(
+        &rig,
+        "x = assumed_symbol('x', real=True)\nsave_expr('A', (x + 1)**2)\nsave_expr('B', x**2 + 2*x + 1)\nx",
+    );
+    let s1 = record_equation_step(&rig, StepEntryType::SymbolicComputation, "(x+1)^2 = x^2+2x+1", &[], &c1, ("A@1", "B@1"), None);
     assert_eq!(s1["entry_id"], "e-1");
 
     // R15: solver asks for `finished`, missing `vanishes_to_order` forces `finished_open_items`.

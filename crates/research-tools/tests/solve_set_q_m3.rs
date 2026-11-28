@@ -84,7 +84,7 @@ fn set_q_m3_gate_all_three_check_derivation_planted_errors_end_failed() {
 
         let c3 = eval_and_harvest(
             &rig,
-            "x = assumed_symbol('x', real=True)\nsave_expr('L3', integrate(2*x - 2, (x, 0, 4)))\nsave_expr('R3', Integer(8))\nInteger(0)",
+            "x = assumed_symbol('x', real=True)\nsave_expr('L3', Integral(2*x - 2, (x, 0, 4)))\nsave_expr('R3', Integer(8))\nInteger(0)",
         );
         let s3 = record_equation_step(
             &rig,
@@ -143,7 +143,7 @@ fn set_q_m3_gate_all_three_check_derivation_planted_errors_end_failed() {
         );
         let c1 = eval_and_harvest(
             &rig,
-            "r = assumed_symbol('r', real=True, positive=True)\ntheta = assumed_symbol('theta', real=True)\nsave_expr('L1', Abs(r*exp(I*theta)))\nsave_expr('R1', r)\nInteger(0)",
+            "r = assumed_symbol('r', real=True, positive=True)\ntheta = assumed_symbol('theta', real=True)\nsave_expr('L1', 'Abs(r*exp(I*theta))', locals={'r': r, 'theta': theta})\nsave_expr('R1', r)\nInteger(0)",
         );
         let s1 = record_equation_step(
             &rig,
@@ -173,7 +173,7 @@ fn set_q_m3_gate_all_three_check_derivation_planted_errors_end_failed() {
 
         let c3 = eval_and_harvest(
             &rig,
-            "r = assumed_symbol('r', real=True, positive=True)\ntheta = assumed_symbol('theta', real=True)\nsave_expr('L3', ((2*log(r) + 2*I*theta) - 2*log(r))/I)\nsave_expr('R3', 2*theta)\nInteger(0)",
+            "r = assumed_symbol('r', real=True, positive=True)\ntheta = assumed_symbol('theta', real=True)\nsave_expr('L3', '((2*log(r) + 2*I*theta) - 2*log(r))/I', locals={'r': r, 'theta': theta})\nsave_expr('R3', 2*theta)\nInteger(0)",
         );
         let s3 = record_equation_step(
             &rig,
@@ -224,7 +224,7 @@ fn set_q_m3_gate_all_three_check_derivation_planted_errors_end_failed() {
         );
         let c1 = eval_and_harvest(
             &rig,
-            "alpha = assumed_symbol('alpha', real=True, positive=True)\nx = assumed_symbol('x', real=True)\nsave_expr('L1', integrate(exp(-alpha*x**2), (x, -oo, oo)))\nsave_expr('R1', sqrt(pi/alpha))\nInteger(0)",
+            "alpha = assumed_symbol('alpha', real=True, positive=True)\nx = assumed_symbol('x', real=True)\nsave_expr('L1', Integral(exp(-alpha*x**2), (x, -oo, oo)))\nsave_expr('R1', sqrt(pi/alpha))\nInteger(0)",
         );
         assert_eq!(
             record_equation_step(&rig, StepEntryType::SymbolicComputation, "I_0(alpha)", &[], &c1, ("L1@1", "R1@1"), None)["effective_tier"],
@@ -233,7 +233,7 @@ fn set_q_m3_gate_all_three_check_derivation_planted_errors_end_failed() {
 
         let c2 = eval_and_harvest(
             &rig,
-            "alpha = assumed_symbol('alpha', real=True, positive=True)\nx = assumed_symbol('x', real=True)\nsave_expr('L2', integrate(x**2 * exp(-alpha*x**2), (x, -oo, oo)))\nsave_expr('R2', sqrt(pi)/(2*alpha**Rational(3, 2)))\nInteger(0)",
+            "alpha = assumed_symbol('alpha', real=True, positive=True)\nx = assumed_symbol('x', real=True)\nsave_expr('L2', Integral(x**2 * exp(-alpha*x**2), (x, -oo, oo)))\nsave_expr('R2', sqrt(pi)/(2*alpha**Rational(3, 2)))\nInteger(0)",
         );
         assert_eq!(
             record_equation_step(&rig, StepEntryType::SymbolicComputation, "I_2(alpha)", &["e-1"], &c2, ("L2@1", "R2@1"), None)["effective_tier"],
@@ -242,14 +242,14 @@ fn set_q_m3_gate_all_three_check_derivation_planted_errors_end_failed() {
 
         let c3 = eval_and_harvest(
             &rig,
-            "alpha = assumed_symbol('alpha', real=True, positive=True)\nx = assumed_symbol('x', real=True)\nsave_expr('L3', integrate(x**4 * exp(-alpha*x**2), (x, -oo, oo)))\nsave_expr('R3', (3/alpha)*sqrt(pi)/(2*alpha**Rational(3, 2)))\nInteger(0)",
+            "alpha = assumed_symbol('alpha', real=True, positive=True)\nx = assumed_symbol('x', real=True)\nsave_expr('L3', Integral(x**4 * exp(-alpha*x**2), (x, -oo, oo)))\nsave_expr('R3', (3/alpha)*sqrt(pi)/(2*alpha**Rational(3, 2)))\nInteger(0)",
         );
         let s3 = record_equation_step(&rig, StepEntryType::SymbolicComputation, "Claim I_4 = (3/alpha) I_2", &["e-2"], &c3, ("L3@1", "R3@1"), None);
         assert_eq!(s3["effective_tier"], "failed");
 
         let c4 = eval_and_harvest(
             &rig,
-            "alpha = assumed_symbol('alpha', real=True, positive=True)\nsave_expr('L4', (3/alpha)*(sqrt(pi)/(2*alpha**Rational(3, 2))))\nsave_expr('R4', 3*sqrt(pi)/(2*alpha**Rational(5, 2)))\nInteger(0)",
+            "alpha = assumed_symbol('alpha', real=True, positive=True)\nsave_expr('L4', '(3/alpha)*(sqrt(pi)/(2*alpha**Rational(3, 2)))', locals={'alpha': alpha})\nsave_expr('R4', 3*sqrt(pi)/(2*alpha**Rational(5, 2)))\nInteger(0)",
         );
         let s4 = record_equation_step(&rig, StepEntryType::SymbolicComputation, "Substitute I_2 into s3", &["e-3", "e-2"], &c4, ("L4@1", "R4@1"), None);
         assert_eq!(s4["own_tier"], "verified");

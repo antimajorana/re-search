@@ -49,6 +49,8 @@ pub struct SolveState {
     pub last_paused: Option<SolvePaused>,
     pub last_checkpoint: Option<SolveCheckpoint>,
     pub done: Option<SolveDone>,
+    #[serde(default)]
+    pub done_history: Vec<SolveDone>,
     pub artifacts: Vec<SolveArtifact>,
     pub upto_seq: u64,
 }
@@ -247,6 +249,7 @@ impl SolveState {
             event_kinds::SOLVE_DONE => {
                 if let Some(done) = parse_solve_done(ev.seq, p) {
                     self.run_status = SolveRunStatus::Done(done.status);
+                    self.done_history.push(done.clone());
                     self.done = Some(done);
                 }
             }
@@ -529,6 +532,12 @@ fn parse_solve_done(seq: u64, p: &Value) -> Option<SolveDone> {
         .get("model_calls")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
+    let summary_markdown = p
+        .get("summary_markdown")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let open_items = string_vec(p, "open_items");
     Some(SolveDone {
         seq,
         final_entry_id: p.get("final_entry_id").and_then(Value::as_str)?.to_string(),
@@ -538,6 +547,8 @@ fn parse_solve_done(seq: u64, p: &Value) -> Option<SolveDone> {
         rests_on,
         status,
         model_calls,
+        summary_markdown,
+        open_items,
     })
 }
 

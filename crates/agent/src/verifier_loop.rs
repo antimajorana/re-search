@@ -8,6 +8,8 @@
 
 #[path = "verifier_finish.rs"]
 mod finish;
+#[path = "verifier_handle_sources.rs"]
+pub(crate) mod handle_sources;
 #[path = "verifier_loop_support.rs"]
 mod support;
 
@@ -17,9 +19,10 @@ pub use self::finish::{
 };
 pub use self::support::build_solve_review_prompt;
 
+use self::handle_sources::extract_sympy_code_by_call;
 use self::support::{
-    entry_digest, pause_trigger_json, persist_solve_verdicts, solve_verifier_system_prompt,
-    validate_report_verdict, validate_target_batch,
+    build_solve_review_prompt_with_code, entry_digest, pause_trigger_json, persist_solve_verdicts,
+    solve_verifier_system_prompt, validate_report_verdict, validate_target_batch,
 };
 use crate::runner::EVENT_VERSION;
 use crate::transport::{
@@ -179,11 +182,13 @@ pub fn run_solve_verifier_loop(
     let target_refs: Vec<&str> = targets.iter().map(String::as_str).collect();
     let closure_list = closure_entries(&state.entries, &target_refs);
     let closure_set: BTreeSet<String> = closure_list.iter().map(|e| e.entry_id.clone()).collect();
-    let initial_prompt = build_solve_review_prompt(
+    let code_by_call = extract_sympy_code_by_call(&events, Some(ctx.ledger));
+    let initial_prompt = build_solve_review_prompt_with_code(
         &setup,
         &state,
         &targets,
         &closure_list,
+        &code_by_call,
         ctx.config.closure_char_budget,
     );
 
@@ -465,3 +470,7 @@ pub(crate) mod test_support;
 #[cfg(test)]
 #[path = "verifier_loop_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "verifier_finish_tests.rs"]
+mod finish_tests;
