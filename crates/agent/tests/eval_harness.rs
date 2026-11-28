@@ -187,6 +187,7 @@ fn manifests_are_checked_together() {
     };
     let with_chains = |cases: Value| {
         let mut all = fixed.manifests.clone();
+        all.retain(|m| m.set != Set::C);
         all.push(parse_manifest(&manifest_json("C", "fixed", cases)).unwrap());
         validate_manifests(&all)
     };

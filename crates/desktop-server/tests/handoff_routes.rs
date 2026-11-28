@@ -295,6 +295,7 @@ fn handoff_end_to_end_across_modes_projects_quote_reverification_and_readonly_st
     let exp_res: Value = serde_json::from_slice(&raw).unwrap();
     let exp_child = exp_res["session_id"].as_str().unwrap().to_string();
     assert_eq!(exp_res["mode"], "explore");
+    assert_eq!(exp_res["target_mode_built"], true);
     assert_eq!(exp_res["prefill"]["excluded_origin_paper"]["key"], "arxiv:2401.00001");
 
     // 3. Explore -> Investigate hand-over (target mode IS built).
