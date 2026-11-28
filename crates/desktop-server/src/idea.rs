@@ -267,6 +267,23 @@ pub fn effective_budget(events: &[Event]) -> IdeaBudget {
     budget
 }
 
+/// True when the active session preset enables Thorough Round 2 self-check (`explore.md` 3).
+pub fn supports_thorough_round2(events: &[Event]) -> bool {
+    effective_budget(events).preset == IdeaPreset::Thorough
+}
+
+/// Highest number of reader exchanges recorded for any single paper in the active revision.
+pub fn max_reader_calls_per_paper(events: &[Event]) -> u64 {
+    let rev_seq = latest_statement_seq(events);
+    let mut by_paper: BTreeMap<String, u64> = BTreeMap::new();
+    for ev in events.iter().filter(|e| e.kind == EVENT_IDEA_EXCHANGE && e.seq > rev_seq) {
+        if let Some(pk) = ev.payload.get("paper_key").and_then(Value::as_str) {
+            *by_paper.entry(pk.to_string()).or_insert(0) += 1;
+        }
+    }
+    by_paper.into_values().max().unwrap_or(0)
+}
+
 /// Compute live budget usage strictly from ledger events using F9 + F3 (`explore.md` Rule P3).
 pub fn budget_snapshot(events: &[Event], running: bool) -> IdeaBudgetSnapshot {
     let cfg = effective_budget(events);

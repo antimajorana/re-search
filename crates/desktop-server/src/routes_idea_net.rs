@@ -75,7 +75,7 @@ pub fn handle_idea_net_op(
     match op {
         "cited-since" => handle_cited_since_op(state, &ledger, session_id, &events, body),
         "more" => handle_more_op(state, &ledger, session_id, &events, body),
-        "round2" => Err((501, "Thorough Round 2 self-check is wired in Checkpoint 2".to_string())),
+        "round2" => crate::idea_round2::handle_round2_op(state, &ledger, session_id, &events, body),
         other => Err(not_found(format!("unknown Explore citation operation `{other}`"))),
     }
 }
@@ -121,11 +121,20 @@ fn handle_more_op(
 ) -> ApiResult {
     let val = if body.is_empty() { json!({}) } else { parse_json_body(body)? };
     let action = val["action"].as_str().unwrap_or("").trim();
+    let has_node_or_seeds = val.get("node_id").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty())
+        || val.get("seeds").or_else(|| val.get("paper_keys")).is_some_and(|v| !v.is_null());
+    let has_active_map = events
+        .iter()
+        .any(|e| e.kind == EVENT_IDEA_MAP && e.seq > latest_statement_seq(events));
     let wants_round2 = action == "round2"
         || val["round2"].as_bool() == Some(true)
-        || val["mode"].as_str() == Some("round2");
+        || val["mode"].as_str() == Some("round2")
+        || (!has_node_or_seeds
+            && action != "expand_citations"
+            && crate::idea::supports_thorough_round2(events)
+            && has_active_map);
     if wants_round2 {
-        return Err((501, "Thorough Round 2 self-check is wired in Checkpoint 2".to_string()));
+        return crate::idea_round2::handle_round2_op(state, ledger, session_id, events, body);
     }
 
     let node_id = val["node_id"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);

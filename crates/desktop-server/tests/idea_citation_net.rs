@@ -7,19 +7,24 @@ mod common;
 
 use common::{raw_http, test_cfg};
 use desktop_server::idea::{
-    append_explore_session_start, build_idea_statement, IdeaPreset, EVENT_IDEA_CITATION_NET,
-    EVENT_IDEA_MAP, EVENT_IDEA_SEARCH_PLANNED,
+    append_explore_session_start, build_idea_statement, IdeaPreset, EVENT_IDEA_BRIEF,
+    EVENT_IDEA_CITATION_NET, EVENT_IDEA_EXCHANGE, EVENT_IDEA_MAP, EVENT_IDEA_SEARCH_FINISHED,
+    EVENT_IDEA_SEARCH_PLANNED, EVENT_IDEA_VERDICT,
+};
+use desktop_server::idea_round2::{
+    find_thin_statements, run_round2_with_router, Round2Request, Round2RunResult,
 };
 use desktop_server::routes_idea_net::{
     run_cited_since_with_router, CitedSinceRequest, NetBatchOutcome, CITED_SINCE_NOT_ANSWERED_NOTE,
 };
-use desktop_server::start_desktop_server;
+use desktop_server::{idea_view, start_desktop_server};
 use ledger::Ledger;
 use research_tools::idea_tools::{idea_search_def, idea_search_handler_with_gate_and_config};
 use research_tools::lit_providers::LitProvider;
 use research_tools::net_rate::{FakeRateClock, NetRateGate};
 use research_tools::paper_key::PaperKey;
 use research_tools::policy_preset::research_policy;
+use research_tools::prior_work_wording::contains_forbidden_prior_work_word;
 use research_tools::run_budget::{count_model_calls, RunScope};
 use research_tools::{LiteratureEndpoints, ResearchEnv};
 use serde_json::{json, Value};
@@ -437,4 +442,121 @@ fn x16_cited_since_passes_f3_net_rate_gate_and_stops_at_query_cap() {
         hits_at_cap,
         "Rule P3: stopped_at_cap must prevent any further network call"
     );
+}
+
+fn make_test_router(data_dir: &std::path::Path, lit_base: &str, sid: &str) -> Router {
+    let mut env = ResearchEnv::new(data_dir);
+    env.network_endpoints = LiteratureEndpoints::loopback_mock(lit_base).unwrap();
+    let clock = Arc::new(FakeRateClock::new());
+    let gate = Arc::new(NetRateGate::new(clock));
+    let mut registry = Registry::new();
+    registry.register(idea_search_def(), idea_search_handler_with_gate_and_config(Arc::new(env), Some(gate), None));
+    Router::new(registry, research_policy(), Ledger::open(data_dir).unwrap(), sid, Arc::new(AlwaysAllowApprover))
+}
+
+#[test]
+fn x16_round2_finds_thin_statements_updates_f12_and_passes_rule_s8() {
+    let (lit_base, _) = spawn_citation_mock_server();
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let ledger = Ledger::open(&data_dir).unwrap();
+    let sid = "s-x16-r2";
+    let stmt = build_idea_statement(1, IDEA_TEXT, &[], &["arxiv:2401.00001".into()]).unwrap();
+    append_explore_session_start(&ledger, sid, IdeaPreset::Thorough, false, &stmt).unwrap();
+    ledger.append(sid, EVENT_IDEA_BRIEF, 1, &json!({
+        "subclaims": [
+            { "id": "sc-1", "text": "b_n grows linearly in volume-law phase" },
+            { "id": "sc-2", "text": "growth rate changes sharply at measurement transition" }
+        ]
+    })).unwrap();
+    ledger.append(sid, EVENT_IDEA_MAP, 1, &json!({
+        "idea_rev": 1,
+        "nodes": [
+            { "id": "q-1", "kind": "open_question", "label": "Interacting Majorana Krylov transition", "statement": "Remains open under interactions.", "evidence": ["xe-1"], "papers": ["arxiv:2401.00001"], "later_work_checked": false, "status": "active" },
+            { "id": "w-1", "kind": "related_work", "label": "Abstract-only spread complexity study", "statement": "Mentions spread complexity in abstract.", "evidence": ["xa-2"], "papers": ["arxiv:2402.00002"], "status": "active" },
+            { "id": "k-1", "kind": "known_result", "label": "Free-fermion Lanczos growth", "statement": "Linear growth shown in one passage.", "evidence": ["xe-3"], "papers": ["arxiv:2401.00001"], "status": "active" }
+        ],
+        "edges": [], "overlaps": [], "dropped": []
+    })).unwrap();
+    ledger.append(sid, EVENT_IDEA_VERDICT, 1, &json!({
+        "verdicts": [
+            { "subclaim_id": "sc-1", "status": "judged_partial" },
+            { "subclaim_id": "sc-2", "status": "none_in_scope" }
+        ]
+    })).unwrap();
+
+    let events_pre = ledger.read_session(sid).unwrap();
+    let thin = find_thin_statements(&events_pre);
+    assert_eq!(thin.len(), 4, "expected 3 thin nodes + 1 uncovered subclaim: {thin:?}");
+    for t in &thin {
+        assert!(contains_forbidden_prior_work_word(&t.summary).is_none(), "Rule S8: {}", t.summary);
+    }
+
+    let router = make_test_router(&data_dir, &lit_base, sid);
+    let req = Round2Request { providers: vec![LitProvider::Inspire], max_results: 5, allow_non_thorough: false };
+    let res = run_round2_with_router(&data_dir, &ledger, &router, sid, &req, None, |_, _| {}).unwrap();
+    let Round2RunResult::Finished { executed_queries, stopped_at_cap, citation_net, .. } = res else {
+        panic!("expected Round2RunResult::Finished, got {res:?}");
+    };
+    assert!(executed_queries >= 3 && !stopped_at_cap);
+    assert!(!citation_net.unread_core_citations.is_empty());
+
+    let updated = ledger.read_session(sid).unwrap();
+    let view = idea_view::view(&updated, false);
+    assert_eq!(view["coverage"]["citation_expansion"]["hops"], 1);
+    assert!(view["coverage"]["citation_expansion"]["seeds"].as_u64().unwrap() >= 1);
+    assert_eq!(view["where_i_looked"]["round2"]["status"], "done");
+    assert_eq!(view["where_i_looked"]["round2"]["ceilings"]["max_queries"], 36);
+    assert_eq!(view["where_i_looked"]["round2"]["ceilings"]["max_papers"], 12);
+    assert_eq!(view["where_i_looked"]["round2"]["ceilings"]["max_model_calls"], 55);
+    assert!(view["where_i_looked"]["citation_net"]["unread_core_citations"].as_array().unwrap().len() >= 1);
+}
+
+#[test]
+fn x16_round2_enforces_thorough_caps_36_12_55_stopped_at_cap() {
+    let (lit_base, lit_hits) = spawn_citation_mock_server();
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let ledger = Ledger::open(&data_dir).unwrap();
+    let req = Round2Request { providers: vec![LitProvider::Inspire], max_results: 5, allow_non_thorough: false };
+
+    // 1. Standard preset rejected unless `thorough`.
+    let stmt = build_idea_statement(1, IDEA_TEXT, &[], &["arxiv:2401.00001".into()]).unwrap();
+    append_explore_session_start(&ledger, "s-std", IdeaPreset::Standard, false, &stmt).unwrap();
+    let r_std = make_test_router(&data_dir, &lit_base, "s-std");
+    assert!(run_round2_with_router(&data_dir, &ledger, &r_std, "s-std", &req, None, |_, _| {}).is_err());
+
+    // 2. Hard cap: 55 model calls -> stopped_at_cap with 0 network hits.
+    append_explore_session_start(&ledger, "s-cap-55", IdeaPreset::Thorough, false, &stmt).unwrap();
+    for i in 1..=55 {
+        ledger.append("s-cap-55", EVENT_IDEA_EXCHANGE, 1, &json!({ "exchange": "read", "attempt": i })).unwrap();
+    }
+    let hits_before = lit_hits.load(Ordering::SeqCst);
+    let r55 = make_test_router(&data_dir, &lit_base, "s-cap-55");
+    let out55 = run_round2_with_router(&data_dir, &ledger, &r55, "s-cap-55", &req, None, |_, _| {}).unwrap();
+    assert!(matches!(out55, Round2RunResult::StoppedAtCap { cap: "model_calls", .. }), "{out55:?}");
+    assert_eq!(lit_hits.load(Ordering::SeqCst), hits_before);
+
+    // 3. Hard cap: 12 fetched papers -> stopped_at_cap with 0 network hits.
+    append_explore_session_start(&ledger, "s-cap-12", IdeaPreset::Thorough, false, &stmt).unwrap();
+    for i in 1..=12 {
+        ledger.append("s-cap-12", "source.ingested", 1, &json!({ "source_id": format!("src-{i}"), "origin": format!("https://arxiv.org/e-print/2401.{i:05}"), "sha256": format!("{i:064x}") })).unwrap();
+    }
+    let r12 = make_test_router(&data_dir, &lit_base, "s-cap-12");
+    let out12 = run_round2_with_router(&data_dir, &ledger, &r12, "s-cap-12", &req, None, |_, _| {}).unwrap();
+    assert!(matches!(out12, Round2RunResult::StoppedAtCap { cap: "papers", .. }), "{out12:?}");
+    assert_eq!(lit_hits.load(Ordering::SeqCst), hits_before);
+
+    // 4. Hard cap: 36 queries (35 already used -> runs 1 query, skips rest with stopped_at_cap = true;
+    //    next call at 36/36 stops immediately with 0 network hits).
+    append_explore_session_start(&ledger, "s-cap-36", IdeaPreset::Thorough, false, &stmt).unwrap();
+    let results_35: Vec<Value> = (1..=35).map(|i| json!({ "qid": format!("q-{i}"), "provider": "inspire", "status": "ok", "count": 1 })).collect();
+    ledger.append("s-cap-36", EVENT_IDEA_SEARCH_FINISHED, 1, &json!({ "round": 1, "results": results_35, "queries": results_35 })).unwrap();
+    let r36 = make_test_router(&data_dir, &lit_base, "s-cap-36");
+    let partial = run_round2_with_router(&data_dir, &ledger, &r36, "s-cap-36", &req, None, |_, _| {}).unwrap();
+    assert!(matches!(partial, Round2RunResult::Finished { executed_queries: 1, skipped_budget, stopped_at_cap: true, .. } if skipped_budget >= 1), "{partial:?}");
+    let hits_after_36 = lit_hits.load(Ordering::SeqCst);
+    let full36 = run_round2_with_router(&data_dir, &ledger, &r36, "s-cap-36", &req, None, |_, _| {}).unwrap();
+    assert!(matches!(full36, Round2RunResult::StoppedAtCap { cap: "queries", .. }), "{full36:?}");
+    assert_eq!(lit_hits.load(Ordering::SeqCst), hits_after_36);
 }
