@@ -280,6 +280,9 @@ pub fn build_where_i_looked(
         .filter(|c| c.get("owned").and_then(Value::as_bool).unwrap_or(false))
         .count();
 
+    let (citation_net_view, round2_view) =
+        crate::idea_round2::project_citation_and_round2_view(events, latest_stmt_seq);
+
     let where_val = json!({
         "offline": offline,
         "providers": providers,
@@ -292,6 +295,9 @@ pub fn build_where_i_looked(
             "summary": format_library_coverage(&coverage.library),
         },
         "known_paper_recall": coverage.known_paper_recall,
+        "citation_expansion": coverage.citation_expansion,
+        "citation_net": citation_net_view,
+        "round2": round2_view,
         "gate": coverage.gate,
         "scope_summary": format_coverage_scope(&coverage),
         "not_searched": NOT_SEARCHED_ITEMS,

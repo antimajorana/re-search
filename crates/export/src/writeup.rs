@@ -187,6 +187,15 @@ pub enum WriteupBlock {
         label: Option<String>,
     },
     Quote(Box<WriteupQuote>),
+    /// Verified verbatim abstract quote (`xa-<seq>`, Rule C3; `00-overview.md` 2.9 & 2.13).
+    /// Rendered with a real `\cite{cite_key}` in TeX (without `\begin{quote}`) and `[@cite_key]`
+    /// in Markdown, strictly capped at `"abstract only"` and `"possible relevance"`.
+    AbstractQuote {
+        evidence_id: String,
+        cite_key: String,
+        provider_label: String,
+        text: String,
+    },
     Statement {
         id: String,
         text: String,
@@ -401,6 +410,19 @@ impl Writeup {
                             "quote for `{}` does not match its QuoteRef sha256 (verify via quote_core first)",
                             q.cite_key
                         ));
+                    }
+                } else if let WriteupBlock::AbstractQuote {
+                    cite_key, text, ..
+                } = blk
+                {
+                    if text.chars().count() > writeup_wording::MAX_QUOTE_CHARS {
+                        return Err(format!(
+                            "abstract quote for `{cite_key}` exceeds {} character limit",
+                            writeup_wording::MAX_QUOTE_CHARS
+                        ));
+                    }
+                    if cite_key.trim().is_empty() {
+                        return Err("abstract quote must carry a non-empty cite_key".into());
                     }
                 }
             }
