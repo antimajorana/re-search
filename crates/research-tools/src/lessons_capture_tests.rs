@@ -116,7 +116,7 @@ fn store_crud_and_opt_in_checksummed_backup_restore() {
 
     assert_eq!(saved.uses, 0);
     assert_eq!(store.list_lessons().unwrap().len(), 1);
-    assert_eq!(store.record_supplied_uses(&[saved.id.clone()]).unwrap(), 1);
+    assert_eq!(store.record_supplied_uses(std::slice::from_ref(&saved.id)).unwrap(), 1);
     assert_eq!(store.get_lesson(&saved.id).unwrap().unwrap().uses, 1);
 
     let backup_bytes = export_lessons_backup(&store, OptInLessonsExport { include_lessons: true })

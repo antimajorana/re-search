@@ -20,7 +20,7 @@ use desktop_server::state::DesktopState;
 use research_tools::lessons_capture::{LessonScope, LessonSourceKind, SaveLessonRequest, UserLessonsStore};
 use research_tools::lessons_prompt::{supply_lessons_to_ledger, LessonMatchContext};
 use research_tools::paper_key::{Mode, NodeRef};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -50,8 +50,8 @@ impl Transport for MockDraftTransport {
     fn info(&self) -> TransportInfo {
         TransportInfo {
             provider: "mock",
-            endpoint: "http://127.0.0.1/mock",
-            api_key_env: "MOCK_KEY",
+            endpoint: "http://127.0.0.1/mock".to_string(),
+            api_key_env: "MOCK_KEY".to_string(),
         }
     }
 
@@ -62,10 +62,12 @@ impl Transport for MockDraftTransport {
     fn send_prepared(&self, _req: &PreparedRequest) -> Result<ModelResponse, TransportError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(ModelResponse {
-            content: vec![ContentBlock::Text { text: self.reply.clone() }],
-            stop_reason: StopReason::EndTurn,
-            usage: Default::default(),
             raw_body: b"{}".to_vec(),
+            id: Some("mock-draft-1".into()),
+            model: "mock-model".into(),
+            stop_reason: StopReason::EndTurn,
+            content: vec![ContentBlock::Text { text: self.reply.clone() }],
+            usage: Default::default(),
         })
     }
 

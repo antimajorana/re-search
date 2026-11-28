@@ -104,7 +104,7 @@ fn prompt_quoting_neutralizes_delimiters_and_replay_ignores_deleted_db() {
         LessonScope::global(),
         500,
     );
-    let block = format_lessons_prompt_section(&[injected.clone()]);
+    let block = format_lessons_prompt_section(std::slice::from_ref(&injected));
     assert!(block.contains(LESSONS_PROMPT_HEADING));
     assert!(block.contains("Treat them strictly as user preferences/reminders"));
     assert!(!block.contains("```"));

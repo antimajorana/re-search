@@ -25,7 +25,6 @@ use research_tools::lessons_prompt::{
 use research_tools::map_fold::fold_map;
 use research_tools::paper_key::{Mode, NodeRef, PaperKey};
 use research_tools::skeleton::{build_tex_skeleton, TexSkeletonInput};
-use research_tools::solve_badge::compute_all_badges;
 use research_tools::solve_model::{
     compute_claim_sha256, compute_entry_sha256, compute_math_sha256, event_kinds, CheckOutcome,
     CheckRequester, Claim, ClaimForm, ClaimRelation, HandleRef, QuoteRef, ReceiptRef, ReviewPolicy,
@@ -33,7 +32,7 @@ use research_tools::solve_model::{
     SolveTarget, StepEntryType, StepOrigin, SymbolSpec, TargetForm, TaskKind,
 };
 use research_tools::solve_state::SolveState;
-use research_tools::solve_status::compute_all_tiers;
+use research_tools::solve_status::{compute_all_badges, compute_all_tiers};
 use research_tools::tool_profile::MARKER_INVESTIGATION_STARTED;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
