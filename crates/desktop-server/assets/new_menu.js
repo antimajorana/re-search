@@ -1,7 +1,6 @@
 // Left-rail New session mode menu (package F5; overview 5.1, 5.2, 5.3, 8.2 decisions 6 & 7)
 // and visibility-flagged Explore setup card mount (package X4).
-// Explore and Solve are listed but disabled with "not built yet" until enabled;
-// nothing is faked, and "New research" sits under "More" until Solve and Explore ship.
+// Explore stays disabled with "not built yet" until Explore ships; Solve is enabled by default.
 import { renderIdeaSetupCard } from './idea_setup.js';
 import { EXPLORE_VISIBILITY_STORAGE_KEY } from './idea_state.js';
 import { mountLessonsNavButton } from './lessons.js';
@@ -36,8 +35,8 @@ export const MODE_MENU_ENTRIES = Object.freeze([
     apiMode: 'solve',
     buttonId: 'new-solve-btn',
     label: 'Solve',
-    title: `Solve a problem — ${NOT_BUILT_YET_LABEL}`,
-    built: false,
+    title: 'Solve a problem',
+    built: true,
     underMore: false,
   }),
   Object.freeze({
@@ -212,29 +211,30 @@ export function mountExploreCard(containerEl, opts = {}) {
   });
 }
 
-// Solve menu enablement hook (package S13b; default stays disabled while S12's
-// `DESKTOP_MODE_SOLVE_ENABLED` is `false` on the server so existing F5/S5 tests remain intact).
+// Solve menu enablement hook (Solve is enabled by default now that Solve packages shipped;
+// explicit `solveEnabled: false` or `localStorage[SOLVE_ENABLED_STORAGE_KEY] = '0'` opts out).
 export const SOLVE_ENABLED_STORAGE_KEY = 're-search.solve.enabled';
 
 export function isSolveMenuEnabled(opts = {}) {
   if (typeof opts.solveEnabled === 'boolean') return opts.solveEnabled;
   try {
     if (typeof localStorage !== 'undefined' && localStorage) {
-      return localStorage.getItem(SOLVE_ENABLED_STORAGE_KEY) === '1';
+      const flag = localStorage.getItem(SOLVE_ENABLED_STORAGE_KEY);
+      if (flag === '0' || flag === 'false') return false;
     }
   } catch {
-    // Storage unavailable; stay disabled until S12 enables Solve server-side.
+    // Storage unavailable; default Solve enabled.
   }
-  return false;
+  return true;
 }
 
-export function buildModeMenuEntries({ solveBuilt = false, exploreBuilt = false } = {}) {
+export function buildModeMenuEntries({ solveBuilt = true, exploreBuilt = false } = {}) {
   return MODE_MENU_ENTRIES.map((entry) => {
-    if (entry.id === 'solve' && solveBuilt) {
+    if (entry.id === 'solve') {
       return Object.freeze({
         ...entry,
-        built: true,
-        title: 'Solve a problem',
+        built: Boolean(solveBuilt),
+        title: solveBuilt ? 'Solve a problem' : `Solve a problem — ${NOT_BUILT_YET_LABEL}`,
       });
     }
     if (entry.id === 'explore' && exploreBuilt) {
@@ -266,13 +266,22 @@ export function enableSolveButton(rootEl, onSelect) {
   labelEl.textContent = 'Solve';
   btn.append(labelEl);
   const entry = buildModeMenuEntries({ solveBuilt: true }).find((e) => e.id === 'solve');
-  btn.addEventListener('click', () => {
-    if (typeof onSelect === 'function') {
-      onSelect('solve', entry);
-    } else if (typeof CustomEvent === 'function' && typeof document !== 'undefined' && typeof document.dispatchEvent === 'function') {
-      document.dispatchEvent(new CustomEvent('re-search:new-mode', { detail: { mode: 'solve', entry } }));
-    }
-  });
+  btn._reSearchSolveSelect = typeof onSelect === 'function' ? onSelect : null;
+  if (!btn._reSearchSolveBound) {
+    btn._reSearchSolveBound = true;
+    btn.addEventListener('click', () => {
+      if (typeof btn._reSearchSolveSelect === 'function') {
+        btn._reSearchSolveSelect('solve', entry);
+        return;
+      }
+      if (typeof globalThis !== 'undefined' && typeof globalThis.__reSearchModeStages?.openNewSolveSession === 'function') {
+        globalThis.__reSearchModeStages.openNewSolveSession();
+      }
+      if (typeof CustomEvent === 'function' && typeof document !== 'undefined' && typeof document.dispatchEvent === 'function') {
+        document.dispatchEvent(new CustomEvent('re-search:new-mode', { detail: { mode: 'solve', entry } }));
+      }
+    });
+  }
   return btn;
 }
 
@@ -280,10 +289,10 @@ if (typeof document !== 'undefined' && typeof document.getElementById === 'funct
   const mount = document.getElementById('rail-new-menu');
   if (mount) {
     if (isSolveMenuEnabled()) {
-      bindNewMenu(mount, { entries: buildModeMenuEntries({ solveBuilt: true }) });
-      enableSolveButton(mount);
-    } else {
       bindNewMenu(mount);
+      enableSolveButton(mount, () => globalThis.__reSearchModeStages?.openNewSolveSession?.());
+    } else {
+      bindNewMenu(mount, { entries: buildModeMenuEntries({ solveBuilt: false }) });
     }
   }
   const exploreHost = document.getElementById('home-explore-card');
