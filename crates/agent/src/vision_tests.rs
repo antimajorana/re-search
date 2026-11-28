@@ -294,37 +294,58 @@ fn non_vision_models_fail_closed_across_all_providers_without_dropping_images() 
         "gpt-4o-search-preview",
         "gpt-4-turbo-preview",
         "gpt-4-turbo-0125-preview",
+        "o3-deep-research",
+        "o1-pro",
+        "o3-pro",
+        "gpt-5-codex",
     ] {
         let err = openai.prepare_request(&vision_request(bad, "image/png", &png)).unwrap_err();
         assert_eq!(err.kind, TransportErrorKind::Config, "expected Config rejection for {bad}");
     }
     assert!(supports_vision(ProviderKind::OpenAi, "gpt-4-turbo-2024-04-09"));
 
-    // Ollama default code model (`qwen2.5-coder:7b`) and text-only `gemma3:1b` fail closed for images.
+    // Ollama default code model (`qwen2.5-coder:7b`) and non-vision/ambiguous `gemma3` fail closed.
     let ollama = OpenAiTransport::new(OpenAiConfig::ollama_default(), None, "none").unwrap();
-    for bad in ["qwen2.5-coder:7b", "gemma3:1b", "gemma3:1b-instruct-q4_0"] {
+    for bad in [
+        "qwen2.5-coder:7b",
+        "gemma3:1b",
+        "gemma3:1b-instruct-q4_0",
+        "gemma3:270m",
+        "gemma3:latest",
+        "gemma3",
+    ] {
         let err = ollama.prepare_request(&vision_request(bad, "image/png", &png)).unwrap_err();
         assert_eq!(err.kind, TransportErrorKind::Config, "expected Config rejection for {bad}");
     }
-    assert!(supports_vision(ProviderKind::Ollama, "gemma3:4b"));
+    for ok_ollama in ["gemma3:4b", "gemma3:12b-it-qat", "gemma3:27b"] {
+        assert!(supports_vision(ProviderKind::Ollama, ok_ollama), "expected vision for {ok_ollama}");
+    }
 
-    // Gemini non-vision (`gemini-1.0-pro`) fails closed.
-    let gemini = GeminiTransport::new(
-        GeminiConfig {
-            base_url: "http://127.0.0.1:9".into(),
-            model: "gemini-1.0-pro".into(),
-            ..GeminiConfig::default()
-        },
-        SecretKey::new("test-key".into()).unwrap(),
-        "TEST",
-    )
-    .unwrap();
-    let err = gemini.prepare_request(&vision_request("gemini-1.0-pro", "image/png", &png)).unwrap_err();
-    assert_eq!(err.kind, TransportErrorKind::Config);
+    // Gemini non-vision (`gemini-1.0-pro`, TTS, native-audio) fails closed.
+    for bad in [
+        "gemini-1.0-pro",
+        "gemini-2.5-flash-preview-tts",
+        "gemini-2.5-flash-native-audio-preview",
+    ] {
+        let gemini = GeminiTransport::new(
+            GeminiConfig {
+                base_url: "http://127.0.0.1:9".into(),
+                model: bad.into(),
+                ..GeminiConfig::default()
+            },
+            SecretKey::new("test-key".into()).unwrap(),
+            "TEST",
+        )
+        .unwrap();
+        let err = gemini.prepare_request(&vision_request(bad, "image/png", &png)).unwrap_err();
+        assert_eq!(err.kind, TransportErrorKind::Config, "expected Config rejection for {bad}");
+    }
 
-    // ChatGPT Responses non-vision (`o3-mini`) fails closed.
-    let err = serialize_responses_request(&vision_request("o3-mini", "image/png", &png)).unwrap_err();
-    assert_eq!(err.kind, TransportErrorKind::Config);
+    // ChatGPT Responses non-vision (`o3-mini`, `o3-deep-research`, `gpt-5-codex`) fails closed.
+    for bad in ["o3-mini", "o3-deep-research", "gpt-5-codex"] {
+        let err = serialize_responses_request(&vision_request(bad, "image/png", &png)).unwrap_err();
+        assert_eq!(err.kind, TransportErrorKind::Config, "expected Config rejection for {bad}");
+    }
 
     // Text-only requests on non-vision models remain unaffected.
     let text_only = ModelRequest {

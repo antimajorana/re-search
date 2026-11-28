@@ -237,6 +237,9 @@ pub fn supports_vision(provider: ProviderKind, model: &str) -> bool {
                 || raw.contains("-tts")
                 || raw.contains("-transcribe")
                 || raw.contains("-search")
+                || raw.contains("-deep-research")
+                || raw.contains("codex")
+                || (provider == ProviderKind::OpenAi && raw.contains("-pro"))
             {
                 return false;
             }
@@ -265,6 +268,9 @@ pub fn supports_vision(provider: ProviderKind, model: &str) -> bool {
         }
         ProviderKind::Gemini => {
             let m = raw.strip_prefix("models/").unwrap_or(&raw);
+            if m.contains("-tts") || m.contains("-native-audio") {
+                return false;
+            }
             m.starts_with("gemini-1.5-")
                 || m.starts_with("gemini-2.")
                 || m.starts_with("gemini-3.")
@@ -277,12 +283,20 @@ pub fn supports_vision(provider: ProviderKind, model: &str) -> bool {
                 Some((b, t)) => (b, Some(t)),
                 None => (raw.as_str(), None),
             };
-            if (base == "gemma3" && tag.is_some_and(|t| t == "1b" || t.starts_with("1b-")))
-                || base.starts_with("gemma3-1b")
-            {
-                return false;
-            }
-            base == "llava"
+            let is_gemma3_vision = if base == "gemma3" {
+                tag.is_some_and(|t| {
+                    matches!(t, "4b" | "12b" | "27b")
+                        || t.starts_with("4b-")
+                        || t.starts_with("12b-")
+                        || t.starts_with("27b-")
+                })
+            } else {
+                base.starts_with("gemma3-4b")
+                    || base.starts_with("gemma3-12b")
+                    || base.starts_with("gemma3-27b")
+            };
+            is_gemma3_vision
+                || base == "llava"
                 || base.starts_with("llava-")
                 || base == "bakllava"
                 || base.starts_with("bakllava-")
@@ -297,8 +311,6 @@ pub fn supports_vision(provider: ProviderKind, model: &str) -> bool {
                 || base.starts_with("qwen2.5-vl")
                 || base.starts_with("qwen2.5vl")
                 || base.starts_with("qwen3-vl")
-                || base == "gemma3"
-                || base.starts_with("gemma3-")
                 || base.starts_with("pixtral")
                 || base.starts_with("granite3.2-vision")
                 || base.starts_with("mistral-small3.1")
