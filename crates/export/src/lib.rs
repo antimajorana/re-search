@@ -17,6 +17,11 @@ pub mod paper_map_import;
 pub mod writeup;
 pub mod writeup_bib;
 pub mod writeup_md;
+pub mod writeup_paper;
+mod writeup_paper_anchors;
+mod writeup_paper_ext;
+mod writeup_paper_meta;
+mod writeup_paper_nodes;
 pub mod writeup_solve;
 mod writeup_solve_cite;
 pub mod writeup_tex;
@@ -227,7 +232,8 @@ impl WriteupFormat {
     }
 }
 
-fn build_session_writeup(data_dir: &Path, session: &str) -> Result<writeup::Writeup, String> {
+/// Dispatch a verified session to its mode-specific F15 write-up adapter (zero model calls).
+pub fn build_session_writeup(data_dir: &Path, session: &str) -> Result<writeup::Writeup, String> {
     validate_session_id(session).map_err(|e| e.to_string())?;
     let ledger =
         Ledger::open_existing(data_dir).map_err(|e| format!("failed to open ledger: {e}"))?;
@@ -238,11 +244,16 @@ fn build_session_writeup(data_dir: &Path, session: &str) -> Result<writeup::Writ
         research_tools::paper_key::Mode::Solve => {
             writeup_solve::build_solve_writeup_from_verified(data_dir, session, &events)
         }
+        research_tools::paper_key::Mode::Investigate => writeup_paper::build_writeup_from_verified(
+            data_dir,
+            session,
+            &ledger,
+            &events,
+            writeup_paper::PaperWriteupOptions::default(),
+        )
+        .map(|b| b.writeup),
         research_tools::paper_key::Mode::Explore => {
             Err("Explore write-up adapter not built yet".to_string())
-        }
-        research_tools::paper_key::Mode::Investigate => {
-            Err("Investigate write-up adapter not built yet".to_string())
         }
         research_tools::paper_key::Mode::Research => Err(
             "Research sessions do not support write-up (use `export` instead)".to_string(),
@@ -369,4 +380,3 @@ pub fn writeup_session_to_path(
         .map_err(|e| format!("failed to write write-up `{}`: {e}", out_path.display()))?;
     Ok(bytes)
 }
-

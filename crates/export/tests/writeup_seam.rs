@@ -1,7 +1,7 @@
 //! Integration tests for the shared F15 write-up seam in `export`:
 //! `WriteupFormat::{Tex, Md, Bib}`, `writeup_session_bytes`, `writeup_session_to_path`
-//! (sidecar `<stem>.bib` for TeX), and clear `"write-up adapter not built yet"` errors for
-//! Explore and Investigate sessions.
+//! (sidecar `<stem>.bib` for TeX), Investigate fail-closed skeleton dispatch, and
+//! clear `"write-up adapter not built yet"` error for Explore sessions.
 
 mod common_writeup_solve;
 
@@ -49,7 +49,7 @@ fn writeup_format_parse_and_mode_dispatch_contracts() {
     let exp_err = writeup_session_bytes(&data_dir, "s-exp", WriteupFormat::Tex, &opts).unwrap_err();
     assert!(exp_err.contains("write-up adapter not built yet"), "{exp_err}");
     let inv_err = writeup_session_bytes(&data_dir, "s-inv", WriteupFormat::Md, &opts).unwrap_err();
-    assert!(inv_err.contains("write-up adapter not built yet"), "{inv_err}");
+    assert!(inv_err.contains("investigation.skeleton"), "{inv_err}");
     let res_err = writeup_session_bytes(&data_dir, "s-res", WriteupFormat::Tex, &opts).unwrap_err();
     assert!(res_err.contains("Research"), "{res_err}");
 }
