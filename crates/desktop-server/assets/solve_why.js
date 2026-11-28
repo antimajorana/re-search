@@ -1,7 +1,13 @@
 // Solve "Why?" step provenance & actions popover (package S13b).
 // Plain ES module; DOM construction uses createElement and textContent only.
 
-import { SOLVE_TIER_LABELS, createSolveBadgeGroup, normalizeSolveTier } from './solve_badges.js';
+import {
+  OWN_CHECK_EQUATIONS_VERIFIED_LINE,
+  OWN_CHECK_VERIFIED_LINE,
+  SOLVE_TIER_LABELS,
+  createSolveBadgeGroup,
+  normalizeSolveTier,
+} from './solve_badges.js';
 import { BORDER_DASHED, BORDER_SOLID, createBadge } from './ui_badge.js';
 import { createQuoteChip } from './quote_chip.js';
 import { createRememberThisCard } from './lesson_remember.js';
@@ -24,6 +30,7 @@ const CHECK_OUTCOMES = Object.freeze({
   fail: Object.freeze({ text: 'Fail', icon: 'error', tone: 'err' }),
   inconclusive: Object.freeze({ text: 'Inconclusive', icon: 'warn', tone: 'warn' }),
   not_run: Object.freeze({ text: 'Not run', icon: 'info', tone: 'muted' }),
+  trivial: Object.freeze({ text: 'Identical sides (nothing checked)', icon: 'warn', tone: 'warn' }),
 });
 
 function formatMetricValue(val) {
@@ -148,7 +155,10 @@ function renderLoweringSection(doc, step, onSelectStep) {
   if (own === effective) return null;
 
   const box = el(doc, 'div', 'solve-why-lowering', null, { 'data-testid': 'solve-why-lowering' });
-  const ownText = own === 'verified' && !badge.stale ? 'own check: verified' : `Own: ${SOLVE_TIER_LABELS[own]}`;
+  const hasProseDetails = String(step?.details || '').trim().length > 0;
+  const ownText = own === 'verified' && !badge.stale
+    ? (hasProseDetails ? OWN_CHECK_EQUATIONS_VERIFIED_LINE : OWN_CHECK_VERIFIED_LINE)
+    : `Own: ${SOLVE_TIER_LABELS[own]}`;
   box.appendChild(el(doc, 'div', 'solve-why-tier-diff', `${ownText} · Effective: ${SOLVE_TIER_LABELS[effective]}`));
   const groups = [
     ['lowered_by', 'Lowered by', badge.lowered_by],
@@ -175,6 +185,32 @@ function renderLoweringSection(doc, step, onSelectStep) {
     box.appendChild(row);
   }
   return box;
+}
+
+function collectProducingCodeEntries(step, view, receiptMap) {
+  const handlesByKey = new Map();
+  for (const h of Array.isArray(view?.handles) ? view.handles : []) {
+    if (!h || typeof h !== 'object') continue;
+    if (h.handle) handlesByKey.set(String(h.handle), h);
+    if (h.name && h.version != null) handlesByKey.set(`${h.name}@${h.version}`, h);
+  }
+  const callIds = [];
+  const pushCall = (cid) => {
+    const s = String(cid || '').trim();
+    if (s && !callIds.includes(s)) callIds.push(s);
+  };
+  for (const rr of Array.isArray(step?.receipt_refs) ? step.receipt_refs : []) pushCall(rr?.call_id);
+  for (const claim of Array.isArray(step?.claims) ? step.claims : []) {
+    pushCall(handlesByKey.get(String(claim?.lhs || ''))?.produced_by?.call_id);
+    pushCall(handlesByKey.get(String(claim?.rhs || ''))?.produced_by?.call_id);
+  }
+  const entries = [];
+  for (const cid of callIds) {
+    const rec = receiptMap.get(cid);
+    const code = typeof rec?.code === 'string' && rec.code.trim() ? rec.code : '';
+    if (code) entries.push({ call_id: cid, code });
+  }
+  return entries;
 }
 
 function buildQuoteSpec(step) {
@@ -227,7 +263,7 @@ export function createSolveWhyPopover(host, props = {}) {
     }
   }
 
-  function renderCheckCard(check, isStale, idx, receiptMap) {
+  function renderCheckCard(check, isStale, idx, receiptMap, producingCodes) {
     const step = currentProps.step;
     const card = el(doc, 'article', `solve-why-check${isStale ? ' solve-why-check--stale' : ''}`, null, {
       'data-check-id': String(check.check_id || idx), 'data-check-name': String(check.name || ''),
@@ -268,7 +304,7 @@ export function createSolveWhyPopover(host, props = {}) {
     const codeKey = String(check.check_id || `${isStale ? 's' : 'c'}-${idx}`);
     const expanded = expandedCodes.has(codeKey);
     const controls = el(doc, 'div', 'solve-why-check-controls');
-    const codeBtn = el(doc, 'button', 'solve-why-btn', expanded ? 'Hide code' : 'Show code', {
+    const codeBtn = el(doc, 'button', 'solve-why-btn', expanded ? 'Hide check record' : 'Show check record', {
       type: 'button', 'data-action': 'toggle-code', 'aria-expanded': expanded ? 'true' : 'false',
     });
     codeBtn.addEventListener('click', () => {
@@ -288,6 +324,14 @@ export function createSolveWhyPopover(host, props = {}) {
         wall_ms: receipt?.wall_ms ?? null, process: receipt?.process ?? null,
         env: receipt?.env ?? null, evidence: check.evidence ?? null,
       }, null, 2), { 'data-testid': 'solve-why-code' }));
+      if (producingCodes.length > 0) {
+        const prodWrap = el(doc, 'div', 'solve-why-producing-code', null, { 'data-testid': 'solve-why-producing-code' });
+        for (const entry of producingCodes) {
+          prodWrap.appendChild(el(doc, 'div', 'solve-why-producing-label', `Producing sympy_eval (${entry.call_id})`));
+          prodWrap.appendChild(el(doc, 'pre', 'solve-why-code', entry.code));
+        }
+        card.appendChild(prodWrap);
+      }
     }
     return card;
   }
@@ -409,7 +453,13 @@ export function createSolveWhyPopover(host, props = {}) {
 
     // 2. Badge summary & lowering ancestors
     const badgeSection = el(doc, 'div', 'solve-why-section');
-    badgeSection.appendChild(createSolveBadgeGroup(step.badge || {}, { document: doc, onSelectStep: currentProps.onSelectStep }));
+    const rawBadge = step.badge || {};
+    const hasProseDetails = String(step.details || '').trim().length > 0;
+    const displayBadge = rawBadge.own_check_line && hasProseDetails
+      && rawBadge.own === 'verified' && rawBadge.effective !== 'verified' && !rawBadge.stale
+      ? { ...rawBadge, own_check_line: OWN_CHECK_EQUATIONS_VERIFIED_LINE }
+      : rawBadge;
+    badgeSection.appendChild(createSolveBadgeGroup(displayBadge, { document: doc, onSelectStep: currentProps.onSelectStep }));
     const loweringEl = renderLoweringSection(doc, step, currentProps.onSelectStep);
     if (loweringEl) badgeSection.appendChild(loweringEl);
     root.appendChild(badgeSection);
@@ -431,6 +481,7 @@ export function createSolveWhyPopover(host, props = {}) {
     for (const r of Array.isArray(view.receipts) ? view.receipts : []) {
       if (r && r.call_id) receiptMap.set(String(r.call_id), r);
     }
+    const producingCodes = collectProducingCodeEntries(step, view, receiptMap);
     const checksSection = el(doc, 'div', 'solve-why-section solve-why-checks');
     checksSection.appendChild(el(doc, 'h4', 'solve-section-title', 'Checks'));
     if (!current.length && !stale.length) {
@@ -438,13 +489,13 @@ export function createSolveWhyPopover(host, props = {}) {
     } else {
       if (current.length) {
         const curBox = el(doc, 'div', 'solve-why-checks-group', null, { 'data-checks-group': 'current' });
-        current.forEach((chk, i) => curBox.appendChild(renderCheckCard(chk, false, i, receiptMap)));
+        current.forEach((chk, i) => curBox.appendChild(renderCheckCard(chk, false, i, receiptMap, producingCodes)));
         checksSection.appendChild(curBox);
       }
       if (stale.length) {
         const staleBox = el(doc, 'div', 'solve-why-checks-group solve-why-checks-group--stale', null, { 'data-checks-group': 'stale' });
         staleBox.appendChild(el(doc, 'h5', 'solve-why-subheading', 'Stale checks'));
-        stale.forEach((chk, i) => staleBox.appendChild(renderCheckCard(chk, true, i, receiptMap)));
+        stale.forEach((chk, i) => staleBox.appendChild(renderCheckCard(chk, true, i, receiptMap, producingCodes)));
         checksSection.appendChild(staleBox);
       }
     }
