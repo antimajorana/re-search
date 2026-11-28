@@ -3,6 +3,7 @@
 // cost line, no-model notice, empty/failure states, candidate list, and "Where I looked" skeleton.
 // Zero innerHTML writes. Rule S8: zero "verified", "new", "novel", or "proved" strings in DOM.
 import { decideIdeaApproval, getExploreSession, postIdeaOp } from './api_idea.js';
+import { openExplorePageImage, openExploreSource, renderIdeaMapSection } from './idea_map.js';
 import {
   renderCandidateCards,
   renderCandidateList,
@@ -239,21 +240,8 @@ export function renderExploreSession(hostEl, state, callbacks = {}) {
   // 7. Live "Where I looked" panel (`idea_search.js`).
   shell.append(renderWhereILooked(view.where_i_looked, { onRetryService: callbacks.onRetryService }));
 
-  // 8. Map placeholder (F6 GraphView populated in X11/X12).
-  const mapNodes = Array.isArray(view.map?.nodes) ? view.map.nodes : [];
-  const mapBox = el('section', 'idea-where-panel');
-  mapBox.setAttribute('data-idea-section', 'map-placeholder');
-  mapBox.append(
-    el('h3', 'idea-card-title', 'Concept map'),
-    el(
-      'p',
-      'idea-card-meta',
-      mapNodes.length === 0
-        ? 'No concept map yet. Sharpening, reading, and mapping build the map once a model is connected.'
-        : `${mapNodes.length} map node(s) recorded.`,
-    ),
-  );
-  shell.append(mapBox);
+  // 8. Map & verdict UI via F6 GraphView, quote_chip.js, and ui_badge.js (package X12).
+  shell.append(renderIdeaMapSection(view, callbacks));
 
   hostEl.replaceChildren(shell);
   return shell;
@@ -289,6 +277,7 @@ export function createExploreSessionController(hostEl, deps = {}) {
   const sendApproval = deps.decideIdeaApproval || decideIdeaApproval;
   let state = createInitialIdeaState({ hasModel: Boolean(deps.hasModel) });
   let loadSeq = 0;
+  let selectedMapNodeId = null;
 
   function patchCandidateCardsOnly() {
     const countEl = hostEl?.querySelector?.('[data-idea-candidate-count="true"]');
@@ -311,6 +300,9 @@ export function createExploreSessionController(hostEl, deps = {}) {
   }
 
   function dispatch(action, { candidatesOnly = false } = {}) {
+    if (action?.type === 'SET_IDEA_VIEW' && action.sessionId && action.sessionId !== state.sessionId) {
+      selectedMapNodeId = null;
+    }
     state = ideaReducer(state, action);
     if (candidatesOnly && patchCandidateCardsOnly()) return;
     render();
@@ -325,6 +317,13 @@ export function createExploreSessionController(hostEl, deps = {}) {
       onSaveAnswer: (payload) => void invokeOp('answer', payload),
       onPlan: () => void invokeOp('plan', {}),
       onRetryService: (provider) => void invokeOp('search', { provider }),
+      onNote: (payload) => void invokeOp('note', payload),
+      onRemap: (payload) => void invokeOp('map', payload || {}),
+      initialSelectedNodeId: selectedMapNodeId,
+      onSelectNode: (node) => { selectedMapNodeId = node?.id || null; deps.onSelectNode?.(node); },
+      onOpenSource: deps.onOpenSource || ((target) => void openExploreSource(state.sessionId, target)),
+      onOpenPageImage: deps.onOpenPageImage || ((target) => void openExplorePageImage(hostEl, state.sessionId, target)),
+      onInvestigatePaper: deps.onInvestigatePaper,
       onAllowGrant: async (grant) => {
         if (grant?.call_id && state.sessionId) {
           const res = await sendApproval(state.sessionId, grant.call_id, {
