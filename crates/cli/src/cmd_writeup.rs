@@ -184,11 +184,11 @@ mod tests {
         );
         assert!(bib_out.is_file());
 
-        // Gate G7 refusal and unbuilt Explore adapter both error cleanly.
+        // Gate G7 refusal and bare Explore session without idea.stated both error cleanly.
         let g7_err = run_cli(&["writeup", "s-cli-fail", "--format", "tex", "--out", &tex_s, "--data-dir", &data_s]).unwrap_err();
         assert!(g7_err.contains("Gate G7"), "{g7_err}");
         let exp_err = run_cli(&["writeup", "s-cli-exp", "--format", "tex", "--out", &tex_s, "--data-dir", &data_s]).unwrap_err();
-        assert!(exp_err.contains("write-up adapter not built yet"), "{exp_err}");
+        assert!(exp_err.contains("idea.stated"), "{exp_err}");
 
         // `--no-inline-marks=false` explicitly preserves inline badges.
         let md_keep = out_dir.join("paper-keep.md");

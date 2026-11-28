@@ -16,6 +16,7 @@ pub mod paper_map_html;
 pub mod paper_map_import;
 pub mod writeup;
 pub mod writeup_bib;
+pub mod writeup_idea;
 pub mod writeup_md;
 pub mod writeup_paper;
 mod writeup_paper_anchors;
@@ -253,7 +254,7 @@ pub fn build_session_writeup(data_dir: &Path, session: &str) -> Result<writeup::
         )
         .map(|b| b.writeup),
         research_tools::paper_key::Mode::Explore => {
-            Err("Explore write-up adapter not built yet".to_string())
+            writeup_idea::build_explore_writeup_from_verified(data_dir, session, &events)
         }
         research_tools::paper_key::Mode::Research => Err(
             "Research sessions do not support write-up (use `export` instead)".to_string(),
