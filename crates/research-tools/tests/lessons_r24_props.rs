@@ -282,6 +282,14 @@ fn property_r24_v10_solve_tiers_and_badges_invariant_to_adversarial_lessons() {
         }
         for (idx, e) in with_lessons.iter_mut().enumerate() {
             e.seq = (idx + 1) as u64;
+            // Re-number synthetic QuoteRef.evidence_seq consistently if LESSONS_SUPPLIED shifted EVIDENCE_QUOTE (seq 3 -> 4).
+            if insert_at <= 2 && e.kind == event_kinds::PROOF_ENTRY {
+                if let Some(sref) = e.payload.get_mut("source_ref").and_then(Value::as_object_mut) {
+                    if sref.get("evidence_seq").and_then(Value::as_u64) == Some(3) {
+                        sref.insert("evidence_seq".into(), json!(4));
+                    }
+                }
+            }
         }
 
         let state_clean = SolveState::from_events(&base_events);
