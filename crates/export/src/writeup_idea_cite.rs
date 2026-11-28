@@ -8,7 +8,7 @@ use super::ocr::{
     build_paper_ref, collect_meta_from_candidates, collect_meta_from_idea_paper,
     collect_meta_from_ingested, collect_meta_from_lit_fetched, detect_ocr_and_page,
     extract_quote_ref, full_quote_present_in_verified_file, is_sha256_hex, make_locator,
-    PaperFallbackMeta,
+    merge_ids, PaperFallbackMeta,
 };
 use crate::writeup::{writeup_wording, BibEntry, QuoteLocator, RejectedWriteupQuote, WriteupQuote};
 use crate::writeup_bib::resolve_bib_entry;
@@ -398,14 +398,32 @@ impl<'a> IdeaCiteResolver<'a> {
     }
 
     fn lookup_meta(&self, key: &PaperKey) -> PaperFallbackMeta {
-        if let Some(m) = self.paper_meta.get(key) {
-            return m.clone();
+        let mut merged = PaperFallbackMeta::default();
+        for k in self.all_paper_keys(key) {
+            if let Some(m) = self.paper_meta.get(&k) {
+                merge_ids(&mut merged.ids, &m.ids);
+                if merged.authors.is_empty() && !m.authors.is_empty() {
+                    merged.authors = m.authors.clone();
+                }
+                if merged.year.is_none() {
+                    merged.year = m.year;
+                }
+                if merged.version.is_none() {
+                    merged.version = m.version.clone();
+                }
+                if (merged.title.is_empty() || (!m.authors.is_empty() && !m.title.is_empty()))
+                    && !m.title.is_empty()
+                {
+                    merged.title = m.title.clone();
+                }
+                for ak in &m.alias_keys {
+                    if !merged.alias_keys.contains(ak) {
+                        merged.alias_keys.push(ak.clone());
+                    }
+                }
+            }
         }
-        self.paper_meta
-            .values()
-            .find(|m| m.alias_keys.contains(key))
-            .cloned()
-            .unwrap_or_default()
+        merged
     }
 
     fn keys_equivalent(&self, a: &PaperKey, b: &PaperKey) -> bool {

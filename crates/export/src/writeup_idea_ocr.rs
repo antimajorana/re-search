@@ -317,7 +317,7 @@ pub(crate) fn collect_meta_from_ingested(
     }
 }
 
-fn merge_ids(dst: &mut PaperIds, src: &PaperIds) {
+pub(crate) fn merge_ids(dst: &mut PaperIds, src: &PaperIds) {
     if dst.arxiv.is_none() { dst.arxiv = src.arxiv.clone(); }
     if dst.doi.is_none() { dst.doi = src.doi.clone(); }
     if dst.inspire.is_none() { dst.inspire = src.inspire.clone(); }
