@@ -1,0 +1,67 @@
+Clone https://github.com/antimajorana/reSearch.git and branch `fix/wp3-release-ux-improvements` from latest `origin/main` (after WP1 and WP2 have landed).
+
+You are implementing **Work Package 3: The 8 improvement items + 2 process notes** from the 2026-11-28 reSearch audit. Work completely and unattended. Use Gemini 4 Neon for implementation and Gemini 4 Carbon for a hard independent audit before your final push.
+
+## Hard Ground Rules
+1. **600-line CI ceiling:** Every touched source or test file MUST stay `<= 600` lines (`python3 scripts/check_file_length.py --base origin/main`).
+2. **Every change gets a regression test** (or workflow/script verification). Never add skipped or `#[ignore]` tests. Keep `Cargo.lock` untouched.
+3. **Never access Vivaldi, its profile, or the owner's personal notes.**
+4. **Stay strictly scoped to Work Package 3** (do NOT remove the Antigravity notice — that is WP4; do NOT do WP5 UI redesign).
+
+## Exact Requirements (8 Improvement Items + 2 Process Notes)
+
+1. **Release what CI tested (`.github/workflows/windows-release.yml`):**
+   - Currently pushing a `v*.*.*` tag rebuilds a brand-new installer from scratch even when a `release/windows-*` push run ALREADY built, smoke-tested, and uploaded `windows-x64-$version` for the exact same commit SHA (`$GITHUB_SHA`), causing different SHA-256 hashes for identical source.
+   - Add a `resolve` job (or pre-check on `github.ref_type == 'tag'`) that queries GitHub Actions (`gh run list` / GitHub API) for a completed `success` run of `Windows release` whose `head_sha == $GITHUB_SHA` and which still has a non-expired `windows-x64-$version` artifact:
+     - When found, `build` is skipped (`if: needs.resolve.outputs.reused_run_id == ''`), and `publish` downloads that exact `windows-x64-$version` artifact from `reused_run_id`, verifies `SHA256SUMS.txt` and commit SHA, and publishes the **exact CI-verified bytes**!
+     - When NOT found (e.g., direct tag or squash commit without a prior `Windows release` run on that exact SHA), `build` runs in full (including `smoke-install.ps1` verification) before `publish` marks the release Latest.
+   - Validate YAML syntax cleanly (`python3 -c "import yaml; yaml.safe_load(open('.github/workflows/windows-release.yml'))"`).
+
+2. **Honest approval wording on the Solve page (`crates/desktop-server/assets/approval_card.js`, `solve_setup.js`, `solve_setup_fields.js`, `solve_view.rs`):**
+   - Currently the Solve page claims `"nothing is auto-approved"` (or similar copy) even when Settings has `auto_approve_tools: true` enabled (which auto-approves everything).
+   - Expose `auto_approve_tools` on the Solve view/prefill payload (or read the setting honestly) and render accurate copy: when `auto_approve_tools` is enabled, say plainly that tools are currently auto-approved per Settings (with a link/hint to Advanced Settings), and only say `"Nothing is auto-approved"` when `auto_approve_tools` is false and no grants are active.
+   - Add a regression test in `crates/desktop-server/tests/` verifying both `auto_approve_tools: true` and `false` wording.
+
+3. **Default Verifier to a different connected model & prominent same-model warning (`crates/desktop-server/assets/solve_state.js`, `solve_setup.js`, `solve_setup_fields.js`, `solve.css`):**
+   - When connected models contain more than one model (preferring a different provider first, then a different model on the same provider), default `roles.verifier` to a model DISTINCT from `roles.solver` rather than copying `roles.solver`!
+   - When Solver and Verifier resolve to the same model (whether because only one model is connected or the user chose the same model), render a prominent, styled warning banner explaining clearly that the same model will review its own work (`"Model agreed (same model)"`, not independent review).
+   - Add regression tests in `crates/desktop-server/tests/` verifying: (a) 2 connected models -> default verifier != solver (prefers different provider when available); (b) 1 connected model -> prominent same-model warning visible.
+
+4. **Strict test fake-servers (`crates/agent/tests/`, `crates/desktop-server/tests/`):**
+   - Audit fake/mock provider HTTP servers across `crates/agent/tests/` and `crates/desktop-server/tests/` (OpenAI Responses/Chat, Anthropic Messages, Gemini) and ensure they reject with HTTP `400` what real provider APIs reject:
+     - Empty `input` / empty `messages` array,
+     - Empty text content blocks (`""`),
+     - Missing or empty `model` field.
+   - Verify all existing tests pass against the stricter fake servers, and add explicit unit assertions that sending empty `input`, empty text blocks, or missing `model` gets HTTP `400` from the fake server!
+
+5. **Style unstyled write-up controls on the Solve page (`crates/desktop-server/assets/writeup_btn.js`, `solve.css`, `components.css`):**
+   - Style `.writeup-btn-bar`, `.writeup-format-select` (`compact-select`), `.writeup-inline-label` + `.writeup-inline-checkbox`, `.writeup-download-btn` (`pill-btn`), `.writeup-status`, and `.writeup-note` so every control matches the app's visual system (light & dark themes) and the help text (`.writeup-note`) sits cleanly on its own subtle secondary line separated from the controls rather than running into them.
+   - Update/add Node DOM test in `crates/desktop-server/tests/writeup_btn.test.mjs` verifying styled classes & separated note structure.
+
+6. **Group model dropdowns under provider `<optgroup>` headings with short model names (`crates/desktop-server/assets/model_picker.js`, `solve_setup.js`, `solve_setup_fields.js`, `composer.js`):**
+   - Group `<select>` options for connected models under `<optgroup label="<Provider>">` headings, and format each `<option>` label as the concise short model name (e.g. `"GPT-6.2-Sol"`, `"Claude Sonnet 4.5"`) without repeating the long provider suffix on every option.
+   - Preserve exact `option.value` wire format (`provider::model` or existing value contract!) so all existing selection logic and tests remain intact.
+   - Add regression tests verifying `<optgroup>` grouping and concise short model names in both the main picker and Solve role dropdowns.
+
+7. **One-line hint explaining why Solve lists only some providers (`solve_setup.js` / `solve_setup_fields.js`):**
+   - Add a concise, clear one-line hint next to the Solve model pickers explaining why Solve lists direct API / ChatGPT sign-in providers for the solver loop (e.g. `"Solve requires direct tool-calling providers (API keys or ChatGPT sign-in); CLI routes are available for verifier review."` — keep copy accurate to what `solve_view` actually permits!).
+   - Add a DOM test asserting the hint is present.
+
+8. **Code-signing step in `.github/workflows/windows-release.yml` + documented secret (`docs/releases/signing.md`):**
+   - Add a secret-gated Authenticode signing step in `.github/workflows/windows-release.yml`:
+     - When `secrets.WINDOWS_CERT_PFX_BASE64` and `secrets.WINDOWS_CERT_PASSWORD` are set, decode the PFX to `$env:RUNNER_TEMP`, sign `re-search-app.exe`, `re-search.exe`, and `core.exe` before `makensis`, and sign `reSearch-Setup-Windows-x64.exe` after `makensis` (BEFORE `smoke-install.ps1` and `SHA256SUMS.txt`!), using `signtool.exe sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com` (configurable via optional `WINDOWS_TIMESTAMP_URL`), verify with `Get-AuthenticodeSignature`, and securely delete the temporary PFX in an `if: always()` cleanup block.
+     - When secrets are not configured, log a clear notice and continue cleanly (never failing unsigned PR builds).
+   - Document exact secret names and setup instructions for the owner in `docs/releases/signing.md`.
+
+9. **Process notes (both):**
+   - Confirm `solve_setup.js` (split in WP2) remains comfortably under 600 lines (well below 550L).
+   - Add a reusable isolated smoke-test environment helper (`scripts/smoke_isolated_env.py` + unittest in `scripts/test_smoke_isolated_env.py`) that creates a temporary data directory for smoke tests and copies ONLY read-only model sign-in/auth credential files from `%LOCALAPPDATA%\re-search` (or a given source data dir) WITHOUT ever touching or adding sessions to the user's real library/ledger!
+
+## Verification Required Before Final Push
+1. `python3 scripts/check_file_length.py --base origin/main` (exit 0)
+2. `python3 -m unittest discover -s scripts -p "test_*.py"` (exit 0)
+3. `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/windows-release.yml'))"` (exit 0)
+4. `node --test crates/desktop-server/tests/*.test.mjs` (0 failures)
+5. `unset RE_SEARCH_PYTHON && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked --no-fail-fast` (0 warnings, 0 failures)
+
+Push cleanly to `origin fix/wp3-release-ux-improvements` and summarize all changed files, tests added, and commands run.
