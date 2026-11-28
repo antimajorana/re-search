@@ -360,6 +360,35 @@ fn set_w_tampered_xe_drop_nonverbatim_xa_drop_300char_utf8_clip_and_ocr_page_tag
     assert!(!tex.contains(q_tamp), "tampered xe quote must never be written in TeX");
     assert!(!md.contains(oa_quote), "non-verbatim OpenAlex abstract quote must never be written");
     assert!(md.contains(explore_writeup_wording::QUOTE_OMITTED_PHRASE));
+
+    // Audit C2: dropped quotes must honestly downgrade subclaim verdicts, omit stale "What differs",
+    // and never register dropped papers in the bibliography.
+    let sc3_row = built.writeup.check_table.iter().find(|r| r.id == "sc-3").expect("sc-3 row");
+    assert_eq!(sc3_row.how_checked, export::writeup::HowChecked::CodeSkeleton);
+    assert!(
+        sc3_row
+            .note
+            .as_deref()
+            .unwrap_or("")
+            .contains(research_tools::prior_work_wording::wording::CHIP_NONE_IN_SCOPE),
+        "tampered xe subclaim must downgrade to NoneInScope chip: {:?}",
+        sc3_row.note
+    );
+    assert!(!md.contains("Source modified on disk."), "dropped overlap difference must not appear");
+    let sc4_row = built.writeup.check_table.iter().find(|r| r.id == "sc-4").expect("sc-4 row");
+    assert_eq!(sc4_row.how_checked, export::writeup::HowChecked::CodeSkeleton);
+    assert!(
+        sc4_row
+            .note
+            .as_deref()
+            .unwrap_or("")
+            .contains(research_tools::prior_work_wording::wording::CHIP_NONE_IN_SCOPE),
+        "non-verbatim xa subclaim must downgrade to NoneInScope chip: {:?}",
+        sc4_row.note
+    );
+    let bib_keys: Vec<_> = built.writeup.bibliography.iter().map(|b| &b.paper.key).collect();
+    assert!(!bib_keys.contains(&&paper_tamper), "dropped tampered paper must not enter .bib");
+    assert!(!bib_keys.contains(&&paper_oa), "dropped OpenAlex paper must not enter .bib");
 }
 
 #[test]
