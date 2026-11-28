@@ -1,0 +1,59 @@
+Clone https://github.com/antimajorana/reSearch.git and check out branch `fix/wp1a-rust-provenance` (which starts from `195ae57` and ALREADY includes the verified WP1 Python layer — 60/60 Python tests pass — and the sanitized real-session replay fixture `crates/research-tools/tests/fixtures/s-ce81c873ea592808.solve.jsonl`).
+
+You are implementing **Work Package 1a (Rust only): Provenance honesty in Solve** (`VAC-1..6`, `GATE-1..3`, `GATE-5..9`, `R1-F3..7`, plus the mandatory replay fixture). A sibling lane (`fix/wp1b-js-ui`) handles JS assets & `assets.rs` in parallel, so **DO NOT edit any files in `crates/desktop-server/assets/`, `crates/desktop-server/src/assets.rs`, or `crates/desktop-server/tests/*.test.mjs`**, and **DO NOT re-edit `python/`** (already done & verified at `195ae57`).
+
+## Exact Python Contract Already Committed in `195ae57`
+- `python/worker.py`: `sympy_eval` returns `result["exprs_out"]` (`{name: srepr}`) AND optional `result["exprs_out_meta"]` (`{name: {"unevaluated_srepr": "...", "source_expr": "..."}}`).
+- `python/checks/algebra.py`: `identity_symbolic`, `identity_numeric`, `series_match`, `vanishes_to_order` return `"outcome": "trivial"` with `evidence: {"identical_sides": true, "reason": "..."}` when both sides are structurally identical before simplification.
+
+## Hard Ground Rules
+1. Never weaken provenance honesty; keep the ledger tamper-evident; never fabricate user input.
+2. **600-line CI ceiling:** Every touched `.rs` file MUST stay `<= 600` lines (`python3 scripts/check_file_length.py --base origin/main`). Put new helpers in sibling modules (`crates/desktop-server/src/solve_view_helpers.rs`, `crates/agent/src/verifier_handle_sources.rs`, `crates/agent/src/verifier_finish_tests.rs`, `crates/research-tools/tests/solve_audit_session_replay.rs`)!
+3. Keep `Cargo.lock` untouched. Never add skipped or `#[ignore]` tests. Never access Vivaldi or personal notes.
+4. **Push Checkpoint 1 immediately after `research-tools` passes**, then push Checkpoint 2 after `agent` + `desktop-server` + Carbon audit pass!
+
+## Checkpoint 1 — `crates/research-tools/` (commit & push `origin fix/wp1a-rust-provenance` as soon as `cargo test -p research-tools` passes!)
+1. **`CheckOutcome::Trivial` (`VAC-1`):**
+   - `crates/research-tools/src/solve_model.rs`: Add `Trivial` (`"trivial"`) to `CheckOutcome` (update any exhaustive matches in `research-tools`, `agent`, `desktop-server`, `export`).
+   - `crates/research-tools/src/solve_checks.rs`: Ensure `outcome.as_deref() == Some("trivial")` does NOT trigger the `inconclusive` `identity_numeric` fallback (`:286-300`); in `AutoCheckGate::after_success`, attach an actionable `attention` field to the `step_record` result whenever any claim ends inconclusive, trivial, or not_run (`R1-F5`).
+2. **Unevaluated handle provenance (`VAC-4`):**
+   - `crates/research-tools/src/solve_model.rs` & `solve_state.rs`: Add optional `unevaluated_srepr_blob: Option<String>`, `unevaluated_srepr_sha256: Option<String>`, `source_expr: Option<String>` (`#[serde(default, skip_serializing_if = "Option::is_none")]`) to `SolveExpr` and fold them from `solve.expr` events.
+   - `crates/research-tools/src/solve_checks_params.rs`: When loading a portable handle for checks, prefer `unevaluated_srepr_blob` (falling back to `srepr_blob`) so checks re-derive from the unevaluated form!
+3. **Non-vacuous tier rules, `check_note`, and review invalidation (`VAC-1`, `VAC-2`, `VAC-3`, `R1-F3`):**
+   - `crates/research-tools/src/solve_own_tier.rs` & `solve_badge.rs`:
+     - Add `claim_sides_identical(state, claim)` checking `claim.lhs == claim.rhs` OR matching non-empty pre-simplification hash (`unevaluated_srepr_sha256.as_deref().unwrap_or(&srepr_sha256)`).
+     - Neither `CheckOutcome::Trivial` nor any historical `CheckOutcome::Pass` on `identity_symbolic`, `identity_numeric`, `series_match`, or `vanishes_to_order` where `claim_sides_identical(state, claim)` is true may ever grant `Tier::Verified` or `Tier::CheckedNumerically` (leave `independent_recompute` untouched).
+     - Add `SUBLABEL_TRIVIAL_IDENTICAL = "both sides identical — nothing checked"` in `solve_badge.rs` (`NON_VERIFIED_CONSTANTS`).
+     - Collect identity/series sublabels in a temporary Vec inside `evaluate_claims_computed_tier` and merge them into `sublabels` ONLY when `evaluate_claims_computed_tier` returns `Some(tier)` (no `"symbolic"` chip on an `Unchecked` step!).
+     - Add `check_note: Option<String>` (`#[serde(default, skip_serializing_if = "Option::is_none")]`) on `OwnEval`, `StepTier`, and `StepBadge` describing inconclusive or trivial claims (e.g. `"checks inconclusive on 3 of 5 claims"` or `"both sides identical on 2 of 2 claims"`). Do NOT put `check_note` in `flags`.
+     - Invalidate any `SolveReview` (`proof.verification`) whose `checks_cited` references a `CheckOutcome::Trivial` check or a check on a `claim_sides_identical` claim so it cannot grant `ModelAgreed` / `ModelAgreedSameModel` (`VAC-3`, fixes historical `seq 537–538`!).
+     - When `own == Tier::Verified` and `!entry.details.trim().is_empty()`, use narrower wording `"own check: the equations shown are verified"` (`VAC-2`).
+4. **`unchecked_deps` & self-supersede non-stale (`R1-F4`, `GATE-7`):**
+   - `crates/research-tools/src/solve_status.rs` & `solve_badge.rs`: Ignore a dependency edge from `B` to `A` when `A.superseded_by.as_deref() == Some(&B.entry_id)` so replacing a step sharing a receipt does not mark `B` `Stale`. Add `unchecked_deps: Vec<String>` on `StepTier` and `StepBadge` (direct deps with effective rank `<= 0` excluding `Given`/`Cited`); when `lowered_by` is empty and `unchecked_deps` is non-empty, emit `rests_on_line` (e.g. `"rests on e-1 (assumed by model), e-3 (unchecked)"`).
+5. **Like-for-like Solve supersede & subset-claim refusal (`GATE-2`, `GATE-7`, `VAC-6`, `VAC-4`):**
+   - `crates/research-tools/src/proof_dag.rs`: In Solve sessions (`events.iter().any(|e| e.kind == "solve.setup")`), allow `ledger_supersede` when `repl_type == "correction" || repl_type == orig_type` (e.g., `final_answer` superseding `final_answer`, `symbolic_computation` superseding `symbolic_computation`).
+   - `crates/research-tools/src/solve_steps.rs`: Refuse `step_record` when the new step's non-empty `(lhs, rhs, relation)` claim set is a subset (strict or equal) of an active, un-superseded step's claims (naming the active step and suggesting `ledger_supersede`); emit `own_tier_reason` when a step with claims stays `Unchecked`, and emit `warnings` when any claim has identical sides.
+6. **Finish gate anti-re-rooting, `NoOpenFlags`, `SolveDone` fields, and `solve_setup_prefill` (`GATE-1`, `GATE-2`, `GATE-3`, `GATE-8`, `GATE-9`):**
+   - `crates/research-tools/src/solve_done.rs` (`validate_solve_finish_preconditions`): Refuse `solve_finish` whenever another active (non-superseded) `final_answer` (or prior `solve.done.final_entry_id`) exists outside `final_entry_id`'s closure (`"earlier final answer \`<id>\` is still active; supersede it explicitly before finishing on a new final answer"`).
+   - `crates/research-tools/src/solve_done_criteria.rs`: In `evaluate_done_criteria`, if an active un-superseded earlier `final_answer` (or prior `solve.done.final_entry_id`) exists outside `final_entry_id`'s closure, `FinalTierAtLeast` and `ClosureTierAtLeast` MUST report `met: false` with `"re_rooted_past_active_final"` in evidence! In `DoneCriterionKind::NoOpenFlags`, ignore `FLAG_SAME_MODEL` when the setup's tier criteria accept `model_agreed_same_model` (`require_different_model == false`).
+   - `crates/research-tools/src/solve_model_records.rs` & `solve_state.rs`: Add `summary_markdown: String` and `open_items: Vec<String>` (`#[serde(default)]`) to `SolveDone` and populate them in `parse_solve_done`; preserve `done_history: Vec<SolveDone>` on `SolveState`.
+   - `crates/research-tools/src/solve_setup_prefill.rs`: Omit `"independent model"` from `target.description` when solver == verifier.
+7. **Mandatory Real-Session Replay Test:**
+   - Add `crates/research-tools/tests/solve_audit_session_replay.rs` loading `crates/research-tools/tests/fixtures/s-ce81c873ea592808.solve.jsonl` and asserting:
+     - `e-6` (`seq 331–355`), `e-8` (`seq 435–479`), and `e-9` (`seq 489–528`) NEVER earn a checked tier (`own != Verified && own != CheckedNumerically`),
+     - `e-3` has `check_note.is_some()` and NO `"symbolic"` sublabel while `Unchecked`,
+     - `seq 562` (`e-10`) is refused by `validate_solve_finish_preconditions` (active un-superseded `e-7`) AND `evaluate_done_criteria` reports `final_different_model_review` and `closure_model_agreed` as `met == false`!
+
+## Checkpoint 2 — `crates/agent/` + `crates/desktop-server/src/` + Carbon Audit (commit & push `origin fix/wp1a-rust-provenance`)
+1. `crates/agent/src/solve_loop_tools.rs`:
+   - In `harvest_sympy`, read `val.get("exprs_out_meta")`: store `unevaluated_srepr` as a content-addressed blob (`unevaluated_srepr_blob` + `unevaluated_srepr_sha256`) and `source_expr` on the `solve.expr` event.
+   - Skip the automatic repair round when unmet items can only be cleared by the user (`assumed_by_model` or `same model` only); when the repair round runs, append a tamper-evident `solve.repair_round` event and reword the prompt to name `below_target` steps and forbid dropping dependencies or re-rooting (`GATE-1`).
+2. `crates/agent/src/solve_prompts.rs`: Update `Prove`, `Calculate`, `CheckDerivation`, and Discipline rules to require deriving both sides independently, keeping expressions unevaluated (or passing expression strings to `save_expr`), forbidding writing expected constants on both sides, and explaining `trivial` / `inconclusive` outcomes (`VAC-4`, `R1-F5`).
+3. `crates/agent/src/verifier_finish.rs` + new `crates/agent/src/verifier_finish_tests.rs`: Under `ReviewPolicy::ProseOnly`, skip claim-bearing steps ONLY when `own.is_computed()` (`R1-F7`/`GATE-5`); cap `max_review_lift` at `1` when solver == verifier (same provider & model) and skip entries that already have a valid `Accepted` review for their current `entry_sha256` at that independence (`GATE-6`).
+4. New `crates/agent/src/verifier_handle_sources.rs` called from `verifier_loop_support.rs` (592L): Include `sides_identical: bool`, `source_expr`, producing `call_id`, and clipped producing `sympy_eval` code (`handle_sources`, ~1800 chars) in the verifier prompt; tell verifier `trivial`/`sides_identical` checks are NOT evidence; reject `checks_cited` pointing to `Trivial` or `claim_sides_identical` checks in `validate_checks_cited` (`VAC-3`).
+5. New `crates/desktop-server/src/solve_view_helpers.rs` called from `solve_view.rs` (594L): Join each receipt's `tool.request` `code` onto view `receipts`, expose `source_expr` on view `handles`, expose `done_history`, and include active un-acknowledged `AssumedByModel` steps outside final closure (`outside_final_closure: true`) in `done_open_items` (`VAC-3`/`GATE-2`/`GATE-9`).
+
+## Verification Before Final Push
+1. `python3 scripts/check_file_length.py --base origin/main` (exit 0)
+2. `unset RE_SEARCH_PYTHON && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked --no-fail-fast` (0 warnings, 0 failures)
+3. Independent Gemini 4 Carbon audit + fixes, then push cleanly to `origin fix/wp1a-rust-provenance`.

@@ -1,0 +1,58 @@
+Clone https://github.com/antimajorana/reSearch.git and check out branch `fix/wp1b-js-ui` (branched from `195ae57`).
+
+You are implementing **Work Package 1b (JS/UI only): Provenance honesty UI in Solve** (`VAC-1..3`, `GATE-2`, `GATE-3`, `GATE-9`, `R1-F3`, `R1-F4`). A sibling lane (`fix/wp1a-rust-provenance`) handles the Rust crates in parallel, so **ONLY edit files under `crates/desktop-server/assets/`, `crates/desktop-server/src/assets.rs`, and `crates/desktop-server/tests/*.test.mjs`**! Do NOT edit any other `.rs` or `python/` files.
+
+## Hard Ground Rules
+1. **600-line CI ceiling:** Every touched source or test file MUST be `<= 600` lines (`python3 scripts/check_file_length.py --base origin/main`).
+   - `solve_steps.js` is 594L: split result-sheet rendering into `crates/desktop-server/assets/solve_result_sheet.js` FIRST and register `/assets/solve_result_sheet.js` in `crates/desktop-server/src/assets.rs`!
+   - `solve_ui.test.mjs` is 599L: add new tests in new files `crates/desktop-server/tests/solve_result_sheet.test.mjs` and `crates/desktop-server/tests/solve_badge_notes.test.mjs`!
+2. **XSS safety:** Strictly `createElement` / `textContent` only; zero untrusted `innerHTML`.
+3. Never weaken provenance honesty. Never touch `Cargo.lock`. Never access Vivaldi or personal notes.
+
+## Exact Requirements
+1. **Split `solve_steps.js` -> `solve_steps.js` + `solve_result_sheet.js`:**
+   - Extract result-sheet rendering (`renderSolveResultSheet`, criterion formatting, active tier counting) from `crates/desktop-server/assets/solve_steps.js` into `crates/desktop-server/assets/solve_result_sheet.js` and re-export from `solve_steps.js` so all existing imports keep working cleanly.
+   - Register `/assets/solve_result_sheet.js` in `crates/desktop-server/src/assets.rs` (522L).
+2. **`trivial` check outcome & producing code visibility (`VAC-1`, `VAC-3`):**
+   - In `crates/desktop-server/assets/solve_why.js`:
+     - Add `trivial: Object.freeze({ text: 'Identical sides (nothing checked)', icon: 'warn', tone: 'warn' })` to `CHECK_OUTCOMES`.
+     - Rename the check-record JSON toggle button from `"Show code"` to `"Show check record"` (updating any existing test label check cleanly if needed, or keeping `data-action` identical), and when `receipt.code` or `handle.source_expr` is available on the step/view, show an expandable `"Show producing code"` block rendering `receipt.code` and `source_expr` via `textContent`.
+   - In `crates/desktop-server/assets/solve_steps.js`:
+     - Make each receipt row expandable (`<details>` or toggle button) so clicking it displays `receipt.code` (the actual `sympy_eval` Python source) and any handle `source_expr` when present on `view.receipts` / `view.handles`.
+3. **Abandoned steps outside final closure (`GATE-2`):**
+   - In `crates/desktop-server/assets/solve_steps.js`:
+     - When `view.done` exists, compute `const closureIds = computeFinalClosureIds(view.steps, findFinalAnswerEntryId(view))` (from `solve_badges.js`).
+     - Render active steps outside `closureIds` inside a collapsed `<details>` group headed `"Not used by the final answer (N steps)"` with a `"not used by the final answer"` chip and `data-outside-final="true"` on each card.
+   - In `crates/desktop-server/assets/solve_result_sheet.js`:
+     - Restrict `Own checks` tier counts (`countActiveTiers`) strictly to steps inside `closureIds`!
+     - Render a plain summary note on the sheet whenever active steps lie outside `closureIds`, naming how many earlier steps, model assumptions, and earlier final answers are not part of the final answer (e.g. `"7 earlier steps (including 2 assumptions made by the model and 1 earlier final answer) are not used by the final answer."`).
+4. **Honest parameter-based criterion descriptions (`GATE-3`):**
+   - In `crates/desktop-server/assets/solve_result_sheet.js` & `solve_steps.js`:
+     - Add `describeCriterion(crit)` deriving human-readable text strictly from `crit.evidence` / `crit.kind` / `crit.params` (NEVER printing raw IDs like `final_different_model_review`!):
+       - `final_tier_at_least`: `"Final answer at least <tier label>"` + `" (different model required)"` ONLY when `require_different_model === true`.
+       - `closure_tier_at_least`: `"Everything it rests on at least <tier label>"` + `" (different model required)"` ONLY when `require_different_model === true`.
+       - `no_open_flags`: `"No open flags"`.
+       - `named_check_passed`: `"Named check passed: <check>"`.
+       - `user_confirms`: `"User confirms: <text>"`.
+     - Use `describeCriterion` in both the result sheet AND `mapRunStateToBarProps` unmet criterion items!
+   - In `crates/desktop-server/assets/solve_state.js`:
+     - In `buildSetupSubmission`, when `acceptSameModel` relaxes the final criterion, rename its ID from `final_different_model_review` to `final_model_review` and omit `"independent model"` from `target.description` when solver == verifier.
+5. **Solver summary, open items, and live `result_sheet` (`GATE-9`):**
+   - In `crates/desktop-server/assets/solve_result_sheet.js`:
+     - Render `done.summary_markdown` explicitly labeled as written by the model (`"Summary (written by model)"`) and render `done.open_items` explicitly labeled as `"Open items noted by the solver (written by model)"`.
+     - When the final step has no claims, display its `summary` text in the answer box.
+     - Drive the sheet status heading from `view.result_sheet?.status_line` (when present, e.g. `"Not done"` after post-finish invalidation), falling back to `done.status`.
+6. **`check_note` chip & `unchecked_deps` jump links (`R1-F3`, `R1-F4`):**
+   - In `crates/desktop-server/assets/solve_badges.js`:
+     - Render `badge.check_note` (when non-empty) as a distinct warning chip (e.g. `"checks inconclusive on 3 of 5 claims"` or `"both sides identical — nothing checked"`).
+     - Do NOT render identity sublabel chips when `effective === 'unchecked'` and `own === 'unchecked'` unless present on non-empty sublabels; extend `depIds` fallback in `createSolveBadgeGroup` to include `badge.unchecked_deps` so `"rests on e-1 (assumed by model), e-3 (unchecked)"` renders with clickable jump buttons!
+7. **Tests (Node.js):**
+   - Add `crates/desktop-server/tests/solve_result_sheet.test.mjs` covering: disjoint chains (`e-1..e-7` vs `e-8..e-10`) outside-closure collapsed group + `data-outside-final="true"` + closure-only counts + earlier-steps note; `describeCriterion` never showing `"different"` when `require_different_model === false`; `done.summary_markdown` & `done.open_items` labeled `"(written by model)"`; stale `done` with `result_sheet.done === false` rendering `"Not done"`; expandable receipt code & `"Show check record"` button; `trivial` outcome in Why popover; XSS safety.
+   - Add `crates/desktop-server/tests/solve_badge_notes.test.mjs` covering `check_note` chip, `unchecked_deps` rests-on line with jump links, and `buildSetupSubmission` same-model criterion ID/description.
+   - Update `crates/desktop-server/tests/solve_ui.test.mjs` ONLY if an existing assertion explicitly checked `"Show code"` or raw criterion ID (keep it `<= 600`L!).
+
+## Verification Before Final Push
+1. `python3 scripts/check_file_length.py --base origin/main` (exit 0)
+2. `for f in crates/desktop-server/assets/*.js; do node --check "$f" || exit 1; done` (exit 0)
+3. `node --test crates/desktop-server/tests/*.test.mjs` (0 failures)
+4. Independent Gemini 4 Carbon audit + fixes, then push cleanly to `origin fix/wp1b-js-ui`.

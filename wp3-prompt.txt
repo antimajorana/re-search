@@ -1,4 +1,4 @@
-Clone https://github.com/antimajorana/reSearch.git and branch `fix/wp3-release-ux-improvements` from latest `origin/main` (after WP1 and WP2 have landed).
+Clone https://github.com/antimajorana/reSearch.git and check out branch `fix/wp3-release-ux-improvements` (which is branched from `fix/wp2-investigate-focus-dag-bugs` so `solve_setup.js` is already split into `solve_setup.js` + `solve_setup_fields.js`). Compare touched file lengths against `origin/fix/wp2-investigate-focus-dag-bugs` (AND `origin/main`).
 
 You are implementing **Work Package 3: The 8 improvement items + 2 process notes** from the 2026-11-28 reSearch audit. Work completely and unattended. Use Gemini 4 Neon for implementation and Gemini 4 Carbon for a hard independent audit before your final push.
 
