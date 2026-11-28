@@ -91,3 +91,9 @@ export function attachIdeaPdf(sessionId, attachPayload) {
   return postIdeaOp(sessionId, 'read', { attach_pdf: attachPayload });
 }
 
+/** Fetch read-only F7 incoming/outgoing hand-offs and child session statuses (`00-overview.md` 4.1 Rule 5). */
+export function getExploreHandoffs(sessionId) {
+  return ideaJson('GET', `/api/sessions/${encodeURIComponent(sessionId)}/handoffs`);
+}
+
+

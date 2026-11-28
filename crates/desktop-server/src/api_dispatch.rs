@@ -505,6 +505,12 @@ pub(crate) fn dispatch_api(
         ("POST", ["api", "idea", "preview"]) => {
             write_api_res(&mut stream, crate::routes_idea::handle_idea_preview(state, &req.body));
         }
+        ("GET", ["api", "sessions", id, "idea", "export"]) => {
+            crate::routes_idea_export::serve_idea_export(&mut stream, state, id, &req.query);
+        }
+        ("POST", ["api", "sessions", id, "idea", op @ ("cited-since" | "more" | "round2")]) => {
+            write_api_res(&mut stream, crate::routes_idea_net::handle_idea_net_op(state, id, op, &req.body));
+        }
         ("POST", ["api", "sessions", id, "idea", op]) => {
             write_api_res(&mut stream, crate::routes_idea::handle_idea_op(state, id, op, &req.body));
         }

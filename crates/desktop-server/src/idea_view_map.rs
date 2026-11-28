@@ -85,7 +85,11 @@ pub fn build_explore_graph_view(
         }
     }
     if let Ok(typed) = serde_json::from_value::<IdeaMapPayload>(raw.clone()) {
-        return project_graph_view(&typed, &ocr_ids);
+        let mut projected = project_graph_view(&typed, &ocr_ids);
+        if let Some(obj) = projected.as_object_mut() {
+            obj.insert("idea_rev".into(), json!(typed.idea_rev));
+        }
+        return projected;
     }
     crate::idea_view_coverage::build_map_graph_view(Some(raw))
 }

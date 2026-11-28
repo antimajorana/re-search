@@ -6,10 +6,9 @@
 
 use crate::idea::{
     append_explore_session_start, build_idea_statement, is_single_paper_identifier,
-    normalize_fields, preview_first_queries, resolve_stages,
-    search_library_matches, validate_first_queries, IdeaPreset, SubmittedFirstQuery,
-    EVENT_IDEA_BUDGET_RAISED, EVENT_IDEA_NOTE, EVENT_IDEA_STAGE, EVENT_IDEA_STATED,
-    MAX_NOTE_COMMENT_CHARS, MAX_PREVIEW_LIBRARY_MATCHES, NOTE_ACTIONS, NOTE_TARGET_KINDS,
+    normalize_fields, preview_first_queries, resolve_stages, search_library_matches,
+    validate_first_queries, IdeaPreset, SubmittedFirstQuery, EVENT_IDEA_BUDGET_RAISED,
+    EVENT_IDEA_STAGE, EVENT_IDEA_STATED, MAX_PREVIEW_LIBRARY_MATCHES,
 };
 use crate::idea_view;
 use crate::projects::save_new_session;
@@ -319,7 +318,7 @@ pub fn handle_idea_op(
 
     match op {
         "revise" => handle_revise(state, &ledger, session_id, body),
-        "note" => handle_note(state, &ledger, session_id, body),
+        "note" => crate::routes_idea_map::handle_note(state, &ledger, session_id, body),
         "stop" => handle_stop(state, &ledger, session_id),
         "continue" => handle_continue(state, &ledger, session_id, body),
         "sharpen" => crate::idea_exchanges::handle_sharpen_op(state, &ledger, session_id, body),
@@ -329,10 +328,8 @@ pub fn handle_idea_op(
         "triage" => crate::idea_exchanges_triage::handle_triage_op(state, &ledger, session_id, body),
         "read" => crate::routes_idea_read::handle_read_op(state, &ledger, session_id, body),
         "map" => crate::idea_map_exchange::handle_map_op(state, &ledger, session_id, body),
-        "directions" => Err(not_implemented("Explore `directions` is not built yet (owned by package X13).")),
-        "handoff" => Err(not_implemented(
-            "Explore `handoff` builder is not built yet (owned by package X13; use POST /api/sessions/{id}/handoff for F7 packets).",
-        )),
+        "directions" => crate::idea_directions_exchange::handle_directions_op(state, &ledger, session_id, body),
+        "handoff" => crate::idea_handoff::handle_idea_handoff_op(state, &ledger, session_id, body),
         "more" => Err(not_implemented(
             "Explore `more` (citation expansion / second round) is not built yet (owned by package X16).",
         )),
@@ -378,61 +375,6 @@ fn handle_revise(
     );
     let updated = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
     Ok((200, json!({ "ok": true, "idea": idea_view::view(&updated, false) })))
-}
-
-fn handle_note(
-    state: &DesktopState,
-    ledger: &ledger::Ledger,
-    session_id: &str,
-    body: &[u8],
-) -> ApiResult {
-    let val = parse_json_body(body)?;
-    let target_kind = val
-        .get("target_kind")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| NOTE_TARGET_KINDS.contains(s))
-        .ok_or_else(|| bad(format!("`target_kind` must be one of: {}", NOTE_TARGET_KINDS.join(", "))))?;
-    let target_id = val
-        .get("target_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && s.chars().count() <= 256)
-        .ok_or_else(|| bad("`target_id` must be a non-empty string (<= 256 chars)"))?;
-    let action = val
-        .get("action")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| NOTE_ACTIONS.contains(s))
-        .ok_or_else(|| bad(format!("`action` must be one of: {}", NOTE_ACTIONS.join(", "))))?;
-    let comment = match val.get("comment").filter(|v| !v.is_null()) {
-        None => String::new(),
-        Some(Value::String(s)) => {
-            if s.chars().count() > MAX_NOTE_COMMENT_CHARS {
-                return Err(bad(format!("`comment` exceeds {MAX_NOTE_COMMENT_CHARS} characters")));
-            }
-            s.trim().to_string()
-        }
-        Some(_) => return Err(bad("`comment` must be a string")),
-    };
-    if action == "comment" && comment.is_empty() {
-        return Err(bad("`comment` is required when `action` is `comment`"));
-    }
-
-    let payload = json!({
-        "target_kind": target_kind, "target_id": target_id, "action": action, "comment": comment,
-    });
-    ledger
-        .append(session_id, EVENT_IDEA_NOTE, EVENT_SCHEMA_VERSION, &payload)
-        .map_err(|e| internal(e.to_string()))?;
-    state.sse.emit(
-        session_id,
-        "session_event",
-        json!({ "session": session_id, "kind": EVENT_IDEA_NOTE, "payload": payload }),
-    );
-    let updated = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
-    let running = is_turn_running(state, session_id);
-    Ok((200, json!({ "ok": true, "idea": idea_view::view(&updated, running) })))
 }
 
 fn handle_stop(
@@ -535,9 +477,11 @@ fn handle_continue(
         Some(crate::idea::IdeaStage::Triage) => crate::idea_exchanges_triage::handle_triage_op(state, ledger, session_id, body),
         Some(crate::idea::IdeaStage::Read) => crate::routes_idea_read::handle_read_op(state, ledger, session_id, body),
         Some(crate::idea::IdeaStage::Map) => crate::idea_map_exchange::handle_map_op(state, ledger, session_id, body),
+        Some(crate::idea::IdeaStage::Directions) => crate::idea_directions_exchange::handle_directions_op(state, ledger, session_id, body),
+        None => Ok((200, json!({ "ok": true, "done": true, "budget_raised": budget_raised, "idea": idea_view::view(&events, is_turn_running(state, session_id)) }))),
         _ if budget_raised => Ok((200, json!({ "ok": true, "budget_raised": true, "idea": idea_view::view(&events, is_turn_running(state, session_id)) }))),
         other => Err(not_implemented(format!(
-            "Explore `continue` for stage `{}` is not built yet (owned by packages X9–X13); pass `extra_queries`/`extra_papers`/`extra_model_calls` to record a budget increase.",
+            "Explore `continue` for stage `{}` is not built yet; pass `extra_queries`/`extra_papers`/`extra_model_calls` to record a budget increase.",
             other.map_or("done", crate::idea::IdeaStage::as_str),
         ))),
     }

@@ -232,11 +232,11 @@ fn writeup_route_enforces_header_auth_formats_inline_marks_g7_and_unbuilt_modes(
     let val: Value = serde_json::from_slice(&raw).unwrap();
     assert!(val["error"].as_str().unwrap().contains("Gate G7"));
 
-    // 6. Unbuilt Explore returns 501 Not Implemented; Investigate without a pinned skeleton fails closed (400).
+    // 6. Bare Explore (no idea.stated) and skeletonless Investigate both fail closed (400).
     let (st, _, raw) = raw_http(port, "GET", "/api/sessions/s-wu-exp/writeup?format=tex", &auth, b"");
-    assert_eq!(st, 501, "expected 501 for s-wu-exp");
+    assert_eq!(st, 400, "expected 400 for bare Explore session s-wu-exp");
     let val: Value = serde_json::from_slice(&raw).unwrap();
-    assert!(val["error"].as_str().unwrap().contains("write-up adapter not built yet"));
+    assert!(val["error"].as_str().unwrap().contains("idea.stated"));
 
     let (st, _, raw) = raw_http(port, "GET", "/api/sessions/s-wu-inv/writeup?format=tex", &auth, b"");
     assert_eq!(st, 400, "expected 400 for skeletonless Investigate session s-wu-inv");

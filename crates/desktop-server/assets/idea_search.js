@@ -9,6 +9,7 @@ import {
   highlightTermsSegments,
 } from './idea_state.js';
 import { createApprovalCard } from './approval_card.js';
+import { renderCitationNetPanel, renderCitedSinceControl } from './idea_net_ui.js';
 import { renderPaperReadRow } from './idea_read_ui.js';
 import { createBadge } from './ui_badge.js';
 
@@ -173,6 +174,13 @@ function renderSingleCandidateCard(cand, terms, triageCtx) {
     const readRow = renderPaperReadRow(readPaper, { onAttachPdf: triageCtx?.onAttachPdf });
     if (readRow) card.append(readRow);
   }
+  if (triageCtx?.onCitedSince && key) {
+    const citeCtrl = renderCitedSinceControl(
+      { key, year: cand.year, isOpenQuestion: false },
+      { onCitedSince: triageCtx.onCitedSince },
+    );
+    if (citeCtrl) card.append(citeCtrl);
+  }
 
   if (Array.isArray(cand.found_by) && cand.found_by.length > 0) {
     const qRow = el('div', 'idea-chip-row');
@@ -201,11 +209,13 @@ export function renderCandidateCards(candidates, terms = [], opts = {}) {
     if (p?.key) papersByKey.set(String(p.key), p);
   }
   const onAttachPdf = typeof opts?.onAttachPdf === 'function' ? opts.onAttachPdf : null;
+  const onCitedSince = typeof opts?.onCitedSince === 'function' ? opts.onCitedSince : null;
 
   const triage = opts?.triage && typeof opts.triage === 'object' ? opts.triage : null;
   const triageItems = Array.isArray(triage?.items) ? triage.items : [];
   if (triageItems.length === 0) {
-    const flatCtx = papersByKey.size > 0 || onAttachPdf ? { papersByKey, onAttachPdf } : null;
+    const flatCtx =
+      papersByKey.size > 0 || onAttachPdf || onCitedSince ? { papersByKey, onAttachPdf, onCitedSince } : null;
     for (const cand of list) wrap.append(renderSingleCandidateCard(cand, terms, flatCtx));
     return wrap;
   }
@@ -236,6 +246,7 @@ export function renderCandidateCards(candidates, terms = [], opts = {}) {
     byKey,
     papersByKey,
     onAttachPdf,
+    onCitedSince,
     readingSet,
     maxPapers,
     quickAbstractOnly,
@@ -361,6 +372,7 @@ export function renderCandidateList(candidates, opts = {}) {
       maxPapers: opts.maxPapers,
       onSaveReadingList: opts.onSaveReadingList,
       onAttachPdf: opts.onAttachPdf,
+      onCitedSince: opts.onCitedSince,
     }),
   );
   return section;
@@ -510,6 +522,13 @@ export function renderWhereILooked(whereILooked, opts = {}) {
     }
     panel.append(qList);
   }
+
+  const citeNetEl = renderCitationNetPanel(data, {
+    onCitedSince: opts.onCitedSince,
+    onRunRound2: opts.onRunRound2,
+    onSearchMoreNode: opts.onSearchMoreNode,
+  });
+  if (citeNetEl) panel.append(citeNetEl);
 
   const notSearched = Array.isArray(data.not_searched) ? data.not_searched : [];
   if (notSearched.length > 0) {
