@@ -7,7 +7,7 @@ use crate::lines_sent::{lines_sent_with_ledger, READ_MAP_NODE_TOOL};
 use crate::paper_key::PaperKey;
 use crate::skeleton::{
     build_tex_skeleton_from_ingested, EdgeConfidence, PaperSkeleton, SkEdge, SkEdgeKind,
-    SkEdgeRole, SkEdgeRule, Span, SymbolDef, SymbolDefHow,
+    SkEdgeRole, SkEdgeRule, SkNodeKind, Span, SymbolDef, SymbolDefHow,
 };
 use crate::ResearchEnv;
 use ledger::Ledger;
@@ -367,3 +367,107 @@ fn tampered_skeleton_blob_and_tampered_source_file_fail_closed() {
         .expect_err("tampered source file must fail closed");
     assert!(file_err.contains("changed") || file_err.contains("digest") || file_err.contains("outside"), "got: {file_err}");
 }
+
+#[test]
+fn bare_normalized_number_single_match_and_ambiguity_without_tie_break() {
+    let fx = setup_fixture(SAMPLE_TEX, |skel| {
+        let base = skel.nodes.iter().find(|n| n.label.as_deref() == Some("sec:setup")).expect("sec").clone();
+        let mut sub = base.clone();
+        sub.tag = Some("n-roman-ia".into());
+        sub.label = Some("sec:ia".into());
+        sub.number = Some("I.A".into());
+        sub.title = Some("Subpart".into());
+        sub.order = skel.nodes.len();
+        skel.nodes.push(sub);
+        // Untagged node with same bare number must be ignored by bare-number fallback.
+        let mut untagged = base;
+        untagged.tag = None;
+        untagged.label = None;
+        untagged.number = Some("I.A".into());
+        untagged.order = skel.nodes.len();
+        skel.nodes.push(untagged);
+    });
+    let thm_tag = node_tag_by_label(&fx.skeleton, "thm:main");
+
+    // Unique bare printed numbers resolve cleanly (including parenthesized and case-folded forms).
+    for (q, expected) in [("1.2", thm_tag.as_str()), ("(1.2)", thm_tag.as_str()), ("i.a", "n-roman-ia"), ("(I.A)", "n-roman-ia")] {
+        let out = read_map_node(&fx.env, &fx.ledger, &fx.session, &json!({ "source_id": fx.source_id, "node": q }))
+            .unwrap_or_else(|e| panic!("bare query `{q}` failed: {e}"));
+        assert_eq!(out["tag"].as_str(), Some(expected), "bare query `{q}`");
+    }
+
+    // Ambiguous bare number ("1" matches Section 1, Definition 1, Equation 1) must error with NO silent tie-break.
+    let amb = read_map_node(&fx.env, &fx.ledger, &fx.session, &json!({ "source_id": fx.source_id, "node": "1" }))
+        .expect_err("ambiguous bare number must error");
+    assert!(amb.contains("Ambiguous"), "got: {amb}");
+    assert!(amb.contains("sec:setup") && amb.contains("def:lat") && amb.contains("eq:energy"), "got: {amb}");
+    let amb_paren = read_map_node(&fx.env, &fx.ledger, &fx.session, &json!({ "source_id": fx.source_id, "node": "(1)" }))
+        .expect_err("parenthesized ambiguous bare number must error");
+    assert!(amb_paren.contains("Ambiguous"), "got: {amb_paren}");
+
+    // Cap ambiguous bare-number list at MAX_SUGGESTED_NODES (8) when >8 tagged nodes collide.
+    let fx_many = setup_fixture(SAMPLE_TEX, |skel| {
+        let base = skel.nodes.iter().find(|n| n.label.as_deref() == Some("thm:main")).expect("thm").clone();
+        for i in 0..10 {
+            let mut n = base.clone();
+            n.tag = Some(format!("n-dup-bare-{i}"));
+            n.label = Some(format!("lbl:dup-{i}"));
+            n.number = Some("77".into());
+            n.order = skel.nodes.len();
+            skel.nodes.push(n);
+        }
+    });
+    let amb_many = read_map_node(&fx_many.env, &fx_many.ledger, &fx_many.session, &json!({ "source_id": fx_many.source_id, "node": "77" }))
+        .expect_err("10 colliding bare numbers must error");
+    assert!(amb_many.contains("Ambiguous") && amb_many.contains("matches 8 nodes:"), "got: {amb_many}");
+    assert_eq!(amb_many.split("; ").count(), 8, "got: {amb_many}");
+}
+
+#[test]
+fn not_found_ranks_dot_prefix_ahead_of_roman_ii_iii_and_truncates_cleanly() {
+    let fx = setup_fixture(SAMPLE_TEX, |skel| {
+        let base = skel.nodes.iter().find(|n| n.label.as_deref() == Some("sec:setup")).expect("sec").clone();
+        // Place II and III BEFORE I.A in document order to prove prefix ranking beats document order.
+        let extras = [
+            ("n-sec-ii", "II", "Methods", 0usize),
+            ("n-sec-iii", "III", "Results", 1usize),
+            ("n-sec-iv", "IV", "Discussion", 2usize),
+            ("n-sec-v", "V", "Outlook", 3usize),
+            ("n-sec-ia", "I.A", "Background", 50usize),
+            ("n-sec-ib", "I.B", "Overview", 51usize),
+        ];
+        for n in &mut skel.nodes {
+            n.order += 10;
+        }
+        for (tag, num, title, order) in extras {
+            let mut n = base.clone();
+            n.kind = SkNodeKind::Section;
+            n.tag = Some(tag.into());
+            n.label = None;
+            n.number = Some(num.into());
+            n.title = Some(title.into());
+            n.order = order;
+            skel.nodes.push(n);
+        }
+    });
+
+    let total_tagged = fx.skeleton.nodes.iter().filter(|n| n.tag.is_some()).count();
+    assert!(total_tagged > 8, "fixture must exceed MAX_SUGGESTED_NODES");
+
+    let err = read_map_node(&fx.env, &fx.ledger, &fx.session, &json!({ "source_id": fx.source_id, "node": "I" }))
+        .expect_err("missing bare I must error");
+    let after = err.split("Available nodes: ").nth(1).expect("available nodes section");
+    assert!(after.split("; ").count() <= 8, "truncation suffix must not add extra '; ' separators: {after}");
+    let pos_ia = after.find("n-sec-ia").expect("I.A must appear in suggestions");
+    let pos_ib = after.find("n-sec-ib").expect("I.B must appear in suggestions");
+    let pos_ii = after.find("n-sec-ii").expect("II must appear in suggestions");
+    let pos_iii = after.find("n-sec-iii").expect("III must appear in suggestions");
+    assert!(pos_ia < pos_ii && pos_ia < pos_iii, "I.A must rank ahead of II/III: {after}");
+    assert!(pos_ib < pos_ii && pos_ib < pos_iii, "I.B must rank ahead of II/III: {after}");
+
+    let expected_suffix = format!(
+        ". Showing 8 of {total_tagged} tagged nodes. Pass a tag, TeX label, or printed reference such as `Section III` or `Eq. (4)`."
+    );
+    assert!(err.ends_with(&expected_suffix), "expected suffix `{expected_suffix}`, got: {err}");
+}
+

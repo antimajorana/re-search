@@ -2,7 +2,9 @@
 
 use crate::investigation::anchor::bounded;
 use crate::lines_sent::SentLines;
-use crate::map_authors_claim::{validate_authors_claim, ClaimAnchorFault, InputAuthorsClaim};
+use crate::map_authors_claim::{
+    outside_node_message, validate_authors_claim, ClaimAnchorFault, InputAuthorsClaim,
+};
 use crate::map_defs::{
     HypothesisRecord, IndexedFault, ModelEdgeBasis, ModelEdgeRecord, ModelEdgeRole,
     ReadingItemRecord, ReadingRole, VerifiedMapAnchor, MAX_GIST_CHARS, MAX_PURPOSE_CHARS,
@@ -124,15 +126,6 @@ pub(crate) fn fault(
 
 pub(crate) fn span_contains_anchor(spans: &[Span], anchor: &VerifiedMapAnchor) -> bool {
     spans.iter().any(|s| s.path == anchor.path && s.start_line <= anchor.start_line && anchor.end_line <= s.end_line)
-}
-
-fn anchor_in_node_or_proof(ctx: &ValidationCtx<'_>, root_tag: &str, root_node: &SkNode, anchor: &VerifiedMapAnchor) -> bool {
-    if span_contains_anchor(&root_node.spans, anchor) {
-        return true;
-    }
-    ctx.proofs_for_target
-        .get(root_tag)
-        .is_some_and(|ps| ps.iter().any(|p| span_contains_anchor(&p.spans, anchor)))
 }
 
 fn nearby_valid_tags(ctx: &ValidationCtx<'_>, missing: &str, scope: Option<&BTreeSet<String>>) -> String {
@@ -425,20 +418,21 @@ pub(super) fn validate_item(
                 None => fault(index, "missing_anchors", "No anchor matched for this item.", None),
             });
         }
-        let contained = match (&root_tag, &target_tag_hint) {
-            (Some(rtag), _) => {
-                let rnode = ctx.nodes_by_tag.get(rtag.as_str()).copied();
-                rnode.is_some_and(|rn| kept_anchors.iter().any(|a| anchor_in_node_or_proof(ctx, rtag, rn, a)))
-            }
-            (None, Some(sk_tag)) => {
-                let snode = ctx.nodes_by_tag.get(sk_tag.as_str()).copied();
-                snode.is_some_and(|sn| kept_anchors.iter().any(|a| span_contains_anchor(&sn.spans, a)))
-            }
-            _ => false,
+        let spans: Vec<&Span> = match (&root_tag, &target_tag_hint) {
+            (Some(rtag), _) => ctx.nodes_by_tag.get(rtag.as_str()).map_or_else(Vec::new, |rn| {
+                rn.spans.iter().chain(
+                    ctx.proofs_for_target.get(rtag.as_str()).into_iter().flatten().flat_map(|p| p.spans.iter()),
+                ).collect()
+            }),
+            (None, Some(sk_tag)) => ctx.nodes_by_tag.get(sk_tag.as_str()).map_or_else(Vec::new, |sn| sn.spans.iter().collect()),
+            _ => Vec::new(),
         };
+        let contained = kept_anchors.iter().any(|a| {
+            spans.iter().any(|s| s.path == a.path && s.start_line <= a.start_line && a.end_line <= s.end_line)
+        });
         if !contained {
             let label = target_tag_hint.as_deref().or(root_tag.as_deref()).unwrap_or("node");
-            return Err(fault(index, "anchor_outside_node", format!("No matched anchor lies inside node `{label}` spans."), None));
+            return Err(fault(index, "anchor_outside_node", outside_node_message(label, &spans, &kept_anchors), None));
         }
         pending_dropped.extend(anchor_faults.iter().map(|e| json!({ "owner": e.owner, "code": e.code })));
     }

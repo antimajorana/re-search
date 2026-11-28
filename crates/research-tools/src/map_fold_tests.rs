@@ -405,3 +405,154 @@ fn task_fold_uses_f9_model_calls_and_maps_all_run_states() {
     assert_eq!(aborted.stored_status, InvestigateTaskState::Interrupted);
     assert_eq!(aborted.run_state, RunState::Interrupted);
 }
+
+fn reading_item(tag: &str, fp: &str, line: usize, quote: &str) -> ReadingItemRecord {
+    ReadingItemRecord {
+        tag: tag.into(),
+        node_fp: fp.into(),
+        attach_to: None,
+        model_kind: None,
+        role: Some(ReadingRole::Supporting),
+        gist: Some(format!("Gist for {tag}.")),
+        purpose: None,
+        hypotheses: Vec::new(),
+        anchors: vec![sample_anchor(line, quote)],
+        authors_claim: None,
+    }
+}
+
+fn reading_payload(
+    request_seq: u64,
+    items: Vec<ReadingItemRecord>,
+    rejected_items: Vec<IndexedFault>,
+    done: bool,
+) -> Value {
+    serde_json::to_value(MapReadingEventPayload {
+        schema_version: 1,
+        request_seq,
+        source_id: "src1".into(),
+        skeleton_seq: 2,
+        done,
+        items,
+        edges: Vec::new(),
+        limitations: Vec::new(),
+        rejected: ReadingRejected { items: rejected_items, edges: Vec::new() },
+        anchor_report: json!({ "dropped": [], "corrected": [] }),
+    })
+    .unwrap()
+}
+
+#[test]
+fn unresolved_rejected_items_tracks_retries_within_and_across_request_seq() {
+    let skel = make_skeleton();
+    let (lem_tag, lem_fp) = tag_and_fp(&skel, "lem:a");
+    let (thm_tag, thm_fp) = tag_and_fp(&skel, "thm:b");
+
+    // Task 1 (req_seq=3): thm_tag rejected via anchor_outside_node (message tag) AND lem_tag rejected
+    // via quote_not_found (attributed from tool.request inline args); then BOTH retried & accepted in req_seq=3.
+    let tool_req_args = json!({
+        "request_seq": 3, "source_id": "src1", "done": false, "edges": [], "limitations": [],
+        "items": [{ "tag": thm_tag }, { "tag": lem_tag }]
+    })
+    .to_string();
+    let t1_first = reading_payload(
+        3,
+        vec![],
+        vec![
+            IndexedFault {
+                index: 0,
+                code: "anchor_outside_node".into(),
+                message: format!("No matched anchor lies inside node `{thm_tag}` spans (src1/paper.tex:9-11)."),
+                true_text: None,
+            },
+            IndexedFault {
+                index: 1,
+                code: "quote_not_found".into(),
+                message: "Quote did not match lines 6-8.".into(),
+                true_text: Some("Every finite sum...".into()),
+            },
+        ],
+        false,
+    );
+    let t1_retry_thm = reading_payload(3, vec![reading_item(&thm_tag, &thm_fp, 10, "iterated flow")], vec![], false);
+    let t1_retry_lem = reading_payload(3, vec![reading_item(&lem_tag, &lem_fp, 7, "finite sum")], vec![], true);
+
+    // Task 2 (req_seq=10): thm_tag rejected and NOT accepted in req_seq=10, then accepted only in Task 3 (req_seq=15).
+    let t2_rej = reading_payload(
+        10,
+        vec![reading_item(&lem_tag, &lem_fp, 7, "finite sum")],
+        vec![IndexedFault {
+            index: 1,
+            code: "anchor_outside_node".into(),
+            message: format!("No matched anchor lies inside node `{thm_tag}` spans (src1/paper.tex:9-11)."),
+            true_text: None,
+        }],
+        true,
+    );
+    let t3_accept = reading_payload(15, vec![reading_item(&thm_tag, &thm_fp, 10, "iterated flow")], vec![], true);
+
+    // Step 1: midway through Task 1 after retrying only thm_tag -> 2 raw rejected, 1 unresolved (lem_tag).
+    let mut events = vec![
+        ev(1, MARKER_INVESTIGATION_STARTED, json!({})),
+        ev(2, EVENT_INVESTIGATION_SKELETON, json!({ "source_id": "src1" })),
+        ev(3, MARKER_TASK_REQUESTED, json!({ "task": "orient", "source_id": "src1", "skeleton_seq": 2 })),
+        ev(4, "tool.request", json!({ "call_id": "c1", "tool": "record_map_reading", "args": { "inline": tool_req_args } })),
+        ev(5, EVENT_INVESTIGATION_READING, t1_first),
+        ev(6, EVENT_INVESTIGATION_READING, t1_retry_thm),
+    ];
+    let mid = fold_map(&skel, &events, true);
+    assert_eq!(mid.tasks[0].rejected_items, 2);
+    assert_eq!(mid.tasks[0].unresolved_rejected_items, 1);
+
+    // Step 2: lem_tag accepted in same request_seq -> raw rejected_items stays 2, unresolved drops to 0.
+    events.extend([
+        ev(7, EVENT_INVESTIGATION_READING, t1_retry_lem),
+        ev(8, MARKER_TASK_FINISHED, json!({ "request_seq": 3, "status": "done" })),
+        ev(10, MARKER_TASK_REQUESTED, json!({ "task": "orient", "source_id": "src1", "skeleton_seq": 2 })),
+        ev(11, EVENT_INVESTIGATION_READING, t2_rej),
+        ev(12, MARKER_TASK_FINISHED, json!({ "request_seq": 10, "status": "done" })),
+        ev(15, MARKER_TASK_REQUESTED, json!({ "task": "orient", "source_id": "src1", "skeleton_seq": 2 })),
+        ev(16, EVENT_INVESTIGATION_READING, t3_accept),
+        ev(17, MARKER_TASK_FINISHED, json!({ "request_seq": 15, "status": "done" })),
+    ]);
+
+    let folded = fold_map(&skel, &events, false);
+    assert_eq!(folded.tasks.len(), 3);
+    assert_eq!(folded.tasks[0].rejected_items, 2);
+    assert_eq!(folded.tasks[0].unresolved_rejected_items, 0);
+    // Task 2's rejected thm_tag must NOT be cleared by Task 3's separate request_seq!
+    assert_eq!(folded.tasks[1].rejected_items, 1);
+    assert_eq!(folded.tasks[1].unresolved_rejected_items, 1);
+    assert_eq!(folded.tasks[2].rejected_items, 0);
+    assert_eq!(folded.tasks[2].unresolved_rejected_items, 0);
+
+    // Verify clean JSON serialization for desktop-server and JS UI consumers.
+    let task0_json = serde_json::to_value(&folded.tasks[0]).unwrap();
+    assert_eq!(task0_json["rejected_items"], 2);
+    assert_eq!(task0_json["unresolved_rejected_items"], 0);
+}
+
+#[test]
+fn task_fold_prefers_cap_key_over_max_calls_and_call_cap() {
+    let skel = make_skeleton();
+    let events = vec![
+        ev(1, MARKER_INVESTIGATION_STARTED, json!({})),
+        ev(2, EVENT_INVESTIGATION_SKELETON, json!({ "source_id": "src1" })),
+        ev(3, MARKER_TASK_REQUESTED, json!({ "task": "orient", "source_id": "src1", "skeleton_seq": 2, "cap": 14 })),
+        ev(4, MARKER_TASK_FINISHED, json!({ "request_seq": 3, "status": "done" })),
+        ev(5, MARKER_TASK_REQUESTED, json!({ "task": "orient", "source_id": "src1", "skeleton_seq": 2, "cap": 15, "max_calls": 20, "call_cap": 25 })),
+        ev(6, MARKER_TASK_FINISHED, json!({ "request_seq": 5, "status": "done" })),
+        ev(7, MARKER_TASK_REQUESTED, json!({ "task": "orient", "source_id": "src1", "skeleton_seq": 2, "cap": null, "max_calls": 20, "call_cap": 25 })),
+        ev(8, MARKER_TASK_FINISHED, json!({ "request_seq": 7, "status": "done" })),
+        ev(9, MARKER_TASK_REQUESTED, json!({ "task": "orient", "source_id": "src1", "skeleton_seq": 2, "call_cap": 25 })),
+        ev(10, MARKER_TASK_FINISHED, json!({ "request_seq": 9, "status": "done" })),
+    ];
+
+    let folded = fold_map(&skel, &events, false);
+    assert_eq!(folded.tasks.len(), 4);
+    assert_eq!(folded.tasks[0].model_calls.cap, 14);
+    assert_eq!(folded.tasks[1].model_calls.cap, 15);
+    assert_eq!(folded.tasks[2].model_calls.cap, 20);
+    assert_eq!(folded.tasks[3].model_calls.cap, 25);
+}
+

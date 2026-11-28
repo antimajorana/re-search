@@ -194,6 +194,8 @@ pub struct FoldedTask {
     pub saved_items: usize,
     pub saved_edges: usize,
     pub rejected_items: usize,
+    #[serde(default)]
+    pub unresolved_rejected_items: usize,
     pub rejected_edges: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -220,6 +222,17 @@ struct TaskCounts {
     saved_edges: usize,
     rejected_items: usize,
     rejected_edges: usize,
+    unresolved_by_tag: BTreeMap<(bool, String), usize>,
+    unattributed_rejected: usize,
+}
+
+impl TaskCounts {
+    fn unresolved_rejected_items(&self) -> usize {
+        self.unresolved_by_tag
+            .values()
+            .copied()
+            .fold(self.unattributed_rejected, usize::saturating_add)
+    }
 }
 
 #[derive(Default)]
@@ -228,6 +241,7 @@ struct FoldAcc {
     edges_map: BTreeMap<(String, String, ModelEdgeRole), FoldedModelEdge>,
     limitations: Vec<String>,
     task_counts: BTreeMap<u64, TaskCounts>,
+    last_reading_call_tags: BTreeMap<u64, Vec<Option<String>>>,
     child_links: Vec<(String, String)>,
 }
 
@@ -259,6 +273,35 @@ fn resolve_expected_fp<'a>(
     None
 }
 
+fn record_reading_tool_request(ev: &Event, skeleton: &PaperSkeleton, acc: &mut FoldAcc) {
+    if ev.payload.get("tool").and_then(Value::as_str) != Some(crate::map_defs::RECORD_MAP_READING) { return; }
+    let Some(raw_args) = ev.payload.get("args") else { return };
+    let owned: Value;
+    let args = match raw_args.get("inline").and_then(Value::as_str) {
+        Some(inline) => { let Ok(v) = serde_json::from_str::<Value>(inline) else { return }; owned = v; &owned }
+        None => raw_args,
+    };
+    let Some(req_seq) = args.get("request_seq").and_then(Value::as_u64) else { return };
+    if args.get("source_id").and_then(Value::as_str) != Some(skeleton.source_id.as_str()) { return; }
+    let Some(items) = args.get("items").and_then(Value::as_array) else { return };
+    let tags = items.iter().map(|it| it.get("tag").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)).collect();
+    acc.last_reading_call_tags.insert(req_seq, tags);
+}
+
+fn extract_backticked_tag(msg: &str, nodes_by_tag: &BTreeMap<&str, &SkNode>, folded_nodes: &BTreeMap<String, FoldedNodeReading>) -> Option<String> {
+    let mut rest = msg;
+    while let Some(start) = rest.find('`') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('`') else { break };
+        let tok = after[..end].trim();
+        let is_tag = !tok.is_empty() && !tok.chars().any(char::is_whitespace)
+            && (nodes_by_tag.contains_key(tok) || folded_nodes.contains_key(tok) || (tok.len() > 2 && (tok.starts_with("n-") || tok.starts_with("m-"))));
+        if is_tag { return Some(tok.to_string()); }
+        rest = &after[end + 1..];
+    }
+    None
+}
+
 fn fold_reading_event(
     ev: &Event,
     skeleton: &PaperSkeleton,
@@ -269,11 +312,24 @@ fn fold_reading_event(
     let Ok(payload) = serde_json::from_value::<MapReadingEventPayload>(ev.payload.clone()) else { return };
     if payload.source_id != skeleton.source_id { return; }
 
+    let call_tags = acc.last_reading_call_tags.remove(&payload.request_seq);
+    let raw_rej = ev.payload.get("rejected").and_then(|r| r.get("items")).and_then(Value::as_array);
     let tc = acc.task_counts.entry(payload.request_seq).or_default();
     tc.saved_items = tc.saved_items.saturating_add(payload.items.len());
     tc.saved_edges = tc.saved_edges.saturating_add(payload.edges.len());
     tc.rejected_items = tc.rejected_items.saturating_add(payload.rejected.items.len());
     tc.rejected_edges = tc.rejected_edges.saturating_add(payload.rejected.edges.len());
+    for item in &payload.items { tc.unresolved_by_tag.remove(&(false, item.tag.clone())); }
+    for (pos, fault) in payload.rejected.items.iter().enumerate() {
+        let tag = raw_rej.and_then(|arr| arr.get(pos)).and_then(|v| v.get("tag")).and_then(Value::as_str)
+            .map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+            .or_else(|| call_tags.as_ref().and_then(|t| t.get(fault.index)).and_then(Clone::clone))
+            .or_else(|| extract_backticked_tag(&fault.message, nodes_by_tag, &acc.nodes));
+        match tag {
+            Some(t) => { let e = tc.unresolved_by_tag.entry((false, t)).or_insert(0); *e = e.saturating_add(1); }
+            None => tc.unattributed_rejected = tc.unattributed_rejected.saturating_add(1),
+        }
+    }
 
     for lim in payload.limitations {
         let trimmed = lim.trim();
@@ -347,6 +403,13 @@ fn fold_context_event(
     let tc = acc.task_counts.entry(payload.request_seq).or_default();
     tc.saved_items = tc.saved_items.saturating_add(payload.cards.len());
     tc.rejected_items = tc.rejected_items.saturating_add(payload.rejected.len());
+    if !payload.cards.is_empty() {
+        tc.unresolved_by_tag.remove(&(true, payload.tag.clone()));
+    }
+    if !payload.rejected.is_empty() {
+        let entry = tc.unresolved_by_tag.entry((true, payload.tag.clone())).or_insert(0);
+        *entry = entry.saturating_add(payload.rejected.len());
+    }
 
     let expected_fp = resolve_expected_fp(payload.tag.as_str(), None, nodes_by_tag, &acc.nodes);
     let skel_mismatch = skeleton_seq.is_some_and(|seq| seq != payload.skeleton_seq);
@@ -421,7 +484,9 @@ fn fold_tasks(
         let depth = ev.payload.get("depth").and_then(Value::as_str).map(str::to_string);
         let focus = ev.payload.get("focus").and_then(Value::as_str).map(str::to_string);
         let task_skel_seq = ev.payload.get("skeleton_seq").and_then(Value::as_u64);
-        let cap = ev.payload.get("max_calls").or_else(|| ev.payload.get("call_cap")).and_then(Value::as_u64)
+        let cap = ev.payload.get("cap").and_then(Value::as_u64)
+            .or_else(|| ev.payload.get("max_calls").and_then(Value::as_u64))
+            .or_else(|| ev.payload.get("call_cap").and_then(Value::as_u64))
             .or_else(|| InvestigationTaskKind::from_str_exact(&task).map(|k| u64::from(k.default_call_cap())))
             .unwrap_or(8);
 
@@ -460,6 +525,7 @@ fn fold_tasks(
             saved_items: counts.map_or(0, |c| c.saved_items),
             saved_edges: counts.map_or(0, |c| c.saved_edges),
             rejected_items: counts.map_or(0, |c| c.rejected_items),
+            unresolved_rejected_items: counts.map_or(0, TaskCounts::unresolved_rejected_items),
             rejected_edges: counts.map_or(0, |c| c.rejected_edges),
             error,
         });
@@ -480,6 +546,7 @@ pub fn fold_map(skeleton: &PaperSkeleton, events: &[Event], running: bool) -> Fo
 
     for ev in slice {
         match ev.kind.as_str() {
+            "tool.request" => record_reading_tool_request(ev, skeleton, &mut acc),
             EVENT_INVESTIGATION_READING => fold_reading_event(ev, skeleton, skeleton_seq, &nodes_by_tag, &mut acc),
             EVENT_INVESTIGATION_CONTEXT => fold_context_event(ev, skeleton, skeleton_seq, &nodes_by_tag, &mut acc),
             EVENT_INVESTIGATION_NOTE => fold_note_event(ev, skeleton, &nodes_by_tag, &mut acc.nodes),

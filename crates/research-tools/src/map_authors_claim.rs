@@ -5,6 +5,7 @@ use crate::investigation::anchor::bounded;
 use crate::map_defs::{
     AuthorsClaimLabel, AuthorsClaimRecord, IndexedFault, VerifiedMapAnchor, MAX_READING_ANCHORS,
 };
+use crate::skeleton::Span;
 use crate::status_badge::detect_cues_from_anchors;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -171,3 +172,32 @@ where
         cues,
     })
 }
+
+/// Build an actionable `anchor_outside_node` message listing the target node's allowed line spans
+/// (including root proof spans for model nodes), the matched anchor line spans, and where
+/// Introduction/Conclusion summary quotes belong.
+pub(crate) fn outside_node_message(
+    label: &str,
+    spans: &[&Span],
+    kept_anchors: &[VerifiedMapAnchor],
+) -> String {
+    let node_spans = if spans.is_empty() {
+        "none".to_string()
+    } else {
+        spans
+            .iter()
+            .map(|s| format!("{}:{}-{}", s.path, s.start_line, s.end_line))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let anchor_spans = kept_anchors
+        .iter()
+        .map(|a| format!("{}:{}-{}", a.path, a.start_line, a.end_line))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "No matched anchor lies inside node `{label}` spans ({node_spans}); matched anchors were at ({anchor_spans}). \
+         At least one item anchor in `anchors` must lie inside the node's spans; place Introduction/Conclusion summary quotes in `authors_claim.anchors`."
+    )
+}
+

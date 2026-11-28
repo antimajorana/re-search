@@ -536,3 +536,55 @@ fn v8_model_nodes_stable_across_reruns_arbitrary_depth_and_sibling_scope_isolati
     assert!(!folded.nodes[&m_step1].any_stale);
     assert!(!folded.nodes[&m_sub1a].any_stale);
 }
+
+#[test]
+fn anchor_outside_node_message_reports_spans_and_authors_claim_guidance() {
+    let fx = Fixture::new();
+    let req_seq = fx.start_task("orient", &[]);
+    fx.supply_all_lines(req_seq, CALLER, &fx.file_sha256);
+
+    let thm_tag = fx.tag_by_label("thm:main");
+    let thm_node = fx.skeleton.nodes.iter().find(|n| n.tag.as_deref() == Some(&thm_tag)).unwrap();
+    let proof_node = fx.skeleton.nodes.iter().find(|n| n.kind == SkNodeKind::Proof && n.proof_of.as_deref() == Some(&thm_tag)).unwrap();
+    let thm_span = format!("{}:{}-{}", thm_node.spans[0].path, thm_node.spans[0].start_line, thm_node.spans[0].end_line);
+    let proof_span = format!("{}:{}-{}", proof_node.spans[0].path, proof_node.spans[0].start_line, proof_node.spans[0].end_line);
+    let intro_line = fx.line_of("We prove a sharp bound on finite lattice spectra");
+    let thm_line = fx.line_of("spectral flow preserves rapid decay");
+    let intro_span = format!("{}:{intro_line}-{intro_line}", fx.path);
+
+    let res = record_map_reading(&fx.env, &fx.ledger, SID, CALLER, &fx.call_args(req_seq, json!([
+        {
+            "tag": thm_tag, "gist": "Intro quote placed in item anchors.",
+            "anchors": [fx.anchor(intro_line, "We prove a sharp bound on finite lattice spectra")]
+        },
+        {
+            "new": { "id": "step-out", "attach_to": thm_tag, "kind": "proof_step" },
+            "gist": "Model step with outside anchor.",
+            "anchors": [fx.anchor(intro_line, "We prove a sharp bound on finite lattice spectra")]
+        },
+        {
+            "tag": thm_tag, "gist": "Inside anchor with intro quote in authors_claim.anchors.",
+            "anchors": [fx.anchor(thm_line, "spectral flow preserves rapid decay")],
+            "authors_claim": { "label": "new", "anchors": [fx.anchor(intro_line, "We prove a sharp bound on finite lattice spectra")] }
+        }
+    ]), json!([]), json!([]), false)).unwrap();
+
+    assert_eq!(res["accepted_items"], 1);
+    assert_eq!(res["items"][2]["status"], "accepted");
+
+    let sk_rej = &res["items"][0];
+    assert_eq!(sk_rej["code"], "anchor_outside_node");
+    assert!(sk_rej.get("true_text").is_none(), "must not overload true_text: {sk_rej}");
+    let sk_msg = sk_rej["message"].as_str().unwrap();
+    assert!(sk_msg.contains(&thm_tag) && sk_msg.contains(&thm_span), "missing node span: {sk_msg}");
+    assert!(sk_msg.contains(&intro_span), "missing matched anchor span: {sk_msg}");
+    assert!(sk_msg.contains("authors_claim.anchors") && sk_msg.contains("Introduction/Conclusion"), "missing rule: {sk_msg}");
+
+    let model_rej = &res["items"][1];
+    assert_eq!(model_rej["code"], "anchor_outside_node");
+    assert!(model_rej.get("true_text").is_none(), "must not overload true_text: {model_rej}");
+    let m_msg = model_rej["message"].as_str().unwrap();
+    assert!(m_msg.contains(&thm_span) && m_msg.contains(&proof_span), "model node must list statement + root proof spans: {m_msg}");
+    assert!(m_msg.contains(&intro_span) && m_msg.contains("authors_claim.anchors"), "got: {m_msg}");
+}
+

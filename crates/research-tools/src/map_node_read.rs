@@ -405,8 +405,24 @@ fn resolve_node<'a>(skeleton: &'a PaperSkeleton, source_id: &str, query: &str) -
             .collect();
         if matches.len() == 1 { return Ok(matches[0]); }
         if matches.len() > 1 { return Err(format_ambiguous(query, &matches)); }
+    } else {
+        let want = normalize_ref_number(query);
+        if !want.is_empty() && !want.chars().any(char::is_whitespace) {
+            let matches: Vec<&SkNode> = skeleton
+                .nodes
+                .iter()
+                .filter(|n| {
+                    n.tag.is_some()
+                        && n.number.as_deref().is_some_and(|num| normalize_ref_number(num) == want)
+                })
+                .collect();
+            if matches.len() == 1 { return Ok(matches[0]); }
+            if matches.len() > 1 {
+                return Err(format_ambiguous(query, &matches[..matches.len().min(MAX_SUGGESTED_NODES)]));
+            }
+        }
     }
-    Err(format_not_found(skeleton, source_id, query, parsed.map(|(k, _)| k)))
+    Err(format_not_found(skeleton, source_id, query, parsed.as_ref()))
 }
 
 fn parse_printed_ref(query: &str) -> Option<(SkNodeKind, String)> {
@@ -455,20 +471,40 @@ fn format_ambiguous(query: &str, matches: &[&SkNode]) -> String {
     format!("Ambiguous node reference `{query}` matches {} nodes: {list}. Pass an exact tag.", matches.len())
 }
 
-fn format_not_found(skeleton: &PaperSkeleton, source_id: &str, query: &str, preferred: Option<SkNodeKind>) -> String {
-    let mut picked: Vec<&SkNode> = Vec::with_capacity(MAX_SUGGESTED_NODES);
-    if let Some(kind) = preferred {
-        picked.extend(skeleton.nodes.iter().filter(|n| n.tag.is_some() && n.kind == kind).take(MAX_SUGGESTED_NODES));
-    }
-    for n in skeleton.nodes.iter().filter(|n| n.tag.is_some()) {
-        if picked.len() >= MAX_SUGGESTED_NODES { break; }
-        if !picked.iter().any(|p| p.order == n.order) { picked.push(n); }
-    }
-    if picked.is_empty() {
+fn format_not_found(
+    skeleton: &PaperSkeleton,
+    source_id: &str,
+    query: &str,
+    parsed: Option<&(SkNodeKind, String)>,
+) -> String {
+    let mut tagged: Vec<&SkNode> = skeleton.nodes.iter().filter(|n| n.tag.is_some()).collect();
+    let total_tagged = tagged.len();
+    if total_tagged == 0 {
         return format!("Node `{query}` not found in skeleton for `{source_id}` (skeleton has no tagged nodes).");
     }
+    let q = parsed.map(|(_, n)| n.clone()).unwrap_or_else(|| normalize_ref_number(query));
+    let q_dot = format!("{q}.");
+    let target_kind = parsed.map_or(SkNodeKind::Section, |(k, _)| *k);
+    tagged.sort_by_key(|n| {
+        let num_match = !q.is_empty()
+            && n.number.as_deref().is_some_and(|num| {
+                let norm = normalize_ref_number(num);
+                norm == q || norm.starts_with(&q_dot)
+            });
+        (!num_match, n.kind != target_kind, n.order)
+    });
+    let picked = &tagged[..total_tagged.min(MAX_SUGGESTED_NODES)];
     let list = picked.iter().map(|n| format_node_brief(n)).collect::<Vec<_>>().join("; ");
-    format!("Node `{query}` not found in skeleton for `{source_id}`. Available nodes: {list}")
+    let mut msg = format!("Node `{query}` not found in skeleton for `{source_id}`. Available nodes: {list}");
+    if picked.len() < total_tagged {
+        let _ = write!(
+            &mut msg,
+            ". Showing {} of {} tagged nodes. Pass a tag, TeX label, or printed reference such as `Section III` or `Eq. (4)`.",
+            picked.len(),
+            total_tagged,
+        );
+    }
+    msg
 }
 
 fn format_node_brief(node: &SkNode) -> String {
