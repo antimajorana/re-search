@@ -152,12 +152,21 @@ fn streamed_turn_with_one_tool_call_then_resume() {
     }
 
     // Provenance: the route, endpoint and model, never the token.
+    assert!(!agent::sends_output_cap(ProviderKind::ChatGpt.wire_id()));
+    assert!(agent::sends_output_cap(ProviderKind::Anthropic.wire_id()));
+    assert!(agent::sends_output_cap(ProviderKind::OpenAi.wire_id()));
     let events = Ledger::open_existing(&dir.path).unwrap().read_session(session).unwrap();
     let start = &events[0].payload;
     assert_eq!(start["route"], json!("api"));
     assert_eq!(start["provider"], json!("chatgpt-responses"));
     assert_eq!(start["api_key_env"], json!("chatgpt-sign-in"));
     assert_eq!(start["model"], json!("gpt-test-sol"));
+    assert_eq!(start["max_tokens"], json!(cfg.max_tokens));
+    assert_eq!(start["max_tokens_sent"], json!(false));
+    for req_ev in events.iter().filter(|e| e.kind == "model.request") {
+        assert_eq!(req_ev.payload["max_tokens"], json!(cfg.max_tokens));
+        assert_eq!(req_ev.payload["max_tokens_sent"], json!(false));
+    }
 
     // A later turn rehydrates the history from the recorded stream.
     let rcfg = ResumeConfig {

@@ -106,7 +106,7 @@ pub use strategist::{
     StrategistAdvice, MAX_STRATEGIST_CONSULTATIONS,
 };
 pub use transport::{
-    normalize_reasoning_effort, CancelToken, ContentBlock, Message, ModelRequest, ModelResponse,
+    normalize_reasoning_effort, sends_output_cap, CancelToken, ContentBlock, Message, ModelRequest, ModelResponse,
     NoopStreamObserver, PreparedRequest, ProviderKind, Role, StopReason, StreamObserver, ToolSpec,
     Transport, TransportError, TransportErrorKind, TransportInfo, DEFAULT_CHATGPT_BASE,
     DEFAULT_CHATGPT_MODEL, DEFAULT_GEMINI_BASE, DEFAULT_GEMINI_MODEL, DEFAULT_OLLAMA_BASE,

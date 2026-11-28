@@ -45,6 +45,7 @@ pub struct AutonomousConfig {
     pub interactive_plan_mode: bool,
     pub pause_after_explore: bool,
     pub project_context: Option<String>,
+    pub final_turn_tools: Vec<String>,
 }
 
 impl Default for AutonomousConfig {
@@ -56,6 +57,7 @@ impl Default for AutonomousConfig {
             interactive_plan_mode: false,
             pause_after_explore: false,
             project_context: None,
+            final_turn_tools: Vec::new(),
         }
     }
 }
@@ -123,6 +125,7 @@ pub fn run_autonomous_research_loop(
         "system_prompt": system_prompt,
         "max_turns": cfg.max_turns,
         "max_tokens": cfg.max_tokens,
+        "max_tokens_sent": crate::transport::sends_output_cap(info.provider),
         "policy_version": router.policy().version.as_str(),
         "containment": cfg.containment,
         "contained": cfg.contained,
@@ -251,6 +254,7 @@ pub fn resume_autonomous_research_loop(
         "system_prompt": system_prompt,
         "max_turns": cfg.max_turns,
         "max_tokens": cfg.max_tokens,
+        "max_tokens_sent": crate::transport::sends_output_cap(info.provider),
         "policy_version": policy_version,
         "containment": cfg.containment,
         "contained": cfg.contained,
@@ -309,6 +313,7 @@ fn drive_autonomous_rounds(
     } else {
         Cow::Borrowed(system_prompt)
     };
+    let final_turn_tools: Vec<&str> = auto_cfg.final_turn_tools.iter().map(String::as_str).collect();
     let max_rounds = auto_cfg.max_verification_rounds.max(1);
     let mut effective_turn_budget = max_turns_budget;
     let mut turns_used = 0u32;
@@ -348,6 +353,7 @@ fn drive_autonomous_rounds(
                 delegation: roles.delegation.as_ref(),
                 human: roles.human,
                 pause_after_explore: auto_cfg.pause_after_explore,
+                final_turn_tools: &final_turn_tools,
             },
         )?;
 

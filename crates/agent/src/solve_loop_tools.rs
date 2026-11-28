@@ -78,6 +78,7 @@ pub(super) fn emit_brief_resume(
             "prompt": prompt_val,
             "max_turns": max_turns,
             "max_tokens": cfg.max_tokens,
+            "max_tokens_sent": crate::transport::sends_output_cap(info.provider),
             "policy_version": router.policy().version.as_str(),
             "tool_profile": PROFILE_SOLVE_V1,
             "resume_mode": RESUME_MODE_BRIEF,

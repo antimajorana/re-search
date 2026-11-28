@@ -205,6 +205,13 @@ pub fn normalize_reasoning_effort(raw: Option<&str>) -> Option<String> {
     }
 }
 
+/// Whether the provider's wire format sends `ModelRequest::max_tokens` as an
+/// output-token cap. The ChatGPT-plan Responses route omits `max_output_tokens`
+/// because that endpoint rejects it.
+pub fn sends_output_cap(provider: &str) -> bool {
+    provider != ProviderKind::ChatGpt.wire_id()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelRequest {
     pub model: String,

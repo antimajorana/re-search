@@ -515,3 +515,70 @@ fn http_errors_malformed_responses_redirects_and_secret_scrubbing() {
     assert_eq!(err.kind, TransportErrorKind::OversizedResponse);
     assert_eq!(err.status, Some(502));
 }
+
+#[test]
+fn max_tokens_sent_is_recorded_true_and_sent_on_wire() {
+    assert!(agent::sends_output_cap(agent::ProviderKind::Anthropic.wire_id()));
+    assert!(!agent::sends_output_cap(agent::ProviderKind::ChatGpt.wire_id()));
+
+    let reply = json!({
+        "id": "msg_cap",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-4-5",
+        "stop_reason": "end_turn",
+        "content": [{ "type": "text", "text": "ok" }],
+        "usage": { "input_tokens": 5, "output_tokens": 2 }
+    });
+    let (base_url, captured, handle) = spawn_single_response_server(
+        "200 OK",
+        &[("Content-Type", "application/json")],
+        serde_json::to_vec(&reply).unwrap(),
+    );
+    let transport = AnthropicTransport::new(
+        AnthropicConfig { base_url, ..Default::default() },
+        SecretKey::new("sk-ant-cap-test".into()).unwrap(),
+        "ANTHROPIC_API_KEY",
+    )
+    .unwrap();
+    struct NoApprove;
+    impl tools::Approver for NoApprove {
+        fn decide(&self, req: &tools::ApprovalRequest) -> tools::ApprovalReply {
+            tools::ApprovalReply { approved: false, digest: req.digest.clone(), by: "test".into() }
+        }
+    }
+    let dir = tempfile::TempDir::new().unwrap();
+    let session = "s-ant-cap";
+    let router = tools::Router::new(
+        tools::Registry::new(),
+        tools::builtin::default_policy(),
+        ledger::Ledger::open(dir.path()).unwrap(),
+        session,
+        Arc::new(NoApprove),
+    );
+    let ledger = ledger::Ledger::open(dir.path()).unwrap();
+    let cfg = agent::AgentConfig {
+        prompt: "hi".into(),
+        model_requested: "claude-haiku-4-5".into(),
+        model: "claude-haiku-4-5".into(),
+        system_prompt: "sys".into(),
+        max_turns: 2,
+        max_tokens: 432,
+        containment: "none".into(),
+        contained: false,
+        reasoning_effort: None,
+    };
+    let out = agent::run_agent_loop(&transport, &router, &ledger, &cfg, &mut agent::NoopSink).unwrap();
+    handle.join().unwrap();
+    assert!(matches!(out, agent::SessionOutcome::Completed { turns: 1, .. }), "{out:?}");
+
+    let wire: Value = serde_json::from_slice(&captured.lock().unwrap().as_ref().unwrap().body).unwrap();
+    assert_eq!(wire["max_tokens"], json!(432));
+    let events = ledger.read_session(session).unwrap();
+    let start = events.iter().find(|e| e.kind == "session.start").unwrap();
+    assert_eq!(start.payload["max_tokens"], json!(432));
+    assert_eq!(start.payload["max_tokens_sent"], json!(true));
+    let req_ev = events.iter().find(|e| e.kind == "model.request").unwrap();
+    assert_eq!(req_ev.payload["max_tokens"], json!(432));
+    assert_eq!(req_ev.payload["max_tokens_sent"], json!(true));
+}

@@ -389,6 +389,7 @@ pub fn run_research_loop(
         "system_prompt": system_prompt,
         "max_turns": cfg.max_turns,
         "max_tokens": cfg.max_tokens,
+        "max_tokens_sent": crate::transport::sends_output_cap(info.provider),
         "policy_version": router.policy().version.as_str(),
         "containment": cfg.containment,
         "contained": cfg.contained,
@@ -423,6 +424,7 @@ pub fn run_research_loop(
             delegation: None,
             human: None,
             pause_after_explore: false,
+            final_turn_tools: &[],
         },
     )?;
 

@@ -194,6 +194,7 @@ pub fn run_solve_loop(
             "system_prompt": system_prompt,
             "max_turns": setup.budgets.max_model_calls_per_leg,
             "max_tokens": cfg.max_tokens,
+            "max_tokens_sent": crate::transport::sends_output_cap(info.provider),
             "policy_version": router.policy().version.as_str(),
             "containment": cfg.containment,
             "contained": cfg.contained,
@@ -359,6 +360,7 @@ fn run_solve_legs(
         tool_specs.extend(hooks.extra_tool_specs());
     }
 
+    let info = transport.info();
     let mut total_turns = ctx.total_turns_before;
     let started = Instant::now();
     loop {
@@ -434,6 +436,7 @@ fn run_solve_legs(
                 "run_id": ctx.run_id,
                 "message_count": req.messages.len(),
                 "max_tokens": cfg.max_tokens,
+                "max_tokens_sent": crate::transport::sends_output_cap(info.provider),
                 "raw_blob": req_blob,
             }),
         )?;

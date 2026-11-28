@@ -494,7 +494,7 @@ fn resume_rebuilds_20kb_with_interleaved_reader_tool_results() {
         model: "claude-sonnet-4-6", system_prompt: "Sys", max_turns: 4, max_tokens: 2048,
         reasoning_effort: None, start_turn: 1,
         initial_messages: vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: "Read paper".into() }] }],
-        mask_keep_recent: None, cancel: None, emit_end_event: true, delegation: Some(&dcfg), human: None, pause_after_explore: false,
+        mask_keep_recent: None, cancel: None, emit_end_event: true, delegation: Some(&dcfg), human: None, pause_after_explore: false, final_turn_tools: &[],
     }).unwrap();
 
     let expected_defs: Vec<ToolDef> = defs.iter().map(|d| (*d).clone()).collect();
@@ -549,7 +549,7 @@ fn list_mode_over_4kb_resumes() {
         model: "claude-sonnet-4-6", system_prompt: "Sys", max_turns: 4, max_tokens: 2048,
         reasoning_effort: None, start_turn: 1,
         initial_messages: vec![Message { role: Role::User, content: vec![ContentBlock::Text { text: "List evidence".into() }] }],
-        mask_keep_recent: None, cancel: None, emit_end_event: true, delegation: Some(&dcfg), human: None, pause_after_explore: false,
+        mask_keep_recent: None, cancel: None, emit_end_event: true, delegation: Some(&dcfg), human: None, pause_after_explore: false, final_turn_tools: &[],
     }).unwrap();
 
     let expected_defs: Vec<ToolDef> = defs.iter().map(|d| (*d).clone()).collect();

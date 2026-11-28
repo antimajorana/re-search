@@ -1,8 +1,8 @@
 //! In-core agent loop driving a [`crate::Transport`] and [`tools::Router`].
 
 use crate::transport::{
-    CancelToken, ContentBlock, Message, ModelRequest, ModelResponse, Role, StopReason, StreamObserver, ToolSpec,
-    Transport, TransportError, TransportErrorKind,
+    sends_output_cap, CancelToken, ContentBlock, Message, ModelRequest, ModelResponse, Role, StopReason,
+    StreamObserver, ToolSpec, Transport, TransportError, TransportErrorKind,
 };
 use ledger::{AppendedEvent, Ledger};
 use serde_json::{json, Value};
@@ -18,7 +18,10 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = "Local re:Search core. `sympy_eval` runs
     note. Results are computations, not verified claims.";
 
 pub(crate) use crate::dispatch::clip_text;
-use crate::dispatch::{collect_text, dispatch_tool_calls};
+use crate::dispatch::{
+    collect_text, dispatch_final_turn_tools, dispatch_tool_calls, emit_final_call_notice, filter_turn_tools,
+    has_allowlisted_tool, request_tool_surface,
+};
 use tools::builtin::SET_SESSION_TITLE;
 pub use tools::builtin::SESSION_TITLE_EVENT;
 
@@ -121,6 +124,7 @@ pub(crate) struct LoopParams<'a> {
     pub(crate) delegation: Option<&'a crate::delegate::DelegationConfig<'a>>,
     pub(crate) human: Option<&'a dyn crate::interaction::HumanChannel>,
     pub(crate) pause_after_explore: bool,
+    pub(crate) final_turn_tools: &'a [&'a str],
 }
 
 pub(crate) struct LegResult {
@@ -196,6 +200,7 @@ pub fn run_agent_loop(
             "system_prompt": cfg.system_prompt,
             "max_turns": cfg.max_turns,
             "max_tokens": cfg.max_tokens,
+            "max_tokens_sent": sends_output_cap(info.provider),
             "policy_version": router.policy().version.as_str(),
             "containment": cfg.containment,
             "contained": cfg.contained,
@@ -225,6 +230,7 @@ pub fn run_agent_loop(
             delegation: None,
             human: None,
             pause_after_explore: false,
+            final_turn_tools: &[],
         },
     )
 }
@@ -252,6 +258,7 @@ pub(crate) fn run_turn_leg(
         .iter()
         .map(|d| ToolSpec { name: d.id.clone(), description: d.description.clone(), input_schema: d.input_schema.clone() })
         .collect();
+    let registry_tool_count = tool_specs.len();
     if let Some(dcfg) = params.delegation {
         tool_specs.extend(crate::delegate::delegation_tool_specs(dcfg));
     }
@@ -278,6 +285,7 @@ pub(crate) fn run_turn_leg(
         let def = tools::builtin::session_title_def();
         tool_specs.push(ToolSpec { name: def.id, description: def.description, input_schema: def.input_schema });
     }
+    let host_tool_set: HashSet<String> = tool_specs[registry_tool_count..].iter().map(|t| t.name.clone()).collect();
 
     for offset in 0..params.max_turns {
         let leg_turns = offset + 1;
@@ -293,11 +301,12 @@ pub(crate) fn run_turn_leg(
             Some((keep, stride)) => crate::guardrails::mask_old_tool_outputs_stepped(&messages, keep, stride),
             None => messages.clone(),
         };
+        let turn_tools = filter_turn_tools(&tool_specs, leg_turns == params.max_turns, params.final_turn_tools);
         let req = ModelRequest {
             model: params.model.to_string(),
             system: Some(system.clone()),
             messages: outgoing_messages,
-            tools: tool_specs.clone(),
+            tools: turn_tools,
             max_tokens: params.max_tokens,
             reasoning_effort: params.reasoning_effort.map(str::to_string),
         };
@@ -309,6 +318,7 @@ pub(crate) fn run_turn_leg(
             }
         };
         let req_blob = audit.put_blob(&prepared.body)?;
+        let (tool_names, host_tools) = request_tool_surface(&req.tools, &host_tool_set);
         audit.emit(
             "model.request",
             json!({
@@ -316,6 +326,9 @@ pub(crate) fn run_turn_leg(
                 "model": params.model,
                 "message_count": req.messages.len(),
                 "max_tokens": params.max_tokens,
+                "max_tokens_sent": sends_output_cap(info.provider),
+                "tool_names": tool_names,
+                "host_tools": host_tools,
                 "raw_blob": req_blob,
             }),
         )?;
@@ -410,6 +423,13 @@ pub(crate) fn run_turn_leg(
             }
             StopReason::ToolUse => {
                 if leg_turns == params.max_turns {
+                    if has_allowlisted_tool(&resp.content, params.final_turn_tools) {
+                        messages.push(Message { role: Role::Assistant, content: resp.content.clone() });
+                        let results = dispatch_final_turn_tools(
+                            audit, router, &caller, turn, &resp.content, &params, use_title_tool,
+                        )?;
+                        messages.push(Message { role: Role::User, content: results });
+                    }
                     let outcome = abort_session(
                         audit,
                         leg_turns,
@@ -418,11 +438,14 @@ pub(crate) fn run_turn_leg(
                     return Ok(LegResult { outcome, messages, last_turn: turn, last_text: String::new() });
                 }
                 messages.push(Message { role: Role::Assistant, content: resp.content.clone() });
-                let results = dispatch_tool_calls(audit, router, &caller, turn, &resp.content, &params, use_title_tool)?;
+                let mut results = dispatch_tool_calls(audit, router, &caller, turn, &resp.content, &params, use_title_tool)?;
                 if params.cancel.is_some_and(CancelToken::is_cancelled) {
                     messages.push(Message { role: Role::User, content: results });
                     let outcome = abort_stopped(audit, leg_turns)?;
                     return Ok(LegResult { outcome, messages, last_turn: turn, last_text: String::new() });
+                }
+                if leg_turns + 1 == params.max_turns && !params.final_turn_tools.is_empty() {
+                    emit_final_call_notice(audit, turn + 1, params.final_turn_tools, &mut results)?;
                 }
                 messages.push(Message { role: Role::User, content: results });
             }
