@@ -11,6 +11,7 @@
 
 #[cfg(windows)]
 pub mod appcontainer;
+pub mod ocr_helper;
 pub mod protocol;
 pub mod sandbox;
 #[cfg(windows)]

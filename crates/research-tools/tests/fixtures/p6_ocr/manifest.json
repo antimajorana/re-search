@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "set": "P6",
+  "description": "Self-authored synthetic scanned PDF evaluation fixtures for local OCR (F14b).",
+  "fixtures": [
+    {
+      "id": "p6_01",
+      "file": "p6_01_fax_1bit_monochrome.pdf",
+      "kind": "fax_1bit_monochrome",
+      "page_count": 2,
+      "expected_initial_bases": [
+        "none",
+        "none"
+      ],
+      "expected_post_ocr_bases": [
+        "ocr",
+        "ocr"
+      ],
+      "ground_truth_sentences": [
+        {
+          "page": 1,
+          "text": "Every symmetric banded matrix with strictly positive diagonal margin admits a uniform spectral gap across lattice sizes."
+        },
+        {
+          "page": 1,
+          "text": "Boundary perturbations decay exponentially with distance from the open edge under local coupling decay."
+        },
+        {
+          "page": 1,
+          "text": "These estimates allow direct truncation of the resolvent series without losing norm control."
+        },
+        {
+          "page": 2,
+          "text": "Suppose the hopping amplitude vanishes beyond finite range and the bulk gap remains bounded away from zero."
+        },
+        {
+          "page": 2,
+          "text": "Then the off-diagonal Green matrix entries obey an explicit exponential bound independent of system volume."
+        },
+        {
+          "page": 2,
+          "text": "Proof follows by expanding the shifted resolvent around the block-diagonal reference operator."
+        }
+      ]
+    },
+    {
+      "id": "p6_02",
+      "file": "p6_02_grayscale_scan.pdf",
+      "kind": "grayscale_scan",
+      "page_count": 2,
+      "expected_initial_bases": [
+        "none",
+        "none"
+      ],
+      "expected_post_ocr_bases": [
+        "ocr",
+        "ocr"
+      ],
+      "ground_truth_sentences": [
+        {
+          "page": 1,
+          "text": "Slow cyclic driving of a gapped periodic chain transfers a quantized charge across each unit cell."
+        },
+        {
+          "page": 1,
+          "text": "The curvature integral over the two-dimensional parameter torus depends only on the occupied bundle."
+        },
+        {
+          "page": 2,
+          "text": "Discretizing the Brillouin zone on a uniform mesh introduces errors smaller than any inverse power of mesh spacing."
+        },
+        {
+          "page": 2,
+          "text": "Smooth gauge frames remain stable whenever the minimal band separation stays strictly positive."
+        }
+      ]
+    },
+    {
+      "id": "p6_03",
+      "file": "p6_03_pre1990_publisher_ocr_plus_scan_appendix.pdf",
+      "kind": "pre1990_publisher_ocr_plus_scan_appendix",
+      "page_count": 3,
+      "expected_initial_bases": [
+        "scan_text_layer",
+        "scan_text_layer",
+        "none"
+      ],
+      "expected_post_ocr_bases": [
+        "scan_text_layer",
+        "scan_text_layer",
+        "ocr"
+      ],
+      "ground_truth_sentences": [
+        {
+          "page": 1,
+          "text": "The archived monograph establishes a sharp lower bound for the principal Dirichlet eigenvalue of convex domains."
+        },
+        {
+          "page": 1,
+          "text": "Publisher digitization embedded an invisible text layer directly beneath the monochrome plate."
+        },
+        {
+          "page": 2,
+          "text": "Symmetric decreasing rearrangement lowers the gradient energy while preserving every Lebesgue norm."
+        },
+        {
+          "page": 2,
+          "text": "Equality holds strictly when the domain coincides with an open Euclidean ball up to zero measure."
+        },
+        {
+          "page": 3,
+          "text": "This scanned appendix plate carries no embedded publisher text layer and requires local recognition."
+        },
+        {
+          "page": 3,
+          "text": "Measured quadrature residuals remain below three parts per million across all tested radial grids."
+        }
+      ]
+    },
+    {
+      "id": "p6_04",
+      "file": "p6_04_formula_heavy_scan.pdf",
+      "kind": "formula_heavy_scan",
+      "page_count": 1,
+      "expected_initial_bases": [
+        "none"
+      ],
+      "expected_post_ocr_bases": [
+        "ocr"
+      ],
+      "ground_truth_sentences": [
+        {
+          "page": 1,
+          "text": "Near the parabolic band minimum, the single-particle energy obeys the quadratic dispersion relation below."
+        },
+        {
+          "page": 1,
+          "text": "Expanding the group velocity around zero momentum determines the transport effective mass directly."
+        },
+        {
+          "page": 1,
+          "text": "Because this page originates from optical character recognition, formulas remain plain text until confirmed visually."
+        }
+      ]
+    },
+    {
+      "id": "p6_05",
+      "file": "p6_05_mixed_digital_and_scan_insert.pdf",
+      "kind": "mixed_digital_and_scan_insert",
+      "page_count": 3,
+      "expected_initial_bases": [
+        "text_layer",
+        "none",
+        "text_layer"
+      ],
+      "expected_post_ocr_bases": [
+        "text_layer",
+        "ocr",
+        "text_layer"
+      ],
+      "ground_truth_sentences": [
+        {
+          "page": 1,
+          "text": "Modern typeset pages contain a native digital text layer that must bypass optical recognition completely."
+        },
+        {
+          "page": 1,
+          "text": "Proposition 1.1 guarantees exact symbol fidelity for all vector-encoded equations on page one."
+        },
+        {
+          "page": 2,
+          "text": "This archival insert was scanned as a monochrome bitmap with no embedded digital text stream."
+        },
+        {
+          "page": 2,
+          "text": "Calibration drift stayed below two millikelvin throughout the entire forty-hour cryogenic run."
+        },
+        {
+          "page": 3,
+          "text": "Closing remarks on page three retain their native digital layer untouched after selective recognition."
+        },
+        {
+          "page": 3,
+          "text": "Cross-page citation anchors distinguish native text on page three from recognized text on page two."
+        }
+      ]
+    },
+    {
+      "id": "p6_06",
+      "file": "p6_06_two_column_scan.pdf",
+      "kind": "two_column_scan",
+      "page_count": 1,
+      "expected_initial_bases": [
+        "none"
+      ],
+      "expected_post_ocr_bases": [
+        "ocr"
+      ],
+      "ground_truth_sentences": [
+        {
+          "page": 1,
+          "text": "Two-column journal scans require clean reading order across the vertical gutter."
+        },
+        {
+          "page": 1,
+          "text": "Thermal relaxation slows down near the critical point as correlation lengths diverge."
+        },
+        {
+          "page": 1,
+          "text": "Finite-temperature susceptibility peaks sharpen systematically as lattice dimensions increase."
+        },
+        {
+          "page": 1,
+          "text": "Independent Monte Carlo chains confirm ergodicity across every simulated coupling regime."
+        }
+      ]
+    }
+  ]
+}

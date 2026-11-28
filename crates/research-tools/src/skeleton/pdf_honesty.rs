@@ -253,7 +253,7 @@ pub fn page_range_for_node(page_map: &PageMap, node: &SkNode) -> Option<(usize, 
     Some((min_p?, max_p?))
 }
 
-/// Conservatively computes the [`PageBasis`] covering a node's physical lines (`None` > `ScanTextLayer` > `TextLayer`).
+/// Conservatively computes the [`PageBasis`] covering a node's physical lines (`None` > `Ocr` > `ScanTextLayer` > `TextLayer`).
 pub fn node_page_basis(page_map: &PageMap, node: &SkNode) -> Option<PageBasis> {
     let mut worst: Option<PageBasis> = None;
     for span in &node.spans {
@@ -266,6 +266,7 @@ pub fn node_page_basis(page_map: &PageMap, node: &SkNode) -> Option<PageBasis> {
             };
             worst = Some(match (worst, rec.basis) {
                 (_, PageBasis::None) | (Some(PageBasis::None), _) => PageBasis::None,
+                (_, PageBasis::Ocr) | (Some(PageBasis::Ocr), _) => PageBasis::Ocr,
                 (_, PageBasis::ScanTextLayer) | (Some(PageBasis::ScanTextLayer), _) => {
                     PageBasis::ScanTextLayer
                 }
@@ -348,7 +349,7 @@ pub fn match_pdf_quote_for_display(
     let (raw, start_page, end_page, worst_basis) = valid_matches.into_iter().next()?;
     let origin = match worst_basis {
         PageBasis::TextLayer => PdfTextOrigin::DigitalTextLayer,
-        PageBasis::ScanTextLayer => PdfTextOrigin::ScanOcrText,
+        PageBasis::ScanTextLayer | PageBasis::Ocr => PdfTextOrigin::ScanOcrText,
         PageBasis::None => return None,
     };
     let page_suffix = if start_page == end_page {
@@ -366,7 +367,7 @@ pub fn match_pdf_quote_for_display(
         end_page,
         basis: worst_basis,
         origin,
-        is_ocr: worst_basis == PageBasis::ScanTextLayer,
+        is_ocr: matches!(worst_basis, PageBasis::ScanTextLayer | PageBasis::Ocr),
         render_math: render_formulas_as_math(worst_basis),
         page_image_available: true,
         display_label,
@@ -396,7 +397,9 @@ fn classify_line_range(
             if rec.basis == PageBasis::None {
                 return None;
             }
-            if rec.basis == PageBasis::ScanTextLayer {
+            if rec.basis == PageBasis::Ocr {
+                worst = PageBasis::Ocr;
+            } else if rec.basis == PageBasis::ScanTextLayer && worst != PageBasis::Ocr {
                 worst = PageBasis::ScanTextLayer;
             }
             end_page = end_page.max(rec.page);

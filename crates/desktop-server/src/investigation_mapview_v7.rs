@@ -352,14 +352,16 @@ pub(crate) fn attach_pdf_pages_to_anchor_obj(q: &mut Value, pdf: &IngestedPdfSou
         .max(start);
     let mut min_p: Option<usize> = None;
     let mut max_p: Option<usize> = None;
-    let mut has_scan = false;
+    let mut scan_basis: Option<&'static str> = None;
     for line in start..=end {
         let Some(rec) = pdf.page_map.record_of_line(line) else { return };
         if rec.basis == PageBasis::None {
             return;
         }
-        if rec.basis == PageBasis::ScanTextLayer {
-            has_scan = true;
+        if rec.basis == PageBasis::Ocr
+            || (rec.basis == PageBasis::ScanTextLayer && scan_basis != Some(PageBasis::Ocr.as_str()))
+        {
+            scan_basis = Some(rec.basis.as_str());
         }
         min_p = Some(min_p.map_or(rec.page, |m| m.min(rec.page)));
         max_p = Some(max_p.map_or(rec.page, |m| m.max(rec.page)));
@@ -369,9 +371,9 @@ pub(crate) fn attach_pdf_pages_to_anchor_obj(q: &mut Value, pdf: &IngestedPdfSou
         if ep > sp {
             obj.insert("end_page".into(), json!(ep));
         }
-        if has_scan {
+        if let Some(basis_str) = scan_basis {
             obj.insert("ocr".into(), json!(true));
-            obj.insert("page_basis".into(), json!("scan_text_layer"));
+            obj.insert("page_basis".into(), json!(basis_str));
         }
     }
 }

@@ -1,6 +1,7 @@
 use crate::routes_session::{bad, internal, not_found};
 use crate::state::DesktopState;
-use research_tools::pdf::{verified_page_lines, MAX_PDF_BYTES};
+use research_tools::pdf::verified_page_lines;
+use research_tools::pdf_pages::MAX_USER_PDF_BYTES;
 use research_tools::validate_session_id;
 
 pub(crate) struct OriginalPdf {
@@ -29,7 +30,7 @@ pub(crate) fn read(
     }
     let raw = receipt["raw_blob"].as_str().ok_or_else(|| not_found("Original PDF is unavailable."))?;
     let bytes = ledger.get_blob(raw).map_err(|_| bad("The original PDF failed its checksum."))?;
-    if bytes.len() > MAX_PDF_BYTES || !bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") {
+    if bytes.len() > MAX_USER_PDF_BYTES || !bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") {
         return Err(bad("The stored document is not a supported PDF."));
     }
     let mut page = None;
