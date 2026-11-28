@@ -56,6 +56,7 @@ pub mod idea_exchanges_triage;
 mod idea_plan;
 pub mod idea_plan_search;
 pub mod idea_read;
+pub mod idea_read_passages;
 pub mod idea_view;
 mod idea_view_coverage;
 pub mod launcher;

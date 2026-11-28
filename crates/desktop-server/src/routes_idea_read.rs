@@ -2,7 +2,9 @@
 //!
 //! Kept in a sibling file so `routes_idea.rs` stays strictly <= 600 lines.
 
+use crate::idea_exchanges::resolve_explore_transport;
 use crate::idea_read::{run_reading_queue_with_router, ReadQueueResult};
+use crate::idea_read_passages::{run_reading_with_router_and_transport, DEFAULT_READER_CONCURRENCY};
 use crate::idea_view;
 use crate::routers::build_idea_router;
 use crate::routes_idea::ActiveExploreGuard;
@@ -18,7 +20,8 @@ use std::sync::Arc;
 /// - If `attach_pdf` is present: attaches a user-uploaded PDF/TeX file to `paper_key`
 ///   strictly through `ingest_bytes` / `ingest_pdf_pages` (Rule C9, zero network).
 /// - Otherwise: runs the reading queue through `build_idea_router` -> `Router::try_call`
-///   (`idea_fetch_papers`, Rule P5) and returns updated `idea_view`.
+///   (`idea_fetch_papers`, Rule P5) and (unless `fetch_only: true`) runs parallel X10
+///   passage readers over fetched papers, returning updated `idea_view`.
 pub fn handle_read_op(
     state: &Arc<DesktopState>,
     ledger: &Ledger,
@@ -36,26 +39,55 @@ pub fn handle_read_op(
     }
 
     let explicit_keys = parse_optional_keys(val.get("keys"))?;
+    let fetch_only = val.get("fetch_only").and_then(Value::as_bool).unwrap_or(false);
+    let transport_pair = if fetch_only {
+        None
+    } else {
+        Some(resolve_explore_transport(state, session_id, Some(&val))?)
+    };
+
     let env = Arc::new(state.research_env_for_session(session_id).map_err(bad)?);
-    let router = build_idea_router(Arc::clone(state), env, session_id).map_err(internal)?;
+    let router = build_idea_router(Arc::clone(state), Arc::clone(&env), session_id).map_err(internal)?;
     let guard = ActiveExploreGuard::acquire(state, session_id)?;
 
     let sse = Arc::clone(&state.sse);
     let sid = session_id.to_string();
-    let res = run_reading_queue_with_router(
-        ledger,
-        &router,
-        session_id,
-        explicit_keys,
-        Some(&guard.cancel),
-        move |kind, payload| {
-            sse.emit(
-                &sid,
-                "session_event",
-                json!({ "session": sid, "kind": kind, "payload": payload }),
-            );
-        },
-    );
+    let res = if let Some((transport, model)) = transport_pair {
+        run_reading_with_router_and_transport(
+            &env,
+            ledger,
+            &state.ledger_write_lock,
+            &router,
+            session_id,
+            explicit_keys,
+            transport.as_ref(),
+            &model,
+            DEFAULT_READER_CONCURRENCY,
+            Some(&guard.cancel),
+            move |kind, payload| {
+                sse.emit(
+                    &sid,
+                    "session_event",
+                    json!({ "session": sid, "kind": kind, "payload": payload }),
+                );
+            },
+        )
+    } else {
+        run_reading_queue_with_router(
+            ledger,
+            &router,
+            session_id,
+            explicit_keys,
+            Some(&guard.cancel),
+            move |kind, payload| {
+                sse.emit(
+                    &sid,
+                    "session_event",
+                    json!({ "session": sid, "kind": kind, "payload": payload }),
+                );
+            },
+        )
+    };
     drop(guard);
 
     let outcome = res.map_err(|e| {

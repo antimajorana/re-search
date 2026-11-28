@@ -116,9 +116,19 @@ pub fn resolve_reading_list(events: &[Event]) -> Vec<PaperKey> {
     out
 }
 
-/// Execute the reading queue strictly via `Router::try_call("host:idea:<session>",
-/// "idea_fetch_papers", ...)` (Rule P5), recording `idea.paper` per paper and streaming
-/// per-paper row states over `on_progress`.
+/// Internal handoff between the X9 fetch phase and the X10 passage-reader phase.
+pub(crate) enum FetchPhaseOutcome {
+    Done {
+        request_id: String,
+        papers: Vec<IdeaPaperEventPayload>,
+        ready_count: usize,
+        unavailable_count: usize,
+    },
+    EarlyReturn(ReadQueueResult),
+}
+
+/// Execute the reading queue fetch phase strictly via `Router::try_call("host:idea:<session>",
+/// "idea_fetch_papers", ...)` (Rule P5), recording `idea.paper` per paper and finishing the stage.
 #[allow(clippy::too_many_arguments)]
 pub fn run_reading_queue_with_router<F>(
     ledger: &Ledger,
@@ -128,6 +138,55 @@ pub fn run_reading_queue_with_router<F>(
     cancel: Option<&CancelToken>,
     mut on_progress: F,
 ) -> Result<ReadQueueResult, String>
+where
+    F: FnMut(&str, Value),
+{
+    let phase = fetch_papers_phase(
+        ledger,
+        router,
+        session_id,
+        explicit_keys,
+        cancel,
+        &mut on_progress,
+    )?;
+    let (request_id, papers, ready_count, unavailable_count) = match phase {
+        FetchPhaseOutcome::EarlyReturn(res) => return Ok(res),
+        FetchPhaseOutcome::Done {
+            request_id,
+            papers,
+            ready_count,
+            unavailable_count,
+        } => (request_id, papers, ready_count, unavailable_count),
+    };
+    let post_events = ledger.read_session(session_id).map_err(|e| e.to_string())?;
+    let _ = budget_snapshot(&post_events, true);
+    emit_stage(
+        ledger,
+        session_id,
+        IdeaStage::Read,
+        ExploreStageState::Finished,
+        &request_id,
+        None,
+        &mut on_progress,
+    )?;
+    Ok(ReadQueueResult::Finished {
+        papers,
+        ready_count,
+        unavailable_count,
+    })
+}
+
+/// Shared fetch/ingest phase (Rule P1, Rule P5, Rule S3) used by both X9 fetch-only queue and
+/// X10 full fetch + passage-reader stage.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fetch_papers_phase<F>(
+    ledger: &Ledger,
+    router: &Router,
+    session_id: &str,
+    explicit_keys: Option<Vec<PaperKey>>,
+    cancel: Option<&CancelToken>,
+    on_progress: &mut F,
+) -> Result<FetchPhaseOutcome, String>
 where
     F: FnMut(&str, Value),
 {
@@ -188,35 +247,25 @@ where
         return Err("reading list is empty; select at least one paper to read".to_string());
     }
 
-    // Track already-completed terminal paper reads in this revision so re-running Read
-    // never clobbers `read_full` / `read_passages` / `nothing_relevant` progress (HIGH #6).
-    let mut existing_terminal: std::collections::BTreeMap<String, IdeaPaperEventPayload> =
+    // Fold latest `idea.paper` per key in ledger order so a newly attached PDF overrides any
+    // older terminal record and already-fetched pinned papers are reused without re-fetching.
+    let mut existing_by_key: std::collections::BTreeMap<String, IdeaPaperEventPayload> =
         std::collections::BTreeMap::new();
     for ev in initial_events.iter().filter(|e| e.seq > stmt.seq && e.kind == EVENT_IDEA_PAPER) {
         if let Ok(rec) = serde_json::from_value::<IdeaPaperEventPayload>(ev.payload.clone()) {
-            if matches!(
-                rec.status.as_str(),
-                "read_full" | "read_passages" | "nothing_relevant"
-            ) && rec.source_id.is_some()
-            {
-                existing_terminal.insert(rec.key.clone(), rec);
-            }
+            existing_by_key.insert(rec.key.clone(), rec);
         }
     }
 
     let request_id = format!("read-r{}-{}", stmt.rev, random_hex(4));
-    emit_stage(
-        ledger,
-        session_id,
-        IdeaStage::Read,
-        ExploreStageState::Requested,
-        &request_id,
-        None,
-        &mut on_progress,
-    )?;
+    emit_stage(ledger, session_id, IdeaStage::Read, ExploreStageState::Requested, &request_id, None, on_progress)?;
 
     for k in &keys {
-        if !existing_terminal.contains_key(k.as_str()) {
+        let already_terminal = existing_by_key.get(k.as_str()).is_some_and(|r| {
+            r.source_id.is_some()
+                && matches!(r.status.as_str(), "read_full" | "read_passages" | "nothing_relevant")
+        });
+        if !already_terminal {
             on_progress(
                 SSE_IDEA_READ_PROGRESS,
                 json!({ "key": k.as_str(), "row_state": "queued", "label": "queued" }),
@@ -231,22 +280,20 @@ where
 
     for key in &keys {
         if cancel.is_some_and(CancelToken::is_cancelled) {
-            emit_stage(
-                ledger,
-                session_id,
-                IdeaStage::Read,
-                ExploreStageState::Cancelled,
-                &request_id,
-                Some("Stopped by user"),
-                &mut on_progress,
-            )?;
-            return Ok(ReadQueueResult::Cancelled { papers: recorded });
+            emit_stage(ledger, session_id, IdeaStage::Read, ExploreStageState::Cancelled, &request_id, Some("Stopped by user"), on_progress)?;
+            return Ok(FetchPhaseOutcome::EarlyReturn(ReadQueueResult::Cancelled { papers: recorded }));
         }
-
-        if let Some(prev) = existing_terminal.get(key.as_str()) {
-            ready_count += 1;
-            recorded.push(prev.clone());
-            continue;
+        if let Some(prev) = existing_by_key.get(key.as_str()) {
+            if prev.source_id.is_some()
+                && matches!(
+                    prev.status.as_str(),
+                    "read_full" | "read_passages" | "nothing_relevant" | "fetched"
+                )
+            {
+                ready_count += 1;
+                recorded.push(prev.clone());
+                continue;
+            }
         }
 
         let args = json!({ "keys": [key.as_str()] });
@@ -255,47 +302,19 @@ where
             .map_err(|e| format!("router ledger error during idea_fetch_papers: {e}"))?;
 
         if cancel.is_some_and(CancelToken::is_cancelled) {
-            emit_stage(
-                ledger,
-                session_id,
-                IdeaStage::Read,
-                ExploreStageState::Cancelled,
-                &request_id,
-                Some("Stopped by user"),
-                &mut on_progress,
-            )?;
-            return Ok(ReadQueueResult::Cancelled { papers: recorded });
+            emit_stage(ledger, session_id, IdeaStage::Read, ExploreStageState::Cancelled, &request_id, Some("Stopped by user"), on_progress)?;
+            return Ok(FetchPhaseOutcome::EarlyReturn(ReadQueueResult::Cancelled { papers: recorded }));
         }
 
         let tool_val = match outcome {
             CallOutcome::Ok(v) => v,
             CallOutcome::Denied(reason) => {
-                emit_stage(
-                    ledger,
-                    session_id,
-                    IdeaStage::Read,
-                    ExploreStageState::Cancelled,
-                    &request_id,
-                    Some(&reason),
-                    &mut on_progress,
-                )?;
-                return Ok(ReadQueueResult::Denied { reason });
+                emit_stage(ledger, session_id, IdeaStage::Read, ExploreStageState::Cancelled, &request_id, Some(&reason), on_progress)?;
+                return Ok(FetchPhaseOutcome::EarlyReturn(ReadQueueResult::Denied { reason }));
             }
             CallOutcome::Error(err) => {
-                let ev_payload = IdeaPaperEventPayload {
-                    key: key.to_string(),
-                    version: None,
-                    source_id: None,
-                    source_seq: None,
-                    origin: "none".into(),
-                    text_basis: "none".into(),
-                    status: "failed".into(),
-                    reason: Some(err),
-                    lines_sent: 0,
-                    total_lines: 0,
-                    raw_blob: None,
-                };
-                append_idea_paper(ledger, session_id, &ev_payload, &mut on_progress)?;
+                let ev_payload = failed_paper_payload(key.as_str(), err);
+                append_idea_paper(ledger, session_id, &ev_payload, on_progress)?;
                 recorded.push(ev_payload);
                 continue;
             }
@@ -306,51 +325,22 @@ where
             .and_then(Value::as_array)
             .and_then(|arr| arr.first())
             .and_then(|v| serde_json::from_value::<FetchedPaperRecord>(v.clone()).ok());
-
         let Some(rec) = fetched_opt else {
-            let ev_payload = IdeaPaperEventPayload {
-                key: key.to_string(),
-                version: None,
-                source_id: None,
-                source_seq: None,
-                origin: "none".into(),
-                text_basis: "none".into(),
-                status: "failed".into(),
-                reason: Some("idea_fetch_papers returned malformed result".into()),
-                lines_sent: 0,
-                total_lines: 0,
-                raw_blob: None,
-            };
-            append_idea_paper(ledger, session_id, &ev_payload, &mut on_progress)?;
+            let ev_payload = failed_paper_payload(key.as_str(), "idea_fetch_papers returned malformed result".into());
+            append_idea_paper(ledger, session_id, &ev_payload, on_progress)?;
             recorded.push(ev_payload);
             continue;
         };
 
         if rec.status == "stopped_at_cap" {
-            let reason = rec
-                .reason
-                .unwrap_or_else(|| "Paper fetch budget cap reached".to_string());
-            emit_stage(
-                ledger,
-                session_id,
-                IdeaStage::Read,
-                ExploreStageState::StoppedAtCap,
-                &request_id,
-                Some(&reason),
-                &mut on_progress,
-            )?;
-            return Ok(ReadQueueResult::StoppedAtCap { reason, papers: recorded });
+            let reason = rec.reason.unwrap_or_else(|| "Paper fetch budget cap reached".to_string());
+            emit_stage(ledger, session_id, IdeaStage::Read, ExploreStageState::StoppedAtCap, &request_id, Some(&reason), on_progress)?;
+            return Ok(FetchPhaseOutcome::EarlyReturn(ReadQueueResult::StoppedAtCap { reason, papers: recorded }));
         }
 
         let (paper_status, row_state) = match rec.status.as_str() {
-            "ready" => {
-                ready_count += 1;
-                ("fetched", "fetched")
-            }
-            "unavailable" => {
-                unavailable_count += 1;
-                ("unavailable", "unavailable")
-            }
+            "ready" => { ready_count += 1; ("fetched", "fetched") }
+            "unavailable" => { unavailable_count += 1; ("unavailable", "unavailable") }
             _ => ("failed", "failed"),
         };
 
@@ -369,7 +359,7 @@ where
             total_lines: rec.total_lines,
             raw_blob: rec.raw_blob,
         };
-        append_idea_paper(ledger, session_id, &ev_payload, &mut on_progress)?;
+        append_idea_paper(ledger, session_id, &ev_payload, on_progress)?;
         on_progress(
             SSE_IDEA_READ_PROGRESS,
             json!({
@@ -384,35 +374,32 @@ where
     }
 
     if cancel.is_some_and(CancelToken::is_cancelled) {
-        emit_stage(
-            ledger,
-            session_id,
-            IdeaStage::Read,
-            ExploreStageState::Cancelled,
-            &request_id,
-            Some("Stopped by user"),
-            &mut on_progress,
-        )?;
-        return Ok(ReadQueueResult::Cancelled { papers: recorded });
+        emit_stage(ledger, session_id, IdeaStage::Read, ExploreStageState::Cancelled, &request_id, Some("Stopped by user"), on_progress)?;
+        return Ok(FetchPhaseOutcome::EarlyReturn(ReadQueueResult::Cancelled { papers: recorded }));
     }
 
-    let post_events = ledger.read_session(session_id).map_err(|e| e.to_string())?;
-    let _ = budget_snapshot(&post_events, true);
-    emit_stage(
-        ledger,
-        session_id,
-        IdeaStage::Read,
-        ExploreStageState::Finished,
-        &request_id,
-        None,
-        &mut on_progress,
-    )?;
-
-    Ok(ReadQueueResult::Finished {
+    Ok(FetchPhaseOutcome::Done {
+        request_id,
         papers: recorded,
         ready_count,
         unavailable_count,
     })
+}
+
+fn failed_paper_payload(key: &str, reason: String) -> IdeaPaperEventPayload {
+    IdeaPaperEventPayload {
+        key: key.to_string(),
+        version: None,
+        source_id: None,
+        source_seq: None,
+        origin: "none".into(),
+        text_basis: "none".into(),
+        status: "failed".into(),
+        reason: Some(reason),
+        lines_sent: 0,
+        total_lines: 0,
+        raw_blob: None,
+    }
 }
 
 /// Prepare and ingest a user-supplied PDF/TeX file for `paper_key` without holding any
