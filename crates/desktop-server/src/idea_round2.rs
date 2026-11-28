@@ -5,19 +5,19 @@
 //! P6, S8, V9), and 11 (OpenScholar self-check pattern re-coded in Rust).
 
 use crate::idea::{
-    budget_snapshot, effective_budget, latest_statement_seq, max_reader_calls_per_paper,
-    supports_thorough_round2, IdeaPreset, IdeaStage, EVENT_IDEA_BRIEF, EVENT_IDEA_CITATION_NET,
-    EVENT_IDEA_MAP, EVENT_IDEA_VERDICT,
+    budget_snapshot, effective_budget, latest_statement_seq, supports_thorough_round2, IdeaPreset,
+    EVENT_IDEA_BRIEF, EVENT_IDEA_CITATION_NET, EVENT_IDEA_EXCHANGE, EVENT_IDEA_MAP,
+    EVENT_IDEA_VERDICT,
 };
-use crate::idea_exchanges::emit_stage;
 use crate::idea_plan::{is_session_offline, next_search_round};
 use crate::idea_view;
 use crate::routers::build_idea_router;
 use crate::routes_idea::ActiveExploreGuard;
 use crate::routes_idea_net::exec::{execute_app_search_batch, AppSearchBatchMeta, NetBatchOutcome};
 use crate::routes_idea_net::{
-    clip_query, collect_session_expansion_seeds, extract_node_paper_keys, parse_max_results,
-    parse_optional_providers, CITED_SINCE_NOT_ANSWERED_NOTE,
+    clip_query, collect_session_expansion_seeds, extract_node_paper_keys,
+    load_online_explore_events, parse_max_results, parse_optional_providers,
+    CITED_SINCE_NOT_ANSWERED_NOTE,
 };
 use crate::routes_session::{bad, internal, parse_json_body, ApiResult};
 use crate::state::DesktopState;
@@ -30,14 +30,14 @@ use research_tools::idea_terms::extract as extract_idea_terms;
 use research_tools::idea_tools::MAX_IDEA_SEARCH_QUERIES;
 use research_tools::lit_providers::{LitProvider, DEFAULT_MAX_RESULTS};
 use research_tools::paper_key::PaperKey;
-use research_tools::run_budget::ExploreStageState;
+use research_tools::lines_sent::CONTEXT_SUPPLIED_EVENT;
 use research_tools::ResearchEnv;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::Arc;
-use tools::Router;
+use std::sync::{Arc, Mutex};
+use tools::{Router, EVENT_SCHEMA_VERSION};
 
 /// Thorough preset canonical ceilings (`explore.md` section 3).
 pub const THOROUGH_MAX_QUERIES: u64 = 36;
@@ -92,6 +92,46 @@ pub enum Round2RunResult {
     Denied { reason: String },
     StoppedAtCap { cap: &'static str, reason: String, thin_statements: Vec<ThinStatement> },
     Cancelled,
+}
+
+/// Per-paper reader call counts in the active revision, combining F4 `context.supplied`
+/// (`caller = "reader:<session>:<paper_key>"`, emitted by X10 `idea_read_passages`) and any
+/// `idea.exchange` records carrying `paper_key` (Audit C2).
+pub fn reader_calls_by_paper(events: &[Event]) -> BTreeMap<String, u64> {
+    let rev_seq = latest_statement_seq(events);
+    let mut from_ctx: BTreeMap<String, u64> = BTreeMap::new();
+    let mut from_ex: BTreeMap<String, u64> = BTreeMap::new();
+
+    for ev in events.iter().filter(|e| e.seq > rev_seq) {
+        if ev.kind == CONTEXT_SUPPLIED_EVENT {
+            if let Some(caller) = ev.payload["caller"].as_str() {
+                if let Some(rest) = caller.strip_prefix("reader:") {
+                    if let Some((_, pkey)) = rest.split_once(':') {
+                        let k = pkey.trim();
+                        if !k.is_empty() {
+                            *from_ctx.entry(k.to_string()).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+        } else if ev.kind == EVENT_IDEA_EXCHANGE {
+            if let Some(pk) = ev.payload["paper_key"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                *from_ex.entry(pk.to_string()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    let mut merged = from_ctx;
+    for (k, v) in from_ex {
+        let entry = merged.entry(k).or_insert(0);
+        *entry = (*entry).max(v);
+    }
+    merged
+}
+
+/// Highest number of reader calls recorded for any single paper in the active revision.
+pub fn max_reader_calls_per_paper(events: &[Event]) -> u64 {
+    reader_calls_by_paper(events).into_values().max().unwrap_or(0)
 }
 
 /// Identify thin/under-supported statements on the active revision's `idea.map` and `idea.verdict`
@@ -190,7 +230,6 @@ pub fn handle_round2_op(
     state: &Arc<DesktopState>,
     ledger: &Ledger,
     session_id: &str,
-    _events: &[Event],
     body: &[u8],
 ) -> ApiResult {
     let val = if body.is_empty() { json!({}) } else { parse_json_body(body)? };
@@ -200,15 +239,26 @@ pub fn handle_round2_op(
         allow_non_thorough: val["allow_non_thorough"].as_bool().unwrap_or(false),
     };
 
+    // Audit H3: acquire ActiveExploreGuard BEFORE snapshotting ledger events.
     let guard = ActiveExploreGuard::acquire(state, session_id)?;
+    let _ = load_online_explore_events(ledger, session_id)?;
     let mut env = ResearchEnv::new(&state.cfg.data_dir);
     env.network_endpoints = state.cfg.literature_endpoints.clone();
     let router = build_idea_router(Arc::clone(state), Arc::new(env), session_id).map_err(internal)?;
 
     let (sse, sid_sse) = (Arc::clone(&state.sse), session_id.to_string());
-    let res = run_round2_with_router(&state.cfg.data_dir, ledger, &router, session_id, &req, Some(&guard.cancel), move |k, p| {
-        sse.emit(&sid_sse, "session_event", json!({ "session": sid_sse, "kind": k, "payload": p }));
-    });
+    let res = run_round2_with_lock(
+        &state.cfg.data_dir,
+        ledger,
+        Some(&state.ledger_write_lock),
+        &router,
+        session_id,
+        &req,
+        Some(&guard.cancel),
+        move |k, p| {
+            sse.emit(&sid_sse, "session_event", json!({ "session": sid_sse, "kind": k, "payload": p }));
+        },
+    );
     drop(guard);
 
     let updated = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
@@ -243,6 +293,23 @@ pub fn run_round2_with_router<F>(
     session_id: &str,
     req: &Round2Request,
     cancel: Option<&CancelToken>,
+    on_progress: F,
+) -> Result<Round2RunResult, String>
+where
+    F: FnMut(&str, Value),
+{
+    run_round2_with_lock(data_dir, ledger, None, router, session_id, req, cancel, on_progress)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_round2_with_lock<F>(
+    data_dir: &Path,
+    ledger: &Ledger,
+    write_lock: Option<&Mutex<()>>,
+    router: &Router,
+    session_id: &str,
+    req: &Round2Request,
+    cancel: Option<&CancelToken>,
     mut on_progress: F,
 ) -> Result<Round2RunResult, String>
 where
@@ -260,15 +327,17 @@ where
     let snap = budget_snapshot(&events, true);
     let thin_statements = find_thin_statements(&events);
     let round = next_search_round(&events);
-    let request_id = format!("round2-r{round}");
+    let max_paper_calls = max_reader_calls_per_paper(&events);
 
-    // Rule P3: enforce ALL Thorough hard ceilings BEFORE dispatching any network or model work.
+    // Rule P3: enforce ALL FIVE Thorough hard ceilings (`55`, `12`, `80`, `4`, `36`) BEFORE any call.
     let cap_hit: Option<(&'static str, String)> = if snap.model_calls.is_exhausted() {
         Some(("model_calls", format!("Model-call budget cap ({}) reached before Thorough Round 2", snap.model_calls.cap)))
     } else if cfg.max_papers > 0 && snap.papers_fetched >= cfg.max_papers {
         Some(("papers", format!("Paper fetch budget cap ({}) reached before Thorough Round 2", cfg.max_papers)))
     } else if snap.screened_used >= cfg.max_screened {
         Some(("screened", format!("Screened candidate cap ({}) reached before Thorough Round 2", cfg.max_screened)))
+    } else if cfg.calls_per_paper > 0 && max_paper_calls >= cfg.calls_per_paper {
+        Some(("calls_per_paper", format!("Per-paper reader call cap ({}) reached before Thorough Round 2", cfg.calls_per_paper)))
     } else if snap.queries_used >= cfg.max_queries {
         Some(("queries", format!("Query budget cap ({}) reached before Thorough Round 2", cfg.max_queries)))
     } else {
@@ -276,11 +345,28 @@ where
     };
 
     if let Some((cap, reason)) = cap_hit {
-        emit_stage(ledger, session_id, IdeaStage::Search, ExploreStageState::StoppedAtCap, &request_id, Some(&reason), &mut on_progress)?;
+        // Record Round-2 cap stop on `idea.citation_net` (preserving existing seeds/hops, NEVER corrupting Round-1 Search stage — Audit C1).
+        let _lk = match write_lock {
+            Some(l) => Some(l.lock().map_err(|_| "ledger lock poisoned".to_string())?),
+            None => None,
+        };
+        let prior = build_from_events(&events, &[], &[], &[], 0);
+        let mut payload = serde_json::to_value(&prior).map_err(|e| e.to_string())?;
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert("origin".into(), json!("app"));
+            obj.insert("kind".into(), json!("round2_stopped_at_cap"));
+            obj.insert("round".into(), json!(round));
+            obj.insert("round2".into(), json!(true));
+            obj.insert("stopped_at_cap".into(), json!(true));
+            obj.insert("cap".into(), json!(cap));
+            obj.insert("reason".into(), json!(reason));
+        }
+        ledger.append(session_id, EVENT_IDEA_CITATION_NET, EVENT_SCHEMA_VERSION, &payload).map_err(|e| e.to_string())?;
+        on_progress(EVENT_IDEA_CITATION_NET, payload);
         return Ok(Round2RunResult::StoppedAtCap { cap, reason, thin_statements });
     }
 
-    let (planned_queries, extra_seeds, hops) = build_round2_queries(&events, &thin_statements, req, round);
+    let (planned_queries, extra_seeds) = build_round2_queries(&events, &thin_statements, req, round);
     if planned_queries.is_empty() {
         return Err("no thin statements or citation seeds available for Thorough Round 2".to_string());
     }
@@ -293,13 +379,13 @@ where
         node_id: None,
         since_year: None,
         is_open_question: has_open_q,
+        hops: usize::from(!extra_seeds.is_empty()),
         extra_seeds,
-        hops,
         round2: true,
         thin_statements: thin_json,
     };
 
-    match execute_app_search_batch(data_dir, ledger, router, session_id, planned_queries, meta, cancel, on_progress)? {
+    match execute_app_search_batch(data_dir, ledger, write_lock, router, session_id, planned_queries, meta, cancel, on_progress)? {
         NetBatchOutcome::Finished { round, executed_queries, skipped_budget, stopped_at_cap, citation_net, .. } => {
             Ok(Round2RunResult::Finished { round, thin_statements, executed_queries, skipped_budget, stopped_at_cap, citation_net })
         }
@@ -314,7 +400,7 @@ fn build_round2_queries(
     thin: &[ThinStatement],
     req: &Round2Request,
     round: u64,
-) -> (Vec<Value>, Vec<PaperKey>, usize) {
+) -> (Vec<Value>, Vec<PaperKey>) {
     let mut seeds = collect_session_expansion_seeds(events, MAX_ROUND2_SEEDS);
     let mut seed_set: BTreeSet<PaperKey> = seeds.iter().cloned().collect();
     for t in thin {
@@ -325,14 +411,6 @@ fn build_round2_queries(
             }
         }
     }
-
-    let stmt_seq = latest_statement_seq(events);
-    let prior_hops = events.iter()
-        .filter(|e| e.kind == EVENT_IDEA_CITATION_NET && e.seq > stmt_seq)
-        .filter_map(|e| e.payload["hops"].as_u64())
-        .max()
-        .unwrap_or(0) as usize;
-    let hops = if seeds.is_empty() { prior_hops } else { (prior_hops + 1).clamp(1, 2) };
 
     let (mut queries, mut q_idx) = (Vec::new(), 0usize);
     for seed in &seeds {
@@ -368,7 +446,7 @@ fn build_round2_queries(
             }));
         }
     }
-    (queries, seeds, hops)
+    (queries, seeds)
 }
 
 fn build_thin_query(label: &str, statement: &str, aliases: Option<&Vec<Value>>) -> String {
@@ -392,31 +470,20 @@ pub fn project_citation_and_round2_view(events: &[Event], latest_stmt_seq: u64) 
     let mut cited_since_runs = Vec::new();
     let (mut r2_status, mut r2_stopped, mut r2_round, mut r2_reason) = ("idle", false, 0u64, None);
 
-    for ev in events.iter().filter(|e| e.seq > latest_stmt_seq) {
-        if ev.kind == EVENT_IDEA_CITATION_NET {
-            if ev.payload["kind"].as_str() == Some("cited_since") {
-                let open_q = ev.payload["is_open_question"].as_bool().unwrap_or(false);
-                cited_since_runs.push(json!({
-                    "seq": ev.seq, "target_key": ev.payload["target_key"], "node_id": ev.payload["node_id"],
-                    "since_year": ev.payload["since_year"], "is_open_question": open_q,
-                    "note": if open_q { json!(CITED_SINCE_NOT_ANSWERED_NOTE) } else { ev.payload["note"].clone() },
-                    "citing_papers": ev.payload["citing_papers"].as_array().cloned().unwrap_or_default(),
-                }));
-            }
-            if ev.payload["round2"].as_bool() == Some(true) {
-                r2_round = ev.payload["round"].as_u64().unwrap_or(r2_round);
-                r2_stopped = ev.payload["stopped_at_cap"].as_bool().unwrap_or(false);
-                r2_status = if r2_stopped { "stopped_at_cap" } else { "done" };
-            }
-        } else if ev.kind == "idea.stage" && ev.payload["request_id"].as_str().is_some_and(|r| r.starts_with("round2-")) {
-            r2_status = match ev.payload["state"].as_str().unwrap_or("") {
-                "stopped_at_cap" => { r2_stopped = true; "stopped_at_cap" }
-                "finished" => "done",
-                "requested" => "running",
-                "failed" => "failed",
-                "cancelled" => "paused",
-                _ => r2_status,
-            };
+    for ev in events.iter().filter(|e| e.seq > latest_stmt_seq && e.kind == EVENT_IDEA_CITATION_NET) {
+        if ev.payload["kind"].as_str() == Some("cited_since") {
+            let open_q = ev.payload["is_open_question"].as_bool().unwrap_or(false);
+            cited_since_runs.push(json!({
+                "seq": ev.seq, "target_key": ev.payload["target_key"], "node_id": ev.payload["node_id"],
+                "since_year": ev.payload["since_year"], "is_open_question": open_q,
+                "note": if open_q { json!(CITED_SINCE_NOT_ANSWERED_NOTE) } else { ev.payload["note"].clone() },
+                "citing_papers": ev.payload["citing_papers"].as_array().cloned().unwrap_or_default(),
+            }));
+        }
+        if ev.payload["round2"].as_bool() == Some(true) {
+            r2_round = ev.payload["round"].as_u64().unwrap_or(r2_round);
+            r2_stopped = ev.payload["stopped_at_cap"].as_bool().unwrap_or(false);
+            r2_status = if r2_stopped { "stopped_at_cap" } else { "done" };
             if let Some(r) = ev.payload["reason"].as_str() { r2_reason = Some(r.to_string()); }
         }
     }

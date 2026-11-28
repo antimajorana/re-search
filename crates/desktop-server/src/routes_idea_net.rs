@@ -17,7 +17,7 @@ use crate::routes_idea::ActiveExploreGuard;
 use crate::routes_session::{bad, internal, not_found, parse_json_body, ApiResult};
 use crate::session_mode::session_mode;
 use crate::state::DesktopState;
-use exec::{execute_app_search_batch, AppSearchBatchMeta};
+use exec::{execute_app_search_batch, run_cited_since_with_lock, AppSearchBatchMeta};
 use ledger::{Event, Ledger};
 use research_tools::idea_net::{default_citation_provider, supported_citation_providers};
 use research_tools::idea_terms::extract as extract_idea_terms;
@@ -64,6 +64,15 @@ pub fn handle_idea_net_op(
         return Err(not_found(format!("session `{session_id}` not found")));
     }
     let ledger = state.open_ledger().map_err(internal)?;
+    match op {
+        "cited-since" => handle_cited_since_op(state, &ledger, session_id, body),
+        "more" => handle_more_op(state, &ledger, session_id, body),
+        "round2" => crate::idea_round2::handle_round2_op(state, &ledger, session_id, body),
+        other => Err(not_found(format!("unknown Explore citation operation `{other}`"))),
+    }
+}
+
+pub(crate) fn load_online_explore_events(ledger: &Ledger, session_id: &str) -> Result<Vec<Event>, (u16, String)> {
     let events = ledger.read_session(session_id).map_err(|e| internal(e.to_string()))?;
     if session_mode(&events) != Mode::Explore {
         return Err(bad(format!("session `{session_id}` is not an Explore session")));
@@ -71,33 +80,30 @@ pub fn handle_idea_net_op(
     if is_session_offline(&events) {
         return Err(bad("Explore session is in offline (library-only) mode"));
     }
-
-    match op {
-        "cited-since" => handle_cited_since_op(state, &ledger, session_id, &events, body),
-        "more" => handle_more_op(state, &ledger, session_id, &events, body),
-        "round2" => crate::idea_round2::handle_round2_op(state, &ledger, session_id, &events, body),
-        other => Err(not_found(format!("unknown Explore citation operation `{other}`"))),
-    }
+    Ok(events)
 }
 
 fn handle_cited_since_op(
     state: &Arc<DesktopState>,
     ledger: &Ledger,
     session_id: &str,
-    events: &[Event],
     body: &[u8],
 ) -> ApiResult {
     let val = parse_json_body(body)?;
-    let req = parse_cited_since_request(events, &val)?;
+    // Audit H3: acquire ActiveExploreGuard BEFORE snapshotting ledger events and building plan.
     let guard = ActiveExploreGuard::acquire(state, session_id)?;
+    let events = load_online_explore_events(ledger, session_id)?;
+    let req = parse_cited_since_request(&events, &val)?;
+
     let mut env = ResearchEnv::new(&state.cfg.data_dir);
     env.network_endpoints = state.cfg.literature_endpoints.clone();
     let router = build_idea_router(Arc::clone(state), Arc::new(env), session_id).map_err(internal)?;
 
     let (sse, sid_sse) = (Arc::clone(&state.sse), session_id.to_string());
-    let res = run_cited_since_with_router(
+    let res = run_cited_since_with_lock(
         &state.cfg.data_dir,
         ledger,
+        Some(&state.ledger_write_lock),
         &router,
         session_id,
         &req,
@@ -116,40 +122,44 @@ fn handle_more_op(
     state: &Arc<DesktopState>,
     ledger: &Ledger,
     session_id: &str,
-    events: &[Event],
     body: &[u8],
 ) -> ApiResult {
     let val = if body.is_empty() { json!({}) } else { parse_json_body(body)? };
     let action = val["action"].as_str().unwrap_or("").trim();
-    let has_node_or_seeds = val.get("node_id").and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty())
-        || val.get("seeds").or_else(|| val.get("paper_keys")).is_some_and(|v| !v.is_null());
-    let has_active_map = events
-        .iter()
-        .any(|e| e.kind == EVENT_IDEA_MAP && e.seq > latest_statement_seq(events));
-    let wants_round2 = action == "round2"
+    let node_id = val["node_id"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let has_seeds = val.get("seeds").or_else(|| val.get("paper_keys")).is_some_and(|v| !v.is_null());
+    let explicit_round2 = action == "round2"
         || val["round2"].as_bool() == Some(true)
-        || val["mode"].as_str() == Some("round2")
-        || (!has_node_or_seeds
-            && action != "expand_citations"
-            && crate::idea::supports_thorough_round2(events)
-            && has_active_map);
-    if wants_round2 {
-        return crate::idea_round2::handle_round2_op(state, ledger, session_id, events, body);
+        || val["mode"].as_str() == Some("round2");
+    if explicit_round2 {
+        return crate::idea_round2::handle_round2_op(state, ledger, session_id, body);
     }
 
-    let node_id = val["node_id"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    // Acquire guard before snapshotting events (Audit H3); delegate implicit Thorough Round 2 if eligible.
+    let guard = ActiveExploreGuard::acquire(state, session_id)?;
+    let events = load_online_explore_events(ledger, session_id)?;
+    if node_id.is_none() && !has_seeds && action != "expand_citations" {
+        let has_map = events.iter().any(|e| e.kind == EVENT_IDEA_MAP && e.seq > latest_statement_seq(&events));
+        if crate::idea::supports_thorough_round2(&events) && has_map {
+            drop(guard);
+            return crate::idea_round2::handle_round2_op(state, ledger, session_id, body);
+        }
+        // Audit M4: refuse ambiguous `{}` on non-Thorough / pre-map sessions instead of guessing.
+        return Err(bad(
+            "specify `node_id`, `seeds`, `action: \"expand_citations\"`, or run Thorough Round 2 after mapping",
+        ));
+    }
+
     let explicit_providers = parse_optional_providers(&val)?;
     let max_results = parse_max_results(val.get("max_results"), DEFAULT_MAX_RESULTS)?;
-
     let (planned_queries, meta) = if let Some(nid) = node_id {
-        build_node_more_plan(events, &nid, &explicit_providers, max_results)?
+        build_node_more_plan(&events, &nid, &explicit_providers, max_results)?
     } else {
         let explicit_seeds = parse_seed_keys(val.get("seeds").or_else(|| val.get("paper_keys")))?;
-        let hops = val["hops"].as_u64().map(|h| (h as usize).clamp(1, 2)).unwrap_or(1);
-        build_citation_expansion_plan(events, &explicit_seeds, &explicit_providers, hops, max_results)?
+        // Single batch executes 1-hop expansion honestly (Audit M2).
+        build_citation_expansion_plan(&events, &explicit_seeds, &explicit_providers, 1, max_results)?
     };
 
-    let guard = ActiveExploreGuard::acquire(state, session_id)?;
     let mut env = ResearchEnv::new(&state.cfg.data_dir);
     env.network_endpoints = state.cfg.literature_endpoints.clone();
     let router = build_idea_router(Arc::clone(state), Arc::new(env), session_id).map_err(internal)?;
@@ -158,6 +168,7 @@ fn handle_more_op(
     let res = execute_app_search_batch(
         &state.cfg.data_dir,
         ledger,
+        Some(&state.ledger_write_lock),
         &router,
         session_id,
         planned_queries,
@@ -194,7 +205,10 @@ fn parse_cited_since_request(events: &[Event], val: &Value) -> Result<CitedSince
     } else {
         let supported = supported_citation_providers(&target_key, "cited_by");
         for &p in &providers {
-            if p.is_allowlisted() && !supported.contains(&p) {
+            if !p.is_allowlisted() {
+                return Err(bad(format!("provider `{p}` is disabled and cannot run `cited_by` lookups")));
+            }
+            if !supported.contains(&p) {
                 return Err(bad(format!("provider `{p}` does not support `cited_by` lookup for `{target_key}`")));
             }
         }
@@ -232,22 +246,15 @@ fn build_node_more_plan(
     if let Some(aliases) = node["aliases"].as_array() {
         for a in aliases.iter().filter_map(Value::as_str).take(2) {
             let t = a.trim();
-            if !t.is_empty() && !terms.iter().any(|x| x.eq_ignore_ascii_case(t)) {
-                terms.push(t.to_string());
-            }
+            if !t.is_empty() && !terms.iter().any(|x| x.eq_ignore_ascii_case(t)) { terms.push(t.to_string()); }
         }
     }
     let joined = terms.join(" ");
     let query_text = clip_query(if terms.is_empty() { label } else { &joined });
 
-    let mut queries = Vec::new();
-    let mut q_idx = 0usize;
+    let (mut queries, mut q_idx) = (Vec::new(), 0usize);
     if !query_text.is_empty() {
-        let lex_provs = if explicit_providers.is_empty() {
-            vec![LitProvider::Arxiv, LitProvider::Inspire]
-        } else {
-            explicit_providers.to_vec()
-        };
+        let lex_provs = if explicit_providers.is_empty() { vec![LitProvider::Arxiv, LitProvider::Inspire] } else { explicit_providers.to_vec() };
         for p in lex_provs {
             if queries.len() >= MAX_NODE_MORE_QUERIES { break; }
             q_idx += 1;
@@ -311,8 +318,7 @@ fn build_citation_expansion_plan(
         return Err(bad("no seed, core, or read papers available for citation expansion"));
     }
     let round = next_search_round(events);
-    let mut queries = Vec::new();
-    let mut q_idx = 0usize;
+    let (mut queries, mut q_idx) = (Vec::new(), 0usize);
     for seed in &seeds {
         for rel in ["cites", "cited_by"] {
             if queries.len() >= MAX_IDEA_SEARCH_QUERIES { break; }
@@ -339,7 +345,7 @@ fn build_citation_expansion_plan(
         since_year: None,
         is_open_question: false,
         extra_seeds: seeds,
-        hops: hops.max(1),
+        hops: hops.min(1),
         round2: false,
         thin_statements: Vec::new(),
     };
@@ -349,9 +355,7 @@ fn build_citation_expansion_plan(
 pub(crate) fn collect_session_expansion_seeds(events: &[Event], limit: usize) -> Vec<PaperKey> {
     let stmt_seq = latest_statement_seq(events);
     let (mut out, mut seen) = (Vec::new(), BTreeSet::new());
-    let mut push = |k: PaperKey| {
-        if out.len() < limit && seen.insert(k.clone()) { out.push(k); }
-    };
+    let mut push = |k: PaperKey| { if out.len() < limit && seen.insert(k.clone()) { out.push(k); } };
     for ev in events.iter().filter(|e| e.seq >= stmt_seq) {
         if ev.kind == "idea.paper" && matches!(ev.payload["status"].as_str(), Some("read_full" | "read_passages")) {
             if let Some(k) = ev.payload["key"].as_str().and_then(|s| PaperKey::parse(s).ok()) { push(k); }
@@ -368,9 +372,7 @@ pub(crate) fn collect_session_expansion_seeds(events: &[Event], limit: usize) ->
     }
     if let Some(st) = events.iter().rev().find(|e| e.kind == "idea.stated") {
         if let Some(arr) = st.payload["seeds"].as_array() {
-            for s in arr.iter().filter_map(Value::as_str) {
-                if let Ok(k) = PaperKey::parse(s) { push(k); }
-            }
+            for s in arr.iter().filter_map(Value::as_str) { if let Ok(k) = PaperKey::parse(s) { push(k); } }
         }
     }
     out
@@ -398,9 +400,7 @@ pub(crate) fn extract_node_paper_keys(node: &Value) -> Vec<PaperKey> {
     }
     if let Some(arr) = node["papers"].as_array() {
         for s in arr.iter().filter_map(Value::as_str) {
-            if let Ok(pk) = PaperKey::parse(s) {
-                if seen.insert(pk.clone()) { keys.push(pk); }
-            }
+            if let Ok(pk) = PaperKey::parse(s) { if seen.insert(pk.clone()) { keys.push(pk); } }
         }
     }
     keys

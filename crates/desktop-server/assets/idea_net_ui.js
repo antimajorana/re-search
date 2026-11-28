@@ -38,6 +38,14 @@ function round2StatusBadge(status) {
   }
 }
 
+function parseValidYear(raw) {
+  if (raw === null || raw === undefined) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isInteger(n) ? n : null;
+}
+
 /**
  * Render a `"Who cited this since"` action bar (0 model calls) for a paper or map node.
  * On open-question targets, ALWAYS renders the `"cited since" != "answered"` note (`explore.md` 12 risk 12).
@@ -49,7 +57,7 @@ export function renderCitedSinceControl(target, opts = {}) {
   if (!key && !nodeId) return null;
 
   const isOpenQ = Boolean(target.isOpenQuestion || target.is_open_question || target.kind === 'open_question');
-  const sinceYear = target.since_year ?? target.stated_year ?? target.year ?? null;
+  const sinceYear = parseValidYear(target.since_year ?? target.stated_year ?? target.year);
   const onCitedSince = typeof opts.onCitedSince === 'function' ? opts.onCitedSince : null;
 
   const box = el('div', 'idea-cited-since-box');
@@ -66,7 +74,7 @@ export function renderCitedSinceControl(target, opts = {}) {
       onCitedSince({
         paper_key: key || undefined,
         node_id: nodeId || undefined,
-        since_year: sinceYear != null ? Number(sinceYear) : undefined,
+        since_year: sinceYear != null ? sinceYear : undefined,
         is_open_question: isOpenQ,
       }),
     );
@@ -171,8 +179,10 @@ export function renderCitedSinceRuns(runs) {
     const card = el('div', 'idea-preview-box');
     const target = String(run.target_key || run.node_id || '');
     card.setAttribute('data-cited-since-run', target);
-    const citing = Array.isArray(run.citing_papers) ? run.citing_papers : [];
-    const sinceTxt = run.since_year != null ? ` since ${run.since_year}` : '';
+    const rawCiting = Array.isArray(run.citing_papers) ? run.citing_papers : [];
+    const citing = rawCiting.filter((cp) => cp && cp.matches_since_year !== false);
+    const runYear = parseValidYear(run.since_year);
+    const sinceTxt = runYear != null ? ` since ${runYear}` : '';
     card.append(
       el('div', 'idea-card-meta', `${target}${sinceTxt}: ${citing.length} citing ${citing.length === 1 ? 'paper' : 'papers'} (${CITED_SINCE_ZERO_CALLS_HINT})`),
     );
@@ -217,8 +227,9 @@ export function renderRound2Progress(round2, opts = {}) {
   if (eligible && onRunRound2) {
     const btn = el('button', 'pill-btn sm', ROUND2_TRIGGER_LABEL);
     btn.type = 'button';
+    btn.disabled = status === 'running';
     btn.setAttribute('data-action', 'run-round2');
-    btn.addEventListener('click', () => onRunRound2());
+    btn.addEventListener('click', () => { if (!btn.disabled) onRunRound2(); });
     head.append(btn);
   }
   box.append(head);

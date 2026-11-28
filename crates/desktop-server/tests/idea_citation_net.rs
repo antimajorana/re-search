@@ -111,7 +111,7 @@ fn spawn_citation_mock_server() -> (String, Arc<AtomicUsize>) {
                                     "metadata": {
                                         "titles": [{ "title": "Synthetic 2025 Follow-up on Monitored Krylov" }],
                                         "authors": [{ "full_name": "B. Followup" }],
-                                        "earliest_date": "2025-05-01",
+                                        "preprint_date": "2025-05-01",
                                         "arxiv_eprints": [{ "value": "2505.00011" }],
                                         "abstracts": [{ "value": "Extends monitored Krylov complexity to interacting chains." }],
                                         "citation_count": 9
@@ -122,7 +122,7 @@ fn spawn_citation_mock_server() -> (String, Arc<AtomicUsize>) {
                                     "metadata": {
                                         "titles": [{ "title": "Synthetic 2023 Earlier Note" }],
                                         "authors": [{ "full_name": "C. Earlier" }],
-                                        "earliest_date": "2023-04-01",
+                                        "preprint_date": "2023-04-01",
                                         "arxiv_eprints": [{ "value": "2304.00022" }],
                                         "abstracts": [{ "value": "Earlier comment on Lanczos coefficients." }],
                                         "citation_count": 5
@@ -145,7 +145,7 @@ fn spawn_citation_mock_server() -> (String, Arc<AtomicUsize>) {
                                 "metadata": {
                                     "titles": [{ "title": "Synthetic Foundational Reference Paper" }],
                                     "authors": [{ "full_name": "D. Reference" }],
-                                    "earliest_date": "2021-03-01",
+                                    "preprint_date": "2021-03-01",
                                     "arxiv_eprints": [{ "value": "2103.00099" }],
                                     "abstracts": [{ "value": "Foundational operator growth formalism." }],
                                     "citation_count": 42
@@ -346,13 +346,19 @@ fn x16_cited_since_enforces_auth_router_approval_zero_model_calls_and_node_more(
     assert_eq!(ok_json["target_key"], "arxiv:2401.00001");
     assert_eq!(ok_json["is_open_question"], true);
     assert_eq!(ok_json["note"], CITED_SINCE_NOT_ANSWERED_NOTE);
-    assert_eq!(ok_json["citing_papers"].as_array().unwrap().len(), 2);
+    assert_eq!(ok_json["citing_papers"].as_array().unwrap().len(), 1);
+    assert_eq!(ok_json["citing_papers"][0]["year"], 2025);
+    assert_eq!(ok_json["citation_net"]["edges"].as_array().unwrap().len(), 2);
     assert!(lit_hits.load(Ordering::SeqCst) > hits_before);
 
-    // Verify ledger invariants: origin == "app", tool.call went through host:idea:<session>, 0 model calls.
+    // Verify ledger invariants: origin == "app", tool.request went through host:idea:<session>, 0 model calls,
+    // and Round-1 search_planned / stage events are NOT overwritten (Audit C1).
     let events = ledger.read_session("s-x16-http").unwrap();
     assert_eq!(count_model_calls(&events, RunScope::All), 0);
     assert!(events.iter().any(|e| {
+        e.kind == EVENT_IDEA_SEARCH_FINISHED && e.payload["origin"] == "app"
+    }));
+    assert!(!events.iter().any(|e| {
         e.kind == EVENT_IDEA_SEARCH_PLANNED && e.payload["origin"] == "app"
     }));
     assert!(events.iter().any(|e| {
@@ -360,7 +366,9 @@ fn x16_cited_since_enforces_auth_router_approval_zero_model_calls_and_node_more(
             && e.payload["tool"] == "idea_search"
             && e.payload["caller"] == "host:idea:s-x16-http"
     }));
-    assert!(events.iter().any(|e| e.kind == EVENT_IDEA_CITATION_NET));
+    assert!(events.iter().any(|e| {
+        e.kind == EVENT_IDEA_CITATION_NET && e.payload["origin"] == "app"
+    }));
     assert_eq!(ok_json["idea"]["coverage"]["citation_expansion"]["seeds"], 1);
     assert_eq!(ok_json["idea"]["coverage"]["citation_expansion"]["hops"], 1);
 
@@ -509,7 +517,7 @@ fn x16_round2_finds_thin_statements_updates_f12_and_passes_rule_s8() {
     assert_eq!(view["where_i_looked"]["round2"]["ceilings"]["max_queries"], 36);
     assert_eq!(view["where_i_looked"]["round2"]["ceilings"]["max_papers"], 12);
     assert_eq!(view["where_i_looked"]["round2"]["ceilings"]["max_model_calls"], 55);
-    assert!(view["where_i_looked"]["citation_net"]["unread_core_citations"].as_array().unwrap().len() >= 1);
+    assert!(!view["where_i_looked"]["citation_net"]["unread_core_citations"].as_array().unwrap().is_empty());
 }
 
 #[test]

@@ -227,3 +227,56 @@ test('idea_net_ui.js and idea_search.js have zero innerHTML and zero Rule S8 for
     }
   }
 });
+
+test('audit M1/M5: cited-since filters pre-cutoff rows, ignores invalid sinceYear, and disables Round 2 while running', async () => {
+  installMiniDom();
+  const { renderCitedSinceControl, renderCitationNetPanel } = await import('../assets/idea_net_ui.js');
+
+  let payload = null;
+  const ctrl = renderCitedSinceControl(
+    { key: 'arxiv:2401.00001', since_year: '', isOpenQuestion: false },
+    { onCitedSince: (p) => { payload = p; } },
+  );
+  ctrl.findAll((n) => n.getAttribute('data-action') === 'cited-since')[0].click();
+  assert.equal(payload.since_year, undefined);
+  assert.equal(ctrl.textContent.includes('since '), false);
+  assert.equal(ctrl.textContent.includes('NaN'), false);
+
+  const extras = renderCitationNetPanel(
+    {
+      citation_expansion: { seeds: 1, hops: 1 },
+      citation_net: {
+        edges_count: 2,
+        cited_since_runs: [
+          {
+            target_key: 'arxiv:2401.00001',
+            since_year: '',
+            citing_papers: [
+              { key: 'arxiv:2301.00001', title: 'Old Pre-Cutoff Paper', year: 2023, matches_since_year: false },
+              { key: 'arxiv:2505.00011', title: 'Post-Cutoff Paper', year: 2025, matches_since_year: true },
+            ],
+          },
+        ],
+      },
+      round2: {
+        eligible: true,
+        preset: 'thorough',
+        preset_label: 'Thorough',
+        status: 'running',
+        ceilings: { max_queries: 36, max_screened: 80, max_papers: 12, calls_per_paper: 4, max_model_calls: 55 },
+        usage: { queries_used: 4, screened_used: 5, papers_fetched: 1, model_calls_used: 2 },
+        thin_statements: [],
+      },
+    },
+    { onRunRound2: () => {} },
+  );
+
+  const text = extras.textContent;
+  assert.ok(text.includes('Post-Cutoff Paper'), text);
+  assert.equal(text.includes('Old Pre-Cutoff Paper'), false, 'matches_since_year:false must be filtered');
+  assert.equal(text.includes('NaN'), false, 'empty since_year must never produce NaN');
+  assert.equal(text.includes('since )'), false, 'empty since_year must never render blank since label');
+  const r2Btn = extras.findAll((n) => n.getAttribute('data-action') === 'run-round2')[0];
+  assert.equal(r2Btn.disabled, true, 'Round 2 button must be disabled while status === running');
+});
+

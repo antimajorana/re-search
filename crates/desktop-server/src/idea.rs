@@ -272,18 +272,6 @@ pub fn supports_thorough_round2(events: &[Event]) -> bool {
     effective_budget(events).preset == IdeaPreset::Thorough
 }
 
-/// Highest number of reader exchanges recorded for any single paper in the active revision.
-pub fn max_reader_calls_per_paper(events: &[Event]) -> u64 {
-    let rev_seq = latest_statement_seq(events);
-    let mut by_paper: BTreeMap<String, u64> = BTreeMap::new();
-    for ev in events.iter().filter(|e| e.kind == EVENT_IDEA_EXCHANGE && e.seq > rev_seq) {
-        if let Some(pk) = ev.payload.get("paper_key").and_then(Value::as_str) {
-            *by_paper.entry(pk.to_string()).or_insert(0) += 1;
-        }
-    }
-    by_paper.into_values().max().unwrap_or(0)
-}
-
 /// Compute live budget usage strictly from ledger events using F9 + F3 (`explore.md` Rule P3).
 pub fn budget_snapshot(events: &[Event], running: bool) -> IdeaBudgetSnapshot {
     let cfg = effective_budget(events);
@@ -302,7 +290,7 @@ pub fn budget_snapshot(events: &[Event], running: bool) -> IdeaBudgetSnapshot {
                         .filter(|r| {
                             !matches!(
                                 r.get("status").and_then(Value::as_str),
-                                Some("skipped_budget" | "disabled" | "not_configured")
+                                Some("skipped_budget" | "disabled" | "not_configured" | "unsupported")
                             )
                         })
                         .count() as u64;
@@ -451,7 +439,16 @@ pub fn next_stage(events: &[Event]) -> Option<IdeaStage> {
         r.stored_state == Some(ExploreStageState::Finished)
             && (is_offline_session(events) || r.updated_seq.unwrap_or(0) > brief_seq.unwrap_or(0))
     });
-    let latest_cands_seq = latest_kind_seq(EVENT_IDEA_CANDIDATES).unwrap_or(0);
+    let latest_cands_seq = events
+        .iter()
+        .filter(|e| {
+            e.seq > rev_seq
+                && e.kind == EVENT_IDEA_CANDIDATES
+                && e.payload.get("origin").and_then(Value::as_str) != Some("app")
+        })
+        .map(|e| e.seq)
+        .max()
+        .unwrap_or(0);
     let triage_done = stage_of(IdeaStage::Triage).and_then(|r| r.stored_state) == Some(ExploreStageState::Finished)
         && latest_kind_seq(EVENT_IDEA_TRIAGE).is_some_and(|ts| ts > latest_cands_seq);
     if !search_ready && !triage_done { return Some(IdeaStage::Search); }
