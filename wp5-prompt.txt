@@ -1,0 +1,36 @@
+Clone https://github.com/antimajorana/reSearch.git and branch `fix/wp5-ui-simplification` from latest `origin/main` (after WP1–WP4 have landed).
+
+You are implementing **Work Package 5: UI simplification and polish** from the 2026-11-28 reSearch audit, implementing the owner-approved simplification plan below. Work completely and unattended. Use Gemini 4 Neon for implementation subagents and Gemini 4 Carbon for a hard independent audit before your final push.
+
+## Hard Ground Rules (Zero Exceptions)
+1. **600-line CI ceiling:** Every touched source or test file (`.rs`, `.js`, `.mjs`, `.py`, `.css`) MUST be `<= 600` lines (`python3 scripts/check_file_length.py --base origin/main`).
+   - CRITICAL: `app.js` (932L), `projects.js` (633L), `canvas_sources.js` (842L), `canvas_dag.js` (688L) are currently OVER 600 lines. Before editing ANY of them, split the touched file cleanly into ES modules `<= 550` lines and register every new asset path in `crates/desktop-server/src/assets.rs`!
+2. **Never break security/XSS invariants:** DOM construction uses `createElement` and `textContent` only; zero untrusted `innerHTML`.
+3. **Preserve keyboard navigation, focus handling (`dom_focus.js`), and both light and dark themes.**
+4. **Update existing JS/Playwright tests AND add regression tests** for every removed/merged/simplified surface. Never add skipped or `#[ignore]` tests. Keep `Cargo.lock` untouched.
+5. **Never access Vivaldi, its profile, or the owner's personal notes.**
+6. **Stay strictly scoped to Work Package 5** (do NOT build WP6 unified LaTeX/Markdown renderer or WP7 usage tracker here).
+
+## Owner-Approved WP5 Simplification Requirements
+1. **Hide the right-canvas `#tab-dag` ("Proof DAG") in Solve mode:**
+   - Solve already has its own authoritative Graph tab + Derivation list with Solve badges. In Solve mode, hide `#tab-dag` (and if `#tab-dag` was active when switching into Solve, switch away or close the drawer cleanly). Keep `#tab-dag` visible for legacy Research sessions.
+2. **Move Solve's standalone Write-up bar into the Result Sheet / Export area:**
+   - Do not show an extra unstyled/cluttered Write-up strip on the Solve setup stage before results exist. Mount the styled write-up control inside the Solve Result Sheet / export actions once a derivation or result exists (preserving all `data-testid="writeup-btn-bar"` functionality when visible!).
+3. **Deduplicate status indicators & Stop buttons:**
+   - Remove redundant `#topbar-stop-btn` duplication when the mode's run bar or composer already owns Stop; unify status pills so Solve and Investigate never show conflicting top-bar vs run-bar pills; hide `#investigation-status` when redundant with the Orient run bar; hide `#investigation-legacy` map container completely for V3 paper sessions; hide `#pipeline-bar` in Solve and Investigate modes.
+4. **Progressive disclosure on Solve Setup & Research Composer:**
+   - Default Solve setup view shows: Statement (+ live preview), Models (Solver/Verifier grouped `<optgroup>` with short names), and Run. Collapse secondary setup sections (Symbols, Dimensions, Done Checklist, Approvals) cleanly inside a collapsible `"Options"` / `<details>` disclosure (auto-expanding if user clicks Edit or if there is a validation/approval warning!).
+   - Collapse the long `#research-options` controls into a calm, compact disclosure combining rigor, conventions, subagent, and workspace options; remove `#composer-connect` button (Connect lives in Settings and empty-model prompt only); group top-bar Archive and Delete actions into a clean `⋯` session menu; hide `#session-grants-pill` in the top header when zero grants exist (or merge into session details).
+5. **Declutter Sources, Rail & Project tabs:**
+   - Hide the left-rail folder dropdown (`#session-folder-filter`) when zero folders exist (keeping folder management accessible via compact action); remove redundant `#home-explore-card` (Explore is already in the left rail); hide disabled Formal Library (Physlib) section in Sources unless configured; merge `Sources Used` + `Saved files` into one clean Sources list; merge Project's 6 tabs (`Question`, `Findings`, `Open Questions`, `Validation`, `Sources`, `Experiments`) into 4 calmer tabs (`Overview` = Question + Open Questions, `Findings` = Findings + Validation, `Sources`, `Experiments`).
+6. **One visual system & plain wording everywhere:**
+   - Every button, select, checkbox, input, and disclosure uses the shared design tokens (`tokens.css`, `components.css`, `solve.css`) consistently across light AND dark themes, with zero raw unstyled browser controls and no help text run into controls.
+   - Plain wording everywhere: zero raw internal identifiers (`max_turns`, criterion IDs like `final_different_model_review`, or raw event names like `solve.done` / `proof.entry`) in user-facing text.
+
+## Verification Required Before Final Push
+1. `python3 scripts/check_file_length.py --base origin/main` (exit 0)
+2. `for f in crates/desktop-server/assets/*.js; do node --check "$f"; done` (exit 0)
+3. `node --test crates/desktop-server/tests/*.test.mjs` (0 failures)
+4. `unset RE_SEARCH_PYTHON && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked --no-fail-fast` (0 warnings, 0 failures)
+
+Push cleanly to `origin fix/wp5-ui-simplification` and summarize all changed/split files, tests updated/added, and commands run.

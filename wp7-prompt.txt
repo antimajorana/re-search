@@ -1,0 +1,37 @@
+Clone https://github.com/antimajorana/reSearch.git and branch `fix/wp7-usage-tracker` from latest `origin/main`.
+
+You are implementing **Work Package 7: Token and usage tracker in Settings** from the 2026-11-28 reSearch audit. Work completely and unattended. Use Gemini 4 Neon for implementation and Gemini 4 Carbon for a hard independent audit before your final push.
+
+## Hard Ground Rules (Zero Exceptions)
+1. **Single source of truth (CRITICAL):** Aggregate usage strictly from existing `model.response` events in the tamper-evident ledger (joining session/request metadata for provider, model, session title, and mode). Do NOT create a second database, cache file, or counter store!
+2. **Honest handling of subscription CLI routes:** For routes whose `model.response` events carry no token counts (e.g. `claude-cli`, `antigravity`, or `usage` missing/null/zero-with-no-fields), accurately count model calls and report `tokens_reported: false` so the UI says `"tokens not reported"` instead of misleadingly showing `0` tokens.
+3. **No cost estimates** (per owner instruction: *"No cost estimates unless the owner asks"*).
+4. **Keep it small and calm:** One compact Usage section in `#settings-dialog` + a compact per-session usage line.
+5. **600-line CI ceiling & XSS safety:** Every touched file MUST stay `<= 600` lines (`python3 scripts/check_file_length.py --base origin/main`). DOM built with `createElement`/`textContent` only (zero `innerHTML`). Keep `Cargo.lock` untouched. Never access Vivaldi or personal notes.
+
+## Exact Requirements
+1. **Backend aggregation (`crates/desktop-server/src/usage_stats.rs`, `<= 350`L, wired in `lib.rs` & `api_dispatch.rs`):**
+   - Inspect how `model.response` events store `usage` (`input_tokens`, `output_tokens`, `cached_tokens` / `cache_read_input_tokens`, etc.) and `provider` / `model` across `crates/agent/` and `crates/cli-route/` so every provider's wire format is parsed accurately!
+   - Expose authenticated `GET /api/usage` returning JSON with:
+     - `totals`: `{ today, last_7_days, all_time }` — each with `{ calls, input_tokens, output_tokens, unreported_calls }`
+     - `by_provider_model`: array of `{ provider, model, calls, input_tokens, output_tokens, tokens_reported, unreported_calls }`
+     - `by_day`: array of `{ date (YYYY-MM-DD), calls, input_tokens, output_tokens, unreported_calls }`
+     - `by_session`: array of `{ session_id, title, mode, updated_at_ms, calls, input_tokens, output_tokens, tokens_reported, unreported_calls }`
+   - Optional `?session_id=<id>` (or include compact `usage` summary in `GET /api/sessions/{id}`) for the compact per-session usage line!
+2. **Frontend UI (`crates/desktop-server/assets/usage_tracker.js`, `<= 300`L, registered in `crates/desktop-server/src/assets.rs`):**
+   - Add one clean **Usage** tab or section inside `#settings-dialog` (matching existing Settings tabs & light/dark theme tokens):
+     - Summary cards/rows for **Today**, **Last 7 days**, and **All time** (calls, input tokens, output tokens, plus note when some calls did not report tokens).
+     - Compact tables for **By provider & model**, **By day**, and **By session**.
+     - For any provider/model or session with `tokens_reported === false`, show call count and `"tokens not reported"`.
+   - Render a compact per-session usage line (e.g. `"8 calls · 36.0k in / 2.4k out"` or `"3 calls · tokens not reported"`) when a session has model calls.
+   - Zero cost estimates anywhere.
+3. **Tests:**
+   - `crates/desktop-server/tests/usage_stats.rs`: Rust integration tests seeding real `model.response` ledger events across multiple days, sessions, API providers (with token usage), and subscription CLI routes (without token usage) — asserting exact `today` / `last_7_days` / `all_time` totals, `by_provider_model`, `by_day`, `by_session`, `tokens_reported: false` for CLI routes, and auth enforcement on `GET /api/usage`.
+   - `crates/desktop-server/tests/usage_tracker.test.mjs`: Node DOM tests verifying Settings Usage rendering, `"tokens not reported"` wording, compact per-session line, no cost estimates (`$`/`USD`), and XSS safety on hostile session titles/model names.
+
+## Verification Required Before Final Push
+1. `python3 scripts/check_file_length.py --base origin/main` (exit 0)
+2. `node --test crates/desktop-server/tests/*.test.mjs` (0 failures)
+3. `unset RE_SEARCH_PYTHON && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked --no-fail-fast` (0 warnings, 0 failures)
+
+Push cleanly to `origin fix/wp7-usage-tracker` and summarize all changed files, tests added, and commands run.

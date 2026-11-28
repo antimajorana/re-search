@@ -1,0 +1,47 @@
+Clone https://github.com/antimajorana/reSearch.git and branch `fix/wp6-unified-latex-markdown` from latest `origin/main` (after WP5 has landed).
+
+You are implementing **Work Package 6: LaTeX and Markdown rendered correctly everywhere** from the 2026-11-28 reSearch audit. Work completely and unattended. Use Gemini 4 Neon for implementation subagents and Gemini 4 Carbon for a hard independent audit before your final push.
+
+## Hard Ground Rules (Zero Exceptions)
+1. **Safety / XSS invariant (CRITICAL):** NEVER assign untrusted text to `innerHTML`! Any HTML generated for Markdown or KaTeX must come strictly from sanitized/escaped DOM-node construction (`createElement`, `textContent`, `katex.render` into a fresh `<span>`/`<div>`, or allowlisted DOM building with zero raw HTML passthrough). Hostile `<script>`, `<img onerror=...>`, `javascript:` links, and HTML entities must remain inert text!
+2. **600-line CI ceiling:** Every touched source or test file MUST be `<= 600` lines (`python3 scripts/check_file_length.py --base origin/main`). Split `stream.js` (660L), `canvas_latex.js` (630L), `canvas_dag.js` (688L), or any other over-limit file into `<= 550`L ES modules (registered in `crates/desktop-server/src/assets.rs`) BEFORE editing!
+3. **Never access Vivaldi, its profile, or the owner's personal notes.** Keep `Cargo.lock` untouched. Never add skipped or `#[ignore]` tests.
+4. **Stay strictly scoped to Work Package 6.**
+
+## Exact Requirements
+1. **One shared renderer module (`crates/desktop-server/assets/rich_render.js`, registered in `assets.rs`):**
+   - Consolidate rendering behind ONE shared API (`renderRichBlock(el, text, opts)`, `renderRichInline(el, text, opts)`, `renderRichStream(el, text, opts)`) leveraging the existing battle-tested scanner/KaTeX primitives (`markdown.js`, `math_scan.js`, `math_katex.js`, `math_equations.js`, `tex_preview.js`, `math.js`).
+   - Support ALL of:
+     - Inline math: `$...$` and `\(...\)`
+     - Display math: `$$...$$` and `\[...\]`
+     - Common LaTeX math environments: `equation`, `equation*`, `align`, `align*`, `gather`, `gather*`, `multline`, `multline*`, `aligned`, `cases`, `pmatrix`, `bmatrix`, `vmatrix`, `subequations`
+     - Markdown headings, paragraphs, lists, blockquotes, tables, fenced code blocks (`` ``` ``), inline code (`` `...` ``), bold/italic, links (safe `http:`/`https:` only) — with code blocks and inline code strictly protected from math scanning!
+     - Literal dollar signs in prose (e.g. `"costs $5 and $10"`, `"price is \$100"`, currency next to `$x = 1$`) MUST NOT swallow prose into math!
+     - Nested delimiters (e.g. `\text{for $x > 0$}` inside display or inline math) MUST render cleanly!
+     - **Graceful error & streaming fallback:** If KaTeX throws on a malformed or incomplete (mid-stream) formula, NEVER render an ugly red KaTeX error box or empty string — fall back cleanly to displaying the raw TeX source inside a styled `<code class="math-source-fallback">` / `<span>` element via `textContent`!
+2. **Route EVERY surface that displays model or paper text through `rich_render.js`:**
+   - Chat messages & live streaming (`stream.js`, split below 600L first)
+   - Investigate answers, map nodes, node details, and citations (`investigation_answer.js`, `investigation_map.js`, `investigation_node.js`, `investigation_results.js`, `paper_cites.js`, `investigation_v3_shell.js`)
+   - Solve statement live preview (`solve_setup.js` / `solve_setup_fields.js`)
+   - Solve step cards: summaries, details, and rendered claims (`solve_steps.js`)
+   - Graph node labels (`graph_view.js` and `canvas_dag.js` if touched)
+   - Solve result sheet, solver summaries, and open items (`solve_result_sheet.js`)
+   - Session titles (left rail `session_rail.js` and top header title)
+   - Tool results (`trace_cards.js` / prose outputs)
+   - Write-up & manuscript / source-reader previews (`canvas_latex.js`, `tex_preview.js`, source reader rendered mode)
+3. **Comprehensive multi-surface tricky-input test page & test suite:**
+   - Add `crates/desktop-server/tests/rich_render_surfaces.test.mjs` (plus a static fixture/harness page if helpful for Playwright verification) running the SAME tricky input suite across EVERY surface listed above:
+     - Nested delimiters (`$$\sum_{i=1}^n x_i \text{ for $x_i > 0$}$$`)
+     - Literal dollar signs in prose (`"The sensor costs $5 while $E = mc^2$ holds for \$100 setups."`)
+     - Formula split across stream chunks (chunk 1: `"Energy $E = m"`, chunk 2: `"c^2$ done"`)
+     - Markdown table + fenced code block (`$not_math$`) adjacent to display `\[ \nabla \cdot \mathbf{E} = \rho / \varepsilon_0 \]` and `\begin{align}...\end{align}`
+     - Malformed formula (`$\frac{1}{$`) falling back to raw source text, NOT empty and NOT KaTeX error class/throw
+     - Hostile XSS payloads (`<img src=x onerror=alert(1)>`, `<script>alert(1)</script>`, `[x](javascript:alert(1))`) rendered strictly inert with zero executable elements or attributes!
+
+## Verification Required Before Final Push
+1. `python3 scripts/check_file_length.py --base origin/main` (exit 0)
+2. `for f in crates/desktop-server/assets/*.js; do node --check "$f"; done` (exit 0)
+3. `node --test crates/desktop-server/tests/*.test.mjs` (0 failures)
+4. `unset RE_SEARCH_PYTHON && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked --no-fail-fast` (0 warnings, 0 failures)
+
+Push cleanly to `origin fix/wp6-unified-latex-markdown` and summarize all changed/split files, surfaces migrated, tests added, and commands run.
