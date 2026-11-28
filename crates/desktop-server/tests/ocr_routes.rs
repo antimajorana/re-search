@@ -165,11 +165,14 @@ fn ocr_settings_defaults_validation_and_persistence_without_mutating_receipts() 
     assert_eq!(initial["langs"], json!(["eng"]));
     assert!(initial["tesseract_path"].is_null());
 
-    // Reject unknown keys, NUL paths, and invalid language tags with 400.
+    // Reject unknown keys, NUL paths, UNC paths, non-tesseract executables, and invalid language tags with 400.
     for bad_payload in [
         json!({ "unknown_key": true }),
-        json!({ "tesseract_path": "/bad/path\0exe" }),
+        json!({ "tesseract_path": "/bad/path\0tesseract" }),
+        json!({ "tesseract_path": "/bin/sh" }),
+        json!({ "tesseract_path": r"\\server\share\tesseract.exe" }),
         json!({ "tessdata_dir": "/bad/dir\0data" }),
+        json!({ "tessdata_dir": "//server/share/tessdata" }),
         json!({ "langs": ["../evil"] }),
     ] {
         let (st, _, _) = raw_http(port, "PUT", "/api/settings/ocr", &auth, &serde_json::to_vec(&bad_payload).unwrap());
@@ -177,7 +180,7 @@ fn ocr_settings_defaults_validation_and_persistence_without_mutating_receipts() 
     }
 
     // Setting a non-existent tesseract_path reports unavailable with the exact install prompt.
-    let missing_exe = tmp.path().join("definitely-missing-tesseract").display().to_string();
+    let missing_exe = tmp.path().join("definitely-missing").join("tesseract").display().to_string();
     let put_res = configure_missing_tesseract(port, &tok, &missing_exe);
     assert_eq!(put_res["enabled"], json!(true));
     assert_eq!(put_res["tesseract_path"], json!(missing_exe));
@@ -216,7 +219,7 @@ fn ocr_ingest_and_page_image_full_and_cropped_png() {
     let port = srv.addr.port();
     let tok = srv.info.token.clone();
     create_session(port, &tok, "s-ocr-img");
-    let missing_exe = tmp.path().join("missing-tess").display().to_string();
+    let missing_exe = tmp.path().join("missing-bin").join("tesseract").display().to_string();
     configure_missing_tesseract(port, &tok, &missing_exe);
 
     let pdf = build_scanned_gray_pdf(16, 12);
@@ -306,7 +309,7 @@ fn ocr_async_job_lifecycle_cross_session_isolation_and_cancel() {
     let auth = [("X-ReSearch-Token", tok.as_str()), ("Content-Type", "application/json")];
     create_session(port, &tok, "s-ocr-job-a");
     create_session(port, &tok, "s-ocr-job-b");
-    let missing_exe = tmp.path().join("missing-tess-async").display().to_string();
+    let missing_exe = tmp.path().join("missing-async").join("tesseract").display().to_string();
     configure_missing_tesseract(port, &tok, &missing_exe);
 
     let pdf = build_scanned_gray_pdf(12, 8);

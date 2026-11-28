@@ -295,3 +295,75 @@ fn validate_effective_langs_and_version_line_sanitization() {
     let capped = sanitize_version_line(&long_line).unwrap();
     assert_eq!(capped.chars().count(), MAX_VERSION_CHARS);
 }
+
+#[test]
+fn validate_paths_reject_unc_and_non_tesseract_executables() {
+    assert!(validate_tesseract_path(Path::new("/usr/bin/tesseract")).is_ok());
+    assert!(validate_tesseract_path(Path::new(r"C:\Program Files\Tesseract-OCR\Tesseract.EXE")).is_ok());
+    assert!(validate_tessdata_dir(Path::new("/usr/share/tesseract-ocr/5/tessdata")).is_ok());
+
+    for bad_exe in [
+        "",
+        "/bin/sh",
+        r"C:\Windows\System32\cmd.exe",
+        r"\\server\share\tesseract.exe",
+        "//server/share/tesseract",
+        "/usr/bin/tesseract\0evil",
+    ] {
+        assert!(validate_tesseract_path(Path::new(bad_exe)).is_err(), "expected `{bad_exe}` rejected");
+    }
+    for bad_dir in ["", r"\\server\share\tessdata", "//server/share/tessdata", "/tmp/td\0bad"] {
+        assert!(validate_tessdata_dir(Path::new(bad_dir)).is_err(), "expected `{bad_dir}` rejected");
+    }
+}
+
+#[test]
+fn explicit_overrides_never_fall_back_to_env_or_system_candidates() {
+    let tmp = tempdir().unwrap();
+    let fallback_exe = tmp.path().join("fallback").join("tesseract");
+    let fallback_td = tmp.path().join("fallback").join("tessdata");
+    let partial_td = tmp.path().join("explicit_partial_td");
+    touch_file(&fallback_exe, b"bin");
+    touch_file(&fallback_td.join("eng.traineddata"), b"eng-model");
+    touch_file(&partial_td.join("deu.traineddata"), b"deu-only");
+
+    let probe = OcrEnvProbe {
+        re_search_tesseract: Some(fallback_exe.clone()),
+        tessdata_prefix: Some(fallback_td.clone()),
+        extra_exe_candidates: vec![fallback_exe.clone()],
+        extra_tessdata_candidates: vec![fallback_td],
+        ..OcrEnvProbe::default()
+    };
+
+    let missing_exe_cfg = OcrLocalConfig {
+        tesseract_path: Some(tmp.path().join("missing").join("tesseract")),
+        tessdata_dir: None,
+        ..OcrLocalConfig::default()
+    };
+    let st1 = ocr_status_with_probe(&missing_exe_cfg, &probe);
+    assert!(!st1.available);
+    assert!(st1.tesseract_path.is_none());
+    assert_eq!(st1.message, OCR_INSTALL_PROMPT);
+
+    let partial_td_cfg = OcrLocalConfig {
+        tesseract_path: Some(fallback_exe),
+        tessdata_dir: Some(partial_td.clone()),
+        langs: vec!["eng".into()],
+        ..OcrLocalConfig::default()
+    };
+    let st2 = ocr_status_with_probe(&partial_td_cfg, &probe);
+    assert!(!st2.available);
+    assert_eq!(st2.tessdata_dir.as_deref(), Some(partial_td.to_string_lossy().as_ref()));
+    assert_eq!(st2.langs, vec!["deu".to_string()]);
+    assert_eq!(st2.missing_langs, vec!["eng".to_string()]);
+    assert_eq!(st2.message, OCR_INSTALL_PROMPT);
+}
+
+#[test]
+fn drain_capped_reads_large_stream_to_eof_without_exceeding_cap() {
+    let huge = vec![b'x'; (MAX_VERSION_READ_BYTES as usize) * 5];
+    let kept = drain_capped(std::io::Cursor::new(huge));
+    assert_eq!(kept.len(), MAX_VERSION_READ_BYTES as usize);
+    assert!(kept.iter().all(|&b| b == b'x'));
+}
+

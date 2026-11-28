@@ -147,6 +147,7 @@ impl OcrPageRunner for LocalTesseractPageRunner {
         #[cfg(windows)]
         {
             if let Some(sysroot) = std::env::var_os("SYSTEMROOT") { cmd.env("SYSTEMROOT", sysroot); }
+            cmd.env("TEMP", &temp.0).env("TMP", &temp.0);
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }

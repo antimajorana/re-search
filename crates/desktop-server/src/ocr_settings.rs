@@ -6,8 +6,8 @@
 use crate::routes_session::{bad, internal, parse_json_body, ApiResult};
 use crate::state::DesktopState;
 use research_tools::pdf_ocr_models::{
-    effective_langs, ocr_status_with_probe, OcrEnvProbe, OcrLocalConfig, OcrStatus,
-    DEFAULT_OCR_LANG, OCR_INSTALL_PROMPT,
+    effective_langs, ocr_status_with_probe, validate_tessdata_dir, validate_tesseract_path,
+    OcrEnvProbe, OcrLocalConfig, OcrStatus, DEFAULT_OCR_LANG,
 };
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
@@ -65,23 +65,6 @@ pub fn save_ocr_settings(data_dir: &Path, cfg: &OcrLocalConfig) -> Result<(), St
     Ok(())
 }
 
-fn scan_explicit_tessdata(dir: &Path) -> Vec<String> {
-    let Ok(entries) = fs::read_dir(dir) else { return Vec::new(); };
-    let mut langs = Vec::new();
-    for entry in entries.flatten() {
-        if !entry.path().is_file() { continue; }
-        let name = entry.file_name();
-        if let Some(stem) = name.to_str().and_then(|s| s.strip_suffix(".traineddata")) {
-            if let Ok(valid) = research_tools::pdf_ocr_models::validate_ocr_lang(stem) {
-                langs.push(valid);
-            }
-        }
-    }
-    langs.sort();
-    langs.dedup();
-    langs
-}
-
 /// Inspects local Tesseract availability while strictly honoring explicit path overrides.
 pub fn effective_ocr_status(cfg: &OcrLocalConfig) -> OcrStatus {
     let mut probe = OcrEnvProbe::from_process_env();
@@ -94,39 +77,10 @@ pub fn effective_ocr_status(cfg: &OcrLocalConfig) -> OcrStatus {
         probe.tessdata_prefix = None;
         probe.extra_tessdata_candidates.clear();
     }
-    let mut status = ocr_status_with_probe(cfg, &probe);
-    if let Some(exe) = &cfg.tesseract_path {
-        if !exe.is_file() {
-            status.tesseract_path = None;
-            status.version = None;
-        }
+    if cfg.tesseract_path.is_some() && cfg.tessdata_dir.is_some() {
+        probe.local_appdata = None;
     }
-    if let Some(dir) = &cfg.tessdata_dir {
-        if dir.is_dir() {
-            let found = scan_explicit_tessdata(dir);
-            let requested = effective_langs(&cfg.langs).unwrap_or_else(|_| cfg.langs.clone());
-            status.tessdata_dir = Some(dir.to_string_lossy().into_owned());
-            status.missing_langs = requested.into_iter().filter(|r| found.binary_search(r).is_err()).collect();
-            status.langs = found;
-        } else {
-            status.tessdata_dir = None;
-            status.langs.clear();
-            status.missing_langs = effective_langs(&cfg.langs).unwrap_or_else(|_| cfg.langs.clone());
-        }
-    }
-    let valid_langs = effective_langs(&cfg.langs).is_ok();
-    status.available = valid_langs
-        && status.tesseract_path.is_some()
-        && status.tessdata_dir.is_some()
-        && status.missing_langs.is_empty();
-    status.message = if !status.available {
-        OCR_INSTALL_PROMPT.to_string()
-    } else if !cfg.enabled {
-        "Local Tesseract detected (OCR disabled in settings).".to_string()
-    } else {
-        format!("Local Tesseract ready ({} language model(s)).", status.langs.len())
-    };
-    status
+    ocr_status_with_probe(cfg, &probe)
 }
 
 fn settings_response(cfg: &OcrLocalConfig) -> Value {
@@ -148,7 +102,16 @@ fn parse_optional_path(raw: &Value, field: &str) -> Result<Option<PathBuf>, (u16
         }
         Value::String(s) => {
             let trimmed = s.trim();
-            Ok((!trimmed.is_empty()).then(|| PathBuf::from(trimmed)))
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            let path = PathBuf::from(trimmed);
+            match field {
+                "tesseract_path" => validate_tesseract_path(&path).map_err(bad)?,
+                "tessdata_dir" => validate_tessdata_dir(&path).map_err(bad)?,
+                _ => {}
+            }
+            Ok(Some(path))
         }
         _ => Err(bad(format!("`{field}` must be a string or null."))),
     }
@@ -210,6 +173,7 @@ pub fn handle_put_ocr_settings(state: &DesktopState, body: &[u8]) -> ApiResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use research_tools::pdf_ocr_models::OCR_INSTALL_PROMPT;
 
     #[test]
     fn defaults_and_roundtrip_persist() {

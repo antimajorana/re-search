@@ -226,6 +226,39 @@ pub fn ocr_status_with_probe(config: &OcrLocalConfig, probe: &OcrEnvProbe) -> Oc
     }
 }
 
+fn is_unc_or_network_path(raw: &str) -> bool {
+    raw.starts_with(r"\\") || raw.starts_with("//")
+}
+
+/// Validates a local Tesseract executable path, rejecting NUL bytes, UNC/network
+/// paths, and executable basenames other than `tesseract` / `tesseract.exe`.
+pub fn validate_tesseract_path(path: &Path) -> Result<(), String> {
+    let raw = path.to_string_lossy();
+    if raw.trim().is_empty() || raw.contains('\0') {
+        return Err("`tesseract_path` must be a non-empty local path without NUL bytes.".into());
+    }
+    if is_unc_or_network_path(&raw) {
+        return Err("`tesseract_path` must be a local path (UNC/network paths are rejected).".into());
+    }
+    let name = raw.rsplit(['/', '\\']).next().unwrap_or("");
+    if !(name.eq_ignore_ascii_case("tesseract") || name.eq_ignore_ascii_case("tesseract.exe")) {
+        return Err("`tesseract_path` must point to a `tesseract` or `tesseract.exe` executable.".into());
+    }
+    Ok(())
+}
+
+/// Validates a local `tessdata` directory path, rejecting NUL bytes and UNC/network paths.
+pub fn validate_tessdata_dir(dir: &Path) -> Result<(), String> {
+    let raw = dir.to_string_lossy();
+    if raw.trim().is_empty() || raw.contains('\0') {
+        return Err("`tessdata_dir` must be a non-empty local path without NUL bytes.".into());
+    }
+    if is_unc_or_network_path(&raw) {
+        return Err("`tessdata_dir` must be a local path (UNC/network paths are rejected).".into());
+    }
+    Ok(())
+}
+
 fn push_unique_path(list: &mut Vec<PathBuf>, candidate: PathBuf) {
     if !candidate.as_os_str().is_empty() && !list.contains(&candidate) {
         list.push(candidate);
@@ -233,8 +266,10 @@ fn push_unique_path(list: &mut Vec<PathBuf>, candidate: PathBuf) {
 }
 
 fn discover_tesseract_exe(config: &OcrLocalConfig, probe: &OcrEnvProbe) -> Option<PathBuf> {
+    if let Some(p) = &config.tesseract_path {
+        return (validate_tesseract_path(p).is_ok() && p.is_file()).then(|| p.clone());
+    }
     let mut candidates = Vec::new();
-    if let Some(p) = &config.tesseract_path { push_unique_path(&mut candidates, p.clone()); }
     if let Some(p) = &probe.re_search_tesseract { push_unique_path(&mut candidates, p.clone()); }
     #[cfg(windows)]
     let path_names = ["tesseract.exe", "tesseract"];
@@ -251,7 +286,7 @@ fn discover_tesseract_exe(config: &OcrLocalConfig, probe: &OcrEnvProbe) -> Optio
     for extra in &probe.extra_exe_candidates {
         push_unique_path(&mut candidates, extra.clone());
     }
-    candidates.into_iter().find(|p| p.is_file())
+    candidates.into_iter().find(|p| validate_tesseract_path(p).is_ok() && p.is_file())
 }
 
 fn discover_tessdata_dir(
@@ -260,8 +295,14 @@ fn discover_tessdata_dir(
     tesseract_exe: Option<&Path>,
     requested_langs: &[String],
 ) -> (Option<PathBuf>, Vec<String>) {
+    if let Some(dir) = &config.tessdata_dir {
+        if validate_tessdata_dir(dir).is_err() || !dir.is_dir() {
+            return (None, Vec::new());
+        }
+        let found = scan_tessdata_dir(dir);
+        return if found.is_empty() { (None, Vec::new()) } else { (Some(dir.clone()), found) };
+    }
     let mut candidates = Vec::new();
-    if let Some(dir) = &config.tessdata_dir { push_unique_path(&mut candidates, dir.clone()); }
     if let Some(prefix) = &probe.tessdata_prefix {
         push_unique_path(&mut candidates, prefix.clone());
         push_unique_path(&mut candidates, prefix.join("tessdata"));
@@ -288,6 +329,9 @@ fn discover_tessdata_dir(
 
     let mut fallback: Option<(PathBuf, Vec<String>)> = None;
     for dir in candidates {
+        if validate_tessdata_dir(&dir).is_err() {
+            continue;
+        }
         let found = scan_tessdata_dir(&dir);
         if found.is_empty() {
             continue;
@@ -323,43 +367,61 @@ fn scan_tessdata_dir(dir: &Path) -> Vec<String> {
     langs
 }
 
-/// Runs `exe --version` with a 3-second timeout and returns the sanitized first `tesseract ...`
-/// (or first non-empty) line, capped at 80 characters.
+/// Runs `exe --version` with a scrubbed environment, concurrent bounded pipe draining,
+/// and a 3-second timeout, returning the sanitized first `tesseract ...` line (<= 80 chars).
 pub fn probe_tesseract_version(exe: &Path) -> Option<String> {
+    validate_tesseract_path(exe).ok()?;
     let mut cmd = Command::new(exe);
-    cmd.arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.env_clear().arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(path_env) = std::env::var_os("PATH") {
+        cmd.env("PATH", path_env);
+    }
     #[cfg(windows)]
     {
+        if let Some(sysroot) = std::env::var_os("SYSTEMROOT") {
+            cmd.env("SYSTEMROOT", sysroot);
+        }
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     let mut child = cmd.spawn().ok()?;
+    let stdout_handle = child.stdout.take().map(|p| std::thread::spawn(move || drain_capped(p)));
+    let stderr_handle = child.stderr.take().map(|p| std::thread::spawn(move || drain_capped(p)));
     let deadline = Instant::now() + VERSION_PROBE_TIMEOUT;
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status,
+            Ok(Some(status)) => break Some(status),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(VERSION_POLL_INTERVAL),
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                break None;
             }
         }
     };
-    if !status.success() {
+    let stdout_buf = stdout_handle.and_then(|h| h.join().ok()).unwrap_or_default();
+    let stderr_buf = stderr_handle.and_then(|h| h.join().ok()).unwrap_or_default();
+    if !status.is_some_and(|st| st.success()) {
         return None;
     }
-    let stdout_buf = read_capped(child.stdout.take());
-    let stderr_buf = read_capped(child.stderr.take());
     extract_version_line(&String::from_utf8_lossy(&stdout_buf), &String::from_utf8_lossy(&stderr_buf))
 }
 
-fn read_capped<R: Read>(pipe: Option<R>) -> Vec<u8> {
-    let mut buf = Vec::new();
-    if let Some(p) = pipe {
-        let _ = p.take(MAX_VERSION_READ_BYTES).read_to_end(&mut buf);
+fn drain_capped<R: Read>(mut pipe: R) -> Vec<u8> {
+    let cap = MAX_VERSION_READ_BYTES as usize;
+    let mut kept = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match pipe.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) if kept.len() < cap => {
+                let take = n.min(cap - kept.len());
+                kept.extend_from_slice(&chunk[..take]);
+            }
+            Ok(_) => {}
+        }
     }
-    buf
+    kept
 }
 
 fn starts_with_tesseract_ascii(s: &str) -> bool {
