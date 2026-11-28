@@ -491,15 +491,17 @@ fn finish_review_policies_batching_assumed_skip_and_loop_caps() {
     let evs = ledger.read_session(session).unwrap();
     let mut st = SolveState::from_events(&evs);
 
-    // ProseOnly skips claimed `e-1` AND skips `e-asm` (AssumedByModel); selects 7 prose steps -> 2 batches (5 + 2).
+    // WP1 item 9: ProseOnly skips claim-bearing steps ONLY when own.is_computed();
+    // unchecked `e-1` is selected alongside the 7 prose steps (8 total -> 2 batches: 5 + 3),
+    // while `e-asm` (AssumedByModel) is still skipped.
     let prose_targets = select_finish_review_targets(&st, "e-final");
-    assert_eq!(prose_targets.len(), 7);
-    assert!(!prose_targets.contains(&"e-1".to_string()));
+    assert_eq!(prose_targets.len(), 8);
+    assert!(prose_targets.contains(&"e-1".to_string()));
     assert!(!prose_targets.contains(&"e-asm".to_string()));
     let chunks = batch_review_targets(&prose_targets);
     assert_eq!(chunks.len(), 2);
     assert_eq!(chunks[0].len(), 5);
-    assert_eq!(chunks[1].len(), 2);
+    assert_eq!(chunks[1].len(), 3);
 
     // All includes claimed `e-1` as well (8 total), still skipping `e-asm`.
     st.setup.as_mut().unwrap().review = ReviewPolicy::All;
@@ -554,7 +556,7 @@ fn finish_review_policies_batching_assumed_skip_and_loop_caps() {
 
     let summary = run_finish_review_batches(&ctx, "e-final").unwrap();
     assert_eq!(summary.batches_run, 1);
-    assert_eq!(summary.skipped_due_to_cap, 2);
+    assert_eq!(summary.skipped_due_to_cap, 3);
 
     // Distinct batches with identical raw payloads must count separately via `batch_id`.
     let cap_err = handle_review_steps(&ctx, &json!({ "entry_ids": ["e-final"] })).unwrap_err();

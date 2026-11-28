@@ -99,6 +99,7 @@ fn store_expr(
         },
         owner_entry: Some(owner.into()),
         portable: true,
+        unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
     };
     ledger
         .append_with_hash(

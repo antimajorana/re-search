@@ -194,15 +194,15 @@ fn desktop_check_and_recheck_r19_preserve_receipts_and_detect_change() {
         )
         .unwrap();
 
-    let s_lhs = "Add(Symbol('x', real=True), Symbol('x', real=True))";
-    let s_rhs = "Mul(Integer(2), Symbol('x', real=True))";
+    let s_lhs = "Pow(Add(Symbol('x', real=True), Integer(1)), Integer(2))";
+    let s_rhs = "Add(Pow(Symbol('x', real=True), Integer(2)), Mul(Integer(2), Symbol('x', real=True)), Integer(1))";
     let h_lhs = sha256_hex(s_lhs.as_bytes());
     let h_rhs = sha256_hex(s_rhs.as_bytes());
     ledger.put_blob(s_lhs.as_bytes()).unwrap();
     ledger.put_blob(s_rhs.as_bytes()).unwrap();
     ledger.append_with_hash(sid, event_kinds::TOOL_REQUEST, 1, &json!({ "call_id": "sym1", "tool": "sympy_eval", "caller": "solver" })).unwrap();
-    let rseq = ledger.append_with_hash(sid, event_kinds::TOOL_RESULT, 1, &json!({ "call_id": "sym1", "ok": true, "result": { "inline": "{\"value\":\"2*x\",\"error\":null,\"code_sha256\":\"c1\",\"process\":\"solver\"}" } })).unwrap().seq;
-    for (name, sha, tex) in [("lhs", h_lhs.clone(), "x+x"), ("rhs", h_rhs.clone(), "2x")] {
+    let rseq = ledger.append_with_hash(sid, event_kinds::TOOL_RESULT, 1, &json!({ "call_id": "sym1", "ok": true, "result": { "inline": "{\"value\":\"(x+1)**2\",\"error\":null,\"code_sha256\":\"c1\",\"process\":\"solver\"}" } })).unwrap().seq;
+    for (name, sha, tex) in [("lhs", h_lhs.clone(), "(x+1)^2"), ("rhs", h_rhs.clone(), "x^2+2x+1")] {
         ledger
             .append_with_hash(
                 sid,

@@ -407,6 +407,10 @@ pub struct SolveDone {
     pub rests_on: RestsOnSummary,
     pub status: SolveDoneStatus,
     pub model_calls: ModelCallsBreakdown,
+    #[serde(default)]
+    pub summary_markdown: String,
+    #[serde(default)]
+    pub open_items: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

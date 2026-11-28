@@ -85,20 +85,30 @@ mod tests {
             "math_sha256": math_sha,
         })).unwrap();
 
-        let srepr = "Add(x, 2)";
-        let ssha = ledger::sha256_hex(srepr.as_bytes());
-        let blob = ledger.put_blob(srepr.as_bytes()).unwrap();
-        ledger.append_with_hash(sid, event_kinds::SOLVE_EXPR, 1, &json!({
-            "name": "val", "version": 1, "srepr_blob": blob, "srepr_sha256": ssha,
-            "latex": "x + 2", "str_preview": srepr, "free_symbols": [],
-            "produced_by": { "call_id": "c-1", "result_seq": 1 }, "owner_entry": "e-1", "portable": true,
-        })).unwrap();
+        let lhs_srepr = "Pow(Add(Symbol('x'), Integer(1)), Integer(2))";
+        let rhs_srepr = "Add(Pow(Symbol('x'), Integer(2)), Mul(Integer(2), Symbol('x')), Integer(1))";
+        let lhs_sha = ledger::sha256_hex(lhs_srepr.as_bytes());
+        let rhs_sha = ledger::sha256_hex(rhs_srepr.as_bytes());
+        let lhs_blob = ledger.put_blob(lhs_srepr.as_bytes()).unwrap();
+        let rhs_blob = ledger.put_blob(rhs_srepr.as_bytes()).unwrap();
+        for (name, blob, sha, tex, preview) in [
+            ("lhs", &lhs_blob, &lhs_sha, "(x + 1)^2", lhs_srepr),
+            ("rhs", &rhs_blob, &rhs_sha, "x^2 + 2x + 1", rhs_srepr),
+        ] {
+            ledger.append_with_hash(sid, event_kinds::SOLVE_EXPR, 1, &json!({
+                "name": name, "version": 1, "srepr_blob": blob, "srepr_sha256": sha,
+                "latex": tex, "str_preview": preview, "free_symbols": [],
+                "produced_by": { "call_id": "c-1", "result_seq": 1 }, "owner_entry": "e-1", "portable": true,
+            })).unwrap();
+        }
         let claim = Claim {
-            form: ClaimForm::Equation, lhs: HandleRef::new("val", 1).unwrap(),
-            rhs: HandleRef::new("val", 1).unwrap(), relation: ClaimRelation::Eq,
+            form: ClaimForm::Equation, lhs: HandleRef::new("lhs", 1).unwrap(),
+            rhs: HandleRef::new("rhs", 1).unwrap(), relation: ClaimRelation::Eq,
             order: None, domain: None, how: None,
         };
-        let csha = compute_claim_sha256(std::slice::from_ref(&claim), |_| Some(ssha.as_str())).unwrap();
+        let csha = compute_claim_sha256(std::slice::from_ref(&claim), |h| {
+            Some(if h.name == "lhs" { lhs_sha.as_str() } else { rhs_sha.as_str() })
+        }).unwrap();
         let esha = compute_entry_sha256(Some(&csha), "CLI verified step.", "");
         ledger.append_with_hash(sid, event_kinds::PROOF_ENTRY, 1, &json!({
             "entry_id": "e-1", "entry_type": StepEntryType::FinalAnswer.as_str(),
@@ -153,7 +163,7 @@ mod tests {
             Ok(0)
         );
         let tex = fs::read_to_string(&tex_out).unwrap();
-        assert!(tex.contains("x + 2 = x + 2"));
+        assert!(tex.contains("(x + 1)^2 = x^2 + 2x + 1"));
         assert!(tex.contains("[Verified]"));
         assert!(tex.contains(writeup_wording::CHECK_TABLE_HEADING));
         assert!(out_dir.join("paper.bib").is_file(), "Tex write-up must emit sidecar .bib");

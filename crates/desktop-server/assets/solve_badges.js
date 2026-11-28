@@ -30,6 +30,7 @@ export const SOLVE_TIER_LABELS = Object.freeze({
 
 // `solve.md` 3 & R22: shown strictly when `own === 'verified'` and `effective !== 'verified'`.
 export const OWN_CHECK_VERIFIED_LINE = 'own check: verified';
+export const OWN_CHECK_EQUATIONS_VERIFIED_LINE = 'own check: the equations shown are verified';
 
 // `solve.md` 3 & `solve_view.rs`: exact Verified legend explanation.
 export const LEGEND_VERIFIED_EXPLANATION =
@@ -152,6 +153,8 @@ export function resolveSafeOwnCheckLine(stepBadge) {
   const effective = normalizeSolveTier(stepBadge?.effective);
   const stale = Boolean(stepBadge?.stale) || effective === 'stale';
   if (!stale && own === 'verified' && effective !== 'verified') {
+    const raw = String(stepBadge?.own_check_line || '').trim();
+    if (raw === OWN_CHECK_EQUATIONS_VERIFIED_LINE) return OWN_CHECK_EQUATIONS_VERIFIED_LINE;
     return OWN_CHECK_VERIFIED_LINE;
   }
   return null;
@@ -247,12 +250,21 @@ export function createSolveBadgeGroup(stepBadge = {}, opts = {}) {
     chip.setAttribute('data-badge-role', 'sublabel');
     topRow.appendChild(chip);
   }
+
+  const checkNote = String(stepBadge?.check_note ?? '').trim();
+  if (checkNote) {
+    const noteChip = makeEl(doc, 'span', 'solve-check-note-chip', checkNote);
+    noteChip.setAttribute('data-badge-role', 'check-note');
+    topRow.appendChild(noteChip);
+  }
   wrap.appendChild(topRow);
 
   const restsOnText = String(stepBadge?.rests_on_line || '').trim();
   const depIds = Array.isArray(stepBadge?.lowered_by) && stepBadge.lowered_by.length
     ? stepBadge.lowered_by
-    : (Array.isArray(stepBadge?.broken_by) ? stepBadge.broken_by : []);
+    : (Array.isArray(stepBadge?.unchecked_deps) && stepBadge.unchecked_deps.length
+      ? stepBadge.unchecked_deps
+      : (Array.isArray(stepBadge?.broken_by) ? stepBadge.broken_by : []));
   if (restsOnText || (typeof opts.onSelectStep === 'function' && depIds.length > 0)) {
     const restsEl = makeEl(doc, 'div', 'solve-rests-on-line');
     restsEl.setAttribute('data-badge-role', 'rests-on');

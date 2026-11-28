@@ -123,20 +123,32 @@ fn seed_verified_solve_session(data_dir: &Path, sid: &str, fail_check: bool) {
         "origin": StepOrigin::Solver, "entry_sha256": e1_sha, "source_ref": qref,
     })).unwrap();
 
-    let srepr = "Add(x, 1)";
-    let ssha = ledger::sha256_hex(srepr.as_bytes());
-    let blob = ledger.put_blob(srepr.as_bytes()).unwrap();
+    let lhs_srepr = "Add(Symbol('x'), Integer(1))";
+    let lhs_sha = ledger::sha256_hex(lhs_srepr.as_bytes());
+    let lhs_blob = ledger.put_blob(lhs_srepr.as_bytes()).unwrap();
     ledger.append_with_hash(sid, event_kinds::SOLVE_EXPR, 1, &json!({
-        "name": "ans", "version": 1, "srepr_blob": blob, "srepr_sha256": ssha,
-        "latex": "x + 1", "str_preview": srepr, "free_symbols": [],
+        "name": "ans_lhs", "version": 1, "srepr_blob": lhs_blob, "srepr_sha256": lhs_sha,
+        "latex": "x + 1", "str_preview": lhs_srepr, "free_symbols": [],
+        "produced_by": { "call_id": "c-1", "result_seq": 1 }, "owner_entry": "e-2", "portable": true,
+    })).unwrap();
+    let rhs_srepr = "Add(Integer(1), Symbol('x'))";
+    let rhs_sha = ledger::sha256_hex(rhs_srepr.as_bytes());
+    let rhs_blob = ledger.put_blob(rhs_srepr.as_bytes()).unwrap();
+    ledger.append_with_hash(sid, event_kinds::SOLVE_EXPR, 1, &json!({
+        "name": "ans_rhs", "version": 1, "srepr_blob": rhs_blob, "srepr_sha256": rhs_sha,
+        "latex": "1 + x", "str_preview": rhs_srepr, "free_symbols": [],
         "produced_by": { "call_id": "c-1", "result_seq": 1 }, "owner_entry": "e-2", "portable": true,
     })).unwrap();
     let claim = Claim {
-        form: ClaimForm::Equation, lhs: HandleRef::new("ans", 1).unwrap(),
-        rhs: HandleRef::new("ans", 1).unwrap(), relation: ClaimRelation::Eq,
+        form: ClaimForm::Equation, lhs: HandleRef::new("ans_lhs", 1).unwrap(),
+        rhs: HandleRef::new("ans_rhs", 1).unwrap(), relation: ClaimRelation::Eq,
         order: None, domain: None, how: None,
     };
-    let csha = compute_claim_sha256(std::slice::from_ref(&claim), |_| Some(ssha.as_str())).unwrap();
+    let csha = compute_claim_sha256(std::slice::from_ref(&claim), |h| match h.name.as_str() {
+        "ans_lhs" => Some(lhs_sha.as_str()),
+        "ans_rhs" => Some(rhs_sha.as_str()),
+        _ => None,
+    }).unwrap();
     let e2_sha = compute_entry_sha256(Some(&csha), "Final route identity.", "");
     ledger.append_with_hash(sid, event_kinds::PROOF_ENTRY, 1, &json!({
         "entry_id": "e-2", "entry_type": StepEntryType::FinalAnswer.as_str(),
@@ -189,7 +201,7 @@ fn writeup_route_enforces_header_auth_formats_inline_marks_g7_and_unbuilt_modes(
     let (st, hdrs, body) = raw_http(port, "GET", url, &[("Authorization", bearer.as_str())], b"");
     assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
     let tex = String::from_utf8(body).unwrap();
-    assert!(tex.contains("x + 1 = x + 1"));
+    assert!(tex.contains("x + 1 = 1 + x"));
     assert!(tex.contains(r"\cite{voss2024route}"));
     assert!(tex.contains("[Verified]"));
     assert!(tex.contains(writeup_wording::CHECK_TABLE_HEADING));

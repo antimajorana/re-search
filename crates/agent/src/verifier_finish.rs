@@ -7,9 +7,13 @@ use crate::verifier_loop::{
 };
 use ledger::Event;
 use research_tools::proof_closure::{closure_entries, topological_order};
-use research_tools::solve_model::{event_kinds, DoneCriterionKind, ReviewPolicy, SolveSetup};
+use research_tools::solve_model::{
+    compute_review_independence, event_kinds, DoneCriterionKind, ReviewIndependence, ReviewPolicy,
+    ReviewVerdict, SolveEntry, SolveSetup,
+};
+use research_tools::solve_setup::is_same_model;
 use research_tools::solve_state::SolveState;
-use research_tools::solve_status::Tier;
+use research_tools::solve_status::{review_cites_trivial_check, Tier};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -55,6 +59,36 @@ pub fn count_review_loops(events: &[Event]) -> u32 {
     u32::try_from(batches.len()).unwrap_or(u32::MAX)
 }
 
+fn independence_rank(ind: ReviewIndependence) -> u8 {
+    match ind {
+        ReviewIndependence::SameModel => 1,
+        ReviewIndependence::DifferentModel => 2,
+        ReviewIndependence::DifferentProvider => 3,
+    }
+}
+
+fn has_valid_accepted_review_at(
+    state: &SolveState,
+    entry: &SolveEntry,
+    min_independence: ReviewIndependence,
+) -> bool {
+    let min_rank = independence_rank(min_independence);
+    state.reviews.iter().any(|r| {
+        r.target_entry_id == entry.entry_id
+            && r.verdict == ReviewVerdict::Accepted
+            && match (&entry.entry_sha256, &r.entry_sha256) {
+                (Some(e), Some(rv)) => e == rv,
+                (None, None) => true,
+                _ => false,
+            }
+            && r.independence
+                .map(independence_rank)
+                .unwrap_or(1)
+                >= min_rank
+            && !review_cites_trivial_check(state, r)
+    })
+}
+
 /// Compute target step ids that still need review at finish time (`solve.md` 5.3, D3).
 pub fn select_finish_review_targets(state: &SolveState, final_entry_id: &str) -> Vec<String> {
     let Some(setup) = state.setup.as_ref() else {
@@ -69,7 +103,18 @@ pub fn select_finish_review_targets(state: &SolveState, final_entry_id: &str) ->
         Err(_) => closure.iter().map(|e| e.entry_id.clone()).collect(),
     };
     let (closure_req, final_req) = required_review_ranks(setup);
-    let max_review_lift = Tier::ModelAgreed.ordered_rank().unwrap_or(2);
+    let same_model = is_same_model(Some(&setup.roles.solver), Some(&setup.roles.verifier));
+    let current_independence = if same_model {
+        ReviewIndependence::SameModel
+    } else {
+        compute_review_independence(&setup.roles.solver, &setup.roles.verifier)
+    };
+    let max_review_lift = if same_model {
+        Tier::ModelAgreedSameModel.ordered_rank().unwrap_or(1)
+    } else {
+        Tier::ModelAgreed.ordered_rank().unwrap_or(2)
+    };
+
     let mut out = Vec::new();
     for id in ordered_ids {
         let Some(entry) = state.entry(&id) else {
@@ -81,10 +126,11 @@ pub fn select_finish_review_targets(state: &SolveState, final_entry_id: &str) ->
         if setup.review == ReviewPolicy::FinalOnly && entry.entry_id != final_entry_id {
             continue;
         }
-        if setup.review == ReviewPolicy::ProseOnly && !entry.claims.is_empty() {
+        let own = state.tier(&id).map_or(Tier::Unchecked, |t| t.own);
+        // Under ProseOnly, skip claim-bearing steps ONLY when they already earned a computed tier.
+        if setup.review == ReviewPolicy::ProseOnly && !entry.claims.is_empty() && own.is_computed() {
             continue;
         }
-        let own = state.tier(&id).map_or(Tier::Unchecked, |t| t.own);
         // Verifier cannot lift Given, Cited, Failed, or AssumedByModel (only user ack can).
         if matches!(
             own,
@@ -92,13 +138,17 @@ pub fn select_finish_review_targets(state: &SolveState, final_entry_id: &str) ->
         ) {
             continue;
         }
+        // Skip entries that already have a valid Accepted review for their current entry_sha256
+        // at the verifier's current independence (unless that review cited trivial checks).
+        if has_valid_accepted_review_at(state, entry, current_independence) {
+            continue;
+        }
         let required = if entry.entry_id == final_entry_id {
             closure_req.max(final_req)
         } else {
             closure_req
         };
-        // A prose step cannot rise above `ModelAgreed` (rank 2) via model review alone.
-        let effective_goal = if entry.claims.is_empty() {
+        let effective_goal = if entry.claims.is_empty() || same_model {
             required.min(max_review_lift)
         } else {
             required

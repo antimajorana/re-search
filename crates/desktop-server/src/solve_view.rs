@@ -19,6 +19,9 @@ use research_tools::solve_status::{
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "solve_view_helpers.rs"]
+mod helpers;
+
 /// On-screen label when a Solve session has been created/configured but no leg has run yet.
 /// Kept as a single named constant (`00-overview.md` 3.3, `solve.md` 5.5).
 pub const RUN_STATE_READY: &str = "ready";
@@ -94,22 +97,6 @@ fn last_leg_stop_reason(events: &[Event]) -> Option<Option<&str>> {
     has_orphan.then_some(None)
 }
 
-fn done_open_items(state: &SolveState) -> Value {
-    let Some(done) = &state.done else {
-        return json!([]);
-    };
-    let mut items = Vec::new();
-    for c in &done.criteria {
-        if !c.met {
-            items.push(json!({ "kind": "unmet_criterion", "id": c.id }));
-        }
-    }
-    for eid in &done.rests_on.assumed_by_model {
-        items.push(json!({ "kind": "unacknowledged_assumption", "entry_id": eid }));
-    }
-    Value::Array(items)
-}
-
 fn build_run_state_json(
     state: &SolveState,
     events: &[Event],
@@ -132,7 +119,7 @@ fn build_run_state_json(
         match state.run_status {
             SolveRunStatus::Done(_) => {
                 let mapped = state.run_status.to_run_state().unwrap_or(RunState::Done);
-                (run_state_key(mapped), mapped.label(), None, done_open_items(state))
+                (run_state_key(mapped), mapped.label(), None, helpers::done_open_items(state))
             }
             SolveRunStatus::Paused(r) => {
                 let mapped = state.run_status.to_run_state().unwrap_or(RunState::Paused);
@@ -439,30 +426,8 @@ pub fn build_solve_view(
         .collect();
 
     let graph = build_graph_view(&state, &ordered_entries, &badges);
-    let handles: Vec<Value> = state
-        .handles
-        .iter()
-        .map(|(h, expr)| {
-            json!({
-                "handle": h.to_string(),
-                "name": expr.name,
-                "version": expr.version,
-                "latex": expr.latex,
-                "str_preview": expr.str_preview,
-                "srepr_sha256": expr.srepr_sha256,
-                "free_symbols": expr.free_symbols,
-                "produced_by": expr.produced_by,
-                "owner_entry": expr.owner_entry,
-                "portable": expr.portable,
-            })
-        })
-        .collect();
-
-    let receipts: Vec<Value> = state
-        .receipts
-        .values()
-        .filter_map(|r| serde_json::to_value(r).ok())
-        .collect();
+    let handles = helpers::build_handles_json(&state);
+    let receipts = helpers::build_receipts_json(&state, events);
 
     let setup_json = match &state.setup {
         Some(s) => {
@@ -496,6 +461,7 @@ pub fn build_solve_view(
         "checks": state.checks,
         "artifacts": state.artifacts,
         "done": state.done,
+        "done_history": state.done_history,
         "result_sheet": crate::cli_turn_solve::build_ledger_result_sheet(&state),
         "plan": state.plan,
         "toolbox": toolbox,

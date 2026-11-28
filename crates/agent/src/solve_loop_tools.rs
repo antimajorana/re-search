@@ -219,13 +219,46 @@ fn dispatch_router_tool(
                 if val.get("status").and_then(Value::as_str) == Some("finished_open_items")
                     && !ctx.repair_used
                 {
-                    ctx.repair_used = true;
-                    ctx.pending_repair_prompt = Some(format!(
-                        "<solve_repair_round>\n`solve_finish` reported `finished_open_items` ({}). \
-                        You have one automatic repair round inside remaining budget to address open \
-                        items and call `solve_finish` again.\n</solve_repair_round>",
-                        val.get("criteria").cloned().unwrap_or(Value::Null)
-                    ));
+                    if let Some((below_target, unmet_ids)) = repairable_open_items(&val) {
+                        ctx.repair_used = true;
+                        let final_eid = val
+                            .get("final_entry_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        audit
+                            .ledger
+                            .append_with_hash(
+                                audit.session,
+                                event_kinds::SOLVE_REPAIR_ROUND,
+                                crate::runner::EVENT_VERSION,
+                                &json!({
+                                    "final_entry_id": final_eid,
+                                    "unmet_criteria": unmet_ids,
+                                    "below_target": below_target,
+                                }),
+                            )
+                            .map_err(|e| format!("failed to append solve.repair_round: {e}"))?;
+                        audit.flush_interleaved()?;
+                        let below_text = if below_target.is_empty() {
+                            "none listed".to_string()
+                        } else {
+                            below_target.join(", ")
+                        };
+                        ctx.pending_repair_prompt = Some(format!(
+                            "<solve_repair_round>\n`solve_finish` reported `finished_open_items` \
+                            (unmet criteria: {}; steps below target: {}). \
+                            You have one automatic repair round inside remaining budget to repair the \
+                            unmet steps (add real non-trivial checks or supersede flawed steps via \
+                            `ledger_supersede`) and call `solve_finish` again. \
+                            DO NOT drop dependencies, omit active steps or model assumptions from the \
+                            dependency closure, or re-root a new `final_answer` around an active earlier \
+                            final answer without explicitly superseding it via `ledger_supersede`.\n\
+                            Criteria detail: {}\n</solve_repair_round>",
+                            unmet_ids.join(", "),
+                            below_text,
+                            val.get("criteria").cloned().unwrap_or(Value::Null),
+                        ));
+                    }
                 }
             }
             Ok((false, canonical_json(&val), None))
@@ -415,4 +448,90 @@ pub(super) fn latest_run_id(events: &[Event]) -> Option<String> {
         .iter()
         .rev()
         .find_map(|e| e.payload.get("run_id").and_then(Value::as_str).map(str::to_string))
+}
+
+fn is_user_only_flag(flag: &str) -> bool {
+    let f = flag.trim();
+    f == "same model"
+        || f == "transcription unconfirmed"
+        || (f.starts_with("rests on ") && f.contains("assumption"))
+}
+
+fn is_user_only_tier_gap(effective: &str, required: &str, req_diff: bool) -> bool {
+    effective == "assumed_by_model"
+        || (effective == "model_agreed_same_model" && required == "model_agreed" && req_diff)
+}
+
+/// Inspect `solve_finish` criteria; returns `None` when every unmet item can only be cleared by
+/// the user (`assumed_by_model`, `same model`, or `user_confirms`), skipping the repair round.
+pub(crate) fn repairable_open_items(finish_val: &Value) -> Option<(Vec<String>, Vec<String>)> {
+    let criteria = finish_val.get("criteria").and_then(Value::as_array)?;
+    let mut unmet_ids = Vec::new();
+    let mut below_target = Vec::new();
+    let mut any_solver_repairable = false;
+
+    for crit in criteria {
+        if crit.get("met").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let cid = crit.get("id").and_then(Value::as_str).unwrap_or("criterion");
+        unmet_ids.push(cid.to_string());
+        let ev = crit.get("evidence").unwrap_or(&Value::Null);
+        let kind = ev.get("kind").and_then(Value::as_str).unwrap_or("");
+        let has_reroot = ev
+            .get("re_rooted_past_active_final")
+            .and_then(Value::as_array)
+            .is_some_and(|a| !a.is_empty());
+
+        let user_only = match kind {
+            "user_confirms" => true,
+            "no_open_flags" => ev
+                .get("open_flags")
+                .and_then(Value::as_array)
+                .is_some_and(|rows| {
+                    !rows.is_empty()
+                        && rows.iter().all(|row| {
+                            row.get("flags")
+                                .and_then(Value::as_array)
+                                .is_some_and(|fs| !fs.is_empty() && fs.iter().all(|f| f.as_str().is_some_and(is_user_only_flag)))
+                        })
+                }),
+            "closure_tier_at_least" => {
+                let req = ev.get("required").and_then(Value::as_str).unwrap_or("");
+                let req_diff = ev.get("require_different_model").and_then(Value::as_bool).unwrap_or(false);
+                let items = ev.get("below_target").and_then(Value::as_array);
+                let mut all_user_only = !has_reroot && items.is_some_and(|a| !a.is_empty());
+                if let Some(arr) = items {
+                    for row in arr {
+                        let eid = row.get("entry_id").and_then(Value::as_str).unwrap_or("");
+                        let eff = row.get("effective").and_then(Value::as_str).unwrap_or("");
+                        if !eid.is_empty() && !below_target.iter().any(|s| s == eid) {
+                            below_target.push(eid.to_string());
+                        }
+                        if !is_user_only_tier_gap(eff, req, req_diff) {
+                            all_user_only = false;
+                        }
+                    }
+                }
+                all_user_only
+            }
+            "final_tier_at_least" => {
+                let req = ev.get("required").and_then(Value::as_str).unwrap_or("");
+                let req_diff = ev.get("require_different_model").and_then(Value::as_bool).unwrap_or(false);
+                let actual = ev.get("actual").and_then(Value::as_str).unwrap_or("");
+                if let Some(eid) = ev.get("final_entry_id").and_then(Value::as_str) {
+                    if !eid.is_empty() && !below_target.iter().any(|s| s == eid) {
+                        below_target.push(eid.to_string());
+                    }
+                }
+                !has_reroot && is_user_only_tier_gap(actual, req, req_diff)
+            }
+            _ => false,
+        };
+        if !user_only {
+            any_solver_repairable = true;
+        }
+    }
+
+    any_solver_repairable.then_some((below_target, unmet_ids))
 }

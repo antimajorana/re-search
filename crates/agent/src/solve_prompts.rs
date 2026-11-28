@@ -23,6 +23,11 @@ Task Kind: calculate\n\
 dimensions, and symmetries before concluding.\n\
 - Assign intermediate and final expressions via `save_expr(name, expr)` inside `sympy_eval` so \
 later steps reference versioned handles rather than re-typed text.\n\
+- Derive LHS and RHS independently: keep the expression under test in unevaluated form \
+(`UnevaluatedExpr(...)`, `Integral(...)`, `Sum(...)`, `Derivative(...)`, `Limit(...)`, `MatMul(...)`, \
+`Trace(...)`, or an unevaluated string `save_expr(\"lhs\", \"(x + 1)**2\", locals=...)`) against an \
+independently constructed RHS. Never save the same expected constant or simplified result on both sides: \
+identical-side claims return `trivial` and earn no tier.\n\
 - Record computation steps (`symbolic_computation` or `numerical_computation`) citing the \
 `sympy_eval` `tool_call_ref`, build supporting `derivation`/`result` steps, and conclude with a \
 `final_answer` step matching the requested target form, order, or digits.",
@@ -31,18 +36,23 @@ Task Kind: prove\n\
 - Record foundational hypotheses and setup assumptions first (`assumption`), then construct a \
 complete dependency-linked chain (`derivation`, `symbolic_computation`, `result`) reaching the \
 theorem statement (`final_answer`).\n\
-- For every quantitative equality, inequality, series relation, or counterexample search, save \
-both sides as handles in `sympy_eval` and attach structured `claims` on `step_record` so host \
-checks evaluate the mathematics directly.\n\
+- For every quantitative equality, inequality, series relation, or counterexample search, derive \
+both sides independently in `sympy_eval` and attach structured `claims` on `step_record`. Keep the \
+left-hand expression unevaluated (via `UnevaluatedExpr`, `Integral`/`Sum`/`Derivative`/`MatMul`/`Trace`, \
+or a string expression in `save_expr(\"lhs\", \"...\", locals=...)`) rather than pre-evaluating it to the \
+expected constant: never write the expected result on both sides, because identical-side claims return \
+`trivial` and earn no tier.\n\
 - Do not skip edge cases, branch cuts, or quantifier restrictions; record counterexamples or \
 needed refinements immediately if a check fails.",
         TaskKind::CheckDerivation => "\
 Task Kind: check_derivation\n\
 - Audit the supplied derivation step-by-step against the attached sources (`fs_read`, \
 `read_paper_lines`, `search_paper_passages`) and algebraic checks.\n\
-- Extract each key claimed identity, limit, or transformation into SymPy handles via `sympy_eval`, \
-record each audited step with explicit `claims`, and run domain/limit/dimension/counterexample \
-checks (`check_run`).\n\
+- Extract each key claimed identity, limit, or transformation into distinct LHS and RHS SymPy handles \
+via `sympy_eval` (preserving the unevaluated form via `UnevaluatedExpr`, `Integral`/`Sum`/`Derivative`, \
+or string expressions in `save_expr` — never saving the same expected constant on both sides, which \
+returns `trivial` and earns no tier), record each audited step with explicit `claims`, and run \
+domain/limit/dimension/counterexample checks (`check_run`).\n\
 - Record any gap or sign/factor/regime error with `correction` or superseded steps, and make the \
 `final_answer` deliver clear per-step verdicts matching the target.",
     }
@@ -57,8 +67,12 @@ pub fn build_solve_system_prompt(setup: &SolveSetup, extra_sections: &[&str]) ->
     out.push_str(task_kind_instructions(setup.task_kind));
     out.push_str("\n\nSolve Discipline & Host Gates:\n");
     out.push_str(
-        "1. Handles First: Python variables do not survive across calls or worker restarts; only \
-handles saved with `save_expr(name, expr)` do. Inspect stored handles with `expr_show`.\n",
+        "1. Handles First & Independent Sides: Python variables do not survive across calls or worker \
+restarts; only handles saved with `save_expr(name, expr)` do. Derive LHS and RHS independently and \
+keep the expression under test unevaluated (`UnevaluatedExpr`, `Integral`/`Sum`/`Derivative`/`MatMul`/`Trace`, \
+or an unevaluated string passed to `save_expr(name, expr_str, locals=...)`). Never write the expected \
+constant/result on both sides — identical-side claims return `trivial` and earn no tier. Inspect stored \
+handles with `expr_show`.\n",
     );
     out.push_str(
         "2. Gate G1 (Interpret Runs): Never leave more than 3 successful `sympy_eval` runs \
@@ -68,12 +82,13 @@ un-cited. Either cite each run in `step_record.tool_call_refs` or discard explor
     out.push_str(
         "3. Structured Proof Graph (`step_record`): Cite `depends_on` explicitly (host also tracks \
 handle provenance in `derived_depends_on`). Never manufacture formulas in prose when a handle claim \
-applies; supersede flawed steps with `ledger_supersede`.\n",
+applies; supersede flawed steps with `ledger_supersede` rather than abandoning them or re-rooting.\n",
     );
     out.push_str(
         "4. Host Checks & Verdicts: `step_record` automatically runs `AutoCheckGate` on claims; use \
 `check_run` for targeted `series_match`, `vanishes_to_order`, `counterexample_search`, \
-`dimensions`, `limit_case`, `symmetry`, `conservation`, `convergence`, or `matrix_property` checks.\n",
+`dimensions`, `limit_case`, `symmetry`, `conservation`, `convergence`, or `matrix_property` checks. \
+If an auto-check returns `trivial` or `inconclusive`, inspect the residual/attention note and repair.\n",
     );
     out.push_str(
         "5. R22 Honesty & `solve_finish`: Only use the word \"verified\" for steps whose effective \

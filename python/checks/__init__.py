@@ -15,6 +15,7 @@ from typing import Any, Callable
 import sympy as sp
 
 from .algebra import ALGEBRA_CHECKS
+from .algebra_probe import is_exact_zero
 from .physics import PHYSICS_CHECKS
 from .srepr_safe import UnsafeSreprError, canonicalize_srepr, parse_srepr_safe
 
@@ -96,8 +97,19 @@ def _symbolic_zero_smoke(handles: dict[str, Any], _params: dict[str, Any]) -> di
     """
     if "lhs" not in handles or "rhs" not in handles:
         raise ValueError("symbolic_zero_smoke requires 'lhs' and 'rhs' handles")
-    diff = sp.simplify(handles["lhs"] - handles["rhs"])
-    is_zero = bool(diff == 0)
+    lhs, rhs = handles["lhs"], handles["rhs"]
+    if isinstance(lhs, sp.Basic) and lhs.has(sp.UnevaluatedExpr):
+        lhs = lhs.replace(lambda e: isinstance(e, sp.UnevaluatedExpr), lambda e: e.args[0])
+    if isinstance(rhs, sp.Basic) and rhs.has(sp.UnevaluatedExpr):
+        rhs = rhs.replace(lambda e: isinstance(e, sp.UnevaluatedExpr), lambda e: e.args[0])
+    try:
+        diff = sp.simplify(lhs - rhs)
+    except (sp.ShapeError, TypeError) as exc:
+        return {
+            "outcome": "inconclusive",
+            "evidence": {"is_zero": False, "reason": str(exc)},
+        }
+    is_zero = is_exact_zero(diff)
     return {
         "outcome": "pass" if is_zero else "inconclusive",
         "evidence": {

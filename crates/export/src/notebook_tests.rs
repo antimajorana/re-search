@@ -376,7 +376,7 @@ fn r22_forbids_verified_outside_verified_own_and_unmet_criteria() {
     );
     ledger.append_with_hash(sid, event_kinds::SOLVE_SETUP, 1, &setup_val).unwrap();
 
-    let ha = add_expr(&ledger, sid, "a", 1, "Integer(1)", "1", "c1", 4, Some("e-1"));
+    let ha = add_expr(&ledger, sid, "a", 1, "Add(Pow(sin(Symbol('t')), Integer(2)), Pow(cos(Symbol('t')), Integer(2)))", "\\sin^2 t + \\cos^2 t", "c1", 4, Some("e-1"));
     let hb = add_expr(&ledger, sid, "b", 1, "Integer(1)", "1", "c1", 4, Some("e-1"));
     let claim = Claim {
         form: ClaimForm::Equation,
@@ -490,7 +490,7 @@ fn r22_emits_own_check_verified_only_when_lowered_by_dependency() {
         .unwrap();
 
     // e-2: own Verified, depends on e-1 -> effective AssumedByModel
-    let ha = add_expr(&ledger, sid, "x", 1, "Integer(2)", "2", "c1", 6, Some("e-2"));
+    let ha = add_expr(&ledger, sid, "x", 1, "Add(Integer(1), Integer(1))", "1 + 1", "c1", 6, Some("e-2"));
     let hb = add_expr(&ledger, sid, "y", 1, "Integer(2)", "2", "c1", 6, Some("e-2"));
     let claim = Claim {
         form: ClaimForm::Equation,

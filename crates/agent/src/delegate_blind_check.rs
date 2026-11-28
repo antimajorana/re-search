@@ -433,9 +433,9 @@ pub(crate) fn run_host_independent_comparison(
         }
     };
 
-    let (outcome, comparison, exact, evidence) = if sym_outcome.as_deref() == Some("pass")
-        && sym_exact
-    {
+    let exact_match = (sym_outcome.as_deref() == Some("pass") && sym_exact)
+        || (sym_outcome.as_deref() == Some("trivial") && parsed.compare_with != *blind_handle);
+    let (outcome, comparison, exact, evidence) = if exact_match {
         (
             CheckOutcome::Pass,
             Some("exact".to_string()),

@@ -5,8 +5,61 @@ use crate::solve_model::{
     ReviewVerdict, SolveEntry, SolveReview, SolveSetup, StepEntryType,
 };
 use crate::solve_state::SolveState;
-use crate::solve_status::{badge_for_step, Tier};
+use crate::solve_status::{badge_for_step, wording, Tier};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
+
+/// Active (non-superseded) `final_answer` entries or prior `solve.done.final_entry_id` steps
+/// that exist outside `final_entry_id`'s dependency closure.
+pub fn active_prior_finals_outside_closure(
+    state: &SolveState,
+    final_entry_id: &str,
+    closure_ids: &[String],
+) -> Vec<String> {
+    let closure_set: BTreeSet<&str> = closure_ids.iter().map(String::as_str).collect();
+    let mut prior_done_ids: BTreeSet<&str> = state
+        .done_history
+        .iter()
+        .map(|d| d.final_entry_id.as_str())
+        .collect();
+    if let Some(d) = state.done.as_ref() {
+        prior_done_ids.insert(d.final_entry_id.as_str());
+    }
+    let mut out = Vec::new();
+    for entry in &state.entries {
+        if entry.superseded_by.is_some()
+            || entry.entry_id == final_entry_id
+            || closure_set.contains(entry.entry_id.as_str())
+        {
+            continue;
+        }
+        let is_final = entry.entry_type == StepEntryType::FinalAnswer
+            || prior_done_ids.contains(entry.entry_id.as_str());
+        if is_final {
+            out.push(entry.entry_id.clone());
+        }
+    }
+    out
+}
+
+fn setup_accepts_same_model(setup: &SolveSetup) -> bool {
+    let mut saw_same_model_tier = false;
+    for dc in &setup.done {
+        if !matches!(
+            dc.kind,
+            DoneCriterionKind::FinalTierAtLeast | DoneCriterionKind::ClosureTierAtLeast
+        ) {
+            continue;
+        }
+        if dc.params.get("require_different_model").and_then(Value::as_bool) == Some(true) {
+            return false;
+        }
+        if dc.params.get("tier").and_then(Value::as_str) == Some("model_agreed_same_model") {
+            saw_same_model_tier = true;
+        }
+    }
+    saw_same_model_tier
+}
 
 /// Evaluate every [`DoneCriterion`] in `setup.done` against folded ledger state (`solve.md` 5.1, R15).
 pub fn evaluate_done_criteria(
@@ -20,9 +73,17 @@ pub fn evaluate_done_criteria(
         .filter_map(|id| state.entry(id))
         .filter(|e| e.superseded_by.is_none())
         .collect();
+    let re_rooted_finals = active_prior_finals_outside_closure(state, final_entry_id, closure_ids);
     let mut outcomes = Vec::with_capacity(setup.done.len());
     for c in &setup.done {
-        outcomes.push(eval_one_criterion(c, setup, state, final_entry_id, &active_closure)?);
+        outcomes.push(eval_one_criterion(
+            c,
+            setup,
+            state,
+            final_entry_id,
+            &active_closure,
+            &re_rooted_finals,
+        )?);
     }
     Ok(outcomes)
 }
@@ -33,23 +94,25 @@ fn eval_one_criterion(
     state: &SolveState,
     final_entry_id: &str,
     active_closure: &[&SolveEntry],
+    re_rooted_finals: &[String],
 ) -> Result<CriterionOutcome, String> {
     match c.kind {
         DoneCriterionKind::FinalTierAtLeast => {
             let (req_tier, req_diff) = parse_tier_requirement(c)?;
             let actual = state.tier(final_entry_id).map(|t| t.effective).unwrap_or(Tier::Unchecked);
-            let met = tier_meets(actual, final_entry_id, req_tier, req_diff, state);
-            Ok(CriterionOutcome {
-                id: c.id.clone(),
-                met,
-                evidence: json!({
-                    "kind": "final_tier_at_least",
-                    "final_entry_id": final_entry_id,
-                    "required": req_tier,
-                    "require_different_model": req_diff,
-                    "actual": actual,
-                }),
-            })
+            let met = re_rooted_finals.is_empty()
+                && tier_meets(actual, final_entry_id, req_tier, req_diff, state);
+            let mut evidence = json!({
+                "kind": "final_tier_at_least",
+                "final_entry_id": final_entry_id,
+                "required": req_tier,
+                "require_different_model": req_diff,
+                "actual": actual,
+            });
+            if !re_rooted_finals.is_empty() {
+                evidence["re_rooted_past_active_final"] = json!(re_rooted_finals);
+            }
+            Ok(CriterionOutcome { id: c.id.clone(), met, evidence })
         }
         DoneCriterionKind::ClosureTierAtLeast => {
             let (req_tier, req_diff) = parse_tier_requirement(c)?;
@@ -62,16 +125,20 @@ fn eval_one_criterion(
                     })
                 })
                 .collect();
+            let mut evidence = json!({
+                "kind": "closure_tier_at_least",
+                "required": req_tier,
+                "require_different_model": req_diff,
+                "checked_count": active_closure.len(),
+                "below_target": failing,
+            });
+            if !re_rooted_finals.is_empty() {
+                evidence["re_rooted_past_active_final"] = json!(re_rooted_finals);
+            }
             Ok(CriterionOutcome {
                 id: c.id.clone(),
-                met: failing.is_empty(),
-                evidence: json!({
-                    "kind": "closure_tier_at_least",
-                    "required": req_tier,
-                    "require_different_model": req_diff,
-                    "checked_count": active_closure.len(),
-                    "below_target": failing,
-                }),
+                met: re_rooted_finals.is_empty() && failing.is_empty(),
+                evidence,
             })
         }
         DoneCriterionKind::NamedCheckPassed => {
@@ -117,11 +184,15 @@ fn eval_one_criterion(
             })
         }
         DoneCriterionKind::NoOpenFlags => {
+            let ignore_same_model = setup_accepts_same_model(setup);
             let mut flagged = Vec::new();
             for entry in active_closure {
                 let mut entry_flags = badge_for_step(state, &entry.entry_id)
                     .map(|b| b.flags)
                     .unwrap_or_default();
+                if ignore_same_model {
+                    entry_flags.retain(|f| f != wording::FLAG_SAME_MODEL);
+                }
                 if let Some(t) = state.tier(&entry.entry_id) {
                     if t.stale && !entry_flags.iter().any(|f| f == "Stale") {
                         entry_flags.push("Stale".into());

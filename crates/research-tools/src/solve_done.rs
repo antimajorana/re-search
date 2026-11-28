@@ -4,11 +4,13 @@
 #[path = "solve_done_criteria.rs"]
 mod criteria;
 
-pub use self::criteria::evaluate_done_criteria;
+pub use self::criteria::{active_prior_finals_outside_closure, evaluate_done_criteria};
 
 use crate::proof_closure::closure_for_target;
 use crate::run_budget::{count_model_calls_breakdown, RunScope};
-use crate::solve_model::{event_kinds, ModelCallsBreakdown, SolveDoneStatus};
+use crate::solve_model::{
+    event_kinds, ModelCallsBreakdown, SolveDoneStatus, StepEntryType, TaskKind,
+};
 use crate::solve_state::SolveState;
 use crate::solve_status::{badge_for_step, rests_on_summary, Tier};
 use crate::ResearchEnv;
@@ -100,16 +102,18 @@ pub fn run_solve_finish(
     Ok(out)
 }
 
-/// Shared Gate G7 validation: refuse `solve_finish` if closure contains `Failed`/`Stale` steps
-/// or if `summary_markdown` violates Solve R22 wording rules. Returns the closure id list.
+/// Shared Gate G7 validation: refuse `solve_finish` if closure contains `Failed`/`Stale` steps,
+/// if another active prior final answer exists outside the closure, if the target step type is
+/// non-terminal, or if `summary_markdown` violates Solve R22 wording rules.
 pub fn validate_solve_finish_preconditions(
     state: &SolveState,
     final_entry_id: &str,
     summary_markdown: &str,
 ) -> Result<Vec<String>, String> {
-    if state.setup.is_none() {
-        return Err("cannot run `solve_finish` before `solve.setup` has been recorded".into());
-    }
+    let setup = state
+        .setup
+        .as_ref()
+        .ok_or_else(|| "cannot run `solve_finish` before `solve.setup` has been recorded".to_string())?;
     let entry = state
         .entry(final_entry_id)
         .ok_or_else(|| format!("unknown `final_entry_id` `{final_entry_id}`"))?;
@@ -160,6 +164,30 @@ pub fn validate_solve_finish_preconditions(
         return Err(format!(
             "closure contains Stale step(s) ({}); re-check stale steps before finishing",
             stale_ids.join(", ")
+        ));
+    }
+
+    let prior_finals = active_prior_finals_outside_closure(state, final_entry_id, &closure);
+    if let Some(first_active) = prior_finals.first() {
+        return Err(format!(
+            "earlier final answer `{first_active}` is still active; supersede it explicitly before finishing on a new final answer"
+        ));
+    }
+
+    let valid_final_type = match setup.task_kind {
+        TaskKind::Prove => entry.entry_type == StepEntryType::FinalAnswer,
+        TaskKind::Calculate | TaskKind::CheckDerivation => matches!(
+            entry.entry_type,
+            StepEntryType::FinalAnswer
+                | StepEntryType::Result
+                | StepEntryType::SymbolicComputation
+                | StepEntryType::NumericalComputation
+        ),
+    };
+    if !valid_final_type {
+        return Err(format!(
+            "cannot finish on `{final_entry_id}` with entry_type `{}`; record a `final_answer` step first",
+            entry.entry_type.as_str()
         ));
     }
 

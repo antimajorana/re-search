@@ -7,18 +7,22 @@ import { createGraphView } from './graph_view.js';
 import { createQuoteChip } from './quote_chip.js';
 import { createRunBar } from './run_bar.js';
 import {
+  OWN_CHECK_EQUATIONS_VERIFIED_LINE,
   SOLVE_TIER_LABELS, adaptSolveGraphView, createSolveBadgeGroup,
-  createSolveLegend, findFinalAnswerEntryId, normalizeSolveTier,
+  createSolveLegend, findFinalAnswerEntryId,
 } from './solve_badges.js';
 import { buildHandleLookup, createSolveExprsView, renderClaimFormula } from './solve_exprs.js';
+import {
+  DONE_LABEL, DONE_OPEN_ITEMS_LABEL, NOT_DONE_LABEL,
+  computeFinalClosureIds, describeCriterion, renderSolveResultSheet, resolveDoneHeading,
+} from './solve_result_sheet.js';
 import { createSolveWhyPopover } from './solve_why.js';
-import { BORDER_SOLID, createBadge, formatModelText } from './ui_badge.js';
 import { mountWriteupButton } from './writeup_btn.js';
 
-// Owner decisions (`00-overview.md` 3.3, `solve.md` 3 & 5.5, R15).
-export const DONE_LABEL = 'Done';
-export const DONE_OPEN_ITEMS_LABEL = 'Done with open items';
-export const NOT_DONE_LABEL = 'Not done';
+export {
+  DONE_LABEL, DONE_OPEN_ITEMS_LABEL, NOT_DONE_LABEL,
+  computeFinalClosureIds, describeCriterion, renderSolveResultSheet, resolveDoneHeading,
+};
 export const CLOSURE_FILTER_LABEL = 'Closure of the final answer';
 
 export const SOLVE_BUILTIN_TABS = Object.freeze([
@@ -91,34 +95,24 @@ function buildStepQuoteChip(step, onOpen) {
   }, { onOpen, onOpenPageImage: onOpen });
 }
 
-function formatSafeWeakestTier(rawTier) {
-  const raw = String(rawTier || '').trim();
-  if (!raw) return SOLVE_TIER_LABELS.unchecked;
-  const key = raw.toLowerCase();
-  if (Object.prototype.hasOwnProperty.call(SOLVE_TIER_LABELS, key)) return SOLVE_TIER_LABELS[key];
-  if (/\b(verified|proved|new|novel)\b/i.test(raw)) return SOLVE_TIER_LABELS.unchecked;
-  return raw;
-}
-
-/**
- * Rule R15: "Done" without "with open items" is reachable ONLY when `done.status === 'finished'`
- * and every recorded criterion has `met === true`.
- */
-export function resolveDoneHeading(done) {
-  if (!done || typeof done !== 'object') return NOT_DONE_LABEL;
-  const criteria = Array.isArray(done.criteria) ? done.criteria : [];
-  const allMet = criteria.every((c) => Boolean(c && c.met === true));
-  return done.status === 'finished' && allMet ? DONE_LABEL : DONE_OPEN_ITEMS_LABEL;
-}
-
-function mapRunStateToBarProps(runState) {
+function mapRunStateToBarProps(runState, view = {}) {
   const rs = runState && typeof runState === 'object' ? runState : {};
   const rawState = String(rs.state || 'paused');
+  const setupCriteria = Array.isArray(view?.setup?.done) ? view.setup.done : [];
+  const doneCriteria = Array.isArray(view?.done?.criteria) ? view.done.criteria : [];
   const openItems = Array.isArray(rs.open_items)
     ? rs.open_items.map((item) => {
         if (typeof item === 'string') return item;
-        if (item?.kind === 'unmet_criterion') return `Unmet criterion: ${item.id}`;
-        if (item?.kind === 'unacknowledged_assumption') return `Unacknowledged assumption: ${item.entry_id}`;
+        if (item?.kind === 'unmet_criterion') {
+          const match = doneCriteria.find((c) => c && String(c.id || '') === String(item.id || ''))
+            || setupCriteria.find((c) => c && String(c.id || '') === String(item.id || ''));
+          return `Open criterion: ${match ? describeCriterion(match, setupCriteria) : String(item.id || 'criterion')}`;
+        }
+        if (item?.kind === 'unacknowledged_assumption') {
+          return item.outside_final_closure
+            ? `Unacknowledged assumption outside final closure: ${item.entry_id}`
+            : `Unacknowledged assumption: ${item.entry_id}`;
+        }
         return String(item?.message || item?.id || item?.entry_id || 'Open item');
       })
     : [];
@@ -134,143 +128,14 @@ function mapRunStateToBarProps(runState) {
   };
 }
 
-function countActiveTiers(steps) {
-  const counts = new Map();
-  for (const s of Array.isArray(steps) ? steps : []) {
-    if (!s || s.superseded_by) continue;
-    const tier = s.badge?.stale ? 'stale' : normalizeSolveTier(s.badge?.own || s.badge?.effective);
-    counts.set(tier, (counts.get(tier) || 0) + 1);
-  }
-  return counts;
-}
-
-export function renderSolveResultSheet(doc, view, handleMap, opts = {}) {
-  const done = view?.done;
-  if (!done || typeof done !== 'object') return null;
-
-  const sheet = el(doc, 'section', 'solve-result-sheet');
-  sheet.setAttribute('data-testid', 'solve-result-sheet');
-  sheet.setAttribute('data-done-status', String(done.status || ''));
-
-  const head = el(doc, 'div', 'solve-result-head');
-  const title = el(doc, 'h3', 'solve-result-title', resolveDoneHeading(done));
-  title.setAttribute('data-testid', 'solve-done-heading');
-  head.append(title);
-
-  const steps = Array.isArray(view.steps) ? view.steps : [];
-  const finalStep = steps.find((s) => String(s?.entry_id) === String(done.final_entry_id)) || null;
-  if (finalStep?.badge) {
-    head.append(createSolveBadgeGroup(finalStep.badge, {
-      document: doc, onBadgeClick: () => opts.onOpenWhy?.(finalStep), onSelectStep: opts.onSelectStep,
-    }));
-  }
-  sheet.append(head);
-
-  // R5: render final answer formulas strictly from solve.expr handles, never step.latex.
-  if (finalStep && Array.isArray(finalStep.claims) && finalStep.claims.length > 0) {
-    const ansBox = el(doc, 'div', 'solve-result-answer');
-    ansBox.setAttribute('data-testid', 'solve-result-answer');
-    for (const claim of finalStep.claims) {
-      const row = el(doc, 'div', 'solve-claim-formula');
-      renderClaimFormula(row, claim, handleMap, opts.katex, { display: true });
-      ansBox.append(row);
-    }
-    sheet.append(ansBox);
-  }
-
-  const criteria = Array.isArray(done.criteria) ? done.criteria : [];
-  if (criteria.length > 0) {
-    const list = el(doc, 'ul', 'solve-result-criteria');
-    list.setAttribute('data-testid', 'solve-result-criteria');
-    for (const crit of criteria) {
-      const li = el(doc, 'li', 'solve-result-criterion');
-      li.setAttribute('data-criterion-id', String(crit?.id || ''));
-      li.setAttribute('data-met', String(Boolean(crit?.met)));
-      li.append(
-        createBadge({ text: crit?.met ? 'Met' : 'Open', icon: crit?.met ? 'check' : 'warn', tone: crit?.met ? 'ok' : 'warn', border: BORDER_SOLID }),
-        el(doc, 'span', 'solve-criterion-name', String(crit?.id || 'criterion')),
-      );
-      list.append(li);
-    }
-    sheet.append(list);
-  }
-
-  const rests = done.rests_on || {};
-  const assumed = Array.isArray(rests.assumed_by_model) ? rests.assumed_by_model : [];
-  const weakest = Array.isArray(rests.weakest) ? rests.weakest : [];
-  if (assumed.length > 0 || weakest.length > 0) {
-    const restsSec = el(doc, 'div', 'solve-result-rests');
-    restsSec.setAttribute('data-testid', 'solve-result-rests');
-    restsSec.append(el(doc, 'strong', 'solve-subhead', 'Rests on'));
-    const errBox = el(doc, 'div', 'solve-error-banner');
-    errBox.hidden = true;
-    errBox.setAttribute('role', 'alert');
-    restsSec.append(errBox);
-    for (const eid of assumed) {
-      const row = el(doc, 'div', 'solve-rests-item');
-      const jump = el(doc, 'button', 'solve-step-link', `${eid} (assumed by model)`);
-      jump.type = 'button';
-      jump.addEventListener('click', () => opts.onSelectStep?.(String(eid)));
-      row.append(jump);
-      const targetStep = steps.find((s) => String(s?.entry_id) === String(eid));
-      if (targetStep && typeof opts.onAck === 'function') {
-        const ackBtn = el(doc, 'button', 'pill-btn sm', `Acknowledge ${eid}`);
-        ackBtn.type = 'button';
-        ackBtn.setAttribute('data-ack-assumption', String(eid));
-        ackBtn.addEventListener('click', () => {
-          errBox.hidden = true;
-          try {
-            const p = opts.onAck(targetStep, {
-              entry_id: targetStep.entry_id, kind: 'assumption', entry_sha256: targetStep.entry_sha256,
-            });
-            if (p && typeof p.then === 'function') {
-              p.catch((err) => { errBox.textContent = String(err?.message || err || 'Ack failed'); errBox.hidden = false; });
-            }
-          } catch (err) { errBox.textContent = String(err?.message || err || 'Ack failed'); errBox.hidden = false; }
-        });
-        row.append(ackBtn);
-      }
-      if (targetStep && typeof opts.onOpenWhy === 'function') {
-        const srcBtn = el(doc, 'button', 'pill-btn sm', 'Attach source');
-        srcBtn.type = 'button';
-        srcBtn.setAttribute('data-attach-assumption', String(eid));
-        srcBtn.addEventListener('click', () => opts.onOpenWhy(targetStep));
-        row.append(srcBtn);
-      }
-      restsSec.append(row);
-    }
-    for (const w of weakest) {
-      if (!w?.entry_id) continue;
-      const wStep = steps.find((s) => String(s?.entry_id) === String(w.entry_id));
-      const tierText = wStep?.badge?.stale ? SOLVE_TIER_LABELS.stale : formatSafeWeakestTier(w.tier);
-      const btn = el(doc, 'button', 'solve-step-link', `${w.entry_id} (${tierText})`);
-      btn.type = 'button';
-      btn.addEventListener('click', () => opts.onSelectStep?.(String(w.entry_id)));
-      restsSec.append(btn);
-    }
-    sheet.append(restsSec);
-  }
-
-  // R22: only list tiers with count > 0 so "Verified" never appears when count === 0.
-  const countParts = [];
-  for (const [tier, count] of countActiveTiers(steps).entries()) {
-    if (count > 0 && SOLVE_TIER_LABELS[tier]) countParts.push(`${count} ${SOLVE_TIER_LABELS[tier]}`);
-  }
-  if (countParts.length > 0) sheet.append(el(doc, 'p', 'solve-result-counts', `Own checks: ${countParts.join(', ')}.`));
-
-  const rawSummary = String(done.summary_markdown || '').trim();
-  if (rawSummary) {
-    const sumEl = el(doc, 'p', 'solve-result-summary', formatModelText(rawSummary, { isVerdict: false }));
-    sumEl.setAttribute('data-testid', 'solve-result-summary');
-    sheet.append(sumEl);
-  }
-  return sheet;
-}
-
-function renderStepCard(doc, step, handleMap, receiptsById, checksByStep, opts) {
+function renderStepCard(doc, step, handleMap, receiptsById, handlesByCallId, checksByStep, opts) {
   const card = el(doc, 'article', 'solve-step-card');
   if (opts.selectedStepId === step.entry_id) card.classList.add('is-selected');
   if (step.superseded_by) card.classList.add('is-superseded');
+  if (opts.outsideFinal) {
+    card.classList.add('is-outside-final');
+    card.setAttribute('data-outside-final', 'true');
+  }
   card.setAttribute('data-testid', 'solve-step-card');
   card.setAttribute('data-entry-id', String(step.entry_id || ''));
   card.setAttribute('data-entry-type', String(step.entry_type || ''));
@@ -281,7 +146,15 @@ function renderStepCard(doc, step, handleMap, receiptsById, checksByStep, opts) 
   idBtn.addEventListener('click', () => opts.onSelectStep?.(String(step.entry_id)));
   head.append(idBtn, el(doc, 'span', 'solve-step-type', String(step.entry_type || 'step')));
   if (step.superseded_by) head.append(el(doc, 'span', 'solve-flag-chip', `superseded by ${step.superseded_by}`));
-  head.append(createSolveBadgeGroup(step.badge || {}, {
+  if (opts.outsideFinal) head.append(el(doc, 'span', 'solve-flag-chip', 'not used by the final answer'));
+
+  const rawBadge = step.badge || {};
+  const hasProseDetails = String(step.details || '').trim().length > 0;
+  const displayBadge = rawBadge.own_check_line && hasProseDetails
+    && rawBadge.own === 'verified' && rawBadge.effective !== 'verified' && !rawBadge.stale
+    ? { ...rawBadge, own_check_line: OWN_CHECK_EQUATIONS_VERIFIED_LINE }
+    : rawBadge;
+  head.append(createSolveBadgeGroup(displayBadge, {
     document: doc, onBadgeClick: () => opts.onOpenWhy?.(step), onSelectStep: opts.onSelectStep,
   }));
   card.append(head);
@@ -332,11 +205,30 @@ function renderStepCard(doc, step, handleMap, receiptsById, checksByStep, opts) 
       `Details · ${stepChecks.length} check${stepChecks.length === 1 ? '' : 's'} · ${receiptRefs.length} receipt${receiptRefs.length === 1 ? '' : 's'}`));
     if (step.details) det.append(el(doc, 'p', 'solve-step-details', String(step.details)));
     for (const rr of receiptRefs) {
-      const rec = receiptsById.get(String(rr.call_id));
+      const cid = String(rr.call_id || '');
+      const rec = receiptsById.get(cid);
       const line = rec
         ? `Receipt ${rec.call_id} (${rec.tool}, ${rec.ok ? 'ok' : 'error'}${rec.wall_ms != null ? `, ${rec.wall_ms} ms` : ''})`
-        : `Receipt ${rr.call_id} (missing)`;
-      det.append(el(doc, 'div', 'solve-receipt-line', line));
+        : `Receipt ${cid} (missing)`;
+      const recCode = typeof rec?.code === 'string' && rec.code.trim() ? rec.code : '';
+      const callHandles = (handlesByCallId.get(cid) || []).filter((h) => typeof h?.source_expr === 'string' && h.source_expr.trim());
+      if (recCode || callHandles.length > 0) {
+        const recDet = el(doc, 'details', 'solve-receipt-details');
+        recDet.append(el(doc, 'summary', 'solve-receipt-line', line));
+        if (recCode) {
+          const pre = el(doc, 'pre', 'solve-receipt-code', recCode);
+          pre.setAttribute('data-testid', 'solve-receipt-code');
+          recDet.append(pre);
+        }
+        for (const h of callHandles) {
+          const srcRow = el(doc, 'div', 'solve-handle-source', `${h.handle || h.name}: ${h.source_expr}`);
+          srcRow.setAttribute('data-testid', 'solve-handle-source');
+          recDet.append(srcRow);
+        }
+        det.append(recDet);
+      } else {
+        det.append(el(doc, 'div', 'solve-receipt-line', line));
+      }
     }
     card.append(det);
   }
@@ -427,7 +319,7 @@ export function createSolveWorkspace(host, initialView = {}, opts = {}) {
   }
 
   function renderRunBarSection() {
-    const props = mapRunStateToBarProps(view.run_state);
+    const props = mapRunStateToBarProps(view.run_state, view);
     const cbs = { onStop: opts.onStop, onContinue: opts.onContinue, onRetry: opts.onRetry };
     if (!runBarApi) runBarApi = createRunBar(runBarHost, props, cbs);
     else runBarApi.update(props, cbs);
@@ -436,6 +328,13 @@ export function createSolveWorkspace(host, initialView = {}, opts = {}) {
   function renderMain() {
     mainCol.replaceChildren();
     const handleMap = buildHandleLookup(view.handles || []);
+    const handlesByCallId = new Map();
+    for (const h of Array.isArray(view.handles) ? view.handles : []) {
+      const cid = String(h?.produced_by?.call_id || '');
+      if (!cid) continue;
+      if (!handlesByCallId.has(cid)) handlesByCallId.set(cid, []);
+      handlesByCallId.get(cid).push(h);
+    }
     const receiptsById = new Map();
     for (const r of Array.isArray(view.receipts) ? view.receipts : []) if (r?.call_id) receiptsById.set(String(r.call_id), r);
     const checksByStep = new Map();
@@ -461,16 +360,45 @@ export function createSolveWorkspace(host, initialView = {}, opts = {}) {
     toolbar.append(supLabel);
     mainCol.append(toolbar, createSolveLegend(view.graph?.legend || [], view.steps || [], { document: doc }));
 
-    const steps = (Array.isArray(view.steps) ? view.steps : []).filter((s) => s && (showSuperseded || !s.superseded_by));
+    const allSteps = Array.isArray(view.steps) ? view.steps : [];
+    const finalEntryId = view?.done?.final_entry_id ? String(view.done.final_entry_id) : '';
+    const hasFinal = Boolean(finalEntryId) && allSteps.some((s) => s && String(s.entry_id) === finalEntryId);
+    const closureIds = hasFinal ? computeFinalClosureIds(allSteps, finalEntryId) : null;
+
+    const visibleSteps = allSteps.filter((s) => s && (showSuperseded || !s.superseded_by));
+    const mainSteps = [];
+    const outsideActiveSteps = [];
+    for (const s of visibleSteps) {
+      if (closureIds && !s.superseded_by && !closureIds.has(String(s.entry_id))) {
+        outsideActiveSteps.push(s);
+      } else {
+        mainSteps.push(s);
+      }
+    }
+
     const list = el(doc, 'div', 'solve-steps-list');
     list.setAttribute('data-testid', 'solve-steps-list');
-    if (steps.length === 0) {
+    const cardOpts = {
+      katex: opts.katex, selectedStepId, onSelectStep: selectStep, onOpenWhy: openWhy, onOpenSource: opts.onOpenSource,
+    };
+    if (mainSteps.length === 0 && outsideActiveSteps.length === 0) {
       list.append(el(doc, 'p', 'solve-muted', 'No derivation steps recorded yet.'));
     } else {
-      for (const step of steps) {
-        list.append(renderStepCard(doc, step, handleMap, receiptsById, checksByStep, {
-          katex: opts.katex, selectedStepId, onSelectStep: selectStep, onOpenWhy: openWhy, onOpenSource: opts.onOpenSource,
-        }));
+      for (const step of mainSteps) {
+        list.append(renderStepCard(doc, step, handleMap, receiptsById, handlesByCallId, checksByStep, cardOpts));
+      }
+      if (outsideActiveSteps.length > 0) {
+        const group = el(doc, 'details', 'solve-outside-final-group');
+        group.setAttribute('data-testid', 'solve-outside-final-group');
+        const n = outsideActiveSteps.length;
+        group.append(el(doc, 'summary', 'solve-outside-final-summary',
+          `Not used by the final answer (${n} ${n === 1 ? 'step' : 'steps'})`));
+        for (const step of outsideActiveSteps) {
+          group.append(renderStepCard(doc, step, handleMap, receiptsById, handlesByCallId, checksByStep, {
+            ...cardOpts, outsideFinal: true,
+          }));
+        }
+        list.append(group);
       }
     }
     mainCol.append(list);

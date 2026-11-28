@@ -95,6 +95,7 @@ fn expr_ev(seq: u64, name: &str, srepr_sha: &str) -> Event {
             produced_by: ReceiptRef { call_id: "c0".into(), result_seq: 1 },
             owner_entry: None,
             portable: true,
+            unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
         })
         .unwrap(),
     )
@@ -347,6 +348,12 @@ fn r7_and_r22_property_tiers_monotone_and_wording_clean_on_200_random_dags() {
             let t = state.tier(&entry.entry_id).unwrap();
             assert!(t.effective.lattice_rank() <= t.own.lattice_rank(), "case {case} {}", entry.entry_id);
             for dep in all_deps(entry) {
+                if state
+                    .entry(dep)
+                    .is_some_and(|de| de.superseded_by.as_deref() == Some(entry.entry_id.as_str()))
+                {
+                    continue;
+                }
                 let dt = state.tier(dep).unwrap();
                 assert!(t.effective.lattice_rank() <= dt.effective.lattice_rank(), "case {case} {} -> {dep}", entry.entry_id);
             }

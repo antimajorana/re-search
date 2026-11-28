@@ -465,16 +465,21 @@ pub fn seed_solve_session(
         )
         .unwrap();
 
-    let srepr_a = "Symbol('x')";
-    let sha_a = ledger.put_blob(srepr_a.as_bytes()).unwrap();
-    for (name, latex) in [("lhs_h", "x"), ("rhs_h", "x")] {
+    let srepr_lhs = "Pow(Add(Symbol('x'), Integer(1)), Integer(2))";
+    let srepr_rhs = "Add(Pow(Symbol('x'), Integer(2)), Mul(Integer(2), Symbol('x')), Integer(1))";
+    let sha_lhs = ledger.put_blob(srepr_lhs.as_bytes()).unwrap();
+    let sha_rhs = ledger.put_blob(srepr_rhs.as_bytes()).unwrap();
+    for (name, sha, latex, preview) in [
+        ("lhs_h", &sha_lhs, "(x + 1)^2", "(x + 1)**2"),
+        ("rhs_h", &sha_rhs, "x^2 + 2x + 1", "x**2 + 2*x + 1"),
+    ] {
         let expr = SolveExpr {
             name: name.into(),
             version: 1,
-            srepr_blob: sha_a.clone(),
-            srepr_sha256: sha_a.clone(),
+            srepr_blob: sha.clone(),
+            srepr_sha256: sha.clone(),
             latex: latex.into(),
-            str_preview: "x".into(),
+            str_preview: preview.into(),
             free_symbols: vec![],
             produced_by: ReceiptRef {
                 call_id: "c-0".into(),
@@ -482,6 +487,7 @@ pub fn seed_solve_session(
             },
             owner_entry: Some("e-1".into()),
             portable: true,
+            unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
         };
         ledger
             .append_with_hash(
@@ -501,8 +507,10 @@ pub fn seed_solve_session(
         domain: None,
         how: None,
     };
-    let claim_sha =
-        compute_claim_sha256(std::slice::from_ref(&claim), |_| Some(sha_a.as_str())).unwrap();
+    let claim_sha = compute_claim_sha256(std::slice::from_ref(&claim), |h| {
+        Some(if h.name == "lhs_h" { sha_lhs.as_str() } else { sha_rhs.as_str() })
+    })
+    .unwrap();
     let e1_sha = compute_entry_sha256(Some(&claim_sha), "Identity step", "Details for e-1");
     ledger
         .append_with_hash(

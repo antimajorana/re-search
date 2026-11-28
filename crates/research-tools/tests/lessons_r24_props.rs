@@ -133,6 +133,7 @@ fn build_random_solve_events(rng: &mut Rng, n_nodes: usize) -> Vec<Event> {
             produced_by: ReceiptRef { call_id: "c0".into(), result_seq: 1 },
             owner_entry: None,
             portable: true,
+            unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
         })
         .unwrap(),
     ));
@@ -152,6 +153,7 @@ fn build_random_solve_events(rng: &mut Rng, n_nodes: usize) -> Vec<Event> {
             produced_by: ReceiptRef { call_id: "c0".into(), result_seq: 1 },
             owner_entry: None,
             portable: true,
+            unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
         })
         .unwrap(),
     ));

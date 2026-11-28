@@ -8,6 +8,9 @@
 use crate::proof_closure::{all_deps, proper_ancestor_ids, topological_order};
 pub use crate::solve_badge::*;
 use crate::solve_model::SolveEntry;
+pub use crate::solve_own_tier::{
+    check_is_trivial, claim_sides_identical, review_cites_trivial_check,
+};
 use crate::solve_own_tier::{evaluate_own, push_unique, OwnEval};
 use crate::solve_state::SolveState;
 use std::collections::BTreeMap;
@@ -78,16 +81,22 @@ fn propagate_step(
     let mut min_rank = eval.own.lattice_rank();
     let mut dep_stale = false;
     let mut broken_by: Vec<String> = Vec::new();
+    let mut unchecked_deps: Vec<String> = Vec::new();
     let mut dep_ranks: Vec<(&str, i8, Tier, bool)> = Vec::with_capacity(deps.len());
 
     for dep_id in deps {
         let Some(&dep_idx) = state.entry_index.get(dep_id) else {
             // Missing dependency: fail-closed to Unchecked (rank 0).
             min_rank = min_rank.min(0);
+            push_unique(&mut unchecked_deps, dep_id.to_string());
             dep_ranks.push((dep_id, 0, Tier::Unchecked, false));
             continue;
         };
         let dep_entry = &state.entries[dep_idx];
+        // Ignore dependency edge from replacement step B to step A that B supersedes.
+        if dep_entry.superseded_by.as_deref() == Some(entry.entry_id.as_str()) {
+            continue;
+        }
         let dep_superseded = dep_entry.superseded_by.is_some();
         let dep_tier = resolved.get(dep_id);
         let dep_eff = dep_tier.map_or(Tier::Unchecked, |t| t.effective);
@@ -116,6 +125,9 @@ fn propagate_step(
         } else {
             dep_eff.lattice_rank()
         };
+        if eff_rank <= 0 && !dep_eff.is_neutral() {
+            push_unique(&mut unchecked_deps, dep_id.to_string());
+        }
         min_rank = min_rank.min(eff_rank);
         dep_ranks.push((dep_id, eff_rank, dep_eff, dep_is_stale));
     }
@@ -177,8 +189,10 @@ fn propagate_step(
         effective,
         lowered_by,
         broken_by,
+        unchecked_deps,
         sublabels: eval.sublabels.clone(),
         flags: Vec::new(),
+        check_note: eval.check_note.clone(),
         stale,
     }
 }

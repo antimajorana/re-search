@@ -448,6 +448,7 @@ pub fn prefill_solve_setup(req: &PrefillRequest) -> SolvePrefillResult {
         }
     }
 
+    let same_model = is_same_model(req.solver.as_ref(), req.verifier.as_ref());
     let target = match task_kind {
         TaskKind::Calculate => SolveTarget {
             description: "Final calculated expression".into(),
@@ -464,7 +465,11 @@ pub fn prefill_solve_setup(req: &PrefillRequest) -> SolvePrefillResult {
             digits: None,
         },
         TaskKind::Prove => SolveTarget {
-            description: "Structured proof reviewed by an independent model".into(),
+            description: if same_model {
+                "Structured proof with model review".into()
+            } else {
+                "Structured proof reviewed by an independent model".into()
+            },
             form: TargetForm::Proof,
             order: None,
             digits: None,
@@ -483,7 +488,6 @@ pub fn prefill_solve_setup(req: &PrefillRequest) -> SolvePrefillResult {
         !dimensions.is_empty(),
         req.allow_numeric_target,
     );
-    let same_model = is_same_model(req.solver.as_ref(), req.verifier.as_ref());
     let same_model_warning = same_model.then(|| SAME_MODEL_WARNING.to_string());
     let prove_notice = (task_kind == TaskKind::Prove).then(|| PROVE_PROSE_NOTICE.to_string());
     let math_sha256 = compute_math_sha256(&symbols, &dimensions, &[], &conventions);

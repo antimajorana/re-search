@@ -284,12 +284,14 @@ fn solve_setup_validation_given_steps_graph_view_and_d15_revision_staleness() {
         latex: "x+x".into(), str_preview: "x + x".into(), free_symbols: vec![],
         produced_by: ReceiptRef { call_id: "c1".into(), result_seq: 1 },
         owner_entry: Some("e-10".into()), portable: true,
+        unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
     };
     let expr_rhs = SolveExpr {
         name: "rhs".into(), version: 1, srepr_blob: "b2".into(), srepr_sha256: "2".repeat(64),
         latex: "2x".into(), str_preview: "2*x".into(), free_symbols: vec![],
         produced_by: ReceiptRef { call_id: "c1".into(), result_seq: 1 },
         owner_entry: Some("e-10".into()), portable: true,
+        unevaluated_srepr: None, unevaluated_srepr_sha256: None, source_expr: None,
     };
     let claim = Claim {
         form: ClaimForm::Equation, lhs: h_lhs, rhs: h_rhs, relation: ClaimRelation::Eq,

@@ -349,6 +349,9 @@ export function buildSetupSubmission(state) {
 
   if (state.sameModel && state.acceptSameModel) {
     for (const c of enabledDone) {
+      if (c.id === 'final_different_model_review') {
+        c.id = 'final_model_review';
+      }
       if (c.params && c.params.require_different_model) {
         c.params.require_different_model = false;
       }
@@ -362,8 +365,13 @@ export function buildSetupSubmission(state) {
   }
 
   const fallbackTarget = defaultTargetForKind(state.taskKind);
+  const rawDescription = String(state.target?.description || fallbackTarget.description);
+  const targetDescription = state.sameModel && state.acceptSameModel
+    && rawDescription === 'Structured proof reviewed by an independent model'
+    ? 'Structured proof with model review'
+    : rawDescription;
   const target = {
-    description: String(state.target?.description || fallbackTarget.description),
+    description: targetDescription,
     form: state.target?.form || fallbackTarget.form,
   };
   if (state.target?.order != null && String(state.target.order).trim() !== '') {

@@ -95,9 +95,22 @@ def validate_symbol_name(raw: Any, label: str = "symbol") -> str:
 
 
 def coerce_handle_obj(obj: Any) -> Any:
-    """Convert mutable SymPy matrices into immutable `sp.Basic` objects for symbol normalization."""
+    """Convert mutable SymPy matrices into immutable `sp.Basic` objects and unwrap `UnevaluatedExpr`."""
     if isinstance(obj, sp.MatrixBase) and not isinstance(obj, sp.Basic):
-        return obj.as_immutable()
+        obj = obj.as_immutable()
+    if isinstance(obj, (sp.Basic, sp.MatrixBase)) and obj.has(sp.UnevaluatedExpr):
+        for _ in range(8):
+            if not obj.has(sp.UnevaluatedExpr):
+                break
+            obj = obj.replace(
+                lambda e: isinstance(e, sp.UnevaluatedExpr),
+                lambda e: (
+                    e.args[0].doit()
+                    if isinstance(e.args[0], (sp.Basic, sp.MatrixBase))
+                    and not e.args[0].has(sp.Integral, sp.Sum, sp.Derivative, sp.Limit, sp.MatMul, sp.Trace)
+                    else e.args[0]
+                ),
+            )
     return obj
 
 

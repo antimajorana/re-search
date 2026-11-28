@@ -77,7 +77,7 @@ _SYMBOL_LIKE_CONSTRUCTORS: frozenset[str] = frozenset({"Symbol", "Dummy", "Wild"
 
 _STATIC_SYMPY_CONSTRUCTORS: tuple[str, ...] = (
     # Core arithmetic & numbers
-    "Add", "Mul", "Pow", "Integer", "Rational", "Float",
+    "Add", "Mul", "Pow", "Integer", "Rational", "Float", "UnevaluatedExpr",
     # Symbols & tuples
     "Symbol", "Dummy", "Wild", "Tuple",
     # Calculus & series
@@ -267,6 +267,10 @@ def _guard_call(ctor: str, args: list[Any], kwargs: dict[str, Any]) -> None:
                     raise UnsafeSreprError(f"invalid Limit direction {a!r}")
             else:
                 _forbid_raw_strings(a, ctor=ctor)
+    elif ctor == "UnevaluatedExpr":
+        if len(args) != 1:
+            raise UnsafeSreprError("UnevaluatedExpr expects 1 positional argument")
+        _forbid_raw_strings(args, ctor=ctor)
     else:
         _forbid_raw_strings(args, ctor=ctor)
         if ctor in ("factorial", "factorial2", "subfactorial", "binomial", "RisingFactorial", "FallingFactorial"):
@@ -293,9 +297,17 @@ def _guard_call(ctor: str, args: list[Any], kwargs: dict[str, Any]) -> None:
                     raise UnsafeSreprError(f"{ctor} element count exceeds cap {MAX_MATRIX_ELEMS}")
 
 
+_PRESERVE_EVAL_CTORS: frozenset[str] = frozenset({
+    "Add", "Mul", "Pow", "Eq", "Equality", "Ne", "Unequality",
+    "Lt", "StrictLessThan", "Le", "LessThan", "Gt", "StrictGreaterThan", "Ge", "GreaterThan",
+    "MatAdd", "MatMul", "MatPow", "sqrt",
+})
+
+
 class _SafeEvaluator:
     def __init__(self) -> None:
         self.nodes = 0
+        self._uneval_depth = 0
 
     def eval_node(self, node: ast.AST, depth: int) -> Any:
         self.nodes += 1
@@ -376,9 +388,22 @@ class _SafeEvaluator:
         if ctor not in ALLOWED_CONSTRUCTORS:
             raise UnsafeSreprError(f"disallowed constructor {ctor!r}", rejected_name=ctor)
 
-        args, kwargs = self._eval_call_args(node, depth + 1)
+        if ctor == "UnevaluatedExpr":
+            self._uneval_depth += 1
+            try:
+                args, kwargs = self._eval_call_args(node, depth + 1)
+            finally:
+                self._uneval_depth -= 1
+        else:
+            args, kwargs = self._eval_call_args(node, depth + 1)
         _guard_call(ctor, args, kwargs)
-        return ALLOWED_CONSTRUCTORS[ctor](*args, **kwargs)
+        target_cls = ALLOWED_CONSTRUCTORS[ctor]
+        if self._uneval_depth > 0 and "evaluate" not in kwargs:
+            from sympy.core.function import FunctionClass
+
+            if ctor in _PRESERVE_EVAL_CTORS or isinstance(target_cls, FunctionClass):
+                kwargs = {**kwargs, "evaluate": False}
+        return target_cls(*args, **kwargs)
 
     def _build_undefined_function(self, node: ast.Call, depth: int) -> Any:
         args, kwargs = self._eval_call_args(node, depth)

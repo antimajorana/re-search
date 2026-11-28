@@ -87,6 +87,8 @@ pub fn run_step_record(
     }
 
     let rendered = validate_and_render_claims(&state, &input.claims)?;
+    refuse_subset_claim_duplicate(&state, &input.claims)?;
+    let warnings = identical_side_warnings(&state, &input.claims);
 
     if input.entry_type == StepEntryType::ReferenceLookup {
         let qref = input.source_ref.as_ref().ok_or_else(|| {
@@ -164,10 +166,12 @@ pub fn run_step_record(
     let updated_events = ledger.read_session(session).map_err(|e| e.to_string())?;
     let updated_state = SolveState::from_events(&updated_events);
     let badge = badge_for_step(&updated_state, &entry_id);
-    let own_tier = updated_state.tier(&entry_id).map(|t| t.own);
-    let effective_tier = updated_state.tier(&entry_id).map(|t| t.effective);
+    let tier = updated_state.tier(&entry_id);
+    let own_tier = tier.map(|t| t.own);
+    let effective_tier = tier.map(|t| t.effective);
+    let own_tier_reason = tier.and_then(|t| explain_unchecked_own_tier(&updated_state, &entry_id, t));
 
-    Ok(json!({
+    let mut out = json!({
         "entry_id": entry_id,
         "seq": appended.seq,
         "entry_type": input.entry_type.as_str(),
@@ -180,7 +184,74 @@ pub fn run_step_record(
         "own_tier": own_tier,
         "effective_tier": effective_tier,
         "badge": badge,
-    }))
+    });
+    if !warnings.is_empty() {
+        out["warnings"] = json!(warnings);
+    }
+    if let Some(reason) = own_tier_reason {
+        out["own_tier_reason"] = json!(reason);
+    }
+    Ok(out)
+}
+
+fn refuse_subset_claim_duplicate(state: &SolveState, claims: &[Claim]) -> Result<(), String> {
+    if claims.is_empty() {
+        return Ok(());
+    }
+    let claim_key = |c: &Claim| (c.lhs.to_string(), c.rhs.to_string(), format!("{:?}", c.relation));
+    let new_set: BTreeSet<(String, String, String)> = claims.iter().map(claim_key).collect();
+    for existing in state.active_entries() {
+        if existing.claims.is_empty() {
+            continue;
+        }
+        let existing_set: BTreeSet<(String, String, String)> =
+            existing.claims.iter().map(claim_key).collect();
+        if new_set.is_subset(&existing_set) {
+            return Err(format!(
+                "claims are already covered by active step `{}` (subset/duplicate claim set); supersede `{}` via `ledger_supersede` or split distinct claims cleanly",
+                existing.entry_id, existing.entry_id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn identical_side_warnings(state: &SolveState, claims: &[Claim]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (idx, claim) in claims.iter().enumerate() {
+        if crate::solve_status::claim_sides_identical(state, claim) {
+            warnings.push(format!(
+                "claims[{idx}] (`{}` vs `{}`) has identical sides before simplification; host checks will return `trivial` and earn no tier",
+                claim.lhs, claim.rhs
+            ));
+        }
+    }
+    warnings
+}
+
+/// Explain why a step's `own_tier` remained `Unchecked` (for `step_record` results).
+pub(crate) fn explain_unchecked_own_tier(
+    state: &SolveState,
+    entry_id: &str,
+    tier: &crate::solve_status::StepTier,
+) -> Option<String> {
+    if tier.own != Tier::Unchecked {
+        return None;
+    }
+    let entry = state.entry(entry_id)?;
+    if entry.claims.is_empty() {
+        return None;
+    }
+    if let Some(note) = &tier.check_note {
+        return Some(format!("step stayed Unchecked: {note}"));
+    }
+    if entry.claims.iter().any(|c| c.form == ClaimForm::Inequality) {
+        return Some(
+            "step stayed Unchecked: inequality claims can only run sampled `counterexample_search` (sublabel only, never earns a computed tier); split inequalities from equation claims or seek model/user review"
+                .to_string(),
+        );
+    }
+    Some("step stayed Unchecked: not all claims passed a tier-granting check".to_string())
 }
 
 fn validate_and_render_claims(state: &SolveState, claims: &[Claim]) -> Result<Vec<String>, String> {
