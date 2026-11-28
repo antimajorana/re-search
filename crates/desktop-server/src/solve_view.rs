@@ -476,6 +476,12 @@ pub fn build_solve_view(
         .get("pending_approvals")
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
+    let supplied_records =
+        research_tools::lessons_prompt::read_supplied_lessons(events, None, None);
+    let supplied_count =
+        research_tools::lessons_prompt::count_distinct_supplied_notes(&supplied_records);
+    let supplied_disclosure =
+        research_tools::lessons_prompt::supplied_notes_disclosure(supplied_count);
 
     json!({
         "setup": setup_json,
@@ -492,6 +498,11 @@ pub fn build_solve_view(
         "toolbox": toolbox,
         "approval_grants": approval_grants,
         "model_connected": model_connected,
+        "lessons_supplied": {
+            "count": supplied_count,
+            "disclosure": supplied_disclosure,
+            "records": supplied_records,
+        },
     })
 }
 

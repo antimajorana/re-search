@@ -4,6 +4,9 @@
 // nothing is faked, and "New research" sits under "More" until Solve and Explore ship.
 import { renderIdeaSetupCard } from './idea_setup.js';
 import { EXPLORE_VISIBILITY_STORAGE_KEY } from './idea_state.js';
+import { mountLessonsNavButton } from './lessons.js';
+
+export { mountLessonsNavButton };
 
 // Single-place named constants for owner-accepted wording (overview 5.2, 5.3, 8.2 decision 7).
 export const NOT_BUILT_YET_LABEL = 'not built yet';
@@ -285,4 +288,6 @@ if (typeof document !== 'undefined' && typeof document.getElementById === 'funct
   }
   const exploreHost = document.getElementById('home-explore-card');
   if (exploreHost) mountExploreCard(exploreHost);
+  const footer = typeof document.querySelector === 'function' ? document.querySelector('.rail-footer') : null;
+  if (footer) mountLessonsNavButton(footer);
 }

@@ -62,6 +62,7 @@ mod routers;
 pub mod routes_export;
 pub mod routes_idea;
 pub mod routes_lessons;
+pub mod routes_lessons_ui;
 pub mod routes_library;
 pub mod routes_session;
 pub mod routes_settings;

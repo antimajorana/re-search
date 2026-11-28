@@ -24,6 +24,9 @@ use loop_tools::{
     latest_turn, pause_on_transport, pause_solve, validate_solve_cfg, write_checkpoint,
     DispatchStep,
 };
+use research_tools::lessons_prompt::{
+    extract_solve_match_context, prepare_mode_lessons, LESSONS_SUPPLIED_EVENT,
+};
 use research_tools::solve_exprs::CheckCanonicalizer;
 use research_tools::solve_gates::{PauseTrigger, SolveGate};
 use research_tools::solve_model::{HandleRef, PauseReason, SolveExpr, SolveSetup};
@@ -126,6 +129,7 @@ pub(super) struct LegContext {
     pub(super) messages: Vec<Message>,
     pub(super) repair_used: bool,
     pub(super) pending_repair_prompt: Option<String>,
+    pub(super) supplied_lessons_section: Option<String>,
 }
 
 /// Start a fresh in-core Solve run (`tool_profile: "solve/1"`, `caller: "solver"`).
@@ -151,7 +155,13 @@ pub fn run_solve_loop(
     let run_id = cfg.run_id.clone().unwrap_or_else(|| format!("solve-{}", random_hex(8)));
     let info = transport.info();
     let defs = router.registry().defs();
-    let system_prompt = build_solve_system_prompt(&setup, &[]);
+    let lesson_ctx = extract_solve_match_context(&setup, &existing);
+    let prepared_lessons = prepare_mode_lessons(&cfg.env.data_dir, &lesson_ctx, &run_id)?;
+    let mut prompt_extra: Vec<&str> = cfg.extra_prompt_sections.iter().map(String::as_str).collect();
+    if let Some(p) = &prepared_lessons {
+        prompt_extra.push(p.prompt_section.as_str());
+    }
+    let system_prompt = build_solve_system_prompt(&setup, &prompt_extra);
     let mut audit = Audit {
         ledger,
         session,
@@ -182,6 +192,15 @@ pub fn run_solve_loop(
             "tool_defs": tool_defs_json(&defs),
         }),
     )?;
+    let supplied_lessons_section = if let Some(prepared) = prepared_lessons {
+        let raw_blob = audit.put_blob(prepared.blob_text.as_bytes())?;
+        let ev_payload = prepared.build_event_payload(&raw_blob);
+        audit.emit(LESSONS_SUPPLIED_EVENT, ev_payload)?;
+        prepared.commit_uses(&cfg.env.data_dir)?;
+        Some(prepared.prompt_section)
+    } else {
+        None
+    };
 
     let gate = match &cfg.solve_gate {
         Some(g) => {
@@ -202,6 +221,7 @@ pub fn run_solve_loop(
         messages: initial_messages,
         repair_used: false,
         pending_repair_prompt: None,
+        supplied_lessons_section,
     };
     run_solve_legs(transport, router, &mut audit, &setup, &gate, cfg, ctx)
 }
@@ -291,6 +311,7 @@ pub fn resume_solve_loop(
         }],
         repair_used: false,
         pending_repair_prompt: None,
+        supplied_lessons_section: None,
     };
     run_solve_legs(transport, router, &mut audit, &setup, &gate, cfg, ctx)
 }
@@ -304,7 +325,10 @@ fn run_solve_legs(
     cfg: &SolveLoopConfig<'_>,
     mut ctx: LegContext,
 ) -> Result<SessionOutcome, String> {
-    let extra_refs: Vec<&str> = cfg.extra_prompt_sections.iter().map(String::as_str).collect();
+    let mut extra_refs: Vec<&str> = cfg.extra_prompt_sections.iter().map(String::as_str).collect();
+    if let Some(sec) = ctx.supplied_lessons_section.as_deref() {
+        extra_refs.push(sec);
+    }
     let system_prompt = build_solve_system_prompt(setup, &extra_refs);
     let mut tool_specs: Vec<ToolSpec> = router
         .registry()
