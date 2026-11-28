@@ -326,18 +326,20 @@ pub fn core_env_for_profile(
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
     .collect();
-    if mode != Mode::Solve {
+    if matches!(mode, Mode::Research | Mode::Investigate) {
         env.insert("CORE_ENABLE_RESEARCH_TOOLS".into(), "1".into());
-    } else {
+    } else if mode == Mode::Solve {
         env.insert(CORE_CHECK_TIMEOUT_ENV.into(), DEFAULT_SOLVE_CHECK_TIMEOUT_S.to_string());
         if let Some((check_scratch, check_pycache)) = check_dirs {
             env.insert(CORE_CHECK_SCRATCH_ENV.into(), path_str(check_scratch));
             env.insert(CORE_CHECK_PYCACHE_ENV.into(), path_str(check_pycache));
         }
     }
-    if let (Some(py), Some(script)) = (&cfg.python, &cfg.worker_script) {
-        env.insert("CORE_PYTHON".into(), path_str(py));
-        env.insert("CORE_WORKER_SCRIPT".into(), path_str(script));
+    if mode != Mode::Explore {
+        if let (Some(py), Some(script)) = (&cfg.python, &cfg.worker_script) {
+            env.insert("CORE_PYTHON".into(), path_str(py));
+            env.insert("CORE_WORKER_SCRIPT".into(), path_str(script));
+        }
     }
     if let Some(ws) = workspace {
         env.insert("CORE_WORKSPACE".into(), path_str(&strip_verbatim_prefix(ws)));
@@ -399,6 +401,9 @@ pub fn build_cli_prompt(
             turns_included: 0,
             turns_dropped: 0,
         };
+    }
+    if mode == Mode::Explore {
+        return crate::cli_turn_explore::build_explore_cli_prompt(existing, ledger, eff_msg, conventions, None, None);
     }
 
     let mut msg = eff_msg.to_string();

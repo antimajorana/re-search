@@ -128,23 +128,42 @@ pub(crate) fn run_cli_turn(
         ledger.verify_session(session_id).map_err(|e| format!("cannot continue session `{session_id}`: {e}"))?;
     }
     let (mode, profile) = resolve_cli_turn_profile(&existing)?;
-    let eff_msg = match &subagent {
-        Some(sa) => crate::subagents::apply_subagent_to_turn_prompt(sa, message),
-        None => message.to_string(),
+    let turn_start_seq = existing.last().map_or(0, |e| e.seq);
+    let eff_msg = if mode == Mode::Explore {
+        message.to_string()
+    } else {
+        match &subagent {
+            Some(sa) => crate::subagents::apply_subagent_to_turn_prompt(sa, message),
+            None => message.to_string(),
+        }
     };
     let needs_title = allow_model_title
         && crate::routes_session::model_session_title(&existing).is_none()
-        && mode != Mode::Investigate;
-    let prompt_build = build_cli_prompt(
-        mode,
-        &existing,
-        Some(&ledger),
-        &eff_msg,
-        conventions.as_deref(),
-        project_context.as_deref(),
-        needs_title,
-        state.cfg.python.is_some(),
-    );
+        && !matches!(mode, Mode::Investigate | Mode::Explore);
+    let prompt_build = if mode == Mode::Explore {
+        let focus_node = req["focus_node_id"]
+            .as_str()
+            .or_else(|| req["node_id"].as_str());
+        crate::cli_turn_explore::build_explore_cli_prompt(
+            &existing,
+            Some(&ledger),
+            &eff_msg,
+            conventions.as_deref(),
+            None,
+            focus_node,
+        )
+    } else {
+        build_cli_prompt(
+            mode,
+            &existing,
+            Some(&ledger),
+            &eff_msg,
+            conventions.as_deref(),
+            project_context.as_deref(),
+            needs_title,
+            state.cfg.python.is_some(),
+        )
+    };
 
     validate_session_id(session_id).map_err(|e| e.to_string())?;
     let sdir = state.session_dir(session_id)?;
@@ -278,7 +297,18 @@ pub(crate) fn run_cli_turn(
                 )?;
             }
             let text = sink.final_text().to_string();
-            Ok(if text.is_empty() { report.final_text } else { text })
+            let final_text = if text.is_empty() { report.final_text } else { text };
+            if mode == Mode::Explore {
+                let caller = vendor.caller(session_id);
+                crate::cli_turn_explore::record_explore_cli_citations(
+                    state,
+                    session_id,
+                    turn_start_seq,
+                    &caller,
+                    &final_text,
+                )?;
+            }
+            Ok(final_text)
         }
         TurnEnd::Completed { init_verified: false, .. } => match kind {
             CliRouteKind::Claude => Err("Claude Code ended without a verified system/init event; turn aborted".to_string()),
