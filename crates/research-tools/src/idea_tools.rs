@@ -154,7 +154,9 @@ pub fn idea_fetch_papers_def() -> ToolDef {
     }
 }
 
-/// Honest fail-closed placeholder handler for `idea_fetch_papers` until package X9 wires F3 fetch.
+pub use crate::idea_fetch::{idea_fetch_papers_handler, idea_fetch_papers_handler_with_gate};
+
+/// Deprecated X7 placeholder handler retained for explicit stub tests.
 pub fn idea_fetch_papers_stub_handler() -> Arc<dyn ToolHandler> {
     Arc::new(|_ctx: &CallCtx<'_>, _args: &Value| {
         Err("idea_fetch_papers: not yet wired (package X9)".to_string())
@@ -182,7 +184,7 @@ pub fn register_explore_v1_tools(
     registry.register(idea_search_def(), idea_search_handler(Arc::clone(&env)));
     registry.register(
         idea_fetch_papers_def(),
-        fetch_handler.unwrap_or_else(idea_fetch_papers_stub_handler),
+        fetch_handler.unwrap_or_else(|| idea_fetch_papers_handler(Arc::clone(&env))),
     );
     paper_lines::register(registry, Arc::clone(&env));
     paper_passages::register(registry, env);
