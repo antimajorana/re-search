@@ -271,6 +271,48 @@ def _validate_srepr_map(mapping, field_name):
     return validated
 
 
+def _extract_save_expr_sources(tree, code):
+    """Map `save_expr` call sites and literal names to AST expression source text."""
+    by_line_name = {}
+    by_line_calls = {}
+    by_name = {}
+
+    class _Visitor(ast.NodeVisitor):
+        def visit_Call(self, node):
+            func = node.func
+            is_save = (
+                (isinstance(func, ast.Name) and func.id == "save_expr")
+                or (isinstance(func, ast.Attribute) and func.attr == "save_expr")
+            )
+            if is_save:
+                name_node = node.args[0] if node.args else None
+                expr_node = node.args[1] if len(node.args) >= 2 else None
+                for kw in node.keywords:
+                    if kw.arg == "name" and name_node is None:
+                        name_node = kw.value
+                    elif kw.arg == "expr" and expr_node is None:
+                        expr_node = kw.value
+                if expr_node is not None:
+                    seg = ast.get_source_segment(code, expr_node)
+                    if seg is not None:
+                        lineno = getattr(node, "lineno", None)
+                        if lineno is not None:
+                            by_line_calls.setdefault(lineno, []).append(seg)
+                        if isinstance(name_node, ast.Constant) and isinstance(name_node.value, str):
+                            by_name[name_node.value] = seg
+                            if lineno is not None:
+                                by_line_name[(lineno, name_node.value)] = seg
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+    by_line_single = {ln: segs[0] for ln, segs in by_line_calls.items() if len(segs) == 1}
+    return {
+        "by_line_name": by_line_name,
+        "by_line_single": by_line_single,
+        "by_name": by_name,
+    }
+
+
 def evaluate(code, ns, exprs_in=None, env_info=None, scratch_dir=None):
     """Run `code`; if its last statement is an expression, return its value."""
     staged = None if exprs_in is None else _validate_srepr_map(exprs_in, "exprs_in")
@@ -282,13 +324,29 @@ def evaluate(code, ns, exprs_in=None, env_info=None, scratch_dir=None):
     error = None
     result = {"seed_events": []}
     outbox = {}
+    meta_out = {}
+
+    ast_sources = None
+    tree = None
+    parse_error = None
+    try:
+        tree = ast.parse(code, filename="<evaluate>", mode="exec")
+        ast_sources = _extract_save_expr_sources(tree, code)
+    except BaseException as exc:
+        parse_error = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(limit=8),
+        }
 
     solver_calc_mod = ns.get("solver_calc")
-    expr_ctx = (
-        solver_calc_mod.expr_context(staged)
-        if solver_calc_mod is not None and hasattr(solver_calc_mod, "expr_context")
-        else contextlib.nullcontext(outbox)
-    )
+    if solver_calc_mod is not None and hasattr(solver_calc_mod, "expr_context"):
+        try:
+            expr_ctx = solver_calc_mod.expr_context(staged, meta_out=meta_out, ast_sources=ast_sources)
+        except TypeError:
+            expr_ctx = solver_calc_mod.expr_context(staged)
+    else:
+        expr_ctx = contextlib.nullcontext(outbox)
 
     lazy_mpl = _LazyMatplotlibEnvFinder(scratch_dir=scratch_dir)
     sys.meta_path.insert(0, lazy_mpl)
@@ -296,21 +354,23 @@ def evaluate(code, ns, exprs_in=None, env_info=None, scratch_dir=None):
     try:
         with expr_ctx as active_outbox, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             outbox = active_outbox
-            try:
-                tree = ast.parse(code, filename="<evaluate>", mode="exec")
-                last = None
-                if tree.body and isinstance(tree.body[-1], ast.Expr):
-                    last = ast.Expression(tree.body.pop().value)
-                exec(compile(tree, "<evaluate>", "exec"), ns)
-                if last is not None:
-                    value = eval(compile(last, "<evaluate>", "eval"), ns)
-                    has_value = value is not None
-            except BaseException as exc:  # includes SystemExit raised by the code
-                error = {
-                    "type": type(exc).__name__,
-                    "message": str(exc),
-                    "traceback": traceback.format_exc(limit=8),
-                }
+            if parse_error is not None:
+                error = parse_error
+            else:
+                try:
+                    last = None
+                    if tree.body and isinstance(tree.body[-1], ast.Expr):
+                        last = ast.Expression(tree.body.pop().value)
+                    exec(compile(tree, "<evaluate>", "exec"), ns)
+                    if last is not None:
+                        value = eval(compile(last, "<evaluate>", "eval"), ns)
+                        has_value = value is not None
+                except BaseException as exc:  # includes SystemExit raised by the code
+                    error = {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                        "traceback": traceback.format_exc(limit=8),
+                    }
     finally:
         _active_seeds.reset(token)
         try:
@@ -356,6 +416,8 @@ def evaluate(code, ns, exprs_in=None, env_info=None, scratch_dir=None):
         result["error"] = error
     # Additive protocol 2 fields (ignored by protocol 1 readers)
     result["exprs_out"] = dict(outbox)
+    if meta_out:
+        result["exprs_out_meta"] = dict(meta_out)
     result["code_sha256"] = code_sha256
     result["wall_ms"] = int((time.perf_counter() - started) * 1000)
     result["process"] = ROLE_SOLVER

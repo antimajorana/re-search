@@ -24,6 +24,7 @@ from .algebra_probe import (
     MAX_SERIES_ORDER,
     assumptions_snapshot,
     eval_mp_scalar,
+    is_exact_zero,
     normalize_symbols,
     numeric_probe,
     parse_simple_real,
@@ -36,9 +37,47 @@ def _require_lhs_rhs(handles: dict[str, Any]) -> tuple[sp.Basic, sp.Basic]:
     return handles["lhs"], handles["rhs"]
 
 
+def _identical_sides_result() -> dict[str, Any]:
+    return {
+        "outcome": "trivial",
+        "evidence": {
+            "identical_sides": True,
+            "reason": "both sides are structurally identical before simplification; nothing was checked",
+        },
+    }
+
+
+def _unwrap_unevaluated(expr: Any) -> Any:
+    if not isinstance(expr, (sp.Basic, sp.MatrixBase)):
+        return expr
+    res = expr
+    for _ in range(8):
+        if not res.has(sp.UnevaluatedExpr):
+            break
+        res = res.replace(
+            lambda e: isinstance(e, sp.UnevaluatedExpr),
+            lambda e: (
+                e.args[0].doit()
+                if isinstance(e.args[0], (sp.Basic, sp.MatrixBase))
+                and not e.args[0].has(sp.Integral, sp.Sum, sp.Derivative, sp.Limit, sp.MatMul, sp.Trace)
+                else e.args[0]
+            ),
+        )
+    if isinstance(res, sp.MatrixExpr) and res.has(sp.MatMul, sp.MatAdd, sp.MatPow):
+        evaluated = res.doit()
+        if isinstance(evaluated, sp.MatrixBase):
+            res = evaluated
+    elif isinstance(res, sp.Basic) and res.has(sp.MatMul, sp.Trace) and not res.has(sp.MatrixSymbol):
+        res = res.replace(
+            lambda e: isinstance(e, (sp.MatMul, sp.Trace)),
+            lambda e: e.doit(),
+        )
+    return res
+
+
 def identity_symbolic(handles: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
     """Exact symbolic identity check with symbol-assumption check and Guard (b) numeric check."""
-    _require_lhs_rhs(handles)
+    lhs_raw, rhs_raw = _require_lhs_rhs(handles)
     norm, assumed, mismatch = normalize_symbols(handles, params)
     if mismatch is not None or norm is None:
         return {
@@ -49,11 +88,28 @@ def identity_symbolic(handles: dict[str, Any], params: dict[str, Any]) -> dict[s
                 "reason": mismatch or "inconclusive: symbol assumptions differ",
             },
         }
-    lhs, rhs = norm["lhs"], norm["rhs"]
+    if sp.srepr(lhs_raw) == sp.srepr(rhs_raw):
+        return _identical_sides_result()
+    lhs = _unwrap_unevaluated(norm["lhs"])
+    rhs = _unwrap_unevaluated(norm["rhs"])
+    assump_info = assumptions_snapshot(assumed)
 
-    diff = sp.simplify(lhs - rhs)
-    if diff != 0 and diff.has(sp.Integral, sp.Sum, sp.Derivative):
-        diff = sp.simplify((lhs - rhs).doit())
+    try:
+        diff = sp.simplify(lhs - rhs)
+        if not is_exact_zero(diff) and isinstance(diff, (sp.Basic, sp.MatrixBase)) and diff.has(
+            sp.Integral, sp.Sum, sp.Derivative, sp.Limit, sp.MatMul, sp.Trace
+        ):
+            diff = sp.simplify((lhs - rhs).doit())
+    except (sp.ShapeError, TypeError) as exc:
+        return {
+            "outcome": "inconclusive",
+            "evidence": {
+                "comparison": "exact",
+                "exact": False,
+                "assumptions": assump_info,
+                "reason": f"inconclusive: incompatible expression shapes or types ({exc})",
+            },
+        }
 
     guard_probe = numeric_probe(
         lhs,
@@ -69,13 +125,13 @@ def identity_symbolic(handles: dict[str, Any], params: dict[str, Any]) -> dict[s
         ),
         relation="eq",
     )
-    assump_info = assumptions_snapshot(assumed)
+    diff_is_zero = is_exact_zero(diff)
 
     if guard_probe["status"] == "fail":
         reason = (
             "symbolic simplification disagreed with numeric evaluation "
             "(suspected branch-cut or domain error)"
-            if diff == 0
+            if diff_is_zero
             else "expression mismatch confirmed by numeric counterexample"
         )
         return {
@@ -83,7 +139,7 @@ def identity_symbolic(handles: dict[str, Any], params: dict[str, Any]) -> dict[s
             "evidence": {
                 "comparison": "exact",
                 "exact": False,
-                "guard_failed": diff == 0,
+                "guard_failed": diff_is_zero,
                 "counterexample": guard_probe["counterexample"],
                 "residual_srepr": sp.srepr(diff),
                 "residual_latex": sp.latex(diff),
@@ -92,7 +148,7 @@ def identity_symbolic(handles: dict[str, Any], params: dict[str, Any]) -> dict[s
             },
         }
 
-    if diff == 0:
+    if diff_is_zero:
         return {
             "outcome": "pass",
             "evidence": {
@@ -121,14 +177,17 @@ def identity_symbolic(handles: dict[str, Any], params: dict[str, Any]) -> dict[s
 
 def identity_numeric(handles: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
     """50-digit mpmath evaluation over >= 12 domain/assumption points."""
-    _require_lhs_rhs(handles)
+    lhs_raw, rhs_raw = _require_lhs_rhs(handles)
     norm, assumed, mismatch = normalize_symbols(handles, params)
     if mismatch is not None or norm is None:
         return {
             "outcome": "inconclusive",
             "evidence": {"reason": mismatch or "inconclusive: symbol assumptions differ"},
         }
-    lhs, rhs = norm["lhs"], norm["rhs"]
+    if sp.srepr(lhs_raw) == sp.srepr(rhs_raw):
+        return _identical_sides_result()
+    lhs = _unwrap_unevaluated(norm["lhs"])
+    rhs = _unwrap_unevaluated(norm["rhs"])
     points = min(
         MAX_POINTS,
         max(
@@ -153,7 +212,7 @@ def identity_numeric(handles: dict[str, Any], params: dict[str, Any]) -> dict[st
         "digits": digits,
         "domain_checked": True,
         "tolerance": probe["tol"],
-        "max_residual": probe["max_err"],
+        "max_residual": probe["max_err"] if probe["valid"] > 0 else None,
         "samples": probe["samples"],
         "assumptions": assumptions_snapshot(assumed),
     }
@@ -167,7 +226,7 @@ def identity_numeric(handles: dict[str, Any], params: dict[str, Any]) -> dict[st
         return {"outcome": "fail", "evidence": evidence}
     if probe["status"] == "pass":
         return {"outcome": "pass", "evidence": evidence}
-    evidence["reason"] = "fewer than required finite evaluation points succeeded"
+    evidence["reason"] = probe.get("reason") or "fewer than required finite evaluation points succeeded"
     return {"outcome": "inconclusive", "evidence": evidence}
 
 
@@ -203,10 +262,12 @@ def _compare_series(
     var_sym, var_name, point_expr, point_str, n = _parse_series_order(params, assumed)
     order_meta = {"variable": var_name, "point": point_str, "n": n}
 
-    target = (expr_a - expr_b) if vanish_mode else expr_a
+    a_unwrapped = _unwrap_unevaluated(expr_a)
+    b_unwrapped = _unwrap_unevaluated(expr_b)
+    target = (a_unwrapped - b_unwrapped) if vanish_mode else a_unwrapped
     if target.has(sp.Integral, sp.Sum, sp.Derivative):
         target = target.doit()
-    rhs_base = sp.Integer(0) if vanish_mode else expr_b
+    rhs_base = sp.Integer(0) if vanish_mode else b_unwrapped
     if rhs_base.has(sp.Integral, sp.Sum, sp.Derivative):
         rhs_base = rhs_base.doit()
 
@@ -239,30 +300,48 @@ def _compare_series(
                         }
                     max_coeff_err = max(max_coeff_err, abs(val))
                 passed = bool(max_coeff_err <= tol)
-            else:
-                probe = numeric_probe(
-                    s_a, s_b, params, num_points=DEFAULT_NUMERIC_POINTS, digits=digits
-                )
-                passed = probe["status"] == "pass"
-                max_coeff_err = (
-                    mp.mpf(probe["max_err"]) if probe["max_err"] != "nan" else mp.mpf("inf")
-                )
+                return {
+                    "outcome": "pass" if passed else "fail",
+                    "evidence": {
+                        "order": order_meta,
+                        "comparison": "numeric",
+                        "numeric_coefficients": True,
+                        "exact": False,
+                        "max_coefficient_residual": mp.nstr(max_coeff_err, 6),
+                    },
+                }
 
+            probe = numeric_probe(
+                s_a, s_b, params, num_points=DEFAULT_NUMERIC_POINTS, digits=digits
+            )
+            max_res = probe["max_err"] if probe["valid"] > 0 else None
+            if probe["status"] == "inconclusive":
+                return {
+                    "outcome": "inconclusive",
+                    "evidence": {
+                        "order": order_meta,
+                        "comparison": "numeric",
+                        "numeric_coefficients": True,
+                        "exact": False,
+                        "max_coefficient_residual": max_res,
+                        "reason": probe.get("reason") or "fewer than required finite evaluation points succeeded",
+                    },
+                }
             return {
-                "outcome": "pass" if passed else "fail",
+                "outcome": "pass" if probe["status"] == "pass" else "fail",
                 "evidence": {
                     "order": order_meta,
                     "comparison": "numeric",
                     "numeric_coefficients": True,
                     "exact": False,
-                    "max_coefficient_residual": mp.nstr(max_coeff_err, 6),
+                    "max_coefficient_residual": max_res,
                 },
             }
         finally:
             mp.mp.dps = old_dps
 
     diff = sp.simplify(s_a - s_b)
-    if diff == 0:
+    if is_exact_zero(diff):
         return {
             "outcome": "pass",
             "evidence": {
@@ -302,25 +381,29 @@ def _compare_series(
 
 def series_match(handles: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
     """Compare power series expansions of `lhs` and `rhs` up to `order` (`variable`, `point`, `n`)."""
-    _require_lhs_rhs(handles)
+    lhs_raw, rhs_raw = _require_lhs_rhs(handles)
     norm, assumed, mismatch = normalize_symbols(handles, params)
     if mismatch is not None or norm is None:
         return {
             "outcome": "inconclusive",
             "evidence": {"reason": mismatch or "inconclusive: symbol assumptions differ"},
         }
+    if sp.srepr(lhs_raw) == sp.srepr(rhs_raw):
+        return _identical_sides_result()
     return _compare_series(norm["lhs"], norm["rhs"], assumed, params, vanish_mode=False)
 
 
 def vanishes_to_order(handles: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
     """Verify `lhs - rhs` vanishes to order `n` around `variable = point`."""
-    _require_lhs_rhs(handles)
+    lhs_raw, rhs_raw = _require_lhs_rhs(handles)
     norm, assumed, mismatch = normalize_symbols(handles, params)
     if mismatch is not None or norm is None:
         return {
             "outcome": "inconclusive",
             "evidence": {"reason": mismatch or "inconclusive: symbol assumptions differ"},
         }
+    if sp.srepr(lhs_raw) == sp.srepr(rhs_raw):
+        return _identical_sides_result()
     return _compare_series(norm["lhs"], norm["rhs"], assumed, params, vanish_mode=True)
 
 
@@ -333,7 +416,8 @@ def counterexample_search(handles: dict[str, Any], params: dict[str, Any]) -> di
             "outcome": "inconclusive",
             "evidence": {"reason": mismatch or "inconclusive: symbol assumptions differ"},
         }
-    lhs, rhs = norm["lhs"], norm["rhs"]
+    lhs = _unwrap_unevaluated(norm["lhs"])
+    rhs = _unwrap_unevaluated(norm["rhs"])
     relation = str(params.get("relation", "le")).strip()
     if relation not in ("eq", "le", "ge", "approx"):
         raise ValueError(f"unsupported relation `{relation}` in counterexample_search")
@@ -368,7 +452,7 @@ def counterexample_search(handles: dict[str, Any], params: dict[str, Any]) -> di
         return {"outcome": "fail", "evidence": evidence}
     if probe["status"] == "pass":
         return {"outcome": "pass", "evidence": evidence}
-    evidence["reason"] = "no finite domain sample could be evaluated"
+    evidence["reason"] = probe.get("reason") or "no finite domain sample could be evaluated"
     return {"outcome": "inconclusive", "evidence": evidence}
 
 

@@ -318,6 +318,102 @@ def eval_mp_scalar(
         return None
 
 
+def is_exact_zero(expr: Any) -> bool:
+    """Return True iff `expr` is exact scalar zero or an exact zero matrix."""
+    if isinstance(expr, sp.MatrixBase):
+        return expr.is_zero_matrix is True
+    if getattr(expr, "is_ZeroMatrix", None) is True:
+        return True
+    try:
+        return bool(expr == 0)
+    except Exception:
+        return False
+
+
+def _probe_matrix_eq(
+    lhs: sp.MatrixBase,
+    rhs: sp.MatrixBase,
+    free: list[sp.Basic],
+    candidate_lists: list[list[sp.Expr]],
+    num_points: int,
+    work_dps: int,
+    tol: mp.mpf,
+) -> dict[str, Any]:
+    """Evaluate `lhs == rhs` entrywise across sampled points for equal-shape matrices."""
+    rows, cols = lhs.shape
+    total_slots = 1 if not free else max(num_points + 12, max(len(c) for c in candidate_lists))
+    samples: list[dict[str, str]] = []
+    valid_count = 0
+    skipped_singularities = 0
+    max_err = mp.mpf("0")
+
+    for idx in range(total_slots):
+        subs = {
+            sym: cands[(idx * (pos + 1) + idx) % len(cands)]
+            if idx >= len(cands)
+            else cands[idx]
+            for pos, (sym, cands) in enumerate(zip(free, candidate_lists))
+        }
+        if not free and idx > 0:
+            break
+        point_str = ", ".join(f"{sym.name}={pt}" for sym, pt in subs.items()) or "constant"
+        point_max_err = mp.mpf("0")
+        point_failed = False
+        for i in range(rows):
+            for j in range(cols):
+                lv = eval_mp_scalar(lhs[i, j], subs, work_dps)
+                rv = eval_mp_scalar(rhs[i, j], subs, work_dps)
+                if lv is None or rv is None:
+                    point_failed = True
+                    break
+                diff = lv - rv
+                err = abs(diff)
+                scale = max(mp.mpf("1"), abs(lv), abs(rv))
+                if err > tol * scale:
+                    return {
+                        "status": "fail",
+                        "valid": valid_count + 1,
+                        "max_err": mp.nstr(err, 6),
+                        "tol": mp.nstr(tol, 4),
+                        "counterexample": {
+                            "point": point_str,
+                            "row": i,
+                            "col": j,
+                            "lhs": str(lv),
+                            "rhs": str(rv),
+                            "residual": str(diff),
+                        },
+                        "samples": samples,
+                        "skipped_singularities": skipped_singularities,
+                    }
+                if err > point_max_err:
+                    point_max_err = err
+            if point_failed:
+                break
+        if point_failed:
+            skipped_singularities += 1
+            continue
+
+        valid_count += 1
+        if point_max_err > max_err:
+            max_err = point_max_err
+        if len(samples) < 5:
+            samples.append({"point": point_str, "residual": mp.nstr(point_max_err, 6)})
+        if not free or valid_count >= num_points:
+            break
+
+    needed = 1 if not free else num_points
+    status = "pass" if valid_count >= needed else "inconclusive"
+    return {
+        "status": status,
+        "valid": valid_count,
+        "max_err": mp.nstr(max_err, 6) if valid_count > 0 else None,
+        "tol": mp.nstr(tol, 4),
+        "samples": samples,
+        "skipped_singularities": skipped_singularities,
+    }
+
+
 def numeric_probe(
     lhs: sp.Basic,
     rhs: sp.Basic,
@@ -334,6 +430,38 @@ def numeric_probe(
         tol_raw = params.get("tolerance")
         tol = mp.mpf(str(tol_raw)) if tol_raw is not None else mp.power(10, -(digits - 12))
 
+        if isinstance(lhs, sp.MatrixBase) or isinstance(rhs, sp.MatrixBase):
+            if not (isinstance(lhs, sp.MatrixBase) and isinstance(rhs, sp.MatrixBase)):
+                return {
+                    "status": "inconclusive",
+                    "valid": 0,
+                    "max_err": None,
+                    "tol": mp.nstr(tol, 4),
+                    "samples": [],
+                    "skipped_singularities": 0,
+                    "reason": "cannot numerically compare matrix and scalar",
+                }
+            if lhs.shape != rhs.shape:
+                return {
+                    "status": "inconclusive",
+                    "valid": 0,
+                    "max_err": None,
+                    "tol": mp.nstr(tol, 4),
+                    "samples": [],
+                    "skipped_singularities": 0,
+                    "reason": f"matrix shape mismatch: {lhs.shape} vs {rhs.shape}",
+                }
+            if relation != "eq":
+                return {
+                    "status": "inconclusive",
+                    "valid": 0,
+                    "max_err": None,
+                    "tol": mp.nstr(tol, 4),
+                    "samples": [],
+                    "skipped_singularities": 0,
+                    "reason": f"matrix relation {relation!r} is not supported numerically",
+                }
+
         free = sorted(
             {s for s in (lhs.free_symbols | rhs.free_symbols) if hasattr(s, "name")},
             key=lambda s: s.name,
@@ -344,6 +472,9 @@ def numeric_probe(
         candidate_lists = [
             _candidates_for_symbol(s, bounds.get(s.name), num_points + 8, seed) for s in free
         ]
+        if isinstance(lhs, sp.MatrixBase) and isinstance(rhs, sp.MatrixBase):
+            return _probe_matrix_eq(lhs, rhs, free, candidate_lists, num_points, work_dps, tol)
+
         total_slots = 1 if not free else max(num_points + 12, max(len(c) for c in candidate_lists))
         samples: list[dict[str, str]] = []
         valid_count = 0
@@ -436,7 +567,7 @@ def numeric_probe(
         return {
             "status": status,
             "valid": valid_count,
-            "max_err": mp.nstr(max_err, 6),
+            "max_err": mp.nstr(max_err, 6) if valid_count > 0 else None,
             "tol": mp.nstr(tol, 4),
             "samples": samples,
             "skipped_singularities": skipped_singularities,

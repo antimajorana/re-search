@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import inspect
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,8 @@ from typing import Any, Iterator
 
 import sympy
 from sympy import Symbol, expand, factor, nsimplify, Rational, simplify, srepr, sympify
+from sympy.core.function import UndefinedFunction
+from sympy.parsing.sympy_parser import parse_expr
 
 _CAS_BUS_DEFAULT = Path("scratch/.cas_bus.json")
 _active_exprs_out: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
@@ -24,6 +27,21 @@ _active_exprs_out: contextvars.ContextVar[dict[str, str] | None] = contextvars.C
 )
 _active_exprs_in: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
     "active_exprs_in", default=None
+)
+_active_exprs_meta: contextvars.ContextVar[dict[str, dict[str, str]] | None] = contextvars.ContextVar(
+    "active_exprs_meta", default=None
+)
+_active_ast_sources: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "active_ast_sources", default=None
+)
+_LAZY_SYMPY_TYPES = (
+    sympy.UnevaluatedExpr,
+    sympy.Integral,
+    sympy.Sum,
+    sympy.Derivative,
+    sympy.Limit,
+    sympy.MatMul,
+    sympy.Trace,
 )
 
 
@@ -35,15 +53,24 @@ def _parse_stored_srepr(raw: str) -> Any:
 
 
 @contextlib.contextmanager
-def expr_context(exprs_in: dict[str, str] | None = None) -> Iterator[dict[str, str]]:
+def expr_context(
+    exprs_in: dict[str, str] | None = None,
+    *,
+    meta_out: dict[str, dict[str, str]] | None = None,
+    ast_sources: dict[str, Any] | None = None,
+) -> Iterator[dict[str, str]]:
     """Bind protocol 2 staged input expressions and capture `save_expr` outputs in memory."""
     outbox: dict[str, str] = {}
     staged = dict(exprs_in) if exprs_in else {}
     tok_out = _active_exprs_out.set(outbox)
     tok_in = _active_exprs_in.set(staged)
+    tok_meta = _active_exprs_meta.set(meta_out)
+    tok_ast = _active_ast_sources.set(ast_sources)
     try:
         yield outbox
     finally:
+        _active_ast_sources.reset(tok_ast)
+        _active_exprs_meta.reset(tok_meta)
         _active_exprs_in.reset(tok_in)
         _active_exprs_out.reset(tok_out)
 
@@ -57,7 +84,59 @@ def _bus_path(path: str | os.PathLike[str] | None = None) -> Path:
     return _CAS_BUS_DEFAULT
 
 
-def save_expr(name: str, expr: Any, bus_path: str | os.PathLike[str] | None = None) -> str:
+def _caller_sympy_locals(depth: int = 2) -> dict[str, Any]:
+    """Collect SymPy symbols/expressions/functions from the caller frame."""
+    frame = inspect.currentframe()
+    try:
+        target = frame
+        for _ in range(depth):
+            if target is None:
+                return {}
+            target = target.f_back
+        if target is None:
+            return {}
+        out: dict[str, Any] = {}
+        for mapping in (target.f_globals, target.f_locals):
+            for key, val in mapping.items():
+                if not isinstance(key, str) or key.startswith("_"):
+                    continue
+                if (
+                    isinstance(val, (sympy.Basic, sympy.MatrixBase, UndefinedFunction, int, float, complex))
+                    and type(val) is not bool
+                ):
+                    out[key] = val
+        return out
+    finally:
+        del frame
+
+
+def _lookup_ast_source(name: str) -> str | None:
+    ast_sources = _active_ast_sources.get()
+    if not ast_sources:
+        return None
+    frame = inspect.currentframe()
+    try:
+        caller = frame.f_back.f_back if frame is not None and frame.f_back is not None else None
+        if caller is not None and caller.f_code.co_filename == "<evaluate>":
+            lineno = caller.f_lineno
+            by_ln_name = ast_sources.get("by_line_name", {})
+            if (lineno, name) in by_ln_name:
+                return by_ln_name[(lineno, name)]
+            by_ln_single = ast_sources.get("by_line_single", {})
+            if lineno in by_ln_single:
+                return by_ln_single[lineno]
+    finally:
+        del frame
+    return ast_sources.get("by_name", {}).get(name)
+
+
+def save_expr(
+    name: str,
+    expr: Any,
+    bus_path: str | os.PathLike[str] | None = None,
+    *,
+    locals: dict[str, Any] | None = None,
+) -> str:
     """Persist a SymPy expression as exact `srepr` into the active protocol 2 outbox.
 
     Inside a worker `evaluate` call, writes only to the in-memory outbox (never to
@@ -66,10 +145,32 @@ def save_expr(name: str, expr: Any, bus_path: str | os.PathLike[str] | None = No
     """
     if not isinstance(name, str) or not name.strip():
         raise ValueError("expression name must be a non-empty string")
-    encoded = srepr(sympify(expr))
+
+    unevaluated_srepr: str | None = None
+    if isinstance(expr, str):
+        local_dict = dict(locals) if locals is not None else _caller_sympy_locals(depth=2)
+        uneval_obj = parse_expr(expr, local_dict=local_dict, evaluate=False)
+        unevaluated_srepr = srepr(uneval_obj)
+        evaluated_obj = sympify(expr, locals=local_dict) if locals is not None else uneval_obj.doit()
+        encoded = srepr(evaluated_obj)
+    else:
+        sym_expr = sympify(expr)
+        encoded = srepr(sym_expr)
+        if isinstance(sym_expr, (sympy.Basic, sympy.MatrixBase)) and sym_expr.has(*_LAZY_SYMPY_TYPES):
+            unevaluated_srepr = encoded
+
     outbox = _active_exprs_out.get()
     if outbox is not None and bus_path is None:
         outbox[name] = encoded
+        meta_out = _active_exprs_meta.get()
+        if meta_out is not None:
+            entry: dict[str, str] = {"srepr": encoded}
+            if unevaluated_srepr is not None:
+                entry["unevaluated_srepr"] = unevaluated_srepr
+            source_expr = _lookup_ast_source(name)
+            if source_expr is not None:
+                entry["source_expr"] = source_expr
+            meta_out[name] = entry
         return encoded
     target = _bus_path(bus_path)
     target.parent.mkdir(parents=True, exist_ok=True)
