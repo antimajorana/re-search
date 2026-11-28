@@ -50,13 +50,18 @@ fn spawn_turn_thread_inner(
     if let Err(err) = crate::session_mode::profile_for_session(&pre_events) {
         return Err((400, err));
     }
-    let is_solve = crate::session_mode::session_mode(&pre_events) == research_tools::paper_key::Mode::Solve;
+    let pre_mode = crate::session_mode::session_mode(&pre_events);
+    let is_solve = pre_mode == research_tools::paper_key::Mode::Solve;
+    let is_explore = pre_mode == research_tools::paper_key::Mode::Explore;
     if is_solve
         && research_tools::solve_state::SolveState::from_events(&pre_events)
             .setup
             .is_none()
     {
         return Err((400, "Solve session requires setup before running a turn".to_string()));
+    }
+    if is_explore {
+        crate::idea_chat::validate_explore_turn_preconditions(&state, &session_id, &pre_events, &req_json)?;
     }
 
     let activity = crate::session_lifecycle::reserve_turn(&state, &session_id)?;
@@ -96,6 +101,12 @@ fn spawn_turn_thread_inner(
             return Err(e);
         }
     };
+    if is_explore && on_cli_route.is_some() {
+        if let Ok(mut active) = state.active_turns.lock() {
+            active.remove(&session_id);
+        }
+        return Err((400, crate::idea_chat::EXPLORE_CHAT_CLI_UNSUPPORTED_MSG.to_string()));
+    }
     if allow_task_spec && on_cli_route.is_some() {
         if let Ok(mut active) = state.active_turns.lock() {
             active.remove(&session_id);
@@ -146,7 +157,7 @@ fn spawn_turn_thread_inner(
     } else {
         false
     };
-    if !is_v6_task && !is_solve {
+    if !is_v6_task && !is_solve && !is_explore {
         if let Err(error) =
             crate::investigation::prepare(&state, &session_id, &mut req_json, &prompt, paper_route)
         {
@@ -178,9 +189,13 @@ fn spawn_turn_thread_inner(
                 }
                 (None, None) => (Err("missing turn registration".into()), false),
             };
-            let outcome = crate::investigation_finish::finish_with_cancel(
-                &thread_state, &thread_session, &req_json, outcome, cancelled,
-            );
+            let outcome = if is_explore {
+                outcome
+            } else {
+                crate::investigation_finish::finish_with_cancel(
+                    &thread_state, &thread_session, &req_json, outcome, cancelled,
+                )
+            };
             drop(registered_cli);
             drop(registered_api);
             if let Ok(mut active) = thread_state.active_turns.lock() {
@@ -251,8 +266,14 @@ fn run_session_turn(
     }
     let pre_ledger = state.open_ledger()?;
     let pre_events = pre_ledger.read_session(session_id).map_err(|e| e.to_string())?;
-    if crate::session_mode::session_mode(&pre_events) == research_tools::paper_key::Mode::Solve {
-        return crate::solve_turn_routes::run_desktop_solve_turn(state, session_id, req, prompt, cancel);
+    match crate::session_mode::session_mode(&pre_events) {
+        research_tools::paper_key::Mode::Solve => {
+            return crate::solve_turn_routes::run_desktop_solve_turn(state, session_id, req, prompt, cancel);
+        }
+        research_tools::paper_key::Mode::Explore => {
+            return crate::idea_chat::run_desktop_explore_turn(state, session_id, req, prompt, cancel);
+        }
+        _ => {}
     }
     let meta = state.load_meta(session_id);
     let ui = state.load_ui_settings();

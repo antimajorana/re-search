@@ -92,10 +92,11 @@ pub fn parse_requested_mode(raw: &str) -> Result<Mode, String> {
 /// Desktop-server gate for Solve session creation and turns (`solve/1` enabled in S12e).
 const DESKTOP_MODE_SOLVE_ENABLED: bool = true;
 
-/// Desktop-server gate for bare Explore session creation and Conversation turns (`explore/1`
-/// tool profile is frozen in package X7 and used directly by `build_idea_router`, while bare
-/// Explore sessions and `/messages` Conversation turns land in X15).
-pub(crate) const DESKTOP_MODE_EXPLORE_ENABLED: bool = false;
+/// Desktop-server gate for Explore Conversation turns on frozen profile `explore/1` (enabled in X15).
+pub(crate) const DESKTOP_MODE_EXPLORE_ENABLED: bool = true;
+
+/// Desktop-server CLI-route gate for Explore Conversation turns (remains false until X18).
+pub(crate) const DESKTOP_MODE_EXPLORE_CLI_ENABLED: bool = false;
 
 /// Resolve the built [`ToolProfile`] for a mode, returning a plain user-facing error when
 /// that mode's desktop session flow or tool profile has not been built yet (never faking
@@ -219,7 +220,7 @@ mod tests {
         assert_eq!(profile_for_mode(Mode::Investigate).unwrap().name, PROFILE_INVESTIGATION_V2);
         assert!(is_mode_built(Mode::Research));
         assert!(is_mode_built(Mode::Investigate));
-        assert!(!is_mode_built(Mode::Explore));
+        assert!(is_mode_built(Mode::Explore));
         assert!(is_mode_built(Mode::Solve));
 
         // Older investigation/1 sessions (marker-inferred or explicit) upgrade to investigation/2.
@@ -247,8 +248,16 @@ mod tests {
             PROFILE_RESEARCH_V1
         );
 
-        let explore_err = profile_for_mode(Mode::Explore).unwrap_err();
-        assert!(explore_err.contains("Explore mode is not built yet"), "{explore_err}");
+        assert_eq!(
+            profile_for_mode(Mode::Explore).unwrap().name,
+            research_tools::tool_profile::PROFILE_EXPLORE_V1
+        );
+        assert_eq!(
+            profile_for_session(&[ev(1, MARKER_IDEA_STARTED, json!({}))])
+                .unwrap()
+                .name,
+            research_tools::tool_profile::PROFILE_EXPLORE_V1
+        );
         assert_eq!(
             profile_for_mode(Mode::Solve).unwrap().name,
             research_tools::tool_profile::PROFILE_SOLVE_V1
