@@ -133,14 +133,12 @@ export function createSolveSetupView(host, options = {}) {
   const onRecheck = typeof options.onRecheck === 'function' ? options.onRecheck : null;
   const katexImpl = options.katex ?? globalThis.window?.katex ?? null;
 
-  let approvalCardApi = null;
-  let prefillTimer = null;
-  let prefillSeq = 0;
+  let approvalCardApi = null, activeRunBtn = null, prefillTimer = null, prefillSeq = 0, submitting = false;
   const root = el('section', 'solve-stage');
   root.setAttribute('data-component', 'solve-setup-stage');
 
   function updateSameModelFlags() {
-    state.sameModel = isSameModelSelection(state.solver, state.verifier);
+    state.sameModel = isSameModelSelection(state.solver, state.verifier, state.connectedModels);
     state.sameModelWarning = state.sameModel ? SAME_MODEL_WARNING : null;
   }
 
@@ -149,18 +147,11 @@ export function createSolveSetupView(host, options = {}) {
     const seq = ++prefillSeq;
     try {
       const resp = await onPrefill({
-        statement: state.statement,
-        conventions: state.conventions,
-        task_kind: null,
-        solver: state.solver,
-        verifier: state.verifier,
-        allow_numeric_target: state.allowNumericTarget,
+        statement: state.statement, conventions: state.conventions, task_kind: null,
+        solver: state.solver, verifier: state.verifier, allow_numeric_target: state.allowNumericTarget,
       });
       if (seq !== prefillSeq) return;
-      if (resp) {
-        state = applyPrefillToState(state, resp);
-        render();
-      }
+      if (resp) { state = applyPrefillToState(state, resp); render(); }
     } catch (err) {
       if (seq !== prefillSeq) return;
       state.error = String(err?.message || err || 'Prefill failed');
@@ -175,6 +166,7 @@ export function createSolveSetupView(host, options = {}) {
   }
 
   async function submitSetup() {
+    if (submitting) return null;
     if (prefillTimer) { clearTimeout(prefillTimer); prefillTimer = null; }
     prefillSeq += 1;
     const payload = buildSetupSubmission(state);
@@ -193,6 +185,8 @@ export function createSolveSetupView(host, options = {}) {
       render();
       return payload;
     }
+    submitting = true;
+    if (activeRunBtn) activeRunBtn.disabled = true;
     try {
       const res = await onSubmitSetup(payload);
       const view = res?.view || {
@@ -201,12 +195,13 @@ export function createSolveSetupView(host, options = {}) {
       };
       state.phase = 'collapsed';
       state = applySolveViewToState(state, view);
-      render();
       return res;
     } catch (err) {
       state.error = String(err?.message || err || 'Setup submission failed');
-      render();
       return null;
+    } finally {
+      submitting = false;
+      render();
     }
   }
 
@@ -497,8 +492,8 @@ export function createSolveSetupView(host, options = {}) {
       return wrap;
     };
     modelSec.append(
-      modelField('Solver model', 'solve-solver-select', state.solver, (v) => { state.solver = v; }),
-      modelField('Verifier model', 'solve-verifier-select', state.verifier, (v) => { state.verifier = v; }),
+      modelField('Solver model', 'solve-solver-select', state.solver, (v) => { state.solver = v; state.solverTouched = true; }),
+      modelField('Verifier model', 'solve-verifier-select', state.verifier, (v) => { state.verifier = v; state.verifierTouched = true; }),
     );
     card.append(modelSec);
 
@@ -540,16 +535,15 @@ export function createSolveSetupView(host, options = {}) {
       const cancelBtn = el('button', 'pill-btn', 'Cancel');
       cancelBtn.type = 'button';
       cancelBtn.setAttribute('data-action', 'cancel-revision');
-      cancelBtn.addEventListener('click', () => {
-        state.phase = 'collapsed';
-        render();
-      });
+      cancelBtn.addEventListener('click', () => { state.phase = 'collapsed'; render(); });
       actions.append(cancelBtn);
     }
     const runBtn = el('button', 'pill-btn primary solve-run-btn', state.phase === 'revising' ? 'Save revision' : 'Run');
     runBtn.type = 'button';
+    runBtn.disabled = submitting;
     runBtn.setAttribute('data-testid', 'solve-run-btn');
     runBtn.addEventListener('click', () => { submitSetup(); });
+    activeRunBtn = runBtn;
     actions.append(runBtn);
     footer.append(actions);
     card.append(footer);
@@ -564,6 +558,7 @@ export function createSolveSetupView(host, options = {}) {
   }
 
   function render() {
+    activeRunBtn = null;
     root.replaceChildren();
     if (!state.modelConnected) {
       const banner = el('div', 'solve-no-model-banner', NO_MODEL_BANNER);

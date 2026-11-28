@@ -2,6 +2,7 @@
 // + `solve_artifacts.js`) and Explore (`idea.js`, X3/X4). Keeps `app.js` untouched and keeps left-rail
 // Explore disabled ("not built yet", F5) until Explore ships. Zero `innerHTML` writes; race-guarded by syncSeq.
 import * as api from './api.js';
+import { createApprovalCard } from './approval_card.js';
 import { createExploreSessionController } from './idea.js';
 import { EXPLORE_VISIBILITY_STORAGE_KEY } from './idea_state.js';
 import { mountUsedLessonsDisclosure } from './lesson_remember.js';
@@ -165,7 +166,7 @@ export function createModeStagesController(deps = {}) {
       const list = Array.isArray(pendingResp?.pending) ? pendingResp.pending : [];
       const match = list.find((p) => (
         (grant?.call_id && p.call_id === grant.call_id)
-        || (grant?.caller && p.caller === grant.caller && (!grant.tool_id || p.tool === grant.tool_id))
+        || (grant?.caller && p.caller === grant.caller && (!grant.tool_id || (p.tool_id || p.tool) === grant.tool_id))
         || (grant?.effect && p.effect === grant.effect)
       ));
       if (match) { callId = match.call_id; digest = match.digest; }
@@ -190,34 +191,11 @@ export function createModeStagesController(deps = {}) {
   }
 
   function destroySolveWidgets() {
-    if (solvePollTimer) {
-      clearTimeout(solvePollTimer);
-      solvePollTimer = null;
-    }
-    if (activeModelsCleanup) {
-      try { activeModelsCleanup(); } finally { activeModelsCleanup = null; }
-    }
-    if (activeSolveWorkspace) {
-      try {
-        activeSolveWorkspace.destroy();
-      } finally {
-        activeSolveWorkspace = null;
-      }
-    }
-    if (activeSolveArtifacts) {
-      try {
-        activeSolveArtifacts.destroy();
-      } finally {
-        activeSolveArtifacts = null;
-      }
-    }
-    if (activeLessonsWidget) {
-      try {
-        activeLessonsWidget.destroy();
-      } finally {
-        activeLessonsWidget = null;
-      }
-    }
+    if (solvePollTimer) { clearTimeout(solvePollTimer); solvePollTimer = null; }
+    if (activeModelsCleanup) { try { activeModelsCleanup(); } finally { activeModelsCleanup = null; } }
+    if (activeSolveWorkspace) { try { activeSolveWorkspace.destroy(); } finally { activeSolveWorkspace = null; } }
+    if (activeSolveArtifacts) { try { activeSolveArtifacts.destroy(); } finally { activeSolveArtifacts = null; } }
+    if (activeLessonsWidget) { try { activeLessonsWidget.destroy(); } finally { activeLessonsWidget = null; } }
   }
 
   function resetStages(nextSessionId = null, nextMode = null) {
@@ -253,18 +231,47 @@ export function createModeStagesController(deps = {}) {
       let connectedModels = initialModels;
 
       const doc = solveHost.ownerDocument || (typeof document !== 'undefined' ? document : null);
-      const makeSlot = (cls) => {
-        const div = doc.createElement('div');
-        div.className = cls;
-        return div;
-      };
+      const makeSlot = (cls) => { const div = doc.createElement('div'); div.className = cls; return div; };
       const lessonsSlot = makeSlot('solve-stage-lessons-slot');
       const setupSlot = makeSlot('solve-stage-setup-slot');
+      const bannerSlot = makeSlot('solve-stage-banner-slot');
+      const pendingSlot = makeSlot('solve-stage-pending-slot');
       const workspaceSlot = makeSlot('solve-stage-workspace-slot');
       const artifactsSlot = makeSlot('solve-stage-artifacts-slot');
-      solveHost.replaceChildren(lessonsSlot, setupSlot, workspaceSlot, artifactsSlot);
+      solveHost.replaceChildren(lessonsSlot, setupSlot, bannerSlot, pendingSlot, workspaceSlot, artifactsSlot);
 
       let currentView = viewData && typeof viewData === 'object' ? viewData : {};
+      let pendingCardApi = null;
+      const showStageBanner = (msg, tone = 'err') => {
+        bannerSlot.replaceChildren();
+        if (!msg) return;
+        const box = doc.createElement('div');
+        box.className = tone === 'warn' ? 'solve-warning-banner' : 'solve-error-banner';
+        box.setAttribute('data-testid', 'solve-stage-banner');
+        box.setAttribute('role', 'alert');
+        box.textContent = String(msg);
+        bannerSlot.appendChild(box);
+      };
+      const syncPendingApprovals = (v) => {
+        const pending = Array.isArray(v?.approval_grants?.pending_approvals) ? v.approval_grants.pending_approvals : [];
+        if (pending.length === 0) { pendingCardApi = null; pendingSlot.replaceChildren(); return; }
+        const grants = pending.map((p) => ({
+          id: p.call_id, call_id: p.call_id, digest: p.digest, caller: p.caller,
+          tool_id: p.tool_id || p.tool, effect: p.effect, status: 'pending',
+          kind: p.allow_session_approve ? 'session_capability' : 'worker_session',
+          label: `${p.tool_id || p.tool || 'tool'} (${p.caller || 'solver'})`,
+        }));
+        const answer = async (g, ok) => {
+          const r = await resolveGrant(sessionId, g, ok);
+          try { applyUpdatedView(await fetchJson('GET', `/api/sessions/${encSid}/solve/view`)); } catch { /* ignore */ }
+          return r;
+        };
+        if (pendingCardApi) pendingCardApi.update(grants, { preTurnSupported: true });
+        else pendingCardApi = createApprovalCard(pendingSlot, {
+          title: 'Waiting for your approval', grants, preTurnSupported: true,
+          onAllowGrant: (g) => answer(g, true), onDenyGrant: (g) => answer(g, false),
+        });
+      };
       const artifactOpts = {
         sessionId,
         fetchFn: deps.fetchArtifact || deps.fetch || (typeof fetch === 'function' ? fetch : null),
@@ -282,9 +289,8 @@ export function createModeStagesController(deps = {}) {
           solvePollTimer = null;
           if (seq !== syncSeq) return;
           try {
-            const polled = await fetchJson('GET', `/api/sessions/${encSid}/solve/view`);
-            applyUpdatedView(polled);
-          } catch { /* transient poll failure */ }
+            applyUpdatedView(await fetchJson('GET', `/api/sessions/${encSid}/solve/view`));
+          } catch { scheduleRunningPoll(); }
         }, deps.pollIntervalMs ?? 1000);
       };
 
@@ -292,6 +298,7 @@ export function createModeStagesController(deps = {}) {
         if (!nextView || typeof nextView !== 'object' || seq !== syncSeq) return currentView;
         currentView = { ...(currentView || {}), ...nextView };
         if (updateSetup && activeSolveView) activeSolveView.applyView(currentView);
+        syncPendingApprovals(currentView);
         if (activeSolveWorkspace) activeSolveWorkspace.update(currentView);
         if (activeSolveArtifacts) activeSolveArtifacts.update(currentView);
         if (currentView?.lessons_supplied?.count > 0) {
@@ -304,13 +311,16 @@ export function createModeStagesController(deps = {}) {
 
       const postAndRefresh = async (path, body = {}) => {
         const res = await fetchJson('POST', path, body);
+        showStageBanner('');
         const nextView = res?.view || await fetchJson('GET', `/api/sessions/${encSid}/solve/view`);
         applyUpdatedView(nextView);
-        if (res && typeof res === 'object') {
-          return res.view ? res : { ...res, view: currentView };
-        }
+        if (res && typeof res === 'object') return res.view ? res : { ...res, view: currentView };
         return { ok: true, view: currentView };
       };
+      const safePost = (path, body = {}) => postAndRefresh(path, body).catch((err) => {
+        showStageBanner(err?.message || 'Solve action failed.');
+        return { ok: false, error: err?.message || 'Solve action failed.' };
+      });
 
       const view = createSolveSetupView(setupSlot, {
         initial: {
@@ -319,19 +329,26 @@ export function createModeStagesController(deps = {}) {
         },
         onPrefill: (body) => (seq === syncSeq ? fetchJson('POST', `/api/sessions/${encSid}/solve/prefill`, body) : Promise.resolve(null)),
         onSubmitSetup: async (body) => {
+          showStageBanner('');
           const hadSetup = Boolean(currentView?.setup);
           const res = await fetchJson('POST', `/api/sessions/${encSid}/solve/setup`, body);
-          if (res?.view || res?.artifacts) {
-            applyUpdatedView(res.view || res, { updateSetup: false });
-          }
-          const hasModel = Boolean(
-            res?.view?.model_connected || currentView?.model_connected || connectedModels.length > 0 || detectModelConnected(deps),
+          if (res?.view || res?.artifacts) applyUpdatedView(res.view || res, { updateSetup: false });
+          const cliOnly = Boolean(res?.view?.cli_review?.on_cli_route) && !body?.roles?.solver?.provider && connectedModels.length === 0;
+          const hasInCoreModel = !cliOnly && Boolean(
+            connectedModels.length > 0 || body?.roles?.solver?.provider
+            || res?.view?.model_connected || currentView?.model_connected || detectModelConnected(deps),
           );
-          if (!hadSetup && !body?.ask_before_running && hasModel && seq === syncSeq) {
-            try {
-              const cont = await postAndRefresh(`/api/sessions/${encSid}/solve/continue`, {});
-              return { ...(res && typeof res === 'object' ? res : {}), view: cont?.view || currentView, started: true };
-            } catch { /* setup already saved */ }
+          if (!hadSetup && !body?.ask_before_running && seq === syncSeq) {
+            if (hasInCoreModel) {
+              try {
+                const cont = await postAndRefresh(`/api/sessions/${encSid}/solve/continue`, {});
+                return { ...(res && typeof res === 'object' ? res : {}), view: cont?.view || currentView, started: true };
+              } catch (err) {
+                showStageBanner(err?.message || 'Setup saved, but automatic Solve run could not start.');
+              }
+            } else if (cliOnly) {
+              showStageBanner(res?.view?.cli_review?.notice || 'Solve continuation requires an in-core API or ChatGPT provider.', 'warn');
+            }
           }
           return res;
         },
@@ -354,6 +371,7 @@ export function createModeStagesController(deps = {}) {
         doc.addEventListener('research:models-updated', onModelsUpdated);
         activeModelsCleanup = () => doc.removeEventListener?.('research:models-updated', onModelsUpdated);
       }
+      syncPendingApprovals(currentView);
       scheduleRunningPoll();
       if (currentView?.lessons_supplied?.count > 0) {
         activeLessonsWidget = mountUsedLessonsDisclosure(lessonsSlot, currentView.lessons_supplied, deps);
@@ -376,18 +394,19 @@ export function createModeStagesController(deps = {}) {
         katex: katexImpl,
         extraTabs: [SOLVE_TRANSCRIBE_TAB, artifactsTab],
         reviewEnabled: true,
-        onReviewModel: (step) => postAndRefresh(`/api/sessions/${encSid}/solve/review`, step?.entry_id ? { entry_id: step.entry_id } : {}),
+        onReviewModel: (step) => safePost(`/api/sessions/${encSid}/solve/review`, step?.entry_id ? { entry_id: step.entry_id } : {}),
         onAck: (_step, payload) => postAndRefresh(`/api/sessions/${encSid}/solve/ack`, payload),
         onAttachSource: (_step, payload) => postAndRefresh(`/api/sessions/${encSid}/solve/attach-source`, payload),
         onAddCheck: (_step, payload) => postAndRefresh(`/api/sessions/${encSid}/solve/check`, payload),
         onRerunChecks: (payload) => postAndRefresh(`/api/sessions/${encSid}/solve/recheck`, payload || {}),
         onTranscribe: (payload) => postAndRefresh(`/api/sessions/${encSid}/solve/transcribe`, payload),
-        onContinue: (note) => postAndRefresh(
-          `/api/sessions/${encSid}/solve/continue`,
-          typeof note === 'string' && note ? { note } : (note && typeof note === 'object' ? note : {}),
-        ),
-        onRetry: () => postAndRefresh(`/api/sessions/${encSid}/solve/continue`, {}),
-        onStop: () => postAndRefresh(`/api/sessions/${encSid}/stop`, {}),
+        onContinue: (note) => {
+          const isDomEv = note && typeof note === 'object' && (typeof note.preventDefault === 'function' || 'isTrusted' in note || 'target' in note);
+          const payload = typeof note === 'string' && note ? { note } : (note && typeof note === 'object' && !isDomEv ? note : {});
+          return safePost(`/api/sessions/${encSid}/solve/continue`, payload);
+        },
+        onRetry: () => safePost(`/api/sessions/${encSid}/solve/continue`, {}),
+        onStop: () => safePost(`/api/sessions/${encSid}/stop`, {}),
         onFork: async (step) => {
           const atSeq = Number.isFinite(Number(step?.seq)) ? { at_seq: Number(step.seq) } : {};
           const res = await fetchJson('POST', `/api/sessions/${encSid}/fork`, atSeq);

@@ -252,6 +252,37 @@ fn solve_verifier_role_key_accepted_and_d2_same_model_still_returns_transport() 
     .unwrap();
     assert_eq!(resolved_alias.independence, ReviewIndependence::SameModel);
 
+    // When `setup_roles.solver` is left at "Not selected" (`provider: ""`), `solver_fallback`
+    // (the actual runtime Solver model) must be used so independent reviews are not falsely
+    // downgraded to `SameModel`.
+    let blank_solver_roles = SolveRoles {
+        solver: RoleModel {
+            provider: String::new(),
+            model: String::new(),
+        },
+        verifier: RoleModel {
+            provider: "anthropic".into(),
+            model: "claude-sonnet-4-5".into(),
+        },
+        compute: None,
+    };
+    let runtime_solver = RoleModel {
+        provider: "openai".into(),
+        model: "gpt-4.1".into(),
+    };
+    let resolved_blank_solver = resolve_solve_verifier_transport(
+        &state,
+        &ui,
+        Some(&blank_solver_roles),
+        None,
+        Some(&runtime_solver),
+    )
+    .unwrap();
+    assert_eq!(
+        resolved_blank_solver.independence,
+        ReviewIndependence::DifferentProvider
+    );
+
     // Explicit malformed, CLI-route, or unknown `req.verifier` must return 400 instead of falling back.
     for bad_req in [
         json!({ "verifier": "not-an-object" }),

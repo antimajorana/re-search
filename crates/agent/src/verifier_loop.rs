@@ -202,7 +202,28 @@ pub fn run_solve_verifier_loop(
         .max_model_calls
         .clamp(1, SOLVE_VERIFIER_MAX_MODEL_CALLS);
     let max_tokens = ctx.config.max_tokens.clamp(256, SOLVE_VERIFIER_MAX_TOKENS);
-    let independence = compute_review_independence(&setup.roles.solver, &ctx.config.verifier_role);
+    let effective_solver = if !setup.roles.solver.provider.trim().is_empty()
+        && !setup.roles.solver.model.trim().is_empty()
+    {
+        setup.roles.solver.clone()
+    } else {
+        events
+            .iter()
+            .rev()
+            .find_map(|ev| {
+                if !matches!(ev.kind.as_str(), "session.start" | "session.resume") {
+                    return None;
+                }
+                let p = ev.payload.get("provider").and_then(Value::as_str).map(str::trim).unwrap_or("");
+                let m = ev.payload.get("model").and_then(Value::as_str).map(str::trim).unwrap_or("");
+                (!p.is_empty() && !m.is_empty()).then(|| RoleModel {
+                    provider: p.to_string(),
+                    model: m.to_string(),
+                })
+            })
+            .unwrap_or_else(|| setup.roles.solver.clone())
+    };
+    let independence = compute_review_independence(&effective_solver, &ctx.config.verifier_role);
 
     let mut messages = vec![Message {
         role: Role::User,

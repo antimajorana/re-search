@@ -38,10 +38,11 @@ pub(crate) fn serialize_request(req: &ModelRequest) -> Result<Vec<u8>, Transport
     if !req.tools.is_empty() {
         obj.insert("tools".into(), Value::Array(req.tools.iter().map(encode_tool).collect()));
     }
-    obj.insert(
-        "messages".into(),
-        Value::Array(req.messages.iter().map(encode_message).collect()),
-    );
+    let messages: Vec<Value> = req.messages.iter().filter_map(encode_message).collect();
+    if messages.is_empty() {
+        return Err(config_err("request has no input messages"));
+    }
+    obj.insert("messages".into(), Value::Array(messages));
     if let Some(effort) = crate::transport::normalize_reasoning_effort(req.reasoning_effort.as_deref()) {
         let mapped = if effort == "xhigh" { "max" } else { effort.as_str() };
         obj.insert("output_config".into(), json!({ "effort": mapped }));
@@ -58,13 +59,22 @@ fn encode_tool(spec: &ToolSpec) -> Value {
     })
 }
 
-fn encode_message(msg: &Message) -> Value {
+fn encode_message(msg: &Message) -> Option<Value> {
     let role = match msg.role {
         Role::User => "user",
         Role::Assistant => "assistant",
     };
-    let blocks: Vec<Value> = msg.content.iter().map(encode_block).collect();
-    json!({ "role": role, "content": blocks })
+    let blocks: Vec<Value> = msg
+        .content
+        .iter()
+        .filter(|b| !matches!(b, ContentBlock::Text { text } if text.trim().is_empty()))
+        .map(encode_block)
+        .collect();
+    if blocks.is_empty() {
+        None
+    } else {
+        Some(json!({ "role": role, "content": blocks }))
+    }
 }
 
 fn encode_block(block: &ContentBlock) -> Value {
@@ -203,5 +213,47 @@ fn decode_block(block: &Value) -> Result<ContentBlock, String> {
             Ok(ContentBlock::ToolResult { tool_use_id: tool_use_id.to_string(), is_error, content })
         }
         other => Ok(ContentBlock::Other { block_type: other.to_string(), raw: block.clone() }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::anthropic::{AnthropicConfig, AnthropicTransport, SecretKey};
+    use crate::gemini::{GeminiConfig, GeminiTransport};
+    use crate::openai::{OpenAiConfig, OpenAiTransport};
+    use crate::transport::{Transport, TransportErrorKind};
+
+    #[test]
+    fn all_api_transports_reject_empty_or_blank_user_turn_locally() {
+        let mk_key = || SecretKey::new("sk-test-dummy-123456".to_string()).unwrap();
+        let ant = AnthropicTransport::new(AnthropicConfig::default(), mk_key(), "TEST").unwrap();
+        let oai = OpenAiTransport::new(OpenAiConfig::default(), Some(mk_key()), "TEST").unwrap();
+        let oll = OpenAiTransport::new(OpenAiConfig::ollama_default(), None, "TEST").unwrap();
+        let gem = GeminiTransport::new(GeminiConfig::default(), mk_key(), "TEST").unwrap();
+
+        for txt in ["", "   \n\t "] {
+            for (model, tr) in [
+                ("claude-haiku-4-5", &ant as &dyn Transport),
+                ("gpt-4.1", &oai as &dyn Transport),
+                ("qwen2.5:14b", &oll as &dyn Transport),
+                (crate::transport::DEFAULT_GEMINI_MODEL, &gem as &dyn Transport),
+            ] {
+                let req = ModelRequest {
+                    model: model.into(),
+                    system: Some("sys".into()),
+                    messages: vec![Message {
+                        role: Role::User,
+                        content: vec![ContentBlock::Text { text: txt.into() }],
+                    }],
+                    tools: Vec::new(),
+                    max_tokens: 512,
+                    reasoning_effort: None,
+                };
+                let err = tr.prepare_request(&req).expect_err("empty user turn must fail locally");
+                assert_eq!(err.kind, TransportErrorKind::Config, "{model}: {err}");
+                assert!(err.message.contains("no input messages"), "{model}: {err}");
+            }
+        }
     }
 }

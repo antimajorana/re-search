@@ -81,11 +81,17 @@ fn run_state_key(state: RunState) -> &'static str {
     }
 }
 
-fn last_leg_ended_cleanly(events: &[Event]) -> Option<bool> {
+fn last_leg_stop_reason(events: &[Event]) -> Option<Option<&str>> {
     if let Some(idx) = events.iter().rposition(|ev| matches!(ev.kind.as_str(), "session.start" | "session.resume")) {
-        return Some(events[idx + 1..].iter().any(|ev| ev.kind == "session.end"));
+        let end = events[idx + 1..].iter().rev().find(|ev| ev.kind == "session.end");
+        return Some(end.map(|ev| ev.payload.get("stop_reason").and_then(Value::as_str).unwrap_or("end_turn")));
     }
-    events.iter().any(|ev| matches!(ev.kind.as_str(), "model.request" | "tool.request")).then_some(false)
+    let has_orphan = events.iter().any(|ev| {
+        ev.kind == "model.request"
+            || (ev.kind == "tool.request"
+                && !matches!(ev.payload.get("caller").and_then(Value::as_str), Some("user" | "host:check")))
+    });
+    has_orphan.then_some(None)
 }
 
 fn done_open_items(state: &SolveState) -> Value {
@@ -137,9 +143,9 @@ fn build_run_state_json(
                     .unwrap_or_else(|| json!([]));
                 (run_state_key(mapped), mapped.label(), Some(r.as_str().to_string()), open_items)
             }
-            SolveRunStatus::Running => match last_leg_ended_cleanly(events) {
-                Some(true) => (run_state_key(RunState::Paused), RunState::Paused.label(), Some("end_turn".to_string()), json!([])),
-                Some(false) => (run_state_key(RunState::Interrupted), RunState::Interrupted.label(), Some("interrupted".to_string()), json!([])),
+            SolveRunStatus::Running => match last_leg_stop_reason(events) {
+                Some(Some(stop)) => (run_state_key(RunState::Paused), RunState::Paused.label(), Some(stop.to_string()), json!([])),
+                Some(None) => (run_state_key(RunState::Interrupted), RunState::Interrupted.label(), Some("interrupted".to_string()), json!([])),
                 None => (RUN_STATE_READY, RUN_STATE_READY_LABEL, None, json!([])),
             },
             SolveRunStatus::Idle => {

@@ -453,3 +453,97 @@ fn fresh_solve_continue_with_empty_body_uses_setup_statement_and_solver_role() {
     srv.shutdown();
     mock.finish();
 }
+
+#[test]
+fn solve_continue_handles_cli_orchestrator_blank_solver_independence_and_missing_credentials() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let ledger = Ledger::open(&data_dir).unwrap();
+    let mut setup = setup_payload();
+    setup["roles"]["solver"] = json!({ "provider": "", "model": "" });
+    setup["roles"]["verifier"] = json!({ "provider": "openai", "model": "gpt-4.1" });
+    setup["done"] = json!([
+        { "id": "d1", "kind": "closure_tier_at_least", "params": { "tier": "model_agreed", "require_different_model": true } },
+        { "id": "d2", "kind": "no_open_flags", "params": {} }
+    ]);
+
+    // 1. Session with zero model leg + user check_run tool event must stay "ready", not "interrupted".
+    ledger.append_with_hash("s-user-chk", event_kinds::SOLVE_STARTED, 1, &json!({})).unwrap();
+    ledger.append_with_hash("s-user-chk", event_kinds::SOLVE_SETUP, 1, &setup).unwrap();
+    ledger.append_with_hash("s-user-chk", "tool.request", 1, &json!({ "call_id": "c1", "tool": "check_run", "caller": "user" })).unwrap();
+    ledger.append_with_hash("s-user-chk", "tool.result", 1, &json!({ "call_id": "c1", "ok": true, "result": { "inline": "{}" } })).unwrap();
+
+    // 2. Session for blank-solver + CLI orchestrator in ui_settings + finish-time review independence.
+    ledger.append_with_hash("s-blank-ind", event_kinds::SOLVE_STARTED, 1, &json!({})).unwrap();
+    ledger.append_with_hash("s-blank-ind", event_kinds::SOLVE_SETUP, 1, &setup).unwrap();
+    let e1_sha = compute_entry_sha256(None, "Given", "1 + 1");
+    ledger.append_with_hash("s-blank-ind", event_kinds::PROOF_ENTRY, 1, &json!({
+        "entry_id": "e-1", "entry_type": "assumption", "summary": "Given", "details": "1 + 1",
+        "depends_on": [], "entry_sha256": e1_sha, "origin": "given"
+    })).unwrap();
+
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::write(
+        data_dir.join("ui_settings.json"),
+        serde_json::to_vec(&json!({
+            "default_provider": "claude-cli",
+            "default_model": "sonnet",
+            "agent_models": { "orchestrator": { "provider": "claude-cli", "model": "sonnet" } }
+        })).unwrap(),
+    ).unwrap();
+
+    // Without any API/ChatGPT credentials, POST /solve/continue must fail fast with 400 (never 202).
+    let srv_no_cred = start_desktop_server(test_cfg(&data_dir, None, None, None)).unwrap();
+    let auth_nc = [("X-ReSearch-Token", srv_no_cred.info.token.as_str()), ("Content-Type", "application/json")];
+    let (st_view, _, raw_view) = raw_http(srv_no_cred.addr.port(), "GET", "/api/sessions/s-user-chk/solve/view", &auth_nc, b"");
+    assert_eq!(st_view, 200);
+    assert_eq!(serde_json::from_slice::<Value>(&raw_view).unwrap()["run_state"]["state"], "ready");
+    let (st_nc, _, _) = raw_http(srv_no_cred.addr.port(), "POST", "/api/sessions/s-blank-ind/solve/continue", &auth_nc, b"{}");
+    assert_eq!(st_nc, 400, "unconfigured solve/continue must fail fast with 400");
+    srv_no_cred.shutdown();
+
+    // Now connect OpenAI (solver fallback) + Anthropic (verifier) while keeping CLI orchestrator in ui_settings.
+    std::fs::write(
+        data_dir.join("providers.json"),
+        serde_json::to_vec(&json!({
+            "providers": {
+                "openai": { "api_key": "sk-test-openai-solver" },
+                "anthropic": { "api_key": "sk-test-anthropic-verifier" }
+            }
+        })).unwrap(),
+    ).unwrap();
+
+    // API_PROVIDERS resolves connected Anthropic first as Solver while Verifier uses OpenAI.
+    let mock = MockHttp::start(vec![
+        anthropic_tool_reply("msg_b1", "tu_s1", "step_record", json!({
+            "entry_type": "result", "depends_on": ["e-1"], "summary": "Two", "details": "1 + 1 = 2."
+        })),
+        anthropic_tool_reply("msg_b2", "tu_s2", "solve_finish", json!({
+            "final_entry_id": "e-2", "summary_markdown": "Sum is 2."
+        })),
+        openai_tool_reply("cmpl_v1", "call_v1", "report_verdict", json!({
+            "verdicts": [{ "entry_id": "e-2", "verdict": "accepted", "summary": "Valid.", "checks_cited": [] }]
+        })),
+        anthropic_json_reply("msg_b3", "Done."),
+    ]);
+    let srv = start_desktop_server(test_cfg(&data_dir, None, Some(mock.base_url.clone()), None)).unwrap();
+    let auth = [("X-ReSearch-Token", srv.info.token.as_str()), ("Content-Type", "application/json")];
+    let (st, _, raw) = raw_http(srv.addr.port(), "POST", "/api/sessions/s-blank-ind/solve/continue", &auth, b"{}");
+    assert_eq!(st, 202, "{}", String::from_utf8_lossy(&raw));
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let evs = ledger.read_session("s-blank-ind").unwrap();
+        if evs.iter().any(|e| e.kind == "session.end" || e.kind == event_kinds::SOLVE_PAUSED) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let evs = ledger.read_session("s-blank-ind").unwrap();
+    let rev = evs.iter().find(|e| e.kind == event_kinds::PROOF_VERIFICATION).expect("PROOF_VERIFICATION");
+    assert_eq!(rev.payload["independence"], "different_provider", "{evs:#?}");
+    let done = evs.iter().find(|e| e.kind == event_kinds::SOLVE_DONE).expect("SOLVE_DONE");
+    assert_eq!(done.payload["status"], "finished", "{evs:#?}");
+    srv.shutdown();
+    mock.finish();
+}
