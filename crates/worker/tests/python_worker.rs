@@ -28,6 +28,7 @@ fn evaluate_timeout_kill_respawn() {
         scratch: scratch.clone(),
         pycache: scratch.join("pycache"),
         startup_timeout: Duration::from_secs(60),
+        job_memory_limit_bytes: None,
     };
     let mut w = Worker::new(config, Box::new(JobObjectSandbox));
     assert_eq!(w.live_epoch(), None);

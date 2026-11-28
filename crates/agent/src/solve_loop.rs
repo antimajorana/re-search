@@ -65,6 +65,16 @@ pub trait SolveHostHooks: Send + Sync {
         None
     }
 
+    fn before_solve_finish(
+        &self,
+        _ledger: &Ledger,
+        _session: &str,
+        _input: &Value,
+        _cancel: Option<&CancelToken>,
+    ) -> Result<Option<PauseTrigger>, String> {
+        Ok(None)
+    }
+
     fn after_solve_finish(
         &self,
         _ledger: &Ledger,

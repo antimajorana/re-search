@@ -51,23 +51,12 @@ fn spawn_turn_thread_inner(
         return Err((400, err));
     }
     let is_solve = crate::session_mode::session_mode(&pre_events) == research_tools::paper_key::Mode::Solve;
-    if is_solve {
-        if research_tools::solve_state::SolveState::from_events(&pre_events)
+    if is_solve
+        && research_tools::solve_state::SolveState::from_events(&pre_events)
             .setup
             .is_none()
-        {
-            return Err((400, "Solve session requires setup before running a turn".to_string()));
-        }
-        let req_prov = req_json.get("provider").and_then(Value::as_str).map(str::trim);
-        let bound_route = state.load_meta(&session_id).and_then(|m| m.route);
-        if matches!(req_prov, Some("claude-cli" | "antigravity"))
-            || matches!(bound_route.as_deref(), Some("claude-cli" | "antigravity"))
-        {
-            return Err((
-                400,
-                "Solve mode requires an API or ChatGPT provider.".to_string(),
-            ));
-        }
+    {
+        return Err((400, "Solve session requires setup before running a turn".to_string()));
     }
 
     let activity = crate::session_lifecycle::reserve_turn(&state, &session_id)?;

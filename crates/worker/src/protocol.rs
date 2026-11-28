@@ -24,6 +24,7 @@ pub const STAGED_HELPER_FILES: &[&str] = &[
     "solver_calc.py",
     "symbolic_validation.py",
     "numerical_validation.py",
+    "physics.py",
 ];
 
 /// Host-shipped check modules under `python/checks/` staged into the runtime.
