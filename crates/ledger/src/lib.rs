@@ -338,18 +338,38 @@ impl Ledger {
         schema_version: u32,
         payload: &Value,
     ) -> Result<AppendedEvent> {
-        self.append_after(session, kind, schema_version, payload, None)
+        self.append_after(session, kind, schema_version, payload, None, now_ms())
     }
 
     /// Atomically append a record that was validated against a particular session head.
     pub fn append_at_head(
         &self, session: &str, kind: &str, schema_version: u32, payload: &Value, expected_head: &str,
     ) -> Result<AppendedEvent> {
-        self.append_after(session, kind, schema_version, payload, Some(expected_head))
+        self.append_after(session, kind, schema_version, payload, Some(expected_head), now_ms())
+    }
+
+    /// Append one event with an explicit UTC millisecond timestamp, preserving full
+    /// SHA-256 hash-chain integrity. Intended for deterministic multi-day tests.
+    #[doc(hidden)]
+    pub fn append_with_ts(
+        &self,
+        session: &str,
+        kind: &str,
+        schema_version: u32,
+        payload: &Value,
+        ts_ms: i64,
+    ) -> Result<AppendedEvent> {
+        self.append_after(session, kind, schema_version, payload, None, ts_ms)
     }
 
     fn append_after(
-        &self, session: &str, kind: &str, schema_version: u32, payload: &Value, expected_head: Option<&str>,
+        &self,
+        session: &str,
+        kind: &str,
+        schema_version: u32,
+        payload: &Value,
+        expected_head: Option<&str>,
+        ts_ms: i64,
     ) -> Result<AppendedEvent> {
         if self.legacy_unchained {
             return Err(Error::LegacyUnchainedSchema);
@@ -369,7 +389,7 @@ impl Ledger {
         let seq = last_seq
             .checked_add(1)
             .ok_or_else(|| Error::Tamper(format!("next sequence number overflows for session `{session}`")))?;
-        let event = Self::insert_event(&tx, session, seq, &prev_hash, kind, schema_version, payload)?;
+        let event = Self::insert_event(&tx, session, seq, &prev_hash, kind, schema_version, payload, ts_ms)?;
         tx.commit()?;
         Ok(event)
     }
@@ -399,12 +419,13 @@ impl Ledger {
         let mut prev_hash = GENESIS_HASH.to_string();
         for (idx, &(kind, schema_version, payload)) in events.iter().enumerate() {
             let seq = idx as i64 + 1;
-            prev_hash = Self::insert_event(&tx, session, seq, &prev_hash, kind, schema_version, payload)?.event_hash;
+            prev_hash = Self::insert_event(&tx, session, seq, &prev_hash, kind, schema_version, payload, now_ms())?.event_hash;
         }
         tx.commit()?;
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn insert_event(
         conn: &Connection,
         session: &str,
@@ -413,11 +434,11 @@ impl Ledger {
         kind: &str,
         schema_version: u32,
         payload: &Value,
+        ts_ms: i64,
     ) -> Result<AppendedEvent> {
         let payload_text = canonical_json(payload);
         let seq_u64 =
             u64::try_from(seq).map_err(|_| Error::Tamper(format!("invalid next sequence number {seq}")))?;
-        let ts_ms = now_ms();
         let event_hash = compute_event_hash(session, seq_u64, ts_ms, kind, schema_version, &payload_text, prev_hash);
         conn.execute(
             "INSERT INTO event (session, seq, ts_ms, kind, schema_version, payload, prev_hash, event_hash)

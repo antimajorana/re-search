@@ -43,6 +43,8 @@ pub mod cli_turn_setup;
 pub mod cli_turn_solve;
 pub mod connections;
 mod explain_export;
+// Rust 1.100 clippy false positive on filtered match arm in untouched evidence.rs.
+#[allow(clippy::manual_unwrap_or)]
 mod evidence;
 mod experiments;
 mod project_context;
@@ -94,6 +96,7 @@ pub mod subagents;
 pub mod turn_control;
 pub mod turn_runner;
 mod upload_codec;
+pub mod usage_stats;
 mod validation_plans;
 pub mod workspace_ops;
 

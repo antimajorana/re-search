@@ -99,6 +99,7 @@ export function switchSettingsTab(tab = 'providers') {
     panel.classList.toggle('is-active', panel.getAttribute('data-settings-panel') === tab);
   }
   if (typeof callbacks.onTabOpened === 'function') callbacks.onTabOpened(tab);
+  globalThis.__reSearchUsageTracker?.onSettingsTab?.(tab);
 }
 
 export function wireTabKeys(tabs) {

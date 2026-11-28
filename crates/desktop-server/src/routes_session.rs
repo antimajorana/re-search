@@ -375,6 +375,7 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
         "sources": sources,
         "linked_sources": linked_sources,
         "stats": stats,
+        "usage": crate::usage_stats::summarize_session_usage(session_id, meta.as_ref(), &events),
         "archived": meta.as_ref().is_some_and(|m| m.archived),
         "running": running,
         "session_grants": list_session_grants(state, session_id),

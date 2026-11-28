@@ -80,6 +80,12 @@ export function listSessions() {
   return rawJson('GET', '/api/sessions');
 }
 
+export function getUsage(sessionId = null) {
+  const sid = sessionId ? String(sessionId).trim() : '';
+  const path = sid ? `/api/usage?session_id=${encodeURIComponent(sid)}` : '/api/usage';
+  return rawJson('GET', path);
+}
+
 export function getSessionFolders() {
   return rawJson('GET', '/api/session-folders');
 }

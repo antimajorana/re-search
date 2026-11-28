@@ -82,6 +82,7 @@
           <img class="topbar-brand-mark" src="/assets/re-search-icon.png" width="24" height="24" alt="reSearch">
           <h1 id="active-session-title" class="session-heading">New research</h1>
           <button id="active-workspace-pill" type="button" class="badge" hidden></button>
+          <span id="session-usage-line" class="session-usage-line" hidden></span>
         </div>
         <div class="topbar-right">
           <button id="session-grants-pill" type="button" class="badge ok" title="Click to revoke session-wide tool approvals for this chat" hidden></button>
@@ -429,6 +430,7 @@
       <div class="settings-tabs" role="tablist" aria-label="Settings sections">
         <button id="settings-tab-providers" type="button" class="settings-tab-btn is-active" data-settings-tab="providers" role="tab" aria-selected="true" aria-controls="settings-panel-providers">Providers</button>
         <button id="settings-tab-subagents" type="button" class="settings-tab-btn" data-settings-tab="subagents" role="tab" aria-selected="false" aria-controls="settings-panel-subagents" tabindex="-1">Agents &amp; Models</button>
+        <button id="settings-tab-usage" type="button" class="settings-tab-btn" data-settings-tab="usage" role="tab" aria-selected="false" aria-controls="settings-panel-usage" tabindex="-1">Usage</button>
         <button id="settings-tab-guide" type="button" class="settings-tab-btn" data-settings-tab="guide" role="tab" aria-selected="false" aria-controls="settings-panel-guide" tabindex="-1">User Guide</button>
         <button id="settings-tab-advanced" type="button" class="settings-tab-btn" data-settings-tab="advanced" role="tab" aria-selected="false" aria-controls="settings-panel-advanced" tabindex="-1">Advanced</button>
       </div>
@@ -514,6 +516,10 @@
         <div id="builtin-agents-list" class="builtin-grid"></div>
       </div>
 
+      <div id="settings-panel-usage" class="settings-tab-panel" data-settings-panel="usage" role="tabpanel" aria-labelledby="settings-tab-usage" tabindex="0">
+        <div id="settings-usage-content"></div>
+      </div>
+
       <div id="settings-panel-guide" class="settings-tab-panel" data-settings-panel="guide" role="tabpanel" aria-labelledby="settings-tab-guide" tabindex="0">
         <div id="settings-guide-content"></div>
       </div>
@@ -553,6 +559,7 @@
   <script type="module" src="/assets/new_menu.js"></script>
   <script type="module" src="/assets/investigation_v3_shell.js"></script>
   <script type="module" src="/assets/mode_stages.js"></script>
+  <script type="module" src="/assets/usage_tracker.js"></script>
   <script type="module" src="/assets/app.js"></script>
 </body>
 </html>

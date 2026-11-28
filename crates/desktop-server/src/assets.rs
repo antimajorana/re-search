@@ -475,6 +475,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/worker_activity.js"),
         }),
+        "/assets/usage_tracker.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/usage_tracker.js"),
+        }),
         "/assets/app.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/app.js"),
@@ -512,6 +516,9 @@ mod tests {
             "workspace-dialog",
             "session-folder-dialog",
             "worked-example",
+            "settings-tab-usage",
+            "settings-panel-usage",
+            "session-usage-line",
         ] {
             assert!(
                 html.contains(&format!("id=\"{id}\"")),

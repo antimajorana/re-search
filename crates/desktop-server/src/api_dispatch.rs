@@ -431,6 +431,9 @@ pub(crate) fn dispatch_api(
         ("GET", ["api", "models"]) => {
             write_api_res(&mut stream, crate::model_catalog::handle_models(state, &req.query));
         }
+        ("GET", ["api", "usage"]) => {
+            write_api_res(&mut stream, crate::usage_stats::handle_get_usage(state, &req.query));
+        }
         ("GET", ["api", "subagents"]) => {
             write_api_res(&mut stream, crate::routes_subagents::handle_list_subagents(state));
         }
