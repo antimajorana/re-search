@@ -160,7 +160,6 @@ function renderRow(c) {
   if (c.status) row.append(make('div', 'connect-status', c.status));
   if (!c.connected && c.how_to) row.append(make('div', 'connect-howto', c.how_to));
 
-  if (c.warning) renderConsent(c, row);
   if (c.action) return renderActionRow(c, row);
   const needsKey = c.accepts_key && c.key_required !== false;
   if (needsKey && !c.connected) row.append(keyForm(c));
@@ -183,37 +182,6 @@ function renderRow(c) {
   }
   if (actions.childElementCount > 0) row.append(actions);
   return row;
-}
-
-function renderConsent(c, row) {
-  const box = make('div', 'connect-warning');
-  box.setAttribute('role', 'note');
-  box.append(make('strong', '', c.acknowledged ? 'Acknowledged notice' : 'Read before enabling'));
-  box.append(make('p', '', c.warning));
-  const action = c.acknowledged ? c.withdraw_action : c.acknowledge_action;
-  if (action) {
-    const label = c.acknowledged ? 'Withdraw acknowledgement' : 'I understand the risk';
-    const button = make('button', 'pill-btn sm', label);
-    button.type = 'button';
-    button.addEventListener('click', async () => {
-      if (!c.acknowledged && !window.confirm(`${c.warning}\n\nEnable ${c.label || c.id}?`)) return;
-      button.disabled = true;
-      try {
-        await api.connectionAction(c.id, action);
-      } catch (err) {
-        notify(`Could not update acknowledgement: ${err.message}`);
-        button.disabled = false;
-        return;
-      }
-      notify(c.acknowledged ? 'Antigravity access withdrawn.' : 'Antigravity acknowledgement saved.');
-      await refreshConnections(false);
-      changed();
-    });
-    const actions = make('div', 'connect-actions');
-    actions.append(button);
-    box.append(actions);
-  }
-  row.append(box);
 }
 
 // A provider connected by signing in (data-driven: `action` is "signin" or "signout").

@@ -145,9 +145,6 @@ pub(crate) fn wants_cli_route(
                 kind.name()
             )));
         }
-        if kind == CliRouteKind::Antigravity {
-            crate::antigravity::require_acknowledged(state).map_err(|e| (403, e))?;
-        }
         if bound != Some(kind) {
             // Provisional until the turn records `session.start` (see the rebinding below).
             let mut m = meta.ok_or_else(|| (404, format!("session `{session_id}` has no metadata to bind")))?;
@@ -191,9 +188,6 @@ pub(crate) fn wants_cli_route(
                 .is_none_or(|s| s.trim().is_empty());
             if resolved.is_none() && recorded.is_none() && meta_provider_unset {
                 resolved = crate::agent_models::orchestrator_cli_override(state).map(|(k, _)| k);
-            }
-            if resolved == Some(CliRouteKind::Antigravity) {
-                crate::antigravity::require_acknowledged(state).map_err(|e| (403, e))?;
             }
             Ok(resolved)
         }

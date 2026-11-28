@@ -3,7 +3,7 @@
 //!   claiming "Final answer is verified!", R15 & R22).
 //! - D16 CLI-route verifier status & setup-card notice (never hides Solve from CLI users,
 //!   rejects CLI helper roles per `agent_models.rs`, and resolves configured API verifier transport).
-//! - Antigravity acknowledgement gate stays enforced on Solve CLI sessions.
+//! - Antigravity route is available directly for Solve CLI sessions when the CLI is found.
 
 mod common;
 
@@ -245,10 +245,25 @@ fn d16_cli_review_notices_helper_role_guard_and_api_verifier_resolution() {
 }
 
 #[test]
-fn antigravity_acknowledgement_remains_enforced_for_solve_cli_route() {
+fn antigravity_route_is_available_directly_for_solve_cli_route() {
     let tmp = TempDir::new().unwrap();
     let data = tmp.path().join("data");
-    let cfg = test_cfg(&data, None, None, None);
+    let fake = cli_route::testkit::FakeCli::new_agy(tmp.path(), "agy");
+
+    // Without agy CLI configured, Antigravity is unavailable.
+    let cfg_missing = test_cfg(&data, None, None, None);
+    let chatgpt_m = desktop_server::chatgpt::ChatGptHub::new(&cfg_missing).unwrap();
+    let state_missing = DesktopState::new(
+        cfg_missing,
+        desktop_server::auth::AuthGuard::new(1).unwrap(),
+        Arc::new(desktop_server::sse::SseHub::new()),
+        chatgpt_m,
+    );
+    assert!(!desktop_server::antigravity::is_available(&state_missing));
+
+    // Once the CLI is found, Antigravity is enabled directly with no gate.
+    let mut cfg = test_cfg(&data, None, None, None);
+    cfg.agy_exe = Some(fake.exe.clone());
     let chatgpt = desktop_server::chatgpt::ChatGptHub::new(&cfg).unwrap();
     let state = DesktopState::new(
         cfg,
@@ -256,21 +271,17 @@ fn antigravity_acknowledgement_remains_enforced_for_solve_cli_route() {
         Arc::new(desktop_server::sse::SseHub::new()),
         chatgpt,
     );
+    assert!(desktop_server::antigravity::is_available(&state));
+    let conn = desktop_server::antigravity::connection_entry(&state);
+    assert_eq!(conn["connected"], true);
+    assert_eq!(conn["label"], "Antigravity (Google)");
+    assert!(conn.get("warning").is_none());
+    assert!(conn.get("confinement").is_none());
+
     let ledger = Ledger::open(&data).unwrap();
     ledger.append_with_hash("s-agy-solve", event_kinds::SOLVE_STARTED, 1, &json!({})).unwrap();
-    state
-        .save_meta(&desktop_server::state::SessionMeta {
-            id: "s-agy-solve".into(),
-            title: "Solve on Antigravity".into(),
-            ..Default::default()
-        })
-        .unwrap();
-
-    // Unacknowledged Antigravity must remain refused (403).
-    let err = desktop_server::antigravity::require_acknowledged(&state).unwrap_err();
-    assert!(err.contains("Antigravity") || err.contains("acknowledge"), "{err}");
-    desktop_server::antigravity::handle_acknowledge(&state).unwrap();
-    assert!(desktop_server::antigravity::require_acknowledged(&state).is_ok());
+    let view = desktop_server::solve::session_solve_view(&state, "s-agy-solve", &ledger.read_session("s-agy-solve").unwrap(), false);
+    assert_eq!(view["model_connected"], true);
 }
 
 #[test]

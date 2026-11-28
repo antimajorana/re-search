@@ -9,9 +9,8 @@
 //!
 //! - [`recorder`]: ledger recorder, event sinks, session and tool-config guards;
 //! - [`vendor`]: the [`VendorCli`] trait for the vendor-specific parts, [`claude`] its
-//!   Claude Code implementation, [`antigravity`] the Antigravity CLI one (labelled
-//!   "vendor-sandboxed, not confined to re:Search tools": its built-in tools cannot be
-//!   removed, only denied through the CLI's own settings);
+//!   Claude Code implementation, [`antigravity`] the Antigravity CLI one (whose built-in
+//!   tools cannot be removed, only denied through the CLI's own settings);
 //! - [`turn`]: one turn (spawn in a kill-on-close job object, prompt on stdin, line loop,
 //!   handshake check, abort/stop, cleanup);
 //! - [`relay`]: the loopback approval listener's wire handling, with the decision taken

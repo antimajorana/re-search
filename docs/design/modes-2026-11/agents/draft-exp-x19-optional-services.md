@@ -15,7 +15,7 @@
   - `F3` (merged in base: `http_client.rs`, `net_rate.rs`), `F11` (`f11-lit-services`: `lit_providers.rs`, `lit_abstracts.rs`), and `X7` (`exp-x6-x7-x8-search-triage`: `idea_search` provider enum already includes `openalex` and `theoremsearch`).
 - **MANDATORY OWNER APPROVAL GATES BEFORE DISPATCH (DO NOT DISPATCH WITHOUT EXPLICIT YES):**
   1. **Checkpoint 1 (OpenAlex) owner gate:** explicit owner approval to widen `ALLOWLISTED_HTTPS_HOSTS` in `crates/research-tools/src/http_client.rs` to add `api.openalex.org`, update `THREAT-MODEL.md:268`, and confirm OpenAlex API key / optional polite-pool settings handling (`explore.md` 13 decisions 8 & 14).
-  2. **Checkpoint 2 (TheoremSearch) owner gate:** explicit owner sign-off on (a) TheoremSearch's exact verified HTTPS hostname and acceptable terms of use (`explore.md` 13 decision 8: `"TheoremSearch off until its terms are known"`), (b) widening `ALLOWLISTED_HTTPS_HOSTS` + `THREAT-MODEL.md` for that host, and (c) the exact versioned consent notice text (following `crates/desktop-server/src/antigravity.rs`).
+  2. **Checkpoint 2 (TheoremSearch) owner gate:** explicit owner sign-off on (a) TheoremSearch's exact verified HTTPS hostname and acceptable terms of use (`explore.md` 13 decision 8: `"TheoremSearch off until its terms are known"`), (b) widening `ALLOWLISTED_HTTPS_HOSTS` + `THREAT-MODEL.md` for that host, and (c) the exact versioned consent notice text.
   - **Independent dispatch:** Checkpoint 1 (OpenAlex) may be dispatched as soon as Gate 1 is signed off, leaving TheoremSearch disabled (`status: "disabled"`) until Gate 2 is signed off.
 
 ## 3. Base-commit verified interfaces vs future-merge interfaces
@@ -26,7 +26,6 @@
 - `crates/research-tools/src/lib.rs` (300 lines): `LiteratureEndpoints` (5 fields, `Default`, `loopback_mock`).
 - `crates/research-tools/src/paper_key.rs`: `PaperKey::from_openalex("W...")` (`openalex:W...`) is ALREADY implemented and tested!
 - `crates/research-tools/src/library_schema.rs` & `library_rebuild_lit.rs`: `ids.openalex` is ALREADY supported!
-- `crates/desktop-server/src/antigravity.rs` (285 lines): proven versioned-consent pattern (`NOTICE_VERSION`, `acknowledged`, `require_acknowledged`, `handle_acknowledge`, `handle_withdraw`).
 - **`crates/desktop-server/src/state.rs` is 598 lines (2 lines below the 600-line ceiling!):** DO NOT add optional-service settings/consent structs inline in `state.rs`! Place them in a new `crates/desktop-server/src/lit_settings.rs` (or split `state.rs` first in a zero-behaviour-change commit).
 - `THREAT-MODEL.md:268-269`: documents the 5 allowlisted literature hosts.
 
@@ -47,7 +46,7 @@
    - Commit and push Checkpoint 1.
 2. **Checkpoint 2 — TheoremSearch (requires Owner Gate 2):**
    - Add `#[serde(default = ...)] pub theoremsearch_api_base: String` to `LiteratureEndpoints`, add the owner-verified host to `ALLOWLISTED_HTTPS_HOSTS` and `THREAT-MODEL.md`, add `Service::TheoremSearch` to `net_rate.rs`, and add `lit_theoremsearch.rs` (optional public service client only — NEVER vendor or copy TheoremSearch code, `explore.md` 11).
-   - In `crates/desktop-server/src/lit_settings.rs`: strictly **off by default**; requires explicit versioned consent acknowledgement (same pattern as `antigravity.rs`) before `idea_search` sends any request; returns `status: "disabled"` whenever off or unacknowledged (never fails F12 coverage gate, Rule V4).
+   - In `crates/desktop-server/src/lit_settings.rs`: strictly **off by default**; requires explicit versioned consent acknowledgement before `idea_search` sends any request; returns `status: "disabled"` whenever off or unacknowledged (never fails F12 coverage gate, Rule V4).
    - Commit and push Checkpoint 2.
 
 ## 5. Owned files

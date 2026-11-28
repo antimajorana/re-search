@@ -1,5 +1,4 @@
-//! The Google Antigravity CLI (`agy`) as a [`VendorCli`]: "vendor-sandboxed, not confined
-//! to re:Search tools".
+//! The Google Antigravity CLI (`agy`) as a [`VendorCli`].
 //!
 //! Unlike the Claude Code route, the CLI's built-in tools (terminal, file, web, browser)
 //! cannot be removed from the model's tool list. re:Search therefore only ASKS the CLI,
@@ -42,10 +41,6 @@ use std::sync::Mutex;
 pub const TESTED_CLI_VERSION: &str = "1.5.14";
 /// Route label recorded in the ledger.
 pub const ROUTE: &str = "antigravity";
-/// Confinement recorded in the start event and shown in the UI.
-pub const CONFINEMENT: &str = "vendor-sandboxed";
-/// The label every surface of this route carries.
-pub const LABEL_SUFFIX: &str = "vendor-sandboxed, not confined to re:Search tools";
 /// MCP server name of `core.exe` in the workspace `mcp_config.json`.
 pub const CORE_SERVER: &str = "core";
 /// The per-turn tool config, relative to the CLI's working directory.
@@ -338,7 +333,6 @@ impl Antigravity {
                         "parameters_truncated": truncated,
                         "error": error,
                         "denied_or_failed": error.is_some() || failed_state,
-                        "confinement": CONFINEMENT,
                     }),
                 ));
             }
@@ -488,7 +482,6 @@ impl VendorCli for Antigravity {
                         "model": init["model"],
                         "agent": init["agent"],
                         "conversation_id": line["conversation_id"],
-                        "confinement": CONFINEMENT,
                     }),
                 )]
             }

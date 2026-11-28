@@ -66,8 +66,8 @@ impl SessionMeta {
 pub const CLAUDE_CLI_ROUTE: &str = "claude-cli";
 
 /// Route value stored in [`SessionMeta::route`] (and accepted as `provider`) for the
-/// Antigravity route (the Antigravity CLI driven by re:Search; vendor-sandboxed, not
-/// confined to re:Search tools). Also the route label in its ledger start events.
+/// Antigravity route (the Antigravity CLI driven by re:Search). Also the route label in
+/// its ledger start events.
 pub const ANTIGRAVITY_ROUTE: &str = "antigravity";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,11 +87,6 @@ pub struct UiSettings {
     pub default_model: Option<String>,
     pub pinned_conventions: Option<String>,
     pub role_presets: Option<Value>,
-    /// The person's acknowledgement of the Antigravity route's warning (terms risk, built-in
-    /// tools outside re:Search's control), given by clicking in the Connect panel. Without
-    /// it (or for an older notice version) the route refuses to start.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub antigravity_ack: Option<AntigravityAck>,
     #[serde(default = "default_auto_approve_tools")]
     pub auto_approve_tools: bool,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -106,19 +101,12 @@ impl Default for UiSettings {
     fn default() -> Self {
         Self {
             default_provider: None, default_model: None, pinned_conventions: None,
-            role_presets: None, antigravity_ack: None,
+            role_presets: None,
             auto_approve_tools: default_auto_approve_tools(),
             agent_models: std::collections::BTreeMap::new(),
             paper_readers_enabled: None, paper_reader_max_parallel: None,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AntigravityAck {
-    pub acknowledged_ms: i64,
-    /// [`crate::antigravity::NOTICE_VERSION`] of the warning that was shown.
-    pub notice_version: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -247,7 +235,7 @@ impl DesktopState {
         };
         for (sid, h) in &targets {
             h.stop();
-            self.deny_pending(sid, None, "supervisor: route acknowledgement withdrawn");
+            self.deny_pending(sid, None, "supervisor: route turns stopped");
         }
         targets.len()
     }

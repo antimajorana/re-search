@@ -15,7 +15,7 @@
 //! the latest models. The ChatGPT plan (Sign in with ChatGPT) is listed once signed in
 //! with plan use granted: `GET https://api.openai.com/v1/models` with the access token,
 //! keeping entries with `visibility == "list"`, through the same cache and class-only
-//! errors. The Antigravity route (once acknowledged) lists `agy models` (a list call with
+//! errors. The Antigravity route (when the CLI is available) lists `agy models` (a list call with
 //! the CLI's own login, no prompt), cached the same way, else a small built-in list marked
 //! as such. Model ids and labels from providers are untrusted text.
 
@@ -376,7 +376,7 @@ pub fn handle_models(state: &DesktopState, query: &HashMap<String, String>) -> A
     if claude_status(state).connected {
         groups.push(claude_group());
     }
-    // Only once found, with a clean environment, and acknowledged by the person.
+    // Only once found and with a clean environment.
     if let Some(g) = crate::antigravity::model_group(state, refresh) {
         groups.push(g);
     }

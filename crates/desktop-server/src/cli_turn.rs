@@ -8,10 +8,8 @@
 //! ledger and to the same SSE events the API route emits. Later turns replay a bounded
 //! transcript of the session.
 //!
-//! On the Claude route the model gets ONLY those tools. The Antigravity route is
-//! "vendor-sandboxed, not confined to re:Search tools": the CLI keeps its built-in tools,
-//! which re:Search can only ask it to deny ([`cli_route::antigravity`]), and it needs the
-//! person's acknowledgement first ([`crate::antigravity`]).
+//! On the Claude route the model gets ONLY those tools. On the Antigravity route the CLI
+//! keeps its built-in tools, which re:Search asks it to deny ([`cli_route::antigravity`]).
 
 use crate::cli_relay::UiRelay;
 pub use crate::cli_turn_setup::{session_route, CliRouteKind, DEFAULT_CLI_MODEL};
@@ -87,8 +85,7 @@ pub(crate) fn run_cli_turn(
             std::env::var_os(n).or_else(|| state.env_var(n))
         }
     };
-    // The person's acknowledgement (Antigravity), then billing safety: nothing is started
-    // while either is missing.
+    // Billing safety: nothing is started while blocked environment credentials are set.
     let (vendor, allowed_env, allow_env_auth, explicit_exe): (Box<dyn VendorCli>, Vec<&str>, bool, Option<&Path>) =
         match kind {
             CliRouteKind::Claude => {
@@ -96,7 +93,6 @@ pub(crate) fn run_cli_turn(
                 (Box::new(ClaudeCode), allowed, cli_route::env_auth::opted_in(&auth_env), state.cfg.claude_exe.as_deref())
             }
             CliRouteKind::Antigravity => {
-                crate::antigravity::require_acknowledged(state)?;
                 let allowed = cli_route::antigravity::check_env_auth(&auth_env)?;
                 let opted = cli_route::env_auth::flag_set(cli_route::antigravity::ALLOW_ENV_AUTH_VAR, &auth_env);
                 (Box::new(Antigravity::new()), allowed, opted, state.cfg.agy_exe.as_deref())
@@ -233,7 +229,6 @@ pub(crate) fn run_cli_turn(
         start_fields["brief_sha256"] = json!(ledger::sha256_hex(prompt_build.prompt.as_bytes()));
     }
     if kind == CliRouteKind::Antigravity {
-        start_fields["confinement"] = json!(cli_route::antigravity::CONFINEMENT);
         start_fields["route_label"] = json!(crate::antigravity::AGY_LABEL);
         start_fields["vendor_builtin_tools"] =
             json!("not removable; denied only through the CLI's own --settings deny rules, enforced by the CLI");

@@ -50,7 +50,6 @@
 4. **Checkpoint S15d — Ledger-driven result sheet & CLI review (CP2 after S14):**
    - Verify `solve_view.rs` builds the result sheet strictly from the ledger (`solve.done`, `SolveState`), so unchecked CLI final prose still renders `"Not done: N steps unchecked"` (`solve.md` 5.4, 12 risk 13).
    - **Review on CLI routes (D16, respects `agent_models.rs` helper-role rule):** Once S14 merges, invoke `verifier_loop` through a configured in-core API verifier (`roles.verifier` — never violating `agent_models.rs`'s rule against CLI-only helper roles); if an explicit second-CLI review route is configured separately at the CLI-turn supervisor level, run it isolated; if neither is configured, display a plain setup-card notice explaining why automatic review is unavailable without hiding Solve from CLI users (D16).
-   - Keep Antigravity's confinement caveat and acknowledgement check (`crate::antigravity::require_acknowledged`) intact.
 
 ## 4. Owned files
 

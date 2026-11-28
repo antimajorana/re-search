@@ -7,8 +7,7 @@
 //! `base_url`). Keys are never returned: only whether one is saved and where the key in
 //! use comes from (`"saved key"` or `"environment"`, with the variable's name).
 //!
-//! The Antigravity CLI is located the same way and asked only `agy --version`; its entry
-//! carries the route's warning and whether the person acknowledged it
+//! The Antigravity CLI is located the same way and asked only `agy --version`
 //! ([`crate::antigravity`]).
 //!
 //! Nothing here sends a prompt anywhere. The Claude CLI is only located and asked for its

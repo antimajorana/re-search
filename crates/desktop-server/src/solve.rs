@@ -346,8 +346,10 @@ fn has_connected_model(state: &DesktopState) -> bool {
     if API_PROVIDERS.iter().any(|p| credential(state, *p, &store).ok().is_some_and(|c| c.key.is_some())) {
         return true;
     }
+    if crate::antigravity::is_available(state) {
+        return true;
+    }
     let ui = state.load_ui_settings();
-    ui.antigravity_ack.is_some()
-        || (ui.default_provider.as_deref().is_some_and(|p| !p.trim().is_empty())
-            && ui.default_model.as_deref().is_some_and(|m| !m.trim().is_empty()))
+    ui.default_provider.as_deref().is_some_and(|p| !p.trim().is_empty())
+        && ui.default_model.as_deref().is_some_and(|m| !m.trim().is_empty())
 }

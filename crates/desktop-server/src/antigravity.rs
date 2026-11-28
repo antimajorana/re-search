@@ -1,8 +1,7 @@
-//! The desktop consent gate, Connect entry and model catalog for Antigravity.
+//! The Connect entry and model catalog for Antigravity.
 
 use crate::model_catalog::CACHE_TTL;
-use crate::routes_session::ApiResult;
-use crate::state::{now_ms, AntigravityAck, DesktopState, ANTIGRAVITY_ROUTE};
+use crate::state::{now_ms, DesktopState, ANTIGRAVITY_ROUTE};
 use cli_route::antigravity::{self as agy, Antigravity, AgyModel, ALLOW_ENV_AUTH_VAR};
 use cli_route::VendorCli;
 use serde_json::{json, Value};
@@ -10,9 +9,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// Label of the route in the Connect panel and the model dropdown.
-pub const AGY_LABEL: &str = "Antigravity (Google) · vendor-sandboxed";
+pub const AGY_LABEL: &str = "Antigravity (Google)";
 /// Plain-text note shown beside the model of a session on this route.
-pub const AGY_NOTE: &str = "Antigravity CLI · vendor-sandboxed";
+pub const AGY_NOTE: &str = "Antigravity CLI";
 const HOW_TO: &str = "Install the Antigravity CLI (`agy`) and sign in once by running `agy` in a terminal.";
 /// Model used when neither the request nor the session names one and the list has it.
 pub const DEFAULT_AGY_MODEL: &str = "gemini-3.8-flash-medium";
@@ -34,52 +33,14 @@ pub struct AgyModelCache {
     pub checked: Instant,
 }
 
-/// Version 2 asks again because earlier withdrawals could leave version 1 acknowledgement on disk.
-pub const NOTICE_VERSION: u32 = 2;
-
-const TERMS_NOTICE: &str = "Google's consumer plan terms may restrict third-party use of the Antigravity CLI and put your account at risk. \
-Antigravity controls its own built-in tools and runs configured global MCP servers. \
-re:Search asks Antigravity to deny built-in tool use and records the use Antigravity reports. \
-Any built-in tools Antigravity runs operate outside re:Search approvals and policy.";
-
-/// Whether the user acknowledged the current notice.
-pub fn acknowledged(state: &DesktopState) -> bool {
-    state.load_ui_settings().antigravity_ack.is_some_and(|ack| ack.notice_version == NOTICE_VERSION)
-}
-
-/// Check for consent before starting a turn.
-pub fn require_acknowledged(state: &DesktopState) -> Result<(), String> {
-    if acknowledged(state) {
-        Ok(())
-    } else {
-        Err("Antigravity requires your acknowledgement. Open Settings & Guide, then read the notice under Providers.".to_string())
-    }
-}
-
-/// `POST /api/connections/antigravity/acknowledge` records the user's consent.
-pub fn handle_acknowledge(state: &DesktopState) -> ApiResult {
-    state
-        .update_ui_settings(|ui| {
-            ui.antigravity_ack = Some(AntigravityAck {
-                acknowledged_ms: now_ms(),
-                notice_version: NOTICE_VERSION,
-            });
-        })
-        .map_err(|e| (500, e))?;
-    Ok((200, json!({ "ok": true, "acknowledged": true, "notice_version": NOTICE_VERSION })))
-}
-
-/// `POST /api/connections/antigravity/withdraw` clears consent and stops active turns.
-pub fn handle_withdraw(state: &DesktopState) -> ApiResult {
-    state
-        .update_ui_settings(|ui| ui.antigravity_ack = None)
-        .map_err(|e| (500, e))?;
-    if let Ok(mut cache) = state.agy_models.lock() {
-        cache.0 = cache.0.wrapping_add(1);
-        cache.1 = None;
-    }
-    state.stop_cli_turns_of(crate::cli_turn::CliRouteKind::Antigravity);
-    Ok((200, json!({ "ok": true, "acknowledged": false })))
+/// Whether the Antigravity CLI is located and allowed by the environment auth guard.
+pub fn is_available(state: &DesktopState) -> bool {
+    let env = |n: &str| state.env_var(n);
+    Antigravity::new()
+        .locate(state.cfg.agy_exe.as_deref(), &env)
+        .ok()
+        .is_some_and(|p| p.is_file())
+        && agy::check_env_auth(&env).is_ok()
 }
 
 /// Whether the route can start a turn now, and why not.
@@ -121,16 +82,6 @@ pub fn agy_status(state: &DesktopState) -> AgyStatus {
             };
         }
     };
-    if !acknowledged(state) {
-        return AgyStatus {
-            connected: false,
-            found: true,
-            status: "Antigravity CLI found. Acknowledge the notice to enable this route.".to_string(),
-            how_to: None,
-            version: None,
-            exe: Some(exe),
-        };
-    }
     let version = match state.agy_version.get() {
         Some(v) => Ok(v.clone()),
         None => run_version(&exe).inspect(|v| {
@@ -174,17 +125,16 @@ fn run_version(exe: &std::path::Path) -> Result<String, String> {
 /// The Connect panel entry.
 pub fn connection_entry(state: &DesktopState) -> Value {
     let st = agy_status(state);
-    let consent = acknowledged(state);
     json!({
         "id": ANTIGRAVITY_ROUTE,
         "label": AGY_LABEL,
         "kind": "subscription",
         "route": ANTIGRAVITY_ROUTE,
-        "connected": st.connected && consent,
+        "connected": st.connected,
         "found": st.found,
         "status": st.status,
         "how_to": st.how_to,
-        "version": st.version.filter(|_| consent),
+        "version": st.version,
         "accepts_key": false,
         "key_required": false,
         "has_saved_key": false,
@@ -192,11 +142,6 @@ pub fn connection_entry(state: &DesktopState) -> Value {
         "key_env": null,
         "base_url": null,
         "session_note": AGY_NOTE,
-        "confinement": agy::CONFINEMENT,
-        "warning": TERMS_NOTICE,
-        "acknowledged": consent,
-        "acknowledge_action": "acknowledge",
-        "withdraw_action": "withdraw",
     })
 }
 
@@ -204,14 +149,14 @@ fn model_json(id: &str, label: &str, is_default: bool) -> Value {
     json!({ "id": id, "label": label, "provider": ANTIGRAVITY_ROUTE, "default": is_default })
 }
 
-/// The model group, when the CLI is available and the user has acknowledged the notice.
+/// The model group, when the CLI is available.
 /// `agy models` makes no model call; it is run at most once per [`CACHE_TTL`] (30 s after
 /// a failure), never while holding the cache lock.
 pub fn model_group(state: &DesktopState, refresh: bool) -> Option<Value> {
     let (generation, cached) = state.agy_models.lock().ok().map(|c| (c.0, c.1.clone()))?;
     let st = agy_status(state);
     let exe = st.exe.filter(|_| st.connected)?;
-    if !acknowledged(state) || state.agy_models.lock().ok()?.0 != generation {
+    if state.agy_models.lock().ok()?.0 != generation {
         return None;
     }
     let fresh = cached.as_ref().filter(|c| {
@@ -257,9 +202,7 @@ pub fn model_group(state: &DesktopState, refresh: bool) -> Option<Value> {
         ),
     };
     let ui = state.load_ui_settings();
-    if !ui.antigravity_ack.is_some_and(|ack| ack.notice_version == NOTICE_VERSION)
-        || state.agy_models.lock().ok()?.0 != generation
-    {
+    if state.agy_models.lock().ok()?.0 != generation {
         return None;
     }
     let saved = ui.default_provider.as_deref().filter(|p| *p == ANTIGRAVITY_ROUTE).and(ui.default_model.clone());
@@ -274,7 +217,6 @@ pub fn model_group(state: &DesktopState, refresh: bool) -> Option<Value> {
         "label": AGY_LABEL,
         "kind": "subscription",
         "route": ANTIGRAVITY_ROUTE,
-        "confinement": agy::CONFINEMENT,
         "session_note": AGY_NOTE,
         "models": list,
         "source": source,

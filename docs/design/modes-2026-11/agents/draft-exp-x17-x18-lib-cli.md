@@ -31,7 +31,7 @@
 - `crates/desktop-server/src/cli_relay.rs` (90 lines): `UiRelay`, `PeerWatch`.
 - `crates/cli-route/src/core_tools.rs` (188 lines): `register_core_tools_for_profile`, `core_tool_set_for_profile`, `core_tool_ids_for`, `CORE_TOOL_PROFILE`.
 - `crates/mcp-server/src/main.rs` (317 lines): line `184` gates profile lookup on `use_research` — must accept `use_research || CORE_TOOL_PROFILE` for non-Research profiles (`explore/1`, `solve/1`).
-- `crates/desktop-server/src/antigravity.rs` (285 lines): `require_acknowledged` consent gate (MUST remain enforced on Antigravity CLI exchanges!).
+- `crates/desktop-server/src/antigravity.rs`: Connect entry and model catalog for Antigravity.
 - `crates/desktop-server/src/assets.rs` (365 lines).
 
 ### Future-merge interfaces to verify before coding
@@ -54,7 +54,7 @@
    - Commit and push X17.
 2. **Checkpoint 2a — X18 Explore pipeline exchanges on CLI-subscription routes:**
    - First commit (if `cli_turn.rs > 600` lines): pure zero-behaviour-change split of `cli_turn.rs` into `cli_turn.rs` + `cli_turn_setup.rs` + `cli_turn_tests.rs` (all `<= 560` lines), verified by existing tests + `check_file_length.py`.
-   - Implement plain prompt-in, JSON-block-out exchange runner over `CliRouteKind::Claude` (`claude-cli`) and `CliRouteKind::Antigravity` (`antigravity`, still enforcing `antigravity::require_acknowledged` — NEVER weaken consent or sandbox rules!), keeping `cli_turn.rs` and `idea_exchanges.rs` under 600 lines (extract `crates/desktop-server/src/idea_cli_exchange.rs` if `idea_exchanges.rs` approaches 520 lines).
+   - Implement plain prompt-in, JSON-block-out exchange runner over `CliRouteKind::Claude` (`claude-cli`) and `CliRouteKind::Antigravity` (`antigravity`, NEVER weaken sandbox rules!), keeping `cli_turn.rs` and `idea_exchanges.rs` under 600 lines (extract `crates/desktop-server/src/idea_cli_exchange.rs` if `idea_exchanges.rs` approaches 520 lines).
    - Pipe every parsed JSON block through the **exact same Rust validators/recorders** (`record_idea_brief`, `record_idea_triage`, `record_paper_evidence`, `record_idea_map`, `record_idea_directions`), with the same `<= 2` repair-attempt loop, F9 budget checks before every CLI invocation (Rule P3), `idea.exchange` audit events (recording route provenance), and `UiRelay` (`cli_relay.rs`) approval handling where applicable.
    - Once X18 lands, CLI-subscription Explore sessions run exchanges instead of refusing `claude-cli`/`antigravity` with X6's `"not supported on CLI route yet"` message.
    - Commit and push Checkpoint 2a.
@@ -95,7 +95,7 @@ Run `cargo test -p export --test idea_export`, `cargo test -p desktop-server --t
 Required tests (fake/mock CLI subprocess & synthetic ledgers only — zero real vendor CLI, zero live network, zero third-party text):
 - `idea_export.rs` & HTTP `routes_idea_export`: `GET /api/sessions/{id}/idea/export?format=json|bib` (enforcing `AuthGuard::authorize_api`) recomputes F12 coverage & verdicts from ledger events (Rule V7), rejects tampered `idea.verdict` mismatch, prefers `source_item.citekey` when present, clips quotes at 300 chars, survives `library.db` deletion (Rule S5), and passes Rule S8 forbidden-word check (zero `"verified"`/`"new"`/`"novel"`).
 - `library_ui.test.mjs`: search/filter, mark update, `"Save to project"`, URL encoding of slash & `+` in `PaperKey`, F13a sources panel mount, zero `"verified"`, XSS escaping.
-- `idea_cli_exchange.rs`: fake Claude CLI & Antigravity CLI returning JSON blocks (valid, malformed -> repair up to 2 attempts, rejected fabricated quote -> fault returned to CLI, budget cap -> `stopped_at_cap`), verifying `antigravity::require_acknowledged` refuses unacknowledged Antigravity exchanges, `idea.exchange` events audit every attempt, and (Checkpoint 2b) `explore/1` MCP tools serve over `core.exe` without the Research `search_formal_library`/`sympy_eval` prompt block and run `idea_chat` multi-paper line-citation checks.
+- `idea_cli_exchange.rs`: fake Claude CLI & Antigravity CLI returning JSON blocks (valid, malformed -> repair up to 2 attempts, rejected fabricated quote -> fault returned to CLI, budget cap -> `stopped_at_cap`), `idea.exchange` events audit every attempt, and (Checkpoint 2b) `explore/1` MCP tools serve over `core.exe` without the Research `search_formal_library`/`sympy_eval` prompt block and run `idea_chat` multi-paper line-citation checks.
 
 ## 8. Document conflicts and resolutions
 

@@ -109,7 +109,6 @@ mod tests {
     use crate::auth::AuthGuard;
     use crate::cli_turn::CliRouteKind;
     use crate::sse::SseHub;
-    use crate::state::AntigravityAck;
     use crate::DesktopConfig;
     use std::path::Path;
 
@@ -173,7 +172,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let st = test_state(tmp.path());
         st.update_ui_settings(|ui| {
-            ui.antigravity_ack = Some(AntigravityAck { acknowledged_ms: 1, notice_version: 1 });
+            ui.default_provider = Some("openai".into());
         })
         .unwrap();
         let s1 = Arc::clone(&st);
@@ -191,7 +190,7 @@ mod tests {
         t1.join().unwrap();
         t2.join().unwrap();
         let ui = st.load_ui_settings();
-        assert!(ui.antigravity_ack.is_some(), "antigravity_ack must not be lost");
+        assert_eq!(ui.default_provider.as_deref(), Some("openai"), "default_provider must not be lost");
         assert_eq!(ui.pinned_conventions.as_deref(), Some("conv"));
         assert!(ui.default_model.is_some());
     }

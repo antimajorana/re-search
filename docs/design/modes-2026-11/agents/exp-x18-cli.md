@@ -19,13 +19,13 @@
 - **Verified `solve-s15-cli-parity` architecture on `gemini/work/fixed`:**
   - `S15` ALREADY split `crates/desktop-server/src/cli_turn.rs` (now `~295`L) into `cli_turn_setup.rs` (`~547`L), `cli_turn_solve.rs` (`~247`L), and `cli_turn_tests.rs` (`~321`L), and updated `crates/cli-route/src/core_tools.rs` (`~257`L) and `crates/mcp-server/src/{main.rs,solve_wire.rs}` (`386`L / `445`L) for mode-neutral `CORE_TOOL_PROFILE`!
   - **Line-count headroom warning:** `cli_turn_setup.rs` is near `547`L! Keep edits to `cli_turn.rs` / `cli_turn_setup.rs` tiny (`<= 15`L) or place Explore CLI helpers in `crates/desktop-server/src/idea_cli_exchange.rs` (`<= 600`L) / `cli_turn_explore.rs` (`<= 600`L) so every file stays `<= 600`L.
-  - **Never weaken consent or sandbox guards:** `antigravity::require_acknowledged` (`antigravity.rs`) and `UiRelay` (`cli_relay.rs`) MUST remain enforced on Antigravity / Claude CLI routes.
+  - **Never weaken sandbox guards:** `UiRelay` (`cli_relay.rs`) MUST remain enforced on Antigravity / Claude CLI routes.
 
 ## 3. Smallest implementation checkpoints (push after each!)
 
 1. **Checkpoint 1 — Explore pipeline exchanges over CLI routes:**
    - `crates/desktop-server/src/idea_cli_exchange.rs` (new, `<= 600`L) + minimal hook in `idea_exchanges.rs` (and `idea_exchanges_triage.rs` / `idea_read.rs` where exchanges dispatch):
-     - Implements plain prompt-in, JSON-block-out exchange runner over `CliRouteKind::Claude` and `CliRouteKind::Antigravity` (enforcing `antigravity::require_acknowledged`).
+     - Implements plain prompt-in, JSON-block-out exchange runner over `CliRouteKind::Claude` and `CliRouteKind::Antigravity`.
      - Pipes extracted JSON through the **exact same Rust validators/recorders** (`record_idea_brief`, `record_idea_triage`, `record_paper_evidence`, `record_idea_map`, `record_idea_directions`), preserving `<= 2` repair rounds, F9 budget checks before every CLI call (Rule P3), `idea.exchange` audit events with CLI route provenance, and `UiRelay` (`cli_relay.rs`) approval handling.
      - Removes X6's `"not supported on CLI route yet"` refusal for Explore exchanges when running on `claude-cli` / `antigravity`.
      - Push Checkpoint 1 to `gemini/modes/exp-x18-cli`.
@@ -44,6 +44,6 @@
 
 ## 5. Required tests & hand-back
 
-- Cover in `idea_cli_exchange.rs` (fake/mock CLI subprocess + synthetic ledgers only, zero live vendor CLI/network): fake Claude & Antigravity CLIs returning JSON blocks (valid, malformed -> up to 2 repairs, fabricated quote fault returned to CLI, budget cap -> `stopped_at_cap`), `antigravity::require_acknowledged` refusing unacknowledged exchanges, `idea.exchange` provenance auditing, and (CP2) `explore/1` MCP tools serving without Research `sympy_eval`/`search_formal_library` prompt block + running `idea_chat` multi-paper line-citation check.
+- Cover in `idea_cli_exchange.rs` (fake/mock CLI subprocess + synthetic ledgers only, zero live vendor CLI/network): fake Claude & Antigravity CLIs returning JSON blocks (valid, malformed -> up to 2 repairs, fabricated quote fault returned to CLI, budget cap -> `stopped_at_cap`), `idea.exchange` provenance auditing, and (CP2) `explore/1` MCP tools serving without Research `sympy_eval`/`search_formal_library` prompt block + running `idea_chat` multi-paper line-citation check.
 - Verify before push as non-root (`RE_SEARCH_PYTHON` unset): `check_file_length.py`, `cargo clippy --workspace --all-targets --locked -- -D warnings -A clippy::manual_unwrap_or`, `cargo test --workspace --locked --no-fail-fast`, plus targeted `RE_SEARCH_PYTHON="$(command -v python3)" cargo test --locked -p worker -p mcp-server -p research-tools`.
 - Write `docs/design/modes-2026-11/reports/exp-x18-cli.md` and push to `gemini/modes/exp-x18-cli`.

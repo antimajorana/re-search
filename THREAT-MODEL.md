@@ -16,9 +16,8 @@ additional desktop subscription routes:
   zero-capability Windows `AppContainerSandbox`) and `ledger_note`. The
   desktop server runs the same route for sessions bound to `claude-cli` (see
   "The Claude subscription route in the desktop" below), with the research
-  tools added, and also offers an opt-in, labelled Antigravity CLI route
-  (`antigravity`, `agy.exe`, `"vendor-sandboxed, not confined to re:Search
-  tools"`). Both use `crates/cli-route`.
+  tools added, and also offers the Antigravity CLI route (`antigravity`,
+  `agy.exe`). Both use `crates/cli-route`.
 - **`--route api` (Stage 4–5, `"in-core loop, full provenance"`).** Runs the
   in-core agent loop (`crates/agent`) directly inside `re-search` over the
   `Transport` trait (`AnthropicTransport`, `OpenAiTransport` for OpenAI/Ollama,
@@ -858,30 +857,11 @@ exactly as on the API-key route; the session records `route: "api"`,
   requires removing `<data_dir>/chatgpt/registration.dpapi` (no account-switch
   UI exists yet).
 
-## The Antigravity route in the desktop (`antigravity`) — vendor-sandboxed, not confined to re:Search tools
+## The Antigravity route in the desktop (`antigravity`)
 
-The user chose to build this route knowing two things it cannot fix: Google's terms
-for consumer plans may treat third-party wrapping of the Antigravity CLI as
-unsupported or as a breach (account risk, the user's own), and the CLI's built-in
-tools are outside re:Search's control. The Connect row, model group, composer
-note, start event and session API identify the route as vendor-sandboxed.
+The desktop enables the Antigravity route directly whenever `agy.exe` is found and
+the environment auth check passes.
 
-- **Gate.** `POST /api/connections/antigravity/acknowledge` (header token) stores
-  `antigravity_ack {acknowledged_ms, notice_version}` in `ui_settings.json`
-  under a mutex with unique per-write temp files (so concurrent settings saves
-  cannot resurrect a withdrawn acknowledgement). The UI calls it only when the
-  person clicks the button under the full warning and confirms a dialog that
-  repeats it. Without it (or for an older notice version), `POST
-  /api/sessions/{id}/messages` refuses synchronously with HTTP 403 before
-  mutating `meta.json` or starting a turn, `GET /api/models` omits the group,
-  and **`agy.exe` is never spawned** (neither `--version` nor `models` runs
-  before acknowledgement; tested). `PUT /api/settings/providers` cannot set it;
-  `POST /api/connections/antigravity/withdraw` clears it, invalidates any
-  in-flight `agy models` cache write via a generation counter, and stops any
-  running Antigravity turn. Reopening an Antigravity session after withdrawal
-  or disconnect still shows its confinement label in the session API and
-  composer. Any holder of the launch token could call the endpoint, as with
-  approvals; re:Search itself never does.
 - **What runs.** Each turn starts the unmodified `agy.exe` (found via `--agy`,
   `RE_SEARCH_AGY`, `PATH`, WinGet's `Links` and `Packages\Google.AntigravityCLI_*`)
   in a kill-on-close Job Object with working directory `sessions/<id>/agy` and
@@ -974,8 +954,8 @@ note, start event and session API identify the route as vendor-sandboxed.
   Headless page says, and that `--disable-slash-commands` (documented for print
   mode) is accepted with it; that the inline `--settings` JSON survives Windows
   command-line quoting as one argument; the exit code when a built-in is
-  soft-denied (documented as 0); and whether `agy models` and `--version` (run
-  after acknowledgement) trigger a self-update (observed once, 1.5.13 →
+  soft-denied (documented as 0); and whether `agy models` and `--version`
+  trigger a self-update (observed once, 1.5.13 →
   1.5.14).
 
 ## Remaining limits & gaps

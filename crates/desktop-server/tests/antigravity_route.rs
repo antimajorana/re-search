@@ -1,6 +1,6 @@
 //! Desktop turns on the Antigravity route (`provider: "antigravity"`), driven by a scripted
-//! fake `agy` (no real CLI, no model, no network): the person's acknowledgement gate, the
-//! handshake ("core tools reachable + settings applied"), a core tool call approved on a
+//! fake `agy` (no real CLI, no model, no network): direct availability when the CLI is found,
+//! the handshake ("core tools reachable + settings applied"), a core tool call approved on a
 //! UI card, built-in tool use recorded as `vendor.builtin_tool`, the workspace
 //! `mcp_config.json` lifetime, stop, the model list, and the labels.
 
@@ -16,16 +16,10 @@ use std::time::Duration;
 use std::time::Instant;
 
 const TURN: Duration = Duration::from_secs(60);
-const AGY_LABEL: &str = "Antigravity (Google) · vendor-sandboxed";
+const AGY_LABEL: &str = "Antigravity (Google)";
 
 fn kinds(data: &std::path::Path, sid: &str) -> Vec<String> {
     Ledger::open(data).unwrap().read_session(sid).unwrap().into_iter().map(|e| e.kind).collect()
-}
-
-fn acknowledge(h: &CliHarness) {
-    let (st, v) = h.post("/api/connections/antigravity/acknowledge", &json!({}));
-    assert_eq!(st, 200, "{v}");
-    assert_eq!(v["acknowledged"], true);
 }
 
 fn create_agy_session(h: &CliHarness) -> String {
@@ -52,51 +46,44 @@ fn find<'a>(list: &'a Value, key: &str, id: &str) -> Option<&'a Value> {
 }
 
 #[test]
-fn route_requires_current_acknowledgement_before_listing_models_or_starting() {
+fn route_is_available_directly_when_cli_is_found_and_ignores_legacy_files() {
     clear_agy_env_auth();
     let h = CliHarness::start_agy();
-    let (st, created) = h.post("/api/sessions", &json!({ "title": "unbound" }));
-    assert_eq!(st, 200);
-    let sid = created["id"].as_str().unwrap();
-    for settings in ["{}", r#"{"antigravity_ack":{"acknowledged_ms":1,"notice_version":1}}"#] {
-        std::fs::write(h.data.join("ui_settings.json"), settings).unwrap();
+    let settings_path = h.data.join("ui_settings.json");
+    let expected_conn_keys: Vec<&str> = vec![
+        "accepts_key", "base_url", "connected", "found", "has_saved_key", "how_to", "id",
+        "key_env", "key_required", "key_source", "kind", "label", "route", "session_note",
+        "status", "version",
+    ];
+    for settings in [
+        "{}",
+        r#"{"antigravity_ack":{"ts":1,"notice_version":1}}"#,
+        r#"{"antigravity_ack":{"ts":1,"notice_version":2}}"#,
+    ] {
+        std::fs::write(&settings_path, settings).unwrap();
         let (_, conns) = h.get("/api/connections");
         let c = find(&conns, "connections", "antigravity").unwrap();
-        assert_eq!(c["connected"], false);
-        assert_eq!(c["acknowledged"], false);
+        assert_eq!(c["connected"], true, "{c}");
         assert_eq!(c["found"], true);
-        assert!(c["version"].is_null());
+        assert_eq!(c["version"], "1.5.14");
         assert_eq!(c["label"], AGY_LABEL);
-        assert_eq!(c["session_note"], "Antigravity CLI · vendor-sandboxed");
-        assert_eq!(c["confinement"], "vendor-sandboxed");
-        let warning = c["warning"].as_str().unwrap();
-        assert!(warning.contains("terms") && warning.contains("built-in tools"), "{warning}");
-        assert_eq!(c["acknowledge_action"], "acknowledge");
-        assert_eq!(c["withdraw_action"], "withdraw");
+        assert_eq!(c["session_note"], "Antigravity CLI");
+        let mut keys: Vec<&str> = c.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, expected_conn_keys, "unexpected connections entry keys: {c}");
 
         let (_, models) = h.get("/api/models");
-        assert!(find(&models, "providers", "antigravity").is_none(), "{models}");
-        let (st, err) = h.post(
-            &format!("/api/sessions/{sid}/messages"),
-            &json!({ "prompt": "hello", "provider": "antigravity" }),
-        );
-        assert_eq!(st, 403, "{err}");
-        assert!(kinds(&h.data, sid).is_empty());
-        let (_, session) = h.get(&format!("/api/sessions/{sid}"));
-        assert!(session["meta"]["route"].is_null());
-        assert!(h.fake.read("invocations.txt").is_none());
+        let g = find(&models, "providers", "antigravity").expect("antigravity group");
+        assert_eq!(g["label"], AGY_LABEL);
+        assert_eq!(g["session_note"], "Antigravity CLI");
+        assert!(g.get("confinement").is_none(), "model group must omit confinement: {g}");
+
+        // Existing stored settings on disk are ignored, never migrated or deleted.
+        assert_eq!(std::fs::read_to_string(&settings_path).unwrap(), settings);
     }
 
-    for action in ["acknowledge", "withdraw"] {
-        let path = format!("/api/connections/antigravity/{action}");
-        let (st, _, _) = common::raw_http(h.port, "POST", &path, &[], b"{}");
-        assert_eq!(st, 401);
-    }
-    acknowledge(&h);
-    let (_, conns) = h.get("/api/connections");
-    let c = find(&conns, "connections", "antigravity").unwrap();
-    assert_eq!(c["connected"], true);
-    assert_eq!(c["acknowledged"], true);
+    let (st, _) = h.post("/api/connections/antigravity/withdraw", &json!({}));
+    assert_eq!(st, 404, "removed antigravity action route must return 404");
     h.srv.shutdown();
 }
 
@@ -104,13 +91,13 @@ fn route_requires_current_acknowledgement_before_listing_models_or_starting() {
 fn model_list_comes_from_agy_models_and_carries_the_label() {
     clear_agy_env_auth();
     let h = CliHarness::start_agy();
-    acknowledge(&h);
     h.fake.write("models.txt", include_str!("../../cli-route/fixtures/agy_models_1_5_13.txt"));
     let (st, models) = h.get("/api/models");
     assert_eq!(st, 200);
     let g = find(&models, "providers", "antigravity").expect("antigravity group").clone();
     assert_eq!(g["label"], AGY_LABEL);
-    assert_eq!(g["session_note"], "Antigravity CLI · vendor-sandboxed");
+    assert_eq!(g["session_note"], "Antigravity CLI");
+    assert!(g.get("confinement").is_none());
     assert_eq!((g["route"].as_str(), g["source"].as_str(), g["stale"].as_bool()), (Some("antigravity"), Some("live"), Some(false)));
     let list = g["models"].as_array().unwrap();
     assert_eq!(list.len(), 27);
@@ -128,7 +115,6 @@ fn model_list_comes_from_agy_models_and_carries_the_label() {
 fn incomplete_antigravity_turns_record_an_abort() {
     clear_agy_env_auth();
     let h = CliHarness::start_agy();
-    acknowledge(&h);
     let timeout = json!({
         "event": "result",
         "result": { "status": "SUCCESS", "response": "partial", "finished_reason": "print_timeout" },
@@ -158,7 +144,6 @@ fn turn_runs_core_tool_with_a_persons_approval_and_cleans_up() {
     clear_agy_env_auth();
     let h = CliHarness::start_agy();
     common::disable_auto_approve(h.port, &h.tok);
-    acknowledge(&h);
     let sid = create_agy_session(&h);
     let digest = "cd".repeat(32);
     let request = json!({
@@ -202,7 +187,7 @@ fn turn_runs_core_tool_with_a_persons_approval_and_cleans_up() {
     let events = ledger.read_session(&sid).unwrap();
     let start = &events[0];
     assert_eq!((start.kind.as_str(), start.payload["route"].as_str()), ("session.start", Some("antigravity")));
-    assert_eq!(start.payload["confinement"], "vendor-sandboxed");
+    assert!(start.payload.get("confinement").is_none());
     assert_eq!(start.payload["route_label"], AGY_LABEL);
     assert_eq!(start.payload["provider"], "antigravity");
     let flags: Vec<String> = start.payload["cli_flags"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect();
@@ -260,7 +245,6 @@ fn turn_runs_core_tool_with_a_persons_approval_and_cleans_up() {
 fn handshake_without_core_tools_or_settings_aborts() {
     clear_agy_env_auth();
     let h = CliHarness::start_agy();
-    acknowledge(&h);
     let only_builtins = vec!["run_command".to_string(), "call_mcp_tool".to_string()];
     let cases = [
         (agy_init(&only_builtins, "request-review"), "core tools not reachable"),
@@ -292,7 +276,6 @@ fn handshake_without_core_tools_or_settings_aborts() {
 fn builtin_tool_use_is_recorded_and_shown_as_a_warning() {
     clear_agy_env_auth();
     let h = CliHarness::start_agy();
-    acknowledge(&h);
     let sid = create_agy_session(&h);
     let params = json!({ "CommandLine": "dir C:\\" });
     let denied = json!({ "type": "PERMISSION_DENIED", "message": "denied by rule command(*)" });
@@ -323,10 +306,9 @@ fn builtin_tool_use_is_recorded_and_shown_as_a_warning() {
 
 #[cfg(windows)]
 #[test]
-fn withdrawing_acknowledgement_kills_the_turn_and_deletes_the_config() {
+fn stopping_turn_kills_the_turn_and_deletes_the_config() {
     clear_agy_env_auth();
     let h = CliHarness::start_agy();
-    acknowledge(&h);
     let sid = create_agy_session(&h);
     h.fake.script(&[agy_init(&builtins_and_core(&h), "request-review"), "@sleep 60000".into(), agy_result("SUCCESS", "late")]);
     let mut sse = h.sse(&sid);
@@ -337,9 +319,9 @@ fn withdrawing_acknowledgement_kills_the_turn_and_deletes_the_config() {
     let mcp_path = h.fake.read("mcp_path.txt").unwrap();
     assert!(std::path::Path::new(&mcp_path).exists(), "present while the turn runs");
     let t0 = Instant::now();
-    let (st, v) = h.post("/api/connections/antigravity/withdraw", &json!({}));
+    let (st, v) = h.post(&format!("/api/sessions/{sid}/stop"), &json!({}));
     assert_eq!(st, 200, "{v}");
-    assert_eq!(v["acknowledged"], false);
+    assert_eq!(v["stopped"], true);
     let err = sse.wait_turn_end(TURN).expect_err("turn_error");
     assert!(err["error"].as_str().unwrap().contains("stopped"), "{err}");
     assert!(t0.elapsed() < Duration::from_secs(20));
@@ -365,9 +347,8 @@ fn the_fake_rejects_unknown_flags_and_a_prompt_argument() {
 }
 
 #[test]
-fn version_probe_runs_after_acknowledgement_and_caches() {
+fn version_probe_runs_when_cli_found_and_caches() {
     let h = CliHarness::start_agy();
-    acknowledge(&h);
     let (_, conns) = h.get("/api/connections");
     let c = find(&conns, "connections", "antigravity").unwrap();
     assert_eq!((c["found"].as_bool(), c["connected"].as_bool()), (Some(true), Some(true)));
@@ -385,7 +366,6 @@ fn env_auth_refusal_blocks_route_unless_explicitly_allowed() {
         let h = CliHarness::start_agy_with(|cfg| {
             cfg.connection_env = Some(BTreeMap::from([(var.to_string(), "dummy-agy-secret".to_string())]));
         });
-        acknowledge(&h);
         let (_, conns) = h.get("/api/connections");
         let c = find(&conns, "connections", "antigravity").unwrap();
         assert_eq!(c["connected"], false, "{var}: {c}");
@@ -411,7 +391,6 @@ fn env_auth_refusal_blocks_route_unless_explicitly_allowed() {
             ("RE_SEARCH_ALLOW_AGY_ENV_AUTH".to_string(), "1".to_string()),
         ]));
     });
-    acknowledge(&h);
     let (_, conns) = h.get("/api/connections");
     let c = find(&conns, "connections", "antigravity").unwrap();
     assert_eq!(c["connected"], true, "{c}");
@@ -430,7 +409,6 @@ fn connection_env_cannot_supply_env_auth_opt_in_bypass_for_turns() {
             ("RE_SEARCH_ALLOW_AGY_ENV_AUTH".to_string(), "1".to_string()),
         ]));
     });
-    acknowledge(&h);
     let sid = create_agy_session(&h);
     let mut sse = h.sse(&sid);
     send_agy(&h, &sid, "bypass attempt");
@@ -443,59 +421,31 @@ fn connection_env_cannot_supply_env_auth_opt_in_bypass_for_turns() {
 }
 
 #[test]
-fn withdrawal_disables_cached_models_and_turns_but_preserves_session_label() {
+fn session_api_carries_antigravity_label_without_confinement_field() {
     let h = CliHarness::start_agy();
-    acknowledge(&h);
     let sid = create_agy_session(&h);
     Ledger::open(&h.data)
         .unwrap()
         .append(&sid, "session.start", 1, &json!({ "route": "antigravity", "prompt": "hi" }))
         .unwrap();
 
-    let (_, models) = h.get("/api/models");
-    assert!(find(&models, "providers", "antigravity").is_some());
-    let (st, v) = h.post("/api/connections/antigravity/withdraw", &json!({}));
-    assert_eq!(st, 200, "{v}");
-    assert_eq!(v["acknowledged"], false);
-    let (_, conns) = h.get("/api/connections");
-    let c = find(&conns, "connections", "antigravity").unwrap();
-    assert_eq!(c["connected"], false);
-    assert_eq!(c["acknowledged"], false);
-    let (_, models) = h.get("/api/models");
-    assert!(find(&models, "providers", "antigravity").is_none());
-
     let (st, sess) = h.get(&format!("/api/sessions/{sid}"));
     assert_eq!(st, 200);
     assert_eq!(sess["route"], "antigravity");
-    assert_eq!(sess["confinement"], "vendor-sandboxed");
+    assert!(sess.get("confinement").is_none());
     assert_eq!(sess["route_label"], AGY_LABEL);
 
     let (st, list) = h.get("/api/sessions");
     assert_eq!(st, 200);
     let row = find(&list, "sessions", &sid).expect("session in list");
-    assert_eq!(row["confinement"], "vendor-sandboxed");
+    assert!(row.get("confinement").is_none());
     assert_eq!(row["route_label"], AGY_LABEL);
-    let before = kinds(&h.data, &sid);
-    for request in [
-        json!({ "prompt": "again" }),
-        json!({ "prompt": "again", "provider": "antigravity" }),
-    ] {
-        let (st, err) = h.post(&format!("/api/sessions/{sid}/messages"), &request);
-        assert_eq!(st, 403, "{err}");
-    }
-    assert_eq!(kinds(&h.data, &sid), before);
-    assert!(h.fake.argv().is_none());
-
-    acknowledge(&h);
-    let (_, models) = h.get("/api/models");
-    assert_eq!(find(&models, "providers", "antigravity").unwrap()["source"], "live");
     h.srv.shutdown();
 }
 
 #[test]
 fn route_mixing_is_refused_even_after_pre_turn_one_upload() {
     let h = CliHarness::start_agy();
-    acknowledge(&h);
     let sid = create_agy_session(&h);
     let (st, v) = h.post(
         &format!("/api/sessions/{sid}/upload"),

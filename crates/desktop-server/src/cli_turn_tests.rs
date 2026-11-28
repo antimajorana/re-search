@@ -37,7 +37,6 @@ fn provisional_cli_switch_clears_stale_default_model() {
         Arc::new(crate::sse::SseHub::new()),
         chatgpt,
     );
-    crate::antigravity::handle_acknowledge(&state).unwrap();
     let meta = SessionMeta {
         id: "s-switch01".into(),
         title: "switch".into(),
@@ -288,7 +287,7 @@ fn resolve_cli_turn_profile_maps_modes_and_rejects_unbuilt_explore() {
 }
 
 #[test]
-fn wants_cli_route_enforces_antigravity_ack_on_solve_session_and_check_sandbox_id_isolates() {
+fn wants_cli_route_allows_antigravity_directly_on_solve_session_and_check_sandbox_id_isolates() {
     let tmp = tempfile::TempDir::new().unwrap();
     let cfg = DesktopConfig {
         port: 0,
@@ -314,7 +313,7 @@ fn wants_cli_route_enforces_antigravity_ack_on_solve_session_and_check_sandbox_i
         Arc::new(crate::sse::SseHub::new()),
         chatgpt,
     );
-    let sid = "s-solve-agy-ack";
+    let sid = "s-solve-agy";
     let ledger = ledger::Ledger::open(tmp.path()).unwrap();
     ledger.append_with_hash(sid, "solve.started", 1, &json!({})).unwrap();
     state
@@ -325,11 +324,6 @@ fn wants_cli_route_enforces_antigravity_ack_on_solve_session_and_check_sandbox_i
         })
         .unwrap();
 
-    let (code, err) =
-        wants_cli_route(&state, sid, &json!({ "provider": "antigravity" })).unwrap_err();
-    assert_eq!(code, 403, "unacknowledged Antigravity on Solve must return 403: {err}");
-
-    crate::antigravity::handle_acknowledge(&state).unwrap();
     let kind = wants_cli_route(&state, sid, &json!({ "provider": "antigravity" })).unwrap();
     assert_eq!(kind, Some(CliRouteKind::Antigravity));
 

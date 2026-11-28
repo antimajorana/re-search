@@ -422,12 +422,6 @@ pub(crate) fn dispatch_api(
         ("POST", ["api", "connections", "chatgpt", "logout"]) => {
             write_api_res(&mut stream, crate::chatgpt::handle_logout(state));
         }
-        ("POST", ["api", "connections", "antigravity", "acknowledge"]) => {
-            write_api_res(&mut stream, crate::antigravity::handle_acknowledge(state));
-        }
-        ("POST", ["api", "connections", "antigravity", "withdraw"]) => {
-            write_api_res(&mut stream, crate::antigravity::handle_withdraw(state));
-        }
         ("GET", ["api", "models"]) => {
             write_api_res(&mut stream, crate::model_catalog::handle_models(state, &req.query));
         }

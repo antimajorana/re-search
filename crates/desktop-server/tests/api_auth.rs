@@ -106,8 +106,6 @@ fn every_api_route_except_health_requires_the_token() {
         ("POST", "/api/connections/chatgpt/login".to_string()),
         ("POST", "/api/connections/chatgpt/open".to_string()),
         ("POST", "/api/connections/chatgpt/logout".to_string()),
-        ("POST", "/api/connections/antigravity/acknowledge".to_string()),
-        ("POST", "/api/connections/antigravity/withdraw".to_string()),
         ("PUT", "/api/settings/providers".to_string()),
         ("DELETE", s.clone()),
         ("POST", format!("{s}/archive")),
@@ -221,8 +219,6 @@ fn valid_token_with_foreign_origin_cannot_mutate_and_refused_bodies_are_not_read
         "/api/connections/chatgpt/login",
         "/api/connections/chatgpt/open",
         "/api/connections/chatgpt/logout",
-        "/api/connections/antigravity/acknowledge",
-        "/api/connections/antigravity/withdraw",
         stop_path.as_str(),
     ];
     for origin in ["http://evil.invalid", "http://127.0.0.1:1", "null"] {
