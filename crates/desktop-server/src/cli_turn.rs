@@ -269,6 +269,14 @@ pub(crate) fn run_cli_turn(
     let cli = kind.cli_name();
     match report.end {
         TurnEnd::Completed { exit_code: Some(0), init_verified: true } => {
+            if mode == Mode::Solve {
+                crate::cli_turn_solve::maybe_run_post_cli_solve_review(
+                    state,
+                    &research,
+                    session_id,
+                    stop,
+                )?;
+            }
             let text = sink.final_text().to_string();
             Ok(if text.is_empty() { report.final_text } else { text })
         }

@@ -10,7 +10,7 @@ mod common;
 use common::{raw_http, test_cfg};
 use desktop_server::cli_turn_solve::{
     resolve_api_verifier_transport_for_cli, D16_CLI_REVIEW_UNAVAILABLE_NOTICE,
-    D16_CLI_VERIFIER_REJECTED_NOTICE, D16_CP2_PENDING_S14_NOTICE,
+    D16_CLI_VERIFIER_REJECTED_NOTICE,
 };
 use desktop_server::start_desktop_server;
 use desktop_server::state::DesktopState;
@@ -213,9 +213,11 @@ fn d16_cli_review_notices_helper_role_guard_and_api_verifier_resolution() {
     let resp3: Value = serde_json::from_slice(&raw).unwrap();
     assert_eq!(resp3["cli_review"]["on_cli_route"], true);
     assert_eq!(resp3["cli_review"]["api_verifier_configured"], true);
+    assert_eq!(resp3["cli_review"]["automatic_review_available"], true);
+    assert_eq!(resp3["cli_review"]["s14_verifier_loop_ready"], true);
     assert_eq!(resp3["cli_review"]["verifier_transport"], "in_core_api");
     assert_eq!(resp3["cli_review"]["verifier"]["provider"], "anthropic");
-    assert_eq!(resp3["cli_review"]["notice"], D16_CP2_PENDING_S14_NOTICE);
+    assert_eq!(resp3["cli_review"]["notice"], Value::Null);
     srv_api.shutdown();
 
     // Direct transport resolution helper also builds the API Transport and rejects CLI helpers.

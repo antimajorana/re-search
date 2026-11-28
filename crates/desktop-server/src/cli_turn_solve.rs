@@ -1,13 +1,24 @@
 //! Solve CLI parity helpers: ledger-driven result-sheet honesty (`solve.md` 5.4, 12 risk 13;
 //! rules R15, R22) and D16 subscription-CLI verifier status / CP2 API-transport seam.
 
+use crate::approver::UiApprover;
 use crate::cli_turn_setup::{meta_kind, CliRouteKind};
+use crate::solve_workers::DesktopIsolatedWorkerFactory;
 use crate::state::DesktopState;
-use agent::{ProviderKind, Transport};
-use research_tools::solve_model::{RoleModel, SolveDoneStatus, SolveSetup};
+use agent::verifier_loop::{
+    batch_review_targets, count_review_loops, run_finish_review_batches, run_solve_verifier_loop,
+    SolveReviewOutcome, SolveVerifierConfig, SolveVerifierRunCtx,
+};
+use agent::verifier_tools::IsolatedWorkerFactory;
+use agent::{CancelToken, ProviderKind, Transport};
+use cli_route::StopHandle;
+use research_tools::solve_model::{ReviewPolicy, RoleModel, SolveDoneStatus, SolveSetup, StepOrigin};
 use research_tools::solve_state::SolveState;
 use research_tools::solve_status::Tier;
+use research_tools::ResearchEnv;
 use serde_json::{json, Value};
+use std::sync::Arc;
+use tools::Approver;
 
 /// Plain D16 notice when a subscription-CLI user has no in-core API verifier configured.
 /// Kept as a single named constant (`solve.md` D16; zero R22-forbidden wording).
@@ -232,12 +243,12 @@ pub fn resolve_cli_verifier_status(
             "on_cli_route": true,
             "cli_provider": kind.provider_id(),
             "api_verifier_configured": true,
-            "automatic_review_available": false,
+            "automatic_review_available": true,
             "cli_helper_rejected": false,
             "verifier_transport": "in_core_api",
             "verifier": { "provider": provider, "model": model },
-            "s14_verifier_loop_ready": false,
-            "notice": D16_CP2_PENDING_S14_NOTICE,
+            "s14_verifier_loop_ready": true,
+            "notice": Value::Null,
         }),
         Ok(None) => json!({
             "on_cli_route": true,
@@ -262,4 +273,120 @@ pub fn resolve_cli_verifier_status(
             "notice": reason,
         }),
     }
+}
+
+/// Run automatic post-CLI-turn API `verifier_loop` review (CP2) when `Mode::Solve` completes
+/// on a subscription-CLI route and an in-core API verifier is configured (`solve.md` 5.2-5.3, D16).
+pub(crate) fn maybe_run_post_cli_solve_review(
+    state: &Arc<DesktopState>,
+    research: &Arc<ResearchEnv>,
+    session_id: &str,
+    stop: &StopHandle,
+) -> Result<(), String> {
+    let ledger = state.open_ledger()?;
+    let events = ledger
+        .read_session(session_id)
+        .map_err(|e| format!("failed to read session `{session_id}` for CLI review: {e}"))?;
+    let folded = SolveState::from_events(&events);
+    let Some(ref setup) = folded.setup else {
+        return Ok(());
+    };
+    if setup.review == ReviewPolicy::Off {
+        return Ok(());
+    }
+    let explicit_verifier = Some(&setup.roles.verifier).filter(|r| !r.provider.trim().is_empty());
+    let Some((transport, provider, model)) =
+        resolve_api_verifier_transport_for_cli(state, explicit_verifier)?
+    else {
+        return Ok(());
+    };
+
+    let cancel = CancelToken::new();
+    if stop.is_stopped() {
+        cancel.cancel();
+        return Err("turn stopped by the user".to_string());
+    }
+
+    let factory: Arc<dyn IsolatedWorkerFactory> =
+        Arc::new(DesktopIsolatedWorkerFactory::new(Arc::clone(state)));
+    let contained = factory.isolated_workers_contained();
+    let containment = if contained {
+        "AppContainer isolated verifier worker".to_string()
+    } else {
+        "desktop host (no sandboxed Python verifier worker configured)".to_string()
+    };
+    let approver: Arc<dyn Approver> =
+        Arc::new(UiApprover::new(Arc::clone(state), containment, contained));
+    let config = SolveVerifierConfig::new(RoleModel { provider, model });
+    let ctx = SolveVerifierRunCtx {
+        transport: transport.as_ref(),
+        ledger: &ledger,
+        env: Arc::clone(research),
+        session: session_id,
+        config: &config,
+        approver,
+        factory: &factory,
+        cancel: Some(&cancel),
+    };
+
+    if let Some(ref done) = folded.done {
+        let summary = run_finish_review_batches(&ctx, &done.final_entry_id)?;
+        if summary.batches_run > 0 {
+            let independence = summary.outcomes.first().map(|o| o.independence());
+            let completed = summary
+                .outcomes
+                .iter()
+                .all(|o| matches!(o, SolveReviewOutcome::Completed { .. }));
+            state.sse.emit(
+                session_id,
+                "solve_updated",
+                json!({
+                    "session": session_id,
+                    "review_completed": completed,
+                    "independence": independence,
+                }),
+            );
+        }
+        return Ok(());
+    }
+
+    if setup.review != ReviewPolicy::All {
+        return Ok(());
+    }
+
+    let remaining_loops = usize::from(setup.budgets.max_review_loops)
+        .saturating_sub(usize::try_from(count_review_loops(&events)).unwrap_or(usize::MAX));
+    if remaining_loops == 0 {
+        return Ok(());
+    }
+
+    let targets: Vec<String> = folded
+        .active_entries()
+        .into_iter()
+        .filter(|e| e.origin != StepOrigin::Given)
+        .filter(|e| folded.tier(&e.entry_id).is_none_or(|t| t.own == Tier::Unchecked))
+        .map(|e| e.entry_id.clone())
+        .collect();
+    if targets.is_empty() {
+        return Ok(());
+    }
+
+    for batch in batch_review_targets(&targets).into_iter().take(remaining_loops) {
+        if stop.is_stopped() {
+            cancel.cancel();
+            return Err("turn stopped by the user".to_string());
+        }
+        let outcome = run_solve_verifier_loop(&ctx, &batch)?;
+        state.sse.emit(
+            session_id,
+            "solve_updated",
+            json!({
+                "session": session_id,
+                "review_completed": matches!(outcome, SolveReviewOutcome::Completed { .. }),
+                "independence": outcome.independence(),
+            }),
+        );
+    }
+
+    Ok(())
 }
