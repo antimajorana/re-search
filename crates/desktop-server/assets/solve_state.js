@@ -44,14 +44,34 @@ export const SYMBOL_ASSUMPTION_PRESETS = Object.freeze([
   'nonzero',
 ]);
 
-export function isSameModelSelection(solver, verifier) {
-  const sp = String(solver?.provider || '').trim().toLowerCase();
-  const sm = String(solver?.model || '').trim().toLowerCase();
-  if (!sp || !sm) return false;
+const CLI_ROLE_PROVIDERS = new Set(['claude-cli', 'antigravity']);
+
+function canonicalProviderFamily(raw) {
+  const norm = String(raw || '').trim().toLowerCase();
+  if (['anthropic', 'anthropic-messages', 'claude-cli', 'claude'].includes(norm)) return 'anthropic';
+  if (['openai', 'openai-chat', 'chatgpt', 'chatgpt-responses'].includes(norm)) return 'openai';
+  if (['gemini', 'gemini-generate-content', 'google', 'antigravity'].includes(norm)) return 'gemini';
+  if (['ollama', 'ollama-chat'].includes(norm)) return 'ollama';
+  return norm;
+}
+
+function isInCoreRole(role) {
+  const p = String(role?.provider || '').trim().toLowerCase();
+  return Boolean(p && !CLI_ROLE_PROVIDERS.has(p));
+}
+
+export function isSameModelSelection(solver, verifier, connectedModels = null) {
+  let sp = String(solver?.provider || '').trim().toLowerCase();
+  let sm = String(solver?.model || '').trim().toLowerCase();
   const vp = String(verifier?.provider || '').trim().toLowerCase();
   const vm = String(verifier?.model || '').trim().toLowerCase();
+  if ((!sp || !sm) && Array.isArray(connectedModels) && connectedModels.length === 1 && vp && vm) {
+    sp = String(connectedModels[0]?.provider || '').trim().toLowerCase();
+    sm = String(connectedModels[0]?.model || '').trim().toLowerCase();
+  }
+  if (!sp || !sm) return false;
   if (!vp || !vm) return true;
-  return sp === vp && sm === vm;
+  return canonicalProviderFamily(sp) === canonicalProviderFamily(vp) && sm === vm;
 }
 
 export function defaultTargetForKind(taskKind) {
@@ -128,7 +148,8 @@ export function createInitialSolveState(initial = {}) {
   const taskKind = initial.taskKind || 'calculate';
   const solver = initial.solver || { provider: '', model: '' };
   const verifier = initial.verifier || { provider: '', model: '' };
-  const sameModel = isSameModelSelection(solver, verifier);
+  const connectedModels = Array.isArray(initial.connectedModels) ? initial.connectedModels : [];
+  const sameModel = isSameModelSelection(solver, verifier, connectedModels);
   return {
     phase: initial.setup ? 'collapsed' : 'setup',
     statement: String(initial.statement || ''),
@@ -152,6 +173,8 @@ export function createInitialSolveState(initial = {}) {
     everyStepVerified: Boolean(initial.everyStepVerified),
     solver: { provider: String(solver.provider || ''), model: String(solver.model || '') },
     verifier: { provider: String(verifier.provider || ''), model: String(verifier.model || '') },
+    solverTouched: Boolean(initial.solverTouched),
+    verifierTouched: Boolean(initial.verifierTouched),
     sameModel,
     sameModelWarning: sameModel ? SAME_MODEL_WARNING : null,
     proveNotice: taskKind === 'prove' ? PROVE_PROSE_NOTICE : null,
@@ -161,7 +184,7 @@ export function createInitialSolveState(initial = {}) {
     toolbox: initial.toolbox || { available: false, line: 'Toolbox: checking…' },
     approvalGrants: initial.approvalGrants || { pre_turn_approver_supported: false, grants: [] },
     modelConnected: initial.modelConnected !== undefined ? Boolean(initial.modelConnected) : false,
-    connectedModels: Array.isArray(initial.connectedModels) ? initial.connectedModels : [],
+    connectedModels,
     setup: initial.setup || null,
     steps: Array.isArray(initial.steps) ? initial.steps : [],
     graph: initial.graph || { nodes: [], edges: [], legend: [] },
@@ -228,9 +251,9 @@ export function applyPrefillToState(state, resp) {
       || (Array.isArray(state.connectedModels) && state.connectedModels.length > 0),
     error: '',
   };
-  if (resp.roles?.solver) next.solver = { ...resp.roles.solver };
-  if (resp.roles?.verifier) next.verifier = { ...resp.roles.verifier };
-  next.sameModel = isSameModelSelection(next.solver, next.verifier);
+  if (!state.solverTouched && isInCoreRole(resp.roles?.solver)) next.solver = { ...resp.roles.solver };
+  if (!state.verifierTouched && isInCoreRole(resp.roles?.verifier)) next.verifier = { ...resp.roles.verifier };
+  next.sameModel = isSameModelSelection(next.solver, next.verifier, next.connectedModels);
   next.sameModelWarning = next.sameModel ? (p.same_model_warning || SAME_MODEL_WARNING) : null;
   return next;
 }
@@ -285,7 +308,7 @@ export function applySolveViewToState(state, view) {
         model: String(setup.roles.verifier.model || ''),
       };
     }
-    next.sameModel = isSameModelSelection(next.solver, next.verifier);
+    next.sameModel = isSameModelSelection(next.solver, next.verifier, connectedModels);
     next.sameModelWarning = next.sameModel ? SAME_MODEL_WARNING : null;
     next.budgets = setup.budgets ? { ...DEFAULT_SOLVE_BUDGETS, ...setup.budgets } : next.budgets;
     next.review = setup.review || next.review;

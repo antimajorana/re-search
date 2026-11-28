@@ -136,7 +136,12 @@ fn serialize_gemini_request(expected_model: &str, req: &ModelRequest) -> Result<
     let mut tool_names: HashMap<&str, &str> = HashMap::new();
     let mut contents = Vec::with_capacity(req.messages.len());
     for msg in &req.messages {
-        contents.push(encode_message(msg, &mut tool_names)?);
+        if let Some(encoded) = encode_message(msg, &mut tool_names)? {
+            contents.push(encoded);
+        }
+    }
+    if contents.is_empty() {
+        return Err(config_err("request has no input messages"));
     }
 
     let mut obj = serde_json::Map::new();
@@ -176,7 +181,7 @@ fn encode_tool(spec: &ToolSpec) -> Value {
     })
 }
 
-fn encode_message<'a>(msg: &'a Message, tool_names: &mut HashMap<&'a str, &'a str>) -> Result<Value, TransportError> {
+fn encode_message<'a>(msg: &'a Message, tool_names: &mut HashMap<&'a str, &'a str>) -> Result<Option<Value>, TransportError> {
     let role = match msg.role {
         Role::User => "user",
         Role::Assistant => "model",
@@ -201,9 +206,10 @@ fn encode_message<'a>(msg: &'a Message, tool_names: &mut HashMap<&'a str, &'a st
     let mut parts = Vec::new();
     for block in &msg.content {
         match block {
-            ContentBlock::Text { text } => {
+            ContentBlock::Text { text } if !text.trim().is_empty() => {
                 parts.push(json!({ "text": text }));
             }
+            ContentBlock::Text { .. } => {}
             ContentBlock::Thinking { thinking, signature } => {
                 let mut part = serde_json::Map::new();
                 part.insert("text".into(), json!(thinking));
@@ -249,7 +255,11 @@ fn encode_message<'a>(msg: &'a Message, tool_names: &mut HashMap<&'a str, &'a st
         }
     }
 
-    Ok(json!({ "role": role, "parts": parts }))
+    if parts.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(json!({ "role": role, "parts": parts })))
+    }
 }
 
 pub(crate) fn parse_gemini_response(raw_body: Vec<u8>, secret: &str) -> Result<ModelResponse, TransportError> {

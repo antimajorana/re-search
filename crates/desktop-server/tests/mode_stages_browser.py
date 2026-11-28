@@ -134,7 +134,10 @@ def check_mode_stages(browser, binary):
             )
             page.route(
                 "**/solve/continue",
-                lambda r: (continue_calls.append(r.request.url), r.fulfill(status=202, json={"ok": True, "accepted": True})),
+                lambda r: (
+                    continue_calls.append((r.request.url, r.request.post_data)),
+                    r.fulfill(status=202, json={"ok": True, "accepted": True}),
+                ),
             )
             page.locator("#new-solve-btn").click()
             solver_opts = solve_stage.locator('[data-testid="solve-solver-select"] option')
@@ -147,7 +150,12 @@ def check_mode_stages(browser, binary):
             solve_stage.locator('[data-testid="solve-statement-input"]').fill(r"Compute $\int_0^1 x^2\,dx$.")
             with page.expect_response("**/solve/continue"):
                 solve_stage.locator('[data-testid="solve-run-btn"]').click()
-            assert len(continue_calls) == 1, continue_calls
+            assert len(continue_calls) == 1 and continue_calls[0][1] == "{}", continue_calls
+
+            # Clicking RunBar Continue sends clean "{}" JSON (never serialized PointerEvent {"isTrusted":true}).
+            with page.expect_response("**/solve/continue"):
+                solve_stage.locator('[data-run-action="continue"]').click()
+            assert len(continue_calls) == 2 and continue_calls[1][1] == "{}", continue_calls
 
             assert not errors, errors
     print("Mode stages (Solve setup, Explore shell, and Library send-back) browser check passed")

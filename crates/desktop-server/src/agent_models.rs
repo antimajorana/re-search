@@ -531,8 +531,10 @@ pub fn resolve_solve_verifier_transport(
     use research_tools::solve_model::{compute_review_independence, RoleModel};
 
     let solver_role = setup_roles
-        .map(|r| r.solver.clone())
-        .or_else(|| solver_fallback.cloned())
+        .map(|r| &r.solver)
+        .filter(|s| !s.provider.trim().is_empty())
+        .cloned()
+        .or_else(|| solver_fallback.filter(|s| !s.provider.trim().is_empty()).cloned())
         .unwrap_or_else(|| RoleModel {
             provider: ui.default_provider.clone().unwrap_or_default(),
             model: ui.default_model.clone().unwrap_or_default(),

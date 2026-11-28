@@ -220,8 +220,12 @@ fn serialize_openai_request(provider: ProviderKind, req: &ModelRequest) -> Resul
             wire_messages.push(json!({ "role": "system", "content": sys }));
         }
     }
+    let non_system_start = wire_messages.len();
     for msg in &req.messages {
         encode_message(msg, &mut wire_messages)?;
+    }
+    if wire_messages.len() == non_system_start {
+        return Err(config_err("request has no input messages"));
     }
     obj.insert("messages".into(), Value::Array(wire_messages));
 
@@ -262,7 +266,7 @@ fn encode_message(msg: &Message, out: &mut Vec<Value>) -> Result<(), TransportEr
             }
             if !text_parts.is_empty() {
                 let joined = text_parts.join("\n");
-                if !joined.is_empty() {
+                if !joined.trim().is_empty() {
                     out.push(json!({ "role": "user", "content": joined }));
                 }
             }

@@ -57,19 +57,38 @@ fn resolve_solve_solver_model(
             return Ok((pk, requested, resolved));
         }
     }
-    let has_configured_orch = meta
+    if let Some(meta_p) = meta
         .and_then(|m| m.default_provider.as_deref())
-        .is_some_and(|s| !s.trim().is_empty())
-        || ui.agent_models.contains_key("orchestrator")
-        || ui.default_provider.as_deref().is_some_and(|s| !s.trim().is_empty());
-    if !has_configured_orch {
-        if let Ok((pk, model)) =
-            crate::agent_models::resolve_in_core_role_model(state, "orchestrator", Some(req), true)
-        {
-            return Ok((pk, model.clone(), model));
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if let Ok(pk) = agent::ProviderKind::parse(meta_p) {
+            let requested = meta
+                .and_then(|m| m.default_model.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| pk.default_model())
+                .to_string();
+            let resolved = pk.resolve_model(&requested);
+            if state.build_transport(pk, &resolved).is_ok() {
+                return Ok((pk, requested, resolved));
+            }
         }
     }
-    crate::agent_models::resolve_orchestrator_model(subagent, req, meta, ui)
+    if let Some(spec) = ui.agent_models.get("orchestrator") {
+        if let Ok(pk) = agent::ProviderKind::parse(&spec.provider) {
+            let m_raw = spec.model.trim();
+            let requested = if m_raw.is_empty() { pk.default_model() } else { m_raw }.to_string();
+            let resolved = pk.resolve_model(&requested);
+            if state.build_transport(pk, &resolved).is_ok() {
+                return Ok((pk, requested, resolved));
+            }
+        }
+    }
+    let (pk, model) =
+        crate::agent_models::resolve_in_core_role_model(state, "orchestrator", Some(req), true)
+            .map_err(|(_, msg)| msg)?;
+    Ok((pk, model.clone(), model))
 }
 
 pub(crate) fn run_desktop_solve_turn(
@@ -205,7 +224,7 @@ pub fn handle_continue(state: &Arc<DesktopState>, session_id: &str, body: &[u8])
     if meta.as_ref().and_then(|m| m.route.as_deref()).is_some_and(|r| matches!(r, "claude-cli" | "antigravity")) {
         return Err(bad("Solve continuation requires an in-core API or ChatGPT provider"));
     }
-    let _ = resolve_solve_solver_model(
+    let (provider, _, model) = resolve_solve_solver_model(
         state,
         None,
         &req,
@@ -214,6 +233,7 @@ pub fn handle_continue(state: &Arc<DesktopState>, session_id: &str, body: &[u8])
         &ui,
     )
     .map_err(bad)?;
+    let _ = state.build_transport(provider, &model).map_err(bad)?;
 
     let activity = reserve_turn(state, session_id)?;
     {
