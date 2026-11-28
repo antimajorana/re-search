@@ -486,5 +486,62 @@ test('X8 Triage groups candidates, marks "from abstract", collapses unrelated, e
   assert.ok(quickCbs.length > 0 && quickCbs.every((c) => c.disabled && !c.checked));
 });
 
+test('Audit regressions: SSE idea.stated clears revision state, search_finished merges by qid, and budget_raised updates caps', () => {
+  let st = ideaReducer(createInitialIdeaState({ hasModel: true }), {
+    type: 'SET_IDEA_VIEW',
+    sessionId: 's-sse-reg',
+    view: {
+      statement: { rev: 1, text: 'Rev 1 idea' },
+      stages: [],
+      budget: { max_queries: 8, max_papers: 0, max_model_calls: 6 },
+      candidates: [{ key: 'arxiv:2501.01234', title: 'Rev 1 paper' }],
+      search_plan: { round: 1, queries: [{ qid: 'q1', provider: 'arxiv', q: 'k' }] },
+      plan_approval: { grants: [{ id: 'explore-network-read' }] },
+      reading_list_override: ['arxiv:2501.01234'],
+      where_i_looked: {
+        queries: [
+          { qid: 'q-ax', provider: 'arxiv', q: 'k', status: 'ok', count: 3 },
+          { qid: 'q-in', provider: 'inspire', q: 'k', status: 'failed', count: 0 },
+        ],
+        providers: [{ name: 'arxiv', state: 'ok' }],
+      },
+    },
+  });
+
+  // Single-provider retry `idea.search_finished` merges by qid without erasing arxiv row.
+  st = ideaReducer(st, {
+    type: 'APPLY_SSE_EVENT',
+    kind: 'idea.search_finished',
+    payload: {
+      results: [{ qid: 'q-in', provider: 'inspire', q: 'k', status: 'ok', count: 2 }],
+    },
+  });
+  assert.equal(st.view.where_i_looked.queries.length, 2);
+  assert.equal(st.view.where_i_looked.queries.find((q) => q.qid === 'q-ax')?.status, 'ok');
+  assert.equal(st.view.where_i_looked.queries.find((q) => q.qid === 'q-in')?.status, 'ok');
+
+  // SSE `idea.budget_raised` updates caps in place.
+  st = ideaReducer(st, {
+    type: 'APPLY_SSE_EVENT',
+    kind: 'idea.budget_raised',
+    payload: { extra_queries: 6, extra_papers: 2, extra_model_calls: 4 },
+  });
+  assert.equal(st.view.budget.max_queries, 14);
+  assert.equal(st.view.budget.max_papers, 2);
+  assert.equal(st.view.budget.max_model_calls, 10);
+
+  // SSE `idea.stated` rev 2 clears all revision-scoped fields.
+  st = ideaReducer(st, {
+    type: 'APPLY_SSE_EVENT',
+    kind: 'idea.stated',
+    payload: { rev: 2, text: 'Rev 2 idea' },
+  });
+  assert.equal(st.view.candidates.length, 0);
+  assert.equal(st.view.search_plan, null);
+  assert.equal(st.view.plan_approval, null);
+  assert.equal(st.view.reading_list_override, null);
+  assert.equal(st.view.where_i_looked.queries.length, 0);
+});
+
 
 

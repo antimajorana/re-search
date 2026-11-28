@@ -327,22 +327,19 @@ export function createExploreSessionController(hostEl, deps = {}) {
       onRetryService: (provider) => void invokeOp('search', { provider }),
       onAllowGrant: async (grant) => {
         if (grant?.call_id && state.sessionId) {
-          await sendApproval(state.sessionId, grant.call_id, {
-            approved: true,
-            digest: grant.digest || '',
+          const res = await sendApproval(state.sessionId, grant.call_id, {
+            approved: true, digest: grant.digest || '',
             approve_for_session: grant.kind === 'session_capability',
           });
-          return { approved: true };
+          return { approved: Boolean(res?.ok !== false && res?.approved !== false) };
         }
-        const res = await invokeOp('search', {});
-        return { approved: Boolean(res?.ok) };
+        // Start planned search asynchronously so approval_card releases `busy` for live UiApprover prompts.
+        void invokeOp('search', {});
+        return { approved: false };
       },
       onDenyGrant: async (grant) => {
         if (grant?.call_id && state.sessionId) {
-          await sendApproval(state.sessionId, grant.call_id, {
-            approved: false,
-            digest: grant.digest || '',
-          });
+          await sendApproval(state.sessionId, grant.call_id, { approved: false, digest: grant.digest || '' });
           return;
         }
         await invokeOp('stop', {});
@@ -352,10 +349,9 @@ export function createExploreSessionController(hostEl, deps = {}) {
 
   async function handleContinueClick() {
     const rb = selectRunBarModel(state);
-    const payload = rb.state === 'paused'
-      ? { extra_queries: 6, extra_papers: 2, extra_model_calls: 6 }
-      : {};
-    return invokeOp('continue', payload);
+    const atCap = rb.state === 'paused' && (state.view?.budget?.state === 'stopped_at_cap'
+      || (state.view?.stages || []).some((s) => s.stored_state === 'stopped_at_cap'));
+    return invokeOp('continue', atCap ? { extra_queries: 6, extra_papers: 2, extra_model_calls: 6 } : {});
   }
 
   async function handleRetryClick() {

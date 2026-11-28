@@ -180,6 +180,7 @@ export function ideaReducer(state, action) {
       }
       if (action.kind === 'idea.stated' && payload.text) {
         const hasMap = Array.isArray(state.view.map?.nodes) && state.view.map.nodes.length > 0;
+        const prevWil = state.view.where_i_looked || {};
         return {
           ...state,
           view: {
@@ -188,6 +189,12 @@ export function ideaReducer(state, action) {
             brief: null,
             sharpened_idea: null,
             triage: null,
+            reading_list_override: null,
+            candidates: [],
+            search_plan: null,
+            plan_approval: null,
+            empty_state: null,
+            where_i_looked: { ...prevWil, queries: [], providers: [], not_searched: [] },
             question_answers: {},
             map_stale: hasMap || Boolean(state.view.map_stale),
           },
@@ -228,9 +235,35 @@ export function ideaReducer(state, action) {
           },
         };
       }
-      if (action.kind === 'idea.search_finished' && Array.isArray(payload.results)) {
-        const wil = { ...(state.view.where_i_looked || {}), queries: payload.results };
+      if (action.kind === 'idea.search_finished') {
+        const incoming = Array.isArray(payload.queries)
+          ? payload.queries
+          : (Array.isArray(payload.results) ? payload.results : []);
+        const prevQ = Array.isArray(state.view.where_i_looked?.queries)
+          ? state.view.where_i_looked.queries
+          : [];
+        const mergedQ = [...prevQ];
+        for (const row of incoming) {
+          const idx = row?.qid ? mergedQ.findIndex((q) => q.qid === row.qid) : -1;
+          if (idx >= 0) mergedQ[idx] = row;
+          else mergedQ.push(row);
+        }
+        const wil = {
+          ...(state.view.where_i_looked || {}),
+          queries: mergedQ,
+          ...(payload.library ? { library: payload.library } : {}),
+        };
         return { ...state, view: { ...state.view, where_i_looked: wil } };
+      }
+      if (action.kind === 'idea.budget_raised' && payload && typeof payload === 'object') {
+        const b = state.view.budget || {};
+        const nextBudget = {
+          ...b,
+          max_queries: (Number(b.max_queries) || 0) + (Number(payload.extra_queries) || 0),
+          max_papers: (Number(b.max_papers) || 0) + (Number(payload.extra_papers) || 0),
+          max_model_calls: (Number(b.max_model_calls) || 0) + (Number(payload.extra_model_calls) || 0),
+        };
+        return { ...state, view: { ...state.view, budget: nextBudget } };
       }
       if (action.kind === 'idea.brief' && payload && typeof payload === 'object') {
         const normalized = { ...payload, heading: SHARPENED_IDEA_TITLE, answers: {} };
