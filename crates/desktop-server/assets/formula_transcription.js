@@ -410,11 +410,12 @@ export function mountFormulaTranscriptionPanel(container, opts = {}) {
           currentSourceId = nextSrc;
           reqSeq += 1;
           busy = false;
+          cardHost.textContent = '';
           setStatus('');
         }
       }
       if (next.optIn !== undefined) {
-        optInCheckbox.checked = Boolean(next.optIn);
+        optInCheckbox.checked = next.optIn === true;
       }
       syncButtonState();
     },

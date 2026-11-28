@@ -391,5 +391,19 @@ test('transcribeBtn click listener, strict crop validation, custom-document CSRF
   const img = panel.cardHost.children[0].querySelector('[data-testid="transcription-crop-img"]');
   assert.ok(img, 'server-rendered crop_image_* should render beside draft');
   assert.equal(img.getAttribute('src'), `data:image/png;base64,${SAMPLE_PNG_B64}`);
+
+  // Switching source or session must clear prior session/source cards.
+  panel.update({ sourceId: 'paper2' });
+  assert.equal(panel.cardHost.children.length, 0);
+
+  // update({ optIn }) must enforce strict `=== true` (never coerce "false" or 1 to true).
+  panel.update({ optIn: 'false' });
+  assert.equal(panel.optInCheckbox.checked, false);
+  assert.equal(panel.transcribeBtn.disabled, true);
+  panel.update({ optIn: 1 });
+  assert.equal(panel.optInCheckbox.checked, false);
+  panel.update({ optIn: true });
+  assert.equal(panel.optInCheckbox.checked, true);
+  assert.equal(panel.transcribeBtn.disabled, false);
 });
 
