@@ -297,6 +297,7 @@ impl DesktopIsolatedWorkerFactory {
                 scratch,
                 pycache,
                 startup_timeout: Duration::from_secs(90),
+                job_memory_limit_bytes: None,
             },
             sandbox,
             role,

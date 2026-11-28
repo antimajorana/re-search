@@ -333,6 +333,9 @@ impl Sandbox for AppContainerSandbox {
         env.insert("PYTHONPATH".into(), p(self.staged.site_dir.clone()));
         env.insert("PYTHONNOUSERSITE".into(), "1".into());
         env.insert("PYTHONIOENCODING".into(), "utf-8".into());
+        // Cap OpenBLAS/OpenMP worker pools so multi-core startup does not commit ~410 MiB inside Job-capped AppContainers.
+        env.insert("OPENBLAS_NUM_THREADS".into(), "1".into());
+        env.insert("OMP_NUM_THREADS".into(), "1".into());
         launch.env = env;
 
         Ok(Box::new(spawn_extended(&launch, Some(&self.profile))?))
