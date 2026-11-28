@@ -354,8 +354,11 @@ pub(crate) fn maybe_run_post_cli_solve_review(
         return Ok(());
     }
 
-    let remaining_loops = usize::from(setup.budgets.max_review_loops)
-        .saturating_sub(usize::try_from(count_review_loops(&events)).unwrap_or(usize::MAX));
+    let remaining_u32 = setup
+        .budgets
+        .max_review_loops
+        .saturating_sub(count_review_loops(&events));
+    let remaining_loops = usize::try_from(remaining_u32).unwrap_or(usize::MAX);
     if remaining_loops == 0 {
         return Ok(());
     }
@@ -363,7 +366,7 @@ pub(crate) fn maybe_run_post_cli_solve_review(
     let targets: Vec<String> = folded
         .active_entries()
         .into_iter()
-        .filter(|e| e.origin != StepOrigin::Given)
+        .filter(|e| e.origin != Some(StepOrigin::Given))
         .filter(|e| folded.tier(&e.entry_id).is_none_or(|t| t.own == Tier::Unchecked))
         .map(|e| e.entry_id.clone())
         .collect();
