@@ -141,3 +141,34 @@ fn store_crud_and_opt_in_checksummed_backup_restore() {
     assert_eq!(restored[0].from.session, "sess-a");
     assert_eq!(restored[0].uses, 1);
 }
+
+#[test]
+fn f16a_and_f16b_stores_share_single_lessons_db_file_without_path_collision() {
+    let dir = TempDir::new().unwrap();
+    let f16a = crate::lessons::LessonsStore::open(dir.path()).unwrap();
+    let expected_db = dir.path().join("library").join(ledger::LESSONS_DB_NAME);
+    assert!(expected_db.is_file(), "expected {} to be a file", expected_db.display());
+    assert_eq!(f16a.db_path(), expected_db);
+    drop(f16a);
+
+    let store = UserLessonsStore::open(dir.path()).unwrap();
+    assert_eq!(store.db().db_path(), expected_db);
+    store
+        .save_lesson(SaveLessonRequest {
+            text: "Keep metric signature explicit.".to_string(),
+            scope: LessonScope::mode(Mode::Solve),
+            from: solve_node("sess-coexist", "e-1"),
+            source_kind: LessonSourceKind::StepCorrection,
+            model_summary: false,
+            created_ms: Some(2_000),
+        })
+        .unwrap();
+
+    let supplied = crate::lessons_prompt::prepare_mode_lessons(
+        dir.path(),
+        &crate::lessons_prompt::LessonMatchContext::for_mode(Mode::Solve),
+        "run-coexist",
+    )
+    .unwrap();
+    assert!(supplied.is_some());
+}

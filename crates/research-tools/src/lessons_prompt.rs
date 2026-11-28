@@ -313,7 +313,7 @@ pub fn prepare_mode_lessons(
     run_id: &str,
 ) -> Result<Option<PreparedLessonsSupply>, String> {
     let db_path = data_dir.join("library").join(LESSONS_DB_NAME);
-    if !db_path.exists() {
+    if !db_path.is_file() {
         return Ok(None);
     }
     let store = UserLessonsStore::open(data_dir)?;

@@ -107,13 +107,19 @@ impl LessonsDb {
 impl LessonsDb {
     /// Open or create `<data_dir>/library/lessons.db`, running forward-only schema migrations.
     pub fn open(data_dir: &Path) -> Result<Self> {
-        let library_dir = data_dir.join(LIBRARY_DIR_NAME);
-        fs::create_dir_all(&library_dir)?;
-        let db_path = library_dir.join(LESSONS_DB_NAME);
+        let db_path = data_dir.join(LIBRARY_DIR_NAME).join(LESSONS_DB_NAME);
+        Self::open_at(&db_path)
+    }
+
+    /// Open or create a `lessons.db` SQLite database at an explicit file path `db_path`.
+    pub fn open_at(db_path: &Path) -> Result<Self> {
+        if let Some(parent) = db_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_CREATE
             | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let mut conn = Connection::open_with_flags(&db_path, flags)?;
+        let mut conn = Connection::open_with_flags(db_path, flags)?;
         conn.busy_timeout(Duration::from_secs(10))?;
         let _ = conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true);
         conn.execute_batch(
@@ -123,7 +129,10 @@ impl LessonsDb {
              PRAGMA trusted_schema = OFF;",
         )?;
         migrate_lessons_db(&mut conn)?;
-        Ok(Self { conn, db_path })
+        Ok(Self {
+            conn,
+            db_path: db_path.to_path_buf(),
+        })
     }
 
     pub fn db_path(&self) -> &Path {
