@@ -1,6 +1,6 @@
 # Package F16b — User-Approved Lessons Shown to Models: Implementation Report
 
-**Branch:** `coord/modes-f16b-lessons` (based on `origin/gemini/work/fixed` `59ff311`)  
+**Branch:** `coord/modes-f16b-lessons` (merged `origin/gemini/work/fixed` `717879c`)  
 **Worktree:** `C:\Users\antimajorana\Documents\Codex\2026-11-26\files-mentioned-by-the-user-00\work\lane-f16b-lessons`
 
 ## Summary of Implementation
@@ -66,8 +66,8 @@ Implemented Package **F16b — User-Approved Lessons Shown to Models** across fo
 | `crates/desktop-server/src/routes_lessons.rs` | 382 | Delegates `/api/lessons/notes..` & `/supplied..` |
 | `crates/desktop-server/src/routes_lessons_ui.rs` | 340 | F16b HTTP API & opt-in `(model)` draft endpoint |
 | `crates/desktop-server/src/assets.rs` | 522 | Registers `/assets/lessons.js`, `/assets/lesson_remember.js` |
-| `crates/desktop-server/src/solve_view.rs` | 590 | Exposes ledger-only `lessons_supplied` on Solve view |
-| `crates/desktop-server/tests/lessons_b_routes.rs` | 277 | Route, AuthGuard, mock draft, `build_resume_brief` invariance |
+| `crates/desktop-server/src/solve_view.rs` | 591 | Exposes ledger-only `lessons_supplied` on Solve view |
+| `crates/desktop-server/tests/lessons_b_routes.rs` | 279 | Route, AuthGuard, mock draft, `build_resume_brief` invariance |
 | `crates/desktop-server/assets/lessons.js` | 453 | `"What I have learnt"` page & rail nav button |
 | `crates/desktop-server/assets/lesson_remember.js` | 331 | `"Remember this?"` card & `"used N of your notes"` widget |
 | `crates/desktop-server/assets/new_menu.js` | 293 | Auto-mounts `#open-lessons-btn` in `.rail-footer` |
@@ -75,10 +75,14 @@ Implemented Package **F16b — User-Approved Lessons Shown to Models** across fo
 | `crates/desktop-server/assets/solve_why.js` | 530 | Opens `"Remember this?"` after step correction submit |
 | `crates/desktop-server/tests/lessons_ui.test.mjs` | 445 | F16b UI, XSS, char-cap, opt-in draft/backup tests |
 
-## Non-Cargo Verification Results & Deferred Cargo Checks
+## Coordinator Verification Results (Post-Merge `717879c`, Commits `9a92393`..`70121fb`)
 
-- `py -3 scripts/check_file_length.py --base origin/gemini/work/fixed`: **PASSED** (`No touched source file is over 600 lines.`)
-- `node --check` on all `.js` assets and `crates/desktop-server/tests/lessons_ui.test.mjs`: **PASSED** (0 syntax errors)
-- `node --test crates/desktop-server/tests/*.test.mjs`: **PASSED** (`244` tests passed, `0` failed, `0` skipped — `4/4` in `lessons_ui.test.mjs` plus `240/240` existing UI tests)
-- Frozen files audit (`git diff --name-only origin/gemini/work/fixed`): **0** frozen files touched (`Cargo.lock`, `crates/mcp-server/Cargo.toml`, `tool_profile.rs`, `solve_defs.rs`, `tests/golden/`, `runner.rs`, `transport.rs`, `honesty.rs`, `http_srv.rs`, `resume_brief.rs`, `solve_steps.js`, `index.html`, `app.js`, `.github/`, `RULES.md` all untouched).
-- **Deferred to Coordinator Cargo Queue:** Per worktree constraints (Solve owns local Cargo queue), `cargo check` / `cargo test` (`ledger`, `research-tools`, `agent`, `desktop-server`) on Windows/WSL were **not** executed here and remain queued for coordinator verification.
+- `py -3 scripts/check_file_length.py --base origin/gemini/work/fixed`: **PASSED** (`No touched source file is over 600 lines.`, `solve_view.rs` = 591 lines)
+- Frozen files audit (`git diff --name-only origin/gemini/work/fixed...HEAD`): **0** frozen files touched (`Cargo.lock`, `crates/mcp-server/Cargo.toml`, `tool_profile.rs`, `solve_defs.rs`, `tests/golden/`, `runner.rs`, `transport.rs`, `honesty.rs`, `http_srv.rs`, `resume_brief.rs`, `solve_steps.js`, `index.html`, `app.js`, `.github/`, `RULES.md` all untouched).
+- `node --check` on all `crates/desktop-server/assets/*.js` + `lessons_ui.test.mjs` (`86` files): **PASSED** (`0` syntax errors)
+- `node --test crates/desktop-server/tests/*.test.mjs`: **PASSED** (`244` passed, `0` failed, `0` skipped — `4/4` in `lessons_ui.test.mjs` + `240/240` existing UI tests)
+- Windows `cargo check --workspace --all-targets --locked` & `cargo clippy --workspace --all-targets --locked -- -D warnings -A clippy::manual_unwrap_or`: **PASSED** (`0` warnings/errors after `9a92393`); Windows targeted checks (`lessons_r24_props` `3/3`, `agent solve_loop` `3/3`, `lessons_b_routes` `3/3`): **PASSED**
+- Non-root WSL2 Ubuntu (`verify_f16b.sh`, after `e45dc38` & `70121fb`):
+  - `cargo clippy --workspace --all-targets --locked -- -D warnings -A clippy::manual_unwrap_or`: **PASSED** (`0` warnings)
+  - Targeted F16b suites (`ledger --lib`, `research-tools --lib --test lessons_r24_props`, `agent --lib`, `desktop-server --test lessons_b_routes`): **5 suites, 459 passed, 0 failed, 0 ignored**
+  - Full `cargo test --workspace --locked --no-fail-fast -j 2`: **172 suites, 1,310 passed, 0 failed, 2 ignored** (`=== VERIFY_F16B_DONE ===`)
