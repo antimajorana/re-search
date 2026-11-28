@@ -199,15 +199,19 @@ export function ideaReducer(state, action) {
             empty_state: null,
             where_i_looked: { ...prevWil, queries: [], providers: [], not_searched: [] },
             question_answers: {},
+            directions: [],
             map_stale: hasMap || Boolean(state.view.map_stale),
           },
         };
       }
       if (action.kind === 'idea.triage' && payload && typeof payload === 'object') {
-        return {
-          ...state,
-          view: { ...state.view, triage: payload, reading_list_override: null },
-        };
+        return { ...state, view: { ...state.view, triage: payload, reading_list_override: null } };
+      }
+      if (action.kind === 'idea.map' && payload && typeof payload === 'object') {
+        return { ...state, view: { ...state.view, directions: [], map_stale: false } };
+      }
+      if (action.kind === 'idea.directions' && Array.isArray(payload.directions)) {
+        return { ...state, view: { ...state.view, directions: payload.directions } };
       }
       if (action.kind === 'idea.stage' && payload.stage) {
         return { ...state, view: applyStageEventToView(state.view, payload) };

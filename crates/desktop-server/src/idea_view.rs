@@ -166,6 +166,7 @@ pub fn view(events: &[Event], running: bool) -> Value {
             EVENT_IDEA_MAP => {
                 latest_map_seq = ev.seq;
                 latest_map = Some(ev.payload.clone());
+                latest_directions.clear();
             }
             EVENT_IDEA_VERDICT => latest_verdicts = Some(ev.payload.clone()),
             EVENT_IDEA_DIRECTIONS => {

@@ -328,10 +328,8 @@ pub fn handle_idea_op(
         "triage" => crate::idea_exchanges_triage::handle_triage_op(state, &ledger, session_id, body),
         "read" => crate::routes_idea_read::handle_read_op(state, &ledger, session_id, body),
         "map" => crate::idea_map_exchange::handle_map_op(state, &ledger, session_id, body),
-        "directions" => Err(not_implemented("Explore `directions` is not built yet (owned by package X13).")),
-        "handoff" => Err(not_implemented(
-            "Explore `handoff` builder is not built yet (owned by package X13; use POST /api/sessions/{id}/handoff for F7 packets).",
-        )),
+        "directions" => crate::idea_directions_exchange::handle_directions_op(state, &ledger, session_id, body),
+        "handoff" => crate::idea_handoff::handle_idea_handoff_op(state, &ledger, session_id, body),
         "more" => Err(not_implemented(
             "Explore `more` (citation expansion / second round) is not built yet (owned by package X16).",
         )),
@@ -479,9 +477,11 @@ fn handle_continue(
         Some(crate::idea::IdeaStage::Triage) => crate::idea_exchanges_triage::handle_triage_op(state, ledger, session_id, body),
         Some(crate::idea::IdeaStage::Read) => crate::routes_idea_read::handle_read_op(state, ledger, session_id, body),
         Some(crate::idea::IdeaStage::Map) => crate::idea_map_exchange::handle_map_op(state, ledger, session_id, body),
+        Some(crate::idea::IdeaStage::Directions) => crate::idea_directions_exchange::handle_directions_op(state, ledger, session_id, body),
+        None => Ok((200, json!({ "ok": true, "done": true, "budget_raised": budget_raised, "idea": idea_view::view(&events, is_turn_running(state, session_id)) }))),
         _ if budget_raised => Ok((200, json!({ "ok": true, "budget_raised": true, "idea": idea_view::view(&events, is_turn_running(state, session_id)) }))),
         other => Err(not_implemented(format!(
-            "Explore `continue` for stage `{}` is not built yet (owned by packages X9–X13); pass `extra_queries`/`extra_papers`/`extra_model_calls` to record a budget increase.",
+            "Explore `continue` for stage `{}` is not built yet; pass `extra_queries`/`extra_papers`/`extra_model_calls` to record a budget increase.",
             other.map_or("done", crate::idea::IdeaStage::as_str),
         ))),
     }
