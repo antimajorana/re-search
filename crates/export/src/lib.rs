@@ -19,6 +19,7 @@ pub mod writeup_bib;
 pub mod writeup_md;
 pub mod writeup_paper;
 mod writeup_paper_anchors;
+mod writeup_paper_ext;
 mod writeup_paper_meta;
 mod writeup_paper_nodes;
 pub mod writeup_solve;

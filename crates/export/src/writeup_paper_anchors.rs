@@ -6,9 +6,10 @@
 //! external anchors to the primary paper.
 
 use crate::writeup::{CheckTableRow, HowChecked, ProseBasis, QuoteLocator, RejectedWriteupQuote, WriteupBlock, WriteupQuote};
+use crate::writeup_paper_ext::find_forbidden_investigate_word;
 use crate::writeup_paper_nodes::BuildCtx;
 use research_tools::map_context_defs::{ContextCardOrigin, ContextCardRecord};
-use research_tools::map_defs::{AuthorsClaimRecord, VerifiedMapAnchor};
+use research_tools::map_defs::{AuthorsClaimLabel, AuthorsClaimRecord, VerifiedMapAnchor};
 use research_tools::quote_core::{clip_quote, quote_sha256, verify_quote, verify_quote_ref, QuoteFault, QuoteRef};
 use research_tools::status_badge::{
     authors_claim_display_text, detect_authors_claim_cues, format_cue_line, format_heading_cites,
@@ -33,7 +34,9 @@ impl<'a> BuildCtx<'a> {
                 verified_items.push(item);
             }
         }
-        if !claim.anchors.is_empty() && verified_items.is_empty() {
+        let requires_anchor = !claim.anchors.is_empty()
+            || matches!(claim.label, AuthorsClaimLabel::New | AuthorsClaimLabel::Restated);
+        if requires_anchor && verified_items.is_empty() {
             self.push_row(
                 format!("{tag}-authors"),
                 "Authors' claim omitted because anchors could not be matched.",
@@ -47,7 +50,9 @@ impl<'a> BuildCtx<'a> {
         let cues = detect_authors_claim_cues(&quote_refs);
         let mut parts = vec![authors_claim_display_text(claim.label).to_string()];
         if let Some(rel) = claim.relation_note.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-            parts.push(rel.to_string());
+            if find_forbidden_investigate_word(rel, false).is_none() {
+                parts.push(rel.to_string());
+            }
         }
         if !claim.attributed_to.is_empty() {
             let mapped: Vec<String> = claim
@@ -57,7 +62,11 @@ impl<'a> BuildCtx<'a> {
                 .collect();
             parts.push(format!("refs: [{}]", mapped.join(", ")));
         }
-        if let Some(hc) = format_heading_cites(head_cites) {
+        let mapped_head: Vec<String> = head_cites
+            .iter()
+            .map(|k| self.cite_key_map.get(k).cloned().unwrap_or_else(|| k.clone()))
+            .collect();
+        if let Some(hc) = format_heading_cites(&mapped_head) {
             parts.push(hc);
         }
         parts.push(format_cue_line(&cues));
@@ -108,27 +117,33 @@ impl<'a> BuildCtx<'a> {
             ContextCardOrigin::External => "Outside this paper",
             ContextCardOrigin::ModelBackground => "Model background, not checked",
         };
-        let basis = if card.origin == ContextCardOrigin::ModelBackground {
-            ProseBasis::Model
-        } else {
-            ProseBasis::App
-        };
-        blocks.push(WriteupBlock::Prose {
-            text: format!(
-                "Context ({}, {origin_label}): {} — {}",
-                card.card_type.as_str(),
-                card.title.trim(),
-                card.body.trim()
-            ),
-            basis,
-        });
-        self.push_row(
-            &card_id,
-            format!("Context card: {}", card.title.trim()),
-            HowChecked::ModelStatement,
-            vec![tag.to_string()],
-            origin_label,
+        let card_text = format!(
+            "Context ({}, {origin_label}): {} — {}",
+            card.card_type.as_str(),
+            card.title.trim(),
+            card.body.trim()
         );
+        if find_forbidden_investigate_word(&card_text, false).is_some() {
+            self.push_row(
+                &card_id,
+                "Context card prose omitted due to disallowed claim wording.",
+                HowChecked::ModelStatement,
+                vec![tag.to_string()],
+                format!("{origin_label} (model; omitted: disallowed claim wording)"),
+            );
+        } else {
+            blocks.push(WriteupBlock::Prose {
+                text: card_text,
+                basis: ProseBasis::Model,
+            });
+            self.push_row(
+                &card_id,
+                format!("Context card: {}", card.title.trim()),
+                HowChecked::ModelStatement,
+                vec![tag.to_string()],
+                format!("{origin_label} (model)"),
+            );
+        }
         for (q, row) in verified_anchors {
             blocks.push(WriteupBlock::Quote(Box::new(q)));
             self.push_row(row.id, row.statement, row.how_checked, row.rests_on, row.note.unwrap_or_default());
@@ -138,17 +153,28 @@ impl<'a> BuildCtx<'a> {
             if let Some((q, row)) = self.verify_anchor_quote(section_title, &h_id, &hyp.anchor, ext_bib) {
                 blocks.push(WriteupBlock::Quote(Box::new(q)));
                 self.push_row(row.id, row.statement, row.how_checked, row.rests_on, row.note.unwrap_or_default());
-                blocks.push(WriteupBlock::Prose {
-                    text: format!("Context hypothesis: {}", hyp.text.trim()),
-                    basis: ProseBasis::Model,
-                });
-                self.push_row(
-                    format!("{h_id}-text"),
-                    format!("Context hypothesis {} for {card_id}", hidx + 1),
-                    HowChecked::ModelStatement,
-                    vec![h_id],
-                    "model hypothesis",
-                );
+                let hyp_trimmed = hyp.text.trim();
+                if find_forbidden_investigate_word(hyp_trimmed, false).is_some() {
+                    self.push_row(
+                        format!("{h_id}-text"),
+                        format!("Context hypothesis {} omitted due to disallowed claim wording", hidx + 1),
+                        HowChecked::ModelStatement,
+                        vec![h_id],
+                        "model hypothesis omitted: disallowed claim wording",
+                    );
+                } else {
+                    blocks.push(WriteupBlock::Prose {
+                        text: format!("Context hypothesis: {hyp_trimmed}"),
+                        basis: ProseBasis::Model,
+                    });
+                    self.push_row(
+                        format!("{h_id}-text"),
+                        format!("Context hypothesis {} for {card_id}", hidx + 1),
+                        HowChecked::ModelStatement,
+                        vec![h_id],
+                        "model hypothesis",
+                    );
+                }
             }
         }
     }
@@ -161,6 +187,30 @@ impl<'a> BuildCtx<'a> {
         external_bib_key: Option<&str>,
     ) -> Option<(WriteupQuote, CheckTableRow)> {
         let raw_quote = anchor.quote.trim();
+        let is_primary = anchor.source_id == self.skeleton.source_id;
+        let resolved_ext = if is_primary {
+            Some((self.primary_cite_key.to_string(), self.primary_ref.clone()))
+        } else if let Some(k) = external_bib_key {
+            self.cite_key_map
+                .get(k)
+                .zip(self.paper_ref_map.get(k))
+                .map(|(ck, pr)| (ck.clone(), pr.clone()))
+                .or_else(|| {
+                    self.source_bib_map
+                        .get(&anchor.source_id)
+                        .map(|eb| (eb.cite_key.clone(), eb.paper_ref.clone()))
+                })
+        } else {
+            self.source_bib_map
+                .get(&anchor.source_id)
+                .map(|eb| (eb.cite_key.clone(), eb.paper_ref.clone()))
+        };
+        let reject_cite = resolved_ext
+            .as_ref()
+            .map(|(ck, _)| ck.clone())
+            .or_else(|| external_bib_key.map(str::to_string))
+            .unwrap_or_else(|| anchor.source_id.clone());
+
         let expected_ref = QuoteRef {
             source_id: anchor.source_id.clone(),
             path: anchor.path.clone(),
@@ -174,47 +224,49 @@ impl<'a> BuildCtx<'a> {
             Ok(v) => v,
             Err(fault) => {
                 let loc = format!("{}:{}-{}", anchor.path, anchor.start_line, anchor.end_line);
-                self.record_unmatched_quote(section_title, row_id, &loc, fault);
+                self.record_unmatched_quote_for(section_title, row_id, &loc, &reject_cite, fault);
                 return None;
             }
         };
-        let is_primary = anchor.source_id == self.skeleton.source_id;
-        let (cite_key, paper_ref) = if is_primary {
-            (self.primary_cite_key.to_string(), self.primary_ref.clone())
-        } else {
-            let Some(k) = external_bib_key else {
-                let loc = format!("{}:{}-{}", anchor.path, anchor.start_line, anchor.end_line);
-                self.record_unmatched_quote(section_title, row_id, &loc, QuoteFault {
-                    code: "unattributed_external_source".into(),
-                    message: "External anchor has no resolved bibliography key.".into(),
+        let Some((cite_key, paper_ref)) = resolved_ext else {
+            let loc = format!("{}:{}-{}", anchor.path, anchor.start_line, anchor.end_line);
+            let (code, message) = match external_bib_key {
+                Some(k) => (
+                    "unresolved_external_bib_key",
+                    format!("External bib key `{k}` is not in the resolved bibliography."),
+                ),
+                None => (
+                    "unattributed_external_source",
+                    "External anchor has no resolved bibliography entry or source receipt.".into(),
+                ),
+            };
+            self.record_unmatched_quote_for(
+                section_title,
+                row_id,
+                &loc,
+                &reject_cite,
+                QuoteFault {
+                    code: code.into(),
+                    message,
                     start_line: Some(anchor.start_line),
                     end_line: Some(anchor.end_line),
                     true_text: None,
-                });
-                return None;
-            };
-            let (Some(ck), Some(pr)) = (self.cite_key_map.get(k), self.paper_ref_map.get(k)) else {
-                let loc = format!("{}:{}-{}", anchor.path, anchor.start_line, anchor.end_line);
-                self.record_unmatched_quote(section_title, row_id, &loc, QuoteFault {
-                    code: "unresolved_external_bib_key".into(),
-                    message: format!("External bib key `{k}` is not in the resolved bibliography."),
-                    start_line: Some(anchor.start_line),
-                    end_line: Some(anchor.end_line),
-                    true_text: None,
-                });
-                return None;
-            };
-            (ck.clone(), pr.clone())
+                },
+            );
+            return None;
         };
         let clipped = clip_quote(raw_quote);
         let mut final_ref = verified.quote_ref;
         if clipped.len() != raw_quote.len() {
             final_ref.quote_sha256 = quote_sha256(clipped);
         }
-        let (locator, ocr, page_range) = if is_primary {
-            self.pdf_index.locator_and_ocr(&final_ref.path, final_ref.start_line, final_ref.end_line)
-        } else {
-            (QuoteLocator::Lines { start_line: final_ref.start_line, end_line: final_ref.end_line }, false, None)
+        let (locator, ocr, page_range) = match self.pdf_indices.get(&anchor.source_id) {
+            Some(idx) => idx.locator_and_ocr(&final_ref.path, final_ref.start_line, final_ref.end_line),
+            None => (
+                QuoteLocator::Lines { start_line: final_ref.start_line, end_line: final_ref.end_line },
+                false,
+                None,
+            ),
         };
         let loc_note = format_locator_note(&final_ref.path, &locator, page_range);
         let how = if ocr { HowChecked::MatchedQuoteOcr } else { HowChecked::MatchedQuoteFullText };
@@ -263,9 +315,21 @@ impl<'a> BuildCtx<'a> {
         loc: &str,
         fault: QuoteFault,
     ) {
+        let primary = self.primary_cite_key.to_string();
+        self.record_unmatched_quote_for(section_title, row_id, loc, &primary, fault);
+    }
+
+    pub(crate) fn record_unmatched_quote_for(
+        &mut self,
+        section_title: &str,
+        row_id: &str,
+        loc: &str,
+        cite_key: &str,
+        fault: QuoteFault,
+    ) {
         self.rejected_quotes.push(RejectedWriteupQuote {
             section_title: section_title.to_string(),
-            cite_key: self.primary_cite_key.to_string(),
+            cite_key: cite_key.to_string(),
             fault,
         });
         self.push_row(

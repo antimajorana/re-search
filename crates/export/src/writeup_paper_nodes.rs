@@ -10,6 +10,7 @@ use crate::writeup::{
 };
 use crate::writeup_paper::{kind_display, quality_word, PaperWriteupOptions};
 use crate::writeup_paper_anchors::{format_locator_note, narrowed_probe_end};
+use crate::writeup_paper_ext::{find_forbidden_investigate_word, ExternalSourceBib};
 use crate::writeup_paper_meta::{
     extract_node_statement_span, neutralize_ocr_math_delimiters, ExtractedStatement,
     LicenceResolution, PdfPageIndex, ReaderNodeOverride, CORRECTED_BY_YOU_LABEL,
@@ -21,7 +22,11 @@ use research_tools::paper_key::PaperRef;
 use research_tools::quote_core::{clip_quote, verify_quote, MAX_DISPLAY_QUOTE_CHARS};
 use research_tools::sandbox::WorkspaceSandbox;
 use research_tools::skeleton::{PaperSkeleton, SkNode, SkNodeKind};
+use research_tools::status_badge::format_heading_cites;
 use std::collections::{BTreeMap, BTreeSet};
+
+const FALLBACK_NO_MAIN_RESULTS_NOTE: &str =
+    "No main results were identified or pinned; listing deterministic theorem-like nodes from the skeleton.";
 
 pub(crate) struct BuildCtx<'a> {
     pub sandbox: &'a WorkspaceSandbox,
@@ -32,11 +37,13 @@ pub(crate) struct BuildCtx<'a> {
     pub overrides: &'a BTreeMap<String, ReaderNodeOverride>,
     pub source_files: &'a BTreeMap<String, Vec<String>>,
     pub pdf_index: &'a PdfPageIndex,
+    pub pdf_indices: &'a BTreeMap<String, PdfPageIndex>,
     pub licence: &'a LicenceResolution,
     pub primary_ref: &'a PaperRef,
     pub primary_cite_key: &'a str,
     pub cite_key_map: &'a BTreeMap<String, String>,
     pub paper_ref_map: &'a BTreeMap<String, PaperRef>,
+    pub source_bib_map: &'a BTreeMap<String, ExternalSourceBib>,
     pub opts: PaperWriteupOptions,
     pub check_table: Vec<CheckTableRow>,
     pub rejected_quotes: Vec<RejectedWriteupQuote>,
@@ -213,7 +220,9 @@ impl<'a> BuildCtx<'a> {
                     .collect();
             }
             if !selected_sk.is_empty() {
-                blocks.push(WriteupBlock::Prose { text: FALLBACK_RESULTS_NOTE.to_string(), basis: ProseBasis::App });
+                let orient_ran = self.folded.tasks.iter().any(|t| t.task == "orient");
+                let note = if orient_ran { FALLBACK_NO_MAIN_RESULTS_NOTE } else { FALLBACK_RESULTS_NOTE };
+                blocks.push(WriteupBlock::Prose { text: note.to_string(), basis: ProseBasis::App });
             }
         }
 
@@ -244,7 +253,7 @@ impl<'a> BuildCtx<'a> {
         let mut blocks = Vec::new();
         for node in &self.skeleton.nodes {
             let Some(tag) = node.tag.as_deref() else { continue };
-            if included.contains(tag) || node.kind == SkNodeKind::Section {
+            if included.contains(tag) {
                 continue;
             }
             let reading = self.folded.nodes.get(tag);
@@ -254,7 +263,13 @@ impl<'a> BuildCtx<'a> {
                 included.insert(tag.to_string());
                 continue;
             }
-            if reading.is_some_and(|r| self.has_reading_content(r)) || ov.is_some() {
+            let has_reading = reading.is_some_and(|r| self.has_reading_content(r));
+            let include_node = if node.kind == SkNodeKind::Section {
+                has_reading
+            } else {
+                has_reading || ov.is_some()
+            };
+            if include_node {
                 self.append_skeleton_node_blocks(
                     "Additional Annotated Nodes and Reader Notes",
                     node,
@@ -333,12 +348,25 @@ impl<'a> BuildCtx<'a> {
         };
         blocks.push(WriteupBlock::Prose { text: header, basis: ProseBasis::App });
 
-        let extracted = extract_node_statement_span(node, ov.and_then(|o| o.end_line), self.source_files);
-        if let Some(ov_rec) = ov {
-            self.record_override_row(tag, ov_rec, node, extracted.as_ref().is_some_and(|e| e.end_line_override_applied));
+        if !node.head_cites.is_empty() && reading.and_then(|r| r.authors_claim.current.as_ref()).is_none() {
+            let mapped: Vec<String> = node
+                .head_cites
+                .iter()
+                .map(|k| self.cite_key_map.get(k).cloned().unwrap_or_else(|| k.clone()))
+                .collect();
+            if let Some(hc) = format_heading_cites(&mapped) {
+                blocks.push(WriteupBlock::Prose { text: format!("Heading citation: {hc}."), basis: ProseBasis::App });
+            }
         }
-        if let Some(ex) = extracted {
-            self.emit_verified_node_statement(section_title, tag, &ex, blocks);
+
+        if node.kind != SkNodeKind::Section {
+            let extracted = extract_node_statement_span(node, ov.and_then(|o| o.end_line), self.source_files);
+            if let Some(ov_rec) = ov {
+                self.record_override_row(tag, ov_rec, node, extracted.as_ref().is_some_and(|e| e.end_line_override_applied));
+            }
+            if let Some(ex) = extracted {
+                self.emit_verified_node_statement(section_title, tag, &ex, blocks);
+            }
         }
         if let Some(r) = reading {
             self.append_reading_blocks(section_title, tag, &node.head_cites, r, included, blocks);
@@ -412,13 +440,23 @@ impl<'a> BuildCtx<'a> {
         blocks: &mut Vec<WriteupBlock>,
     ) {
         if let Some(gist) = &reading.gist.current {
-            blocks.push(WriteupBlock::Prose { text: format!("Gist: {}", gist.value.trim()), basis: ProseBasis::Model });
-            let note = if gist.stale { "model gist (stale)" } else { "model gist" };
-            self.push_row(format!("{tag}-gist"), format!("Gist for {tag}"), HowChecked::ModelStatement, vec![tag.to_string()], note);
+            let text = gist.value.trim();
+            if find_forbidden_investigate_word(text, false).is_some() {
+                self.push_row(format!("{tag}-gist"), format!("Gist for {tag} omitted"), HowChecked::ModelStatement, vec![tag.to_string()], "model gist omitted: disallowed claim wording");
+            } else {
+                blocks.push(WriteupBlock::Prose { text: format!("Gist: {text}"), basis: ProseBasis::Model });
+                let note = if gist.stale { "model gist (stale)" } else { "model gist" };
+                self.push_row(format!("{tag}-gist"), format!("Gist for {tag}"), HowChecked::ModelStatement, vec![tag.to_string()], note);
+            }
         }
         if let Some(purpose) = &reading.purpose.current {
-            blocks.push(WriteupBlock::Prose { text: format!("Purpose: {}", purpose.value.trim()), basis: ProseBasis::Model });
-            self.push_row(format!("{tag}-purpose"), format!("Purpose for {tag}"), HowChecked::ModelStatement, vec![tag.to_string()], "model purpose");
+            let text = purpose.value.trim();
+            if find_forbidden_investigate_word(text, false).is_some() {
+                self.push_row(format!("{tag}-purpose"), format!("Purpose for {tag} omitted"), HowChecked::ModelStatement, vec![tag.to_string()], "model purpose omitted: disallowed claim wording");
+            } else {
+                blocks.push(WriteupBlock::Prose { text: format!("Purpose: {text}"), basis: ProseBasis::Model });
+                self.push_row(format!("{tag}-purpose"), format!("Purpose for {tag}"), HowChecked::ModelStatement, vec![tag.to_string()], "model purpose");
+            }
         }
         if let Some(anchors) = &reading.anchors.current {
             for (idx, a) in anchors.value.iter().enumerate() {
@@ -437,8 +475,13 @@ impl<'a> BuildCtx<'a> {
                 if let Some((q, row)) = self.verify_anchor_quote(section_title, &q_id, &hyp.anchor, None) {
                     blocks.push(WriteupBlock::Quote(Box::new(q)));
                     self.push_row(row.id, row.statement, row.how_checked, row.rests_on, row.note.unwrap_or_default());
-                    blocks.push(WriteupBlock::Prose { text: format!("Hypothesis: {}", hyp.text.trim()), basis: ProseBasis::Model });
-                    self.push_row(format!("{q_id}-text"), format!("Hypothesis {} for {tag}", idx + 1), HowChecked::ModelStatement, vec![q_id], "model hypothesis");
+                    let htxt = hyp.text.trim();
+                    if find_forbidden_investigate_word(htxt, false).is_some() {
+                        self.push_row(format!("{q_id}-text"), format!("Hypothesis {} for {tag} omitted", idx + 1), HowChecked::ModelStatement, vec![q_id], "model hypothesis omitted: disallowed claim wording");
+                    } else {
+                        blocks.push(WriteupBlock::Prose { text: format!("Hypothesis: {htxt}"), basis: ProseBasis::Model });
+                        self.push_row(format!("{q_id}-text"), format!("Hypothesis {} for {tag}", idx + 1), HowChecked::ModelStatement, vec![q_id], "model hypothesis");
+                    }
                 }
             }
         }
@@ -503,7 +546,9 @@ impl<'a> BuildCtx<'a> {
         if let Some(num) = &ov.number { details.push(format!("number: {num}")); }
         if let Some(el) = ov.end_line.filter(|_| end_line_applied) { details.push(format!("end line: {el}")); }
         if ov.not_a_node { details.push("marked not a node".to_string()); }
-        if let Some(n) = &ov.note { details.push(n.clone()); }
+        if self.opts.include_notes {
+            if let Some(n) = &ov.note { details.push(n.clone()); }
+        }
         let loc = node.spans.first().map(|s| format!("{}:{}-{}", s.path, s.start_line, s.end_line)).unwrap_or_else(|| tag.to_string());
         self.push_row(format!("{tag}-override"), format!("Reader override on {tag}"), HowChecked::UserStatement, vec![loc], details.join("; "));
     }

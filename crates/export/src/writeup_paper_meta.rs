@@ -194,12 +194,13 @@ impl PdfPageIndex {
                 }
             }
         } else if let Some(arr) = data.get("pdf_page_lines").and_then(Value::as_array) {
+            let empty_layer = data["status"].as_str() == Some("empty_text_layer");
             for t in arr.iter().filter_map(Value::as_array).filter(|t| t.len() >= 3) {
                 let page = t[0].as_u64().unwrap_or(0) as usize;
                 let first_line = t[1].as_u64().unwrap_or(0) as usize;
                 let last_line = t[2].as_u64().unwrap_or(0) as usize;
                 if page > 0 && first_line > 0 && last_line >= first_line {
-                    pages.push(PdfPageEntry { page, first_line, last_line, is_ocr: false, is_none: false });
+                    pages.push(PdfPageEntry { page, first_line, last_line, is_ocr: false, is_none: empty_layer });
                 }
             }
         }
@@ -438,67 +439,65 @@ pub(crate) struct ExtractedStatement {
     pub end_line_override_applied: bool,
 }
 
-/// Extract clean verbatim statement text and its exact 1-based physical `(path, start, end)`.
+fn is_pure_input_directive(text: &str) -> bool {
+    let t = text.trim();
+    (t.starts_with("\\input{") || t.starts_with("\\include{")) && t.ends_with('}') && !t.contains('\n')
+}
+
+/// Extract clean verbatim statement text in `node.spans` order and its exact 1-based physical `(path, start, end)`.
 pub(crate) fn extract_node_statement_span(
     node: &SkNode,
     override_end_line: Option<usize>,
     files: &BTreeMap<String, Vec<String>>,
 ) -> Option<ExtractedStatement> {
-    let first_span = node.spans.first()?;
-    let lines = files.get(&first_span.path)?;
-    let mut start = first_span.start_line;
-    let mut end = node
-        .spans
-        .iter()
-        .filter(|s| s.path == first_span.path)
-        .map(|s| s.end_line)
-        .max()
-        .unwrap_or(first_span.end_line);
+    let mut chunks: Vec<(String, usize, usize, String)> = Vec::new();
     let mut end_line_override_applied = false;
-    if let Some(ov_end) = override_end_line {
-        if ov_end >= start && ov_end <= lines.len() {
-            end = ov_end;
-            end_line_override_applied = true;
-        }
-    }
-    if start == 0 || end < start || end > lines.len() {
-        return None;
-    }
-    if end > start && is_pure_begin_wrapper_line(&lines[start - 1]) {
-        start += 1;
-    }
-    if end > start && is_pure_end_wrapper_line(&lines[end - 1]) {
-        end -= 1;
-    }
-    while start < end && lines[start - 1].trim().is_empty() {
-        start += 1;
-    }
-    while end > start && lines[end - 1].trim().is_empty() {
-        end -= 1;
-    }
-    let primary_text = lines[start - 1..end].join("\n").trim().to_string();
-    if primary_text.is_empty() {
-        return None;
-    }
-    let mut parts = vec![primary_text.clone()];
-    for extra in node.spans.iter().filter(|s| s.path != first_span.path) {
-        if let Some(el) = files.get(&extra.path) {
-            if extra.start_line > 0 && extra.end_line >= extra.start_line && extra.end_line <= el.len() {
-                let chunk = el[extra.start_line - 1..extra.end_line].join("\n").trim().to_string();
-                if !chunk.is_empty() {
-                    parts.push(chunk);
-                }
+    for (idx, span) in node.spans.iter().enumerate() {
+        let Some(lines) = files.get(&span.path) else { continue };
+        let mut start = span.start_line;
+        let mut end = span.end_line;
+        if idx == 0 {
+            if let Some(ov_end) = override_end_line.filter(|&e| e >= start && e <= lines.len()) {
+                end = ov_end;
+                end_line_override_applied = true;
             }
         }
+        if start == 0 || end < start || end > lines.len() {
+            continue;
+        }
+        if idx == 0 && is_pure_begin_wrapper_line(&lines[start - 1]) {
+            start += 1;
+        }
+        if idx == 0 && end >= start && is_pure_end_wrapper_line(&lines[end - 1]) {
+            end -= 1;
+        }
+        while start <= end && lines[start - 1].trim().is_empty() {
+            start += 1;
+        }
+        while end >= start && lines[end - 1].trim().is_empty() {
+            end -= 1;
+        }
+        if start > end {
+            continue;
+        }
+        let text = lines[start - 1..end].join("\n").trim().to_string();
+        if !text.is_empty() {
+            chunks.push((span.path.clone(), start, end, text));
+        }
     }
-    Some(ExtractedStatement {
-        path: first_span.path.clone(),
-        start_line: start,
-        end_line: end,
-        primary_text,
-        full_text: parts.join("\n"),
-        end_line_override_applied,
-    })
+    if chunks.is_empty() {
+        return None;
+    }
+    let primary_idx = if chunks.len() > 1 && is_pure_input_directive(&chunks[0].3) { 1 } else { 0 };
+    let (path, start_line, end_line, primary_text) = chunks[primary_idx].clone();
+    let full_text = chunks
+        .iter()
+        .enumerate()
+        .filter(|(i, (_, _, _, t))| !(*i == 0 && primary_idx > 0 && is_pure_input_directive(t)))
+        .map(|(_, (_, _, _, t))| t.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(ExtractedStatement { path, start_line, end_line, primary_text, full_text, end_line_override_applied })
 }
 
 /// Neutralize TeX/Markdown math delimiters on OCR statements (`investigate.md` rule 6.21).
@@ -552,6 +551,7 @@ pub(crate) struct ResolvedBibliography {
     pub entries: Vec<BibEntry>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_bibliography(
     lib: Option<&Library>,
     primary_ref: &PaperRef,
@@ -560,6 +560,7 @@ pub(crate) fn resolve_bibliography(
     primary_year: Option<i32>,
     skeleton: &PaperSkeleton,
     referenced_bib_keys: &BTreeSet<String>,
+    cited_by_bib: &BTreeMap<String, PaperRef>,
 ) -> Result<ResolvedBibliography, String> {
     let mut used_keys = BTreeSet::new();
     let mut entries = Vec::new();
@@ -573,17 +574,20 @@ pub(crate) fn resolve_bibliography(
     let mut cite_key_map = BTreeMap::new();
     let mut paper_ref_map = BTreeMap::new();
     for raw_key in referenced_bib_keys {
-        if let Some(bref) = bib_by_key.get(raw_key.as_str()) {
-            let pref = bib_ref_to_paper_ref(bref);
-            let title = bref.title.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or_else(|| {
-                let r = bref.raw.trim();
-                if r.is_empty() { bref.key.as_str() } else { r }
-            });
-            let entry = resolve_bib_entry(lib, &pref, title, &[], None, &mut used_keys)?;
-            cite_key_map.insert(raw_key.clone(), entry.cite_key.clone());
-            paper_ref_map.insert(raw_key.clone(), pref);
-            entries.push(entry);
-        }
+        let bref = bib_by_key.get(raw_key.as_str()).copied();
+        let pref = cited_by_bib
+            .get(raw_key)
+            .cloned()
+            .or_else(|| bref.map(bib_ref_to_paper_ref));
+        let Some(pref) = pref else { continue };
+        let title = bref
+            .and_then(|b| b.title.as_deref().map(str::trim).filter(|s| !s.is_empty()))
+            .or_else(|| bref.map(|b| b.raw.trim()).filter(|s| !s.is_empty()))
+            .unwrap_or(raw_key.as_str());
+        let entry = resolve_bib_entry(lib, &pref, title, &[], None, &mut used_keys)?;
+        cite_key_map.insert(raw_key.clone(), entry.cite_key.clone());
+        paper_ref_map.insert(raw_key.clone(), pref);
+        entries.push(entry);
     }
     Ok(ResolvedBibliography { primary_cite_key, cite_key_map, paper_ref_map, entries })
 }

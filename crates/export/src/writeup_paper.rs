@@ -6,6 +6,10 @@
 //! stores. Zero model calls, zero network calls, zero explicit writes.
 
 use crate::writeup::{RejectedWriteupQuote, Writeup, WriteupMode};
+use crate::writeup_paper_ext::{
+    build_pdf_indices, collect_cited_lookups, find_forbidden_investigate_word,
+    resolve_external_source_bibs,
+};
 use crate::writeup_paper_meta::{
     collect_reader_overrides, load_and_verify_source_files, open_existing_library,
     resolve_bibliography, resolve_licence, resolve_primary_paper_ref, PdfPageIndex,
@@ -122,6 +126,12 @@ pub(crate) fn build_writeup_from_verified(
     if skel_ev.payload["source_id"].as_str().is_some_and(|s| s != skeleton.source_id) {
         return Err("pinned skeleton blob `source_id` disagrees with ledger event".into());
     }
+    if skel_ev.payload["paper_key"].as_str().is_some_and(|s| s != skeleton.paper_key.as_str()) {
+        return Err("pinned skeleton blob `paper_key` disagrees with ledger event".into());
+    }
+    if skel_ev.payload["builder"].as_str().is_some_and(|s| s != skeleton.builder.as_str()) {
+        return Err("pinned skeleton blob `builder` disagrees with ledger event".into());
+    }
 
     let receipt = find_source_receipt(events, &skeleton.source_id, skeleton.source_seq)
         .ok_or_else(|| {
@@ -134,6 +144,8 @@ pub(crate) fn build_writeup_from_verified(
     let sandbox = WorkspaceSandbox::new(data_dir.to_path_buf(), None);
     let source_files = load_and_verify_source_files(&sandbox, session_id, receipt, &skeleton)?;
     let pdf_index = PdfPageIndex::from_receipt(receipt);
+    let mut pdf_indices = build_pdf_indices(events);
+    pdf_indices.insert(skeleton.source_id.clone(), pdf_index.clone());
 
     let lib = open_existing_library(data_dir);
     let lib_detail = lib.as_ref().and_then(|l| l.get_paper(&skeleton.paper_key).ok().flatten());
@@ -147,7 +159,8 @@ pub(crate) fn build_writeup_from_verified(
     let year = resolve_paper_year(paper_ev, receipt, lib_detail.as_ref());
     let primary_ref = resolve_primary_paper_ref(&skeleton, lib_detail.as_ref());
     let referenced_bib_keys = collect_referenced_bib_keys(&skeleton, &folded);
-    let bib = resolve_bibliography(
+    let cited = collect_cited_lookups(events);
+    let mut bib = resolve_bibliography(
         lib.as_ref(),
         &primary_ref,
         &title,
@@ -155,9 +168,25 @@ pub(crate) fn build_writeup_from_verified(
         year,
         &skeleton,
         &referenced_bib_keys,
+        &cited.by_bib_key,
+    )?;
+    let source_bib_map = resolve_external_source_bibs(
+        events,
+        lib.as_ref(),
+        &skeleton.source_id,
+        &folded,
+        &cited.by_source_id,
+        &mut bib.cite_key_map,
+        &mut bib.paper_ref_map,
+        &mut bib.entries,
     )?;
 
     let status_line = build_status_line(&skeleton, &pdf_index, &folded.tasks);
+    if let Some(word) = find_forbidden_investigate_word(&status_line, false) {
+        return Err(format!(
+            "Investigate write-up status_line must not contain forbidden word \"{word}\""
+        ));
+    }
 
     let mut ctx = BuildCtx {
         sandbox: &sandbox,
@@ -168,11 +197,13 @@ pub(crate) fn build_writeup_from_verified(
         overrides: &overrides,
         source_files: &source_files,
         pdf_index: &pdf_index,
+        pdf_indices: &pdf_indices,
         licence: &licence_res,
         primary_ref: &primary_ref,
         primary_cite_key: &bib.primary_cite_key,
         cite_key_map: &bib.cite_key_map,
         paper_ref_map: &bib.paper_ref_map,
+        source_bib_map: &source_bib_map,
         opts,
         check_table: Vec::new(),
         rejected_quotes: Vec::new(),
