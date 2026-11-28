@@ -58,7 +58,12 @@ pub fn render_writeup_markdown(doc: &Writeup, opts: &WriteupOptions) -> Result<S
                     } else {
                         String::new()
                     };
-                    let quoted = q.text.replace('\n', "\n> ");
+                    let display_text = if q.ocr {
+                        neutralize_ocr_math(&q.text)
+                    } else {
+                        q.text.clone()
+                    };
+                    let quoted = display_text.replace('\n', "\n> ");
                     let _ = writeln!(
                         out,
                         "> \"{quoted}\"\n>\n> -- [@{}, {loc}]{ocr_suffix}\n",
@@ -168,4 +173,13 @@ pub fn render_verified_writeup_markdown(
 
 fn escape_md_cell(s: &str) -> String {
     s.replace('|', "\\|").replace(['\r', '\n'], " ")
+}
+
+fn neutralize_ocr_math(s: &str) -> String {
+    s.replace("$$", " ")
+        .replace('$', "")
+        .replace("\\[", "(")
+        .replace("\\]", ")")
+        .replace("\\(", "(")
+        .replace("\\)", ")")
 }
