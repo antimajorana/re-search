@@ -1,15 +1,16 @@
-//! Explore mode model exchanges (Sharpen X6; Plan/Search X7; Triage delegation X8).
+//! Explore mode model exchanges (Sharpen X6; Plan/Search X7; Triage delegation X8; CLI routes X18).
 //!
-//! Governance: `explore.md` 3, 4.1, 4.2, 5.1, 6 (Rules P1, P2, P3, C7), 13 (decision 12).
-//! CLI-subscription routes (`claude-cli`, `antigravity`) return an explicit X18 message so
-//! deterministic preview/search keeps working cleanly until X18.
+//! Governance: `explore.md` 3, 4.1, 4.2, 5.1, 6 (Rules P1, P2, P3, C7), 9 (X18), 10.
+//! Supports both in-core API/ChatGPT/Ollama providers and CLI-subscription routes (`claude-cli`,
+//! `antigravity`) through the exact same Rust validators and F9 budget checks.
 
 use crate::agent_models::resolve_in_core_role_model;
 use crate::cli_turn::CliRouteKind;
 use crate::idea::{
     budget_snapshot, latest_statement_seq, next_stage, validate_recorder_stage, IdeaRecorder,
-    IdeaStage, EVENT_IDEA_BRIEF, EVENT_IDEA_STAGE, EVENT_IDEA_STATED,
+    IdeaStage, EVENT_IDEA_BRIEF, EVENT_IDEA_EXCHANGE, EVENT_IDEA_STAGE, EVENT_IDEA_STATED,
 };
+use crate::idea_cli_exchange::build_cli_exchange_transport;
 use crate::idea_view;
 use crate::routes_idea::ActiveExploreGuard;
 use crate::routes_session::{bad, conflict, internal, parse_json_body, ApiResult};
@@ -27,10 +28,6 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tools::canon::random_hex;
 use tools::EVENT_SCHEMA_VERSION;
-
-/// Explicit message returned when a session/user route is on a CLI subscription (`explore.md` 13 #12).
-pub const CLI_ROUTE_UNSUPPORTED_MSG: &str =
-    "Explore exchanges are not supported on CLI routes yet (awaiting X18)";
 
 const SHARPEN_SYSTEM_PROMPT: &str = "\
 You sharpen a researcher's physics or mathematics idea into checkable subclaims and multi-perspective \
@@ -51,11 +48,37 @@ fn non_empty_trimmed(opt: Option<&str>) -> Option<&str> {
     opt.map(str::trim).filter(|s| !s.is_empty())
 }
 
-/// Resolve an in-core model transport for Explore exchanges, explicitly refusing CLI-subscription
-/// routes (`claude-cli`, `antigravity`) with [`CLI_ROUTE_UNSUPPORTED_MSG`] until X18.
+/// Inspect recorded `idea.exchange` / `session.start` events to see if this session already
+/// committed to a CLI route (`Some(Ok(kind))`) or an in-core API route (`Some(Err(provider))`).
+fn recorded_exchange_route(state: &DesktopState, session_id: &str) -> Option<Result<CliRouteKind, String>> {
+    let ledger = state.open_ledger().ok()?;
+    let events = ledger.read_session(session_id).ok()?;
+    for ev in &events {
+        if ev.kind == "session.start" || ev.kind == "session.resume" {
+            if let Some(r) = ev.payload.get("route").and_then(Value::as_str) {
+                if let Some(k) = CliRouteKind::from_ledger_route(r) {
+                    return Some(Ok(k));
+                }
+            }
+        }
+        if ev.kind == EVENT_IDEA_EXCHANGE {
+            if let Some(p) = ev.payload.get("provider").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                return Some(match CliRouteKind::from_ledger_route(p) {
+                    Some(k) => Ok(k),
+                    None => Err(p.to_string()),
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Resolve a model transport for Explore exchanges — either a subscription-CLI JSON-block
+/// transport (`claude-cli`, `antigravity`; package X18) or an in-core API/ChatGPT/Ollama transport.
 ///
-/// Enforces session route consistency: a session already bound to a CLI route (`meta.route`)
-/// never silently switches to an API provider even if the request body specifies another provider.
+/// Enforces session route consistency (409 on cross-route mixing): a session already bound to a
+/// CLI route (`meta.route` or prior ledger events) never silently switches to another provider,
+/// and Antigravity consent + billing-safety guards are enforced before spawning any subprocess.
 pub fn resolve_explore_transport(
     state: &DesktopState,
     session_id: &str,
@@ -63,22 +86,55 @@ pub fn resolve_explore_transport(
 ) -> Result<(Box<dyn Transport>, String), (u16, String)> {
     let meta = state.load_meta(session_id);
     let ui = state.load_ui_settings();
-
-    let session_route = non_empty_trimmed(meta.as_ref().and_then(|m| m.route.as_deref()));
-    if let Some(r) = session_route {
-        if CliRouteKind::from_provider(&r.to_ascii_lowercase()).is_some() {
-            return Err(bad(CLI_ROUTE_UNSUPPORTED_MSG));
-        }
-    }
+    let prior_route = recorded_exchange_route(state, session_id);
 
     let requested_provider =
         non_empty_trimmed(req.and_then(|v| v.get("provider")).and_then(Value::as_str));
     let requested_model =
         non_empty_trimmed(req.and_then(|v| v.get("model")).and_then(Value::as_str));
-    if let Some(p) = requested_provider {
-        if CliRouteKind::from_provider(&p.to_ascii_lowercase()).is_some() {
-            return Err(bad(CLI_ROUTE_UNSUPPORTED_MSG));
+    let requested_cli = requested_provider
+        .and_then(|p| CliRouteKind::from_provider(&p.to_ascii_lowercase()));
+
+    let session_route = non_empty_trimmed(meta.as_ref().and_then(|m| m.route.as_deref()));
+    let bound_cli = session_route
+        .and_then(|r| CliRouteKind::from_provider(&r.to_ascii_lowercase()))
+        .or(match prior_route {
+            Some(Ok(k)) => Some(k),
+            _ => None,
+        });
+
+    if let Some(bound_kind) = bound_cli {
+        if let Some(req_p) = requested_provider {
+            if requested_cli != Some(bound_kind) {
+                return Err(conflict(format!(
+                    "session `{session_id}` runs on {} ({}); start a new session to use `{req_p}`",
+                    bound_kind.name(),
+                    bound_kind.provider_id()
+                )));
+            }
         }
+        return build_cli_exchange_transport(state, session_id, bound_kind, req);
+    }
+
+    if let Some(req_kind) = requested_cli {
+        if let Some(Err(api_prov)) = &prior_route {
+            return Err(conflict(format!(
+                "session `{session_id}` already ran exchanges on `{api_prov}`; start a new session for {}",
+                req_kind.name()
+            )));
+        }
+        let built = build_cli_exchange_transport(state, session_id, req_kind, req)?;
+        if let Some(mut m) = meta {
+            if m.route.is_none() {
+                m.route = Some(req_kind.provider_id().to_string());
+                m.default_provider = Some(req_kind.provider_id().to_string());
+                if let Some(mod_name) = requested_model {
+                    m.default_model = Some(mod_name.to_string());
+                }
+                let _ = state.save_meta(&m);
+            }
+        }
+        return Ok(built);
     }
 
     let orch_provider =
@@ -93,8 +149,14 @@ pub fn resolve_explore_transport(
             .flatten()
             .next()
         {
-            if CliRouteKind::from_provider(&cand.to_ascii_lowercase()).is_some() {
-                return Err(bad(CLI_ROUTE_UNSUPPORTED_MSG));
+            if let Some(cand_kind) = CliRouteKind::from_provider(&cand.to_ascii_lowercase()) {
+                if let Some(Err(api_prov)) = &prior_route {
+                    return Err(conflict(format!(
+                        "session `{session_id}` already ran exchanges on `{api_prov}`; start a new session for {}",
+                        cand_kind.name()
+                    )));
+                }
+                return build_cli_exchange_transport(state, session_id, cand_kind, req);
             }
         }
     }
