@@ -28,6 +28,7 @@ const crateRoot = path.resolve(here, '..');
 
 function makeFakeDom() {
   let innerHtmlWrites = 0;
+  let doc = null;
   const makeNode = (tag = 'div', ns = null) => {
     let text = '';
     let html = '';
@@ -38,6 +39,7 @@ function makeFakeDom() {
     const node = {
       tagName: String(tag).toUpperCase(),
       namespaceURI: ns,
+      ownerDocument: doc,
       children: [],
       style: {},
       type: '',
@@ -47,6 +49,11 @@ function makeFakeDom() {
       selected: false,
       disabled: false,
       rows: 0,
+      selectionStart: 0,
+      selectionEnd: 0,
+      selectionDirection: 'none',
+      scrollTop: 0,
+      lastFocusOpts: null,
       get className() { return [...classes].join(' '); },
       set className(v) {
         classes.clear();
@@ -66,9 +73,27 @@ function makeFakeDom() {
       setAttribute(k, v) { attrs.set(String(k), String(v)); },
       getAttribute(k) { return attrs.has(String(k)) ? attrs.get(String(k)) : null; },
       getAttributes() { return attrs; },
+      contains(target) {
+        if (!target) return false;
+        if (target === this) return true;
+        return this.children.some((c) => typeof c?.contains === 'function' && c.contains(target));
+      },
+      focus(opts) { this.lastFocusOpts = opts ?? null; if (doc) doc.activeElement = this; },
+      setSelectionRange(start, end, dir = 'none') {
+        this.selectionStart = start;
+        this.selectionEnd = end;
+        this.selectionDirection = dir;
+      },
       append(...nodes) { this.children.push(...nodes); },
       appendChild(n) { this.children.push(n); return n; },
-      replaceChildren(...nodes) { this.children = [...nodes]; text = ''; html = ''; },
+      replaceChildren(...nodes) {
+        if (doc?.activeElement && doc.activeElement !== this && this.contains(doc.activeElement)) {
+          doc.activeElement = null;
+        }
+        this.children = [...nodes];
+        text = '';
+        html = '';
+      },
       addEventListener(type, fn) {
         if (!listeners.has(type)) listeners.set(type, []);
         listeners.get(type).push(fn);
@@ -105,11 +130,14 @@ function makeFakeDom() {
   };
 
   const prevDoc = globalThis.document;
-  globalThis.document = {
+  doc = {
+    activeElement: null,
     createElement: (tag) => makeNode(tag, null),
     createElementNS: (ns, tag) => makeNode(tag, ns),
   };
+  globalThis.document = doc;
   return {
+    doc,
     makeEl: (tag = 'div') => makeNode(tag, null),
     get innerHtmlWrites() { return innerHtmlWrites; },
     restore() { globalThis.document = prevDoc; },
@@ -375,12 +403,14 @@ test('XSS payloads in statement, conventions, symbols, and approval labels produ
   }
 });
 
-test('assets.rs registers approval_card.js, solve_state.js, solve_setup.js, and solve.css', () => {
+test('assets.rs registers approval_card.js, dom_focus.js, solve_state.js, solve_setup.js, solve_setup_fields.js, and solve.css', () => {
   const assetsRs = fs.readFileSync(path.join(crateRoot, 'src', 'assets.rs'), 'utf8');
   for (const asset of [
     '/assets/approval_card.js',
+    '/assets/dom_focus.js',
     '/assets/solve_state.js',
     '/assets/solve_setup.js',
+    '/assets/solve_setup_fields.js',
     '/assets/solve.css',
   ]) {
     assert.ok(assetsRs.includes(`"${asset}"`), `assets.rs must register ${asset}`);
@@ -484,3 +514,82 @@ test('approval_card.js allowListed remains safe when update() replaces grants mi
     dom.restore();
   }
 });
+
+test('solve_setup.js preserves focus, caret, and scrollTop across prefill, error, models-updated, IME, and Edit setup polling', async () => {
+  const dom = makeFakeDom();
+  try {
+    const host = dom.makeEl('div');
+    let prefillCalls = 0;
+    let shouldFail = false;
+    const view = createSolveSetupView(host, {
+      debounceMs: 5,
+      onPrefill: async () => {
+        prefillCalls += 1;
+        if (shouldFail) throw new Error('offline prefill failure');
+        return {
+          prefill: { task_kind: 'calculate', symbols: [{ name: 'phi', assumptions: ['real'] }], dimensions: { phi: { mass: 1 } } },
+          model_connected: false,
+        };
+      },
+    });
+
+    // IME composing input must NOT trigger prefill; compositionend schedules it.
+    let stmt = host.querySelector('[data-testid="solve-statement-input"]');
+    stmt.focus();
+    stmt.value = 'Compute $V(\\phi)$';
+    stmt.setSelectionRange(8, 12, 'backward');
+    stmt.scrollTop = 42;
+    stmt.dispatch('input', { isComposing: true });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(prefillCalls, 0, 'isComposing input must not trigger prefill');
+
+    stmt.dispatch('compositionend');
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(prefillCalls, 1, 'compositionend must schedule prefill');
+    let nextStmt = host.querySelector('[data-testid="solve-statement-input"]');
+    assert.equal(dom.doc.activeElement, nextStmt);
+    assert.deepEqual(nextStmt.lastFocusOpts, { preventScroll: true });
+    assert.equal(nextStmt.selectionStart, 8);
+    assert.equal(nextStmt.selectionEnd, 12);
+    assert.equal(nextStmt.selectionDirection, 'backward');
+    assert.equal(nextStmt.scrollTop, 42);
+
+    // Dimension inputs carry stable aria-labels and keep focus across prefill error rebuilds.
+    const dimSym = host.querySelector('[aria-label="Dimension 1 symbol"]');
+    assert.ok(dimSym && host.querySelector('[aria-label="Dimension 1 base"]') && host.querySelector('[aria-label="Dimension 1 power"]'));
+    dimSym.focus();
+    dimSym.setSelectionRange(1, 3, 'forward');
+    shouldFail = true;
+    await view.triggerPrefill();
+    assert.ok(host.querySelector('[data-testid="solve-error-banner"]'));
+    assert.equal(dom.doc.activeElement, host.querySelector('[aria-label="Dimension 1 symbol"]'));
+    assert.equal(dom.doc.activeElement.selectionStart, 1);
+    assert.equal(dom.doc.activeElement.selectionEnd, 3);
+
+    // models-updated rebuild preserves focus/caret/scrollTop on statement input.
+    stmt = host.querySelector('[data-testid="solve-statement-input"]');
+    stmt.focus();
+    stmt.setSelectionRange(3, 7, 'forward');
+    stmt.scrollTop = 19;
+    view.applyView({ connected_models: [{ provider: 'openai', model: 'gpt-5', label: 'OpenAI / gpt-5' }], model_connected: true });
+    nextStmt = host.querySelector('[data-testid="solve-statement-input"]');
+    assert.equal(dom.doc.activeElement, nextStmt);
+    assert.equal(nextStmt.selectionStart, 3);
+    assert.equal(nextStmt.selectionEnd, 7);
+    assert.equal(nextStmt.scrollTop, 19);
+
+    // Edit setup polling updates state WITHOUT rebuilding the DOM when setupCardSig is unchanged.
+    await view.submitSetup();
+    host.querySelector('[data-action="edit-setup"]').dispatch('click');
+    const revisingStmt = host.querySelector('[data-testid="solve-statement-input"]');
+    revisingStmt.focus();
+    revisingStmt.setSelectionRange(2, 5, 'forward');
+    view.applyView({ steps: [{ entry_id: 'e-9', summary: 'polled step' }], run_state: { state: 'running', running: true } });
+    assert.equal(host.querySelector('[data-testid="solve-statement-input"]'), revisingStmt, 'Edit setup polling must not rebuild DOM');
+    assert.equal(dom.doc.activeElement, revisingStmt);
+    assert.equal(view.getState().steps.length, 1);
+  } finally {
+    dom.restore();
+  }
+});
+

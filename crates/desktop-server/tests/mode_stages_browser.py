@@ -66,7 +66,16 @@ def check_mode_stages(browser, binary):
             assert "Checked numerically" not in solve_stage.inner_text()
 
             stmt = solve_stage.locator('[data-testid="solve-statement-input"]')
-            stmt.fill(r"Compute $V_1(\phi)$ for $\lambda > 0$.")
+            stmt.click()
+            with page.expect_response("**/solve/prefill"):
+                stmt.press_sequentially(r"Compute $V_1(\phi)$", delay=20)
+            expect(solve_stage.locator(".solve-sym-name")).to_have_count(1)
+            expect(stmt).to_be_focused()
+            with page.expect_response("**/solve/prefill"):
+                page.keyboard.type(r" for $\lambda > 0$.", delay=20)
+            expect(solve_stage.locator(".solve-sym-name")).to_have_count(2)
+            expect(stmt).to_be_focused()
+            expect(stmt).to_have_value(r"Compute $V_1(\phi)$ for $\lambda > 0$.")
             expect(solve_stage.locator('[data-testid="solve-katex-preview"] .katex').first).to_be_visible()
             solve_stage.locator('[data-testid="solve-conventions-input"]').fill("Euclidean signature, hbar = 1")
             solve_stage.locator('[data-testid="solve-run-btn"]').click()

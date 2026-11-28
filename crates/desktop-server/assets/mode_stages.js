@@ -484,7 +484,7 @@ export function createModeStagesController(deps = {}) {
     if (activeSessionId === mountedSessionId && (mountedMode === 'solve' || mountedMode === 'explore') && (!cachedMode || cachedMode === mountedMode)) {
       return mountedMode === 'solve' ? activeSolveView : activeExploreCtrl;
     }
-    if (inFlightMount?.sessionId === activeSessionId && (!cachedMode || cachedMode === 'solve')) {
+    if (inFlightMount?.sessionId === activeSessionId && inFlightMount.seq === syncSeq && (!cachedMode || cachedMode === 'solve')) {
       try { return await inFlightMount.promise; } catch { return null; }
     }
     const seq = ++syncSeq;
@@ -506,7 +506,7 @@ export function createModeStagesController(deps = {}) {
       return mode === 'solve' ? activeSolveView : activeExploreCtrl;
     }
     if (mode === 'solve') {
-      if (inFlightMount?.sessionId === activeSessionId) {
+      if (inFlightMount?.sessionId === activeSessionId && inFlightMount.seq === syncSeq) {
         try { return await inFlightMount.promise; } catch { return null; }
       }
       try { return await mountSolveStage(activeSessionId, seq); } catch { return null; }
@@ -536,7 +536,7 @@ export function createModeStagesController(deps = {}) {
       const handled = rail
         ? await rail.upsertSession?.({ id, title, mode: 'solve', archived: false }, { select: true })
         : false;
-      if (inFlightMount?.sessionId === id) {
+      if (inFlightMount?.sessionId === id && inFlightMount.seq === syncSeq) {
         await inFlightMount.promise;
       } else if (!handled || mountedSessionId !== id || mountedMode !== 'solve') {
         await mountSolveStage(id, ++syncSeq);

@@ -167,9 +167,17 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/solve_state.js"),
         }),
+        "/assets/dom_focus.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/dom_focus.js"),
+        }),
         "/assets/solve_setup.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/solve_setup.js"),
+        }),
+        "/assets/solve_setup_fields.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_setup_fields.js"),
         }),
         "/assets/solve_badges.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",

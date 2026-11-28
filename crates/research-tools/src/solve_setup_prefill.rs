@@ -421,14 +421,18 @@ pub fn prefill_solve_setup(req: &PrefillRequest) -> SolvePrefillResult {
     let vanishes_cue = detect_show_vanishes_cue(&req.statement);
 
     let mut conv_parts: Vec<String> = Vec::new();
+    let mut seen_lines: BTreeSet<String> = BTreeSet::new();
     let pinned = req.pinned_conventions.trim();
     if !pinned.is_empty() {
+        for line in pinned.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            seen_lines.insert(line.to_string());
+        }
         conv_parts.push(pinned.to_string());
     }
     if let Some(defs) = &req.defaults {
         for extra in &defs.conventions {
             let trimmed = extra.trim();
-            if !trimmed.is_empty() && !conv_parts.iter().any(|p| p == trimmed) {
+            if !trimmed.is_empty() && seen_lines.insert(trimmed.to_string()) {
                 conv_parts.push(trimmed.to_string());
             }
         }
@@ -515,5 +519,39 @@ pub fn prefill_solve_setup(req: &PrefillRequest) -> SolvePrefillResult {
         vanishes_cue,
         math_sha256,
         target_tier_labels,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefill_deduplicates_default_conventions_per_trimmed_pinned_line() {
+        let req = PrefillRequest {
+            statement: "Compute $V(\\phi)$".into(),
+            pinned_conventions: "  metric: Euclidean  \nhbar = c = 1\n".into(),
+            defaults: Some(SetupDefaults {
+                conventions: vec![
+                    "metric: Euclidean".into(),
+                    "  hbar = c = 1  ".into(),
+                    "scheme: MS-bar".into(),
+                    "scheme: MS-bar".into(),
+                ],
+                ..SetupDefaults::default()
+            }),
+            ..PrefillRequest::default()
+        };
+        let first = prefill_solve_setup(&req);
+        assert_eq!(
+            first.conventions,
+            "metric: Euclidean  \nhbar = c = 1\nscheme: MS-bar"
+        );
+        // Re-feeding the merged multi-line conventions stays idempotent across repeated prefills.
+        let second = prefill_solve_setup(&PrefillRequest {
+            pinned_conventions: first.conventions.clone(),
+            ..req
+        });
+        assert_eq!(second.conventions, first.conventions);
     }
 }
