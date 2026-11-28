@@ -1,0 +1,88 @@
+Clone https://github.com/antimajorana/reSearch.git and branch `fix/wp2-investigate-focus-dag-bugs` from latest `origin/main` (v0.2.2).
+
+You are implementing **Work Package 2: Bugs the owner hit today + Priority 3 items** from the 2026-11-28 reSearch audit. Work completely and unattended. Use Gemini 4 Neon for implementation subagents and Gemini 4 Carbon for a hard independent audit before your final push.
+
+## Hard Ground Rules (Zero Exceptions)
+1. **Never weaken provenance honesty.** Keep the ledger tamper-evident; NEVER record host notices as user input (`human.steer` / `<human_steer>`); NEVER record unexecuted tools as `tool.request` / `tool.result`; NEVER fabricate model assistant text (`Ok(String::new())`, not fake assistant prose).
+2. **600-line CI ceiling:** Every touched source or test file (`.rs`, `.js`, `.mjs`, `.py`, `.css`) MUST be `<= 600` lines. Verify with `python3 scripts/check_file_length.py --base origin/main`.
+   - Split `crates/desktop-server/assets/solve_setup.js` (593L) FIRST (e.g. extract field/section builders into `solve_setup_fields.js` and register `/assets/solve_setup_fields.js` in `crates/desktop-server/src/assets.rs`) so both files stay well below 600L!
+   - Keep `crates/desktop-server/src/investigation_tasks.rs` (566L), `turn_runner.rs` (569L), `autonomous.rs` (575L), `map_reading_validate.rs` (566L), `routes_tools.rs` (585L) under 600L by putting helpers in sibling modules (`dispatch.rs`, `investigation_task_context.rs`, `map_authors_claim.rs`, `solve_dag_labels.rs`).
+   - Do NOT touch over-limit legacy files (`app.js` 932L, `session_view.rs` 753L, `canvas_dag.js` 688L).
+   - For `crates/agent/src/responses.rs` (599L): move its inline `#[cfg(test)] mod tests` block into `crates/agent/src/responses_tests.rs` BEFORE making any edit there.
+3. **Every bug fix gets a regression test** that fails before the fix. Never add skipped or `#[ignore]` tests. Keep `Cargo.lock` untouched.
+4. **Never access Vivaldi, its profile, or the owner's personal notes.**
+5. **Stay strictly scoped to Work Package 2** (do NOT implement WP1 Solve provenance tier/check changes, WP3 release workflow/styling, WP4 Antigravity notice removal, or WP5 UI redesign).
+
+## Exact Scope & Acceptance Criteria (Work Package 2)
+
+### 1. Investigate drops final answer at call cap + last-call notice (`final-turn-submission-dropped`, `no-remaining-call-notice`)
+- In `crates/agent/src/runner.rs`, `crates/agent/src/dispatch.rs`, `crates/agent/src/autonomous.rs`, `crates/desktop-server/src/turn_runner.rs`:
+  - Add opt-in `final_turn_tools: &'a [&'a str]` to `LoopParams` (default `&[]` so `crates/agent/tests/agent_loop.rs:383` stays completely unchanged!) and `final_turn_tools: Vec<String>` to `AutonomousConfig`, set in `turn_runner.rs` to `[RECORD_MAP_READING, RECORD_CONTEXT_CARDS]` ONLY for V6 investigation tasks.
+  - When `leg_turns + 1 == params.max_turns` and `!params.final_turn_tools.is_empty()`:
+    1. Emit tamper-evident ledger event `audit.emit("session.notice", json!({"kind": "final_call_next", "turn": turn + 1}))` (NEVER `human.steer` or `<human_steer>`!).
+    2. Append `ContentBlock::Text` to tool results: `"[harness notice, not from the user] Final model call next: only \`record_map_reading\`/\`record_context_cards\` will run. Submit all remaining items now with done: true."`
+    3. On that final call (`leg_turns == params.max_turns` / last iteration), filter `tool_specs` to `params.final_turn_tools`.
+  - In `StopReason::ToolUse` when `leg_turns == params.max_turns` and `!params.final_turn_tools.is_empty()` and the response contains any `tool_use` in `final_turn_tools`: via a helper in `dispatch.rs`, push the assistant message, dispatch ONLY allowlisted `final_turn_tools` through the normal policy/audit path, emit an honest host-generated `model.tool_result` with `is_error: true` and text `"NOT RUN: model-call cap reached"` (NEVER `tool.request` or `tool.result`) for every other `tool_use` ID so `resume.rs::collect_committed_tool_results` keeps the turn on resume, and then call `abort_session` with the unchanged reason string.
+  - In `crates/desktop-server/src/investigation_task_prompts.rs` (`build_task_preamble`), `investigation_task_context.rs`, and `investigation_tasks.rs`: pass the clamped `cap: u32` into `build_task_preamble` instead of `task.default_call_cap()` so `max_turns=2` prints `call_cap=2` and `cap 2 model calls`.
+  - In `investigation_tasks.rs::finish_task`: ahead of the `Partial` arm, add `Err(err) if has_documented_done && err.starts_with("reached max_turns (") => (InvestigateTaskState::Done, Ok(String::new()), None)` so a run whose final-turn `record_map_reading` had `done: true` finishes as `Done`, not `Paused`/`Partial`!
+- Regression tests:
+  - Keep `crates/agent/tests/agent_loop.rs:383` unchanged.
+  - New `crates/agent/tests/final_turn_submit.rs`: test `max_turns=1` mixed submit+non-submit tools (only submit dispatched, non-submit gets `is_error: true` `"NOT RUN"` `model.tool_result` with zero `tool.request`/`tool.result`, `resume_loop` keeps turn), AND `max_turns=2` verifying `session.notice` precedes turn-2 `model.request`, turn-2 request contains `[harness notice, not from the user]` and no `<human_steer>`, and turn-2 `tools` are filtered to `final_turn_tools`.
+  - `investigation_task_context_tests.rs` & new `crates/desktop-server/tests/investigation_final_turn.rs`: `max_turns=1` orient with `done: true` ends `status: "done"`, `run_state: "done"`; `max_turns=2` preamble contains `call_cap=2`.
+
+### 2. Cap messaging, `Partial` non-error completion, `Continue` resumption, and configurable cap
+- In `crates/desktop-server/src/investigation_tasks.rs::finish_task`: split `(status, final_outcome, ledger_error)`. For `InvestigateTaskState::Partial`, return `Ok(String::new())` (so the top bar shows `Ready`, NO red `Error`, NO `"Turn failed"`, NO `"Reuse prompt"`, and NO fabricated assistant text!) while writing `"error": ledger_error` in the `investigation.task_finished` ledger payload for audit. Keep `Stopped`, `Interrupted`, and `Failed` returning `Err`. Update `investigation_task_context_tests.rs` partial/stopped/interrupted/failed assertions.
+- In `crates/desktop-server/assets/run_bar.js`: add shared exported `describeRunError(err, state, modelCalls)` mapping `"reached max_turns ..."` to plain user text (`"model-call limit reached"`) and unknown paused errors to `"stopped early"` (never exposing `max_turns` or `model completed` in visible badges!), and support optional `callbacks.continueLabel` in `makeActionButton`.
+- In `crates/desktop-server/assets/investigation_orient_ui.js`: use `orientReason(latest)` via `describeRunError`, pass `continueLabel: \`Continue (up to ${cap} more model calls)\``, and send `{ task: 'orient', continue_from: latest.request_seq }` on Continue click. Update `investigation_orient_ui.test.mjs` fixture to the real `FoldedTask` wire shape (including `run_state: 'paused'`, `stored_status: 'partial'`, `model_calls: {cap:8, used:8, remaining:0}`, `error: 'reached max_turns (8) before model completed'`) and assert no `/max_turns|model completed/`, plain paused reason, Continue button label, and `continue_from`.
+- In `crates/desktop-server/src/investigation_settings.rs`, `investigation_tasks.rs`, `investigation_task_context.rs`:
+  - Add `orient_call_cap: u32` (default `8`, validated `4..=24`, 400 on out-of-range) to `InvestigateSettings` (`GET/PUT /api/settings/investigate`), and use it as the Orient cap in `clamp_cap` (and wire a compact input for it in Investigate settings UI if cleanly reachable without touching `app.js`).
+  - Validate optional `continue_from: u64` via helper `investigation_task_context::resolve_continuation(&events, task, seq)` (must point to an orient `investigation.task_requested` in the same session whose `task_finished` is `partial` or `stopped`, 400 otherwise), record `continue_from` in the new `investigation.task_requested` payload, and in `build_task_context_with_events` append `"Already saved readings for this paper (metadata, not source lines; do not redo): ..."` from `map_fold::fold_map` (plus a note if the previous run had an undispatched final `record_map_reading`).
+
+### 3. Orient node lookup & net rejected items
+- In `crates/desktop-server/src/investigation_task_context.rs`: add `build_section_outline` called in the Orient branch when the skeleton has no theorem-like nodes, listing `SkNodeKind::Section` nodes via `format_heading_entry` within the existing char budget (metadata only; `supplied_ranges` unchanged!). Add regression test in `investigation_task_context_tests.rs`.
+- In `crates/research-tools/src/map_node_read.rs` (488L; do NOT touch frozen `map_defs.rs` `read_map_node` ToolDef description!):
+  - In `resolve_node`, when `parse_printed_ref` returns `None`, try matching bare normalized printed number (`want = normalize_ref_number(query)`, non-empty, no whitespace) across tagged nodes: return `Ok` if exactly 1 match, or `Err(format_ambiguous(query, &matches[..matches.len().min(MAX_SUGGESTED_NODES)]))` if >1 match (NO silent tie-break!).
+  - In `format_not_found`, rank nodes where `normalize_ref_number(num) == q || normalize_ref_number(num).starts_with(&format!("{q}."))` FIRST (so `I` does not rank `II`/`III` ahead of `I.A`), then preferred kind (or `Section` when none parsed), then document order (cap 8). When `picked.len() < total_tagged`, append `. Showing {n} of {total} tagged nodes. Pass a tag, TeX label, or printed reference such as \`Section III\` or \`Eq. (4)\`.` (NO `"; "` separator so existing `<= 8` test passes!).
+  - Add tests in `map_node_read_tests.rs`.
+- In `crates/research-tools/src/map_reading_validate.rs` (566L), `map_authors_claim.rs` (173L), and `crates/desktop-server/src/investigation_task_prompts.rs`:
+  - Put `outside_node_message(label, &spans, &kept_anchors)` in `map_authors_claim.rs` so `validate_item` only adds ~5 lines: state the target node's line spans (including root's proof spans for model nodes), the matched anchor line spans, and the rule that at least one item anchor must lie inside the node while Introduction/Conclusion summary quotes belong in `authors_claim.anchors`. Do NOT overload `true_text`.
+  - Add the 1-sentence asymmetric rule to the Orient prompt in `investigation_task_prompts.rs`. Add tests in `map_reading_tests.rs` and `investigation_task_prompts.rs`.
+- In `crates/research-tools/src/map_fold.rs` & `crates/desktop-server/src/investigation_tasks.rs` & `investigation_orient_ui.js`:
+  - Compute net `unresolved_rejected_items` (rejected item tags that were NOT later accepted in the same `request_seq`; leave raw `rejected_items` untouched for audit). Surface `"N section(s) not saved (quote outside section)"` in `investigation_orient_ui.js` ONLY when `unresolved_rejected_items > 0`. Add tests in `map_fold_tests.rs`, `investigation_task_context_tests.rs`, and `investigation_orient_ui.test.mjs`.
+
+### 4. Split `solve_setup.js` (`<= 600`L) & Fix Solve Typing Focus (`F1..F5`)
+- Split `crates/desktop-server/assets/solve_setup.js` (593L) cleanly into `solve_setup.js` + `solve_setup_fields.js` (register `/assets/solve_setup_fields.js` in `crates/desktop-server/src/assets.rs`), keeping both comfortably <= 400 lines.
+- Add `crates/desktop-server/assets/dom_focus.js` (register `/assets/dom_focus.js` in `assets.rs`) implementing `keepFocus(root, rebuild)`:
+  - Keys `['data-testid', 'aria-label', 'data-action', 'data-kind']`; re-find via `[...root.querySelectorAll(\`[${attr}]\`)] .find(x => x.getAttribute(attr) === val)` (no CSS selector injection!).
+  - Focus with `{ preventScroll: true }`, restore `selectionStart`/`selectionEnd`/`selectionDirection` and `scrollTop` when value matches (else caret at end).
+  - Give dimension inputs stable `aria-label` (`Dimension ${idx + 1} symbol/base/power`).
+  - Guard `schedulePrefill` against `ev.isComposing` and schedule on `compositionend`.
+- In `crates/desktop-server/assets/solve_state.js` & `solve_setup.js` & `crates/research-tools/src/solve_setup_prefill.rs` (`F2` & `F3`):
+  - Track `prefillBase` / user-owned fields & removed symbol names (seeded cleanly on fresh init and set to user-owned on `initial.setup` and `applySolveViewToState` revision hydration!) so prefill NEVER overwrites user-edited or hydrated `symbols` (including deleted symbols!), `dimensions`, `conventions`, `taskKind`, `target`, `budgets`, `review`, or unchecked `done` criteria (`enabled` preserved by criterion `id` when merging server criteria; clearing `done` ownership on kind switch).
+  - Send `task_kind: prefillTaskKindOverride(state)` to `/solve/prefill` when user picked a kind.
+  - Add `setupCardSig(state)` in `solve_state.js`: in `solve_setup.js::applyView`, when `state.phase !== 'collapsed'` and `setupCardSig` did not change, update state without calling `render()` so 1s polling during `Edit setup` (`F3`) does NOT rebuild the DOM at all!
+  - Fix `crates/research-tools/src/solve_setup_prefill.rs:424-435`: deduplicate lessons-default convention lines against `pinned.lines().map(str::trim)` instead of the whole pinned string.
+- Focus `F4` hardening (`crates/desktop-server/assets/mode_stages.js`): verify `syncFromRail` ALSO guards `inFlightMount.seq === syncSeq` before incrementing `syncSeq` (note `v0.2.2` already fixed the mounted early return — double-check and add the `inFlightMount` regression test in new `crates/desktop-server/tests/mode_stages_resync.test.mjs`).
+- Focus `F5` tests:
+  - Extend `makeFakeDom` in `solve_setup_ui.test.mjs` with `document.activeElement`, `focus()`, `contains()`, `selectionStart`/`selectionEnd`/`selectionDirection`, `setSelectionRange()`, `scrollTop`, and `replaceChildren()` clearing `activeElement` when a focused descendant is detached.
+  - Add focus/caret/scroll tests across prefill success, prefill error, `models-updated`, and `Edit setup` polling in `solve_setup_ui.test.mjs`, prefill-merge tests in new `solve_setup_prefill_merge.test.mjs`, and slow-typing test with `press_sequentially` across `page.expect_response("**/solve/prefill")` + `expect(stmt).to_be_focused()` in `crates/desktop-server/tests/mode_stages_browser.py`!
+
+### 5. Proof DAG Tab Uses Solve Tiers (`R1-F1`)
+- Add `crates/desktop-server/src/solve_dag_labels.rs` (`relabel_for_solve(dag: &mut Value, events: &[Event])`) called from `routes_tools.rs::handle_dag`: when a session has `solve.setup`, compute Solve badges (`SolveState::from_events` + `compute_all_badges`) and replace each non-superseded entry's `status` with Solve's badge label (e.g. `"Unchecked"`, `"Model agreed (same model)"`, `"Verified"`, `"Failed"`) plus `solve_tier`, so Solve steps never show `"pending"` or green `"accepted"`. Non-Solve Research sessions keep their existing statuses unchanged.
+- Add regression test in `crates/desktop-server/tests/solve_loop_routes.rs`.
+
+### 6. Priority 3 Items (`REPORT.md`)
+- `crates/research-tools/src/map_fold.rs:424` (`fold-tasks-cap-key-mismatch`): read `ev.payload.get("cap")` first before `max_calls`/`call_cap`; add test in `map_fold_tests.rs`.
+- `crates/desktop-server/assets/investigation_context_cards.js` (`context-runbar-budget-object`): read nested `taskObj.model_calls?.used` and `taskObj.model_calls?.cap`, use `describeRunError` instead of raw `taskObj.error` in `extras`; update `investigation_context_cards.test.mjs` fixtures to nested `model_calls: {cap, used, remaining}` and add paused/done tests.
+- `crates/agent/src/transport.rs`, `runner.rs`, `solve_loop.rs` (`max-tokens-recorded-not-sent`): add `pub fn sends_output_cap(provider: &str) -> bool { provider != ProviderKind::ChatGpt.wire_id() }` and emit `"max_tokens_sent": sends_output_cap(...)` alongside `max_tokens` in `session.start` (`runner.rs`) and `model.request` (`runner.rs` and `solve_loop.rs`). Add tests in `chatgpt_wire.rs` and `openai_wire.rs`/`anthropic_wire.rs`.
+- `crates/agent/src/runner.rs` (`tool-surface-and-provenance`): emit additive `"tool_names"` (and `"host_tools"`) on `model.request` without modifying `session.start.tool_defs` (preserving resume drift checks!). Add unit test.
+- `crates/desktop-server/src/turn_runner.rs` / `cli_turn.rs` & `investigation_title.rs` (`session-title-renamed-by-model`): disable `allow_model_title` on Investigate turns when a paper is pinned, and prefer cleaned `origin` (stripping `.pdf` / `.pdf.extracted.txt`) in `source_label` when `title` is null. Add unit test in `investigation_title.rs`.
+- `crates/agent/src/responses.rs` (599L): move inline `#[cfg(test)] mod tests` into `crates/agent/src/responses_tests.rs` so `responses.rs` is safely below 600L. Note on `prompt_cache_key` and encrypted `reasoning` replay: check `docs/` and `chatgpt_wire.rs` — do NOT enable sending `prompt_cache_key` or replaying `reasoning` items on ChatGPT's live subscription route unless explicitly documented as accepted by that endpoint (report your finding clearly in the summary so we don't break live turns with HTTP 400).
+
+## Verification Required Before Final Push
+Run all of these on Linux (non-root) after your independent Carbon audit fixes:
+1. `python3 scripts/check_file_length.py --base origin/main` (exit 0)
+2. `node --test crates/desktop-server/tests/*.test.mjs` (0 failures)
+3. `unset RE_SEARCH_PYTHON && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked --no-fail-fast` (0 warnings, 0 failures)
+
+Push cleanly to `origin fix/wp2-investigate-focus-dag-bugs` and summarize all changed files, tests added, commands run, and any deferred/gated P3 choices in your final response.

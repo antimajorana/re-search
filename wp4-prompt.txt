@@ -1,0 +1,36 @@
+Clone https://github.com/antimajorana/reSearch.git and branch `fix/wp4-remove-antigravity-notice` from latest `origin/main` (v0.2.2).
+
+You are implementing **Work Package 4: Remove the Gemini / Antigravity notice completely** from the 2026-11-28 reSearch audit. Work completely and unattended. Use Gemini 4 Neon for implementation and Gemini 4 Carbon for an independent audit before your final push.
+
+## Hard Ground Rules
+1. **Zero trace of the Antigravity notice or confinement warning may remain anywhere in code, UI, docs, comments, or tests.**
+2. **Keep unrelated uses of "acknowledge" intact** (such as Solve assumption acknowledgement `solve.assumption_ack` / `assumption_ack` / transcription acknowledgement!).
+3. **Existing stored acknowledgement files on disk are ignored, not migrated or deleted.**
+4. **600-line CI ceiling:** Every touched source or test file MUST stay `<= 600` lines (`python3 scripts/check_file_length.py --base origin/main`).
+5. **Never access Vivaldi, its profile, or the owner's personal notes.** Keep `Cargo.lock` untouched.
+6. **Stay strictly scoped to Work Package 4.**
+
+## Exact Requirements
+1. **UI (`crates/desktop-server/assets/connect.js`):**
+   - Remove the notice box, its confirm dialog, and its toasts (`renderConsent` and all references to `acknowledge_action`, `withdraw_action`, `acknowledged`, `warning`, and confinement notice strings).
+2. **Backend gate & routes (`crates/desktop-server/src/antigravity.rs`, `crates/desktop-server/src/api_dispatch.rs`, connections API):**
+   - Remove `acknowledged`, `require_acknowledged`, `handle_acknowledge`, the withdraw handler, `NOTICE_VERSION`, and stored acknowledgement file reads/writes in `crates/desktop-server/src/antigravity.rs`.
+   - Remove the acknowledge/withdraw routes in `crates/desktop-server/src/api_dispatch.rs` (and any router/route table or CLI references to them).
+   - Enable the Antigravity route whenever the Antigravity CLI is found (no acknowledgement gate!). Existing stored acknowledgement files are simply ignored.
+   - Remove `warning`, `acknowledged`, `acknowledge_action`, and `withdraw_action` fields from the connections API payload.
+3. **Labels & confinement strings (`crates/desktop-server/assets/model_picker.js`, `crates/cli-route/src/antigravity.rs`, session notes, connection display):**
+   - Remove every `"vendor-sandboxed"` and `"not confined"` label and note: `AGY_LABEL`, `AGY_NOTE`, `AGY_FALLBACK_NOTE` in `model_picker.js`, `CONFINEMENT` and `LABEL_SUFFIX` in `crates/cli-route/src/antigravity.rs`, session notes mentioning vendor-sandboxed/not confined, and the connection's `confinement` field as displayed.
+   - Labels read simply `"Antigravity (Google)"`.
+4. **Docs, comments, and tests:**
+   - Remove every mention of the notice or of that confinement statement in `THREAT-MODEL.md`, `README.md`, `docs/`, code comments, and tests.
+   - Update/add tests confirming Antigravity is available directly whenever the CLI is found (without any acknowledgement step), connections API omits `warning`/`acknowledged`/`acknowledge_action`/`withdraw_action`, UI labels read `"Antigravity (Google)"` with no consent box, and old acknowledgement files on disk are harmlessly ignored.
+5. **Repo-wide verification search (MANDATORY):**
+   - Run `git grep -inE "acknowledg|vendor-sandboxed|not confined"` across the entire repository and verify that **zero** matches relating to the Antigravity/Gemini notice or confinement remain (only unrelated Solve assumption/transcription acknowledgement or generic English outside Antigravity).
+
+## Verification Required Before Final Push
+1. `git grep -inE "acknowledg|vendor-sandboxed|not confined"` (verify zero Antigravity notice/confinement hits)
+2. `python3 scripts/check_file_length.py --base origin/main` (exit 0)
+3. `node --test crates/desktop-server/tests/*.test.mjs` (0 failures)
+4. `unset RE_SEARCH_PYTHON && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked --no-fail-fast` (0 warnings, 0 failures)
+
+Push cleanly to `origin fix/wp4-remove-antigravity-notice` and summarize all changed files, tests updated/added, grep verification results, and commands run.

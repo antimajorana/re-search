@@ -1,0 +1,89 @@
+Clone https://github.com/antimajorana/reSearch.git and check out branch `fix/wp1-solve-provenance-honesty` (which is branched from latest `origin/main` v0.2.2 and already contains the sanitized real-session replay fixture `crates/research-tools/tests/fixtures/s-ce81c873ea592808.solve.jsonl`).
+
+You are implementing **Work Package 1: Provenance honesty in Solve (highest priority)** from the 2026-11-28 reSearch audit. Work completely and unattended. Use Gemini 4 Neon for implementation subagents and Gemini 4 Carbon for a hard independent audit before your final push.
+
+## Hard Ground Rules (Zero Exceptions)
+1. **Never weaken provenance honesty to make something pass.** A label must never claim more than what was checked. The ledger stays tamper-evident; never record that the user typed something they did not.
+2. **600-line CI ceiling:** Every touched source or test file (`.rs`, `.js`, `.mjs`, `.py`, `.css`) MUST be `<= 600` lines. Verify with `python3 scripts/check_file_length.py --base origin/main` before every push. Split near-limit files BEFORE adding to them:
+   - `crates/desktop-server/assets/solve_steps.js` (594L) -> extract result-sheet rendering into `crates/desktop-server/assets/solve_result_sheet.js` and register `/assets/solve_result_sheet.js` in `crates/desktop-server/src/assets.rs`!
+   - `crates/desktop-server/src/solve_view.rs` (594L) -> put new helpers in `crates/desktop-server/src/solve_view_helpers.rs`.
+   - `crates/agent/src/verifier_loop_support.rs` (592L) -> put handle-source / identical-sides helpers in `crates/agent/src/verifier_handle_sources.rs`.
+   - `crates/desktop-server/tests/solve_ui.test.mjs` (599L), `crates/agent/src/verifier_loop_tests.rs` (579L), `crates/research-tools/src/solve_status_tests.rs` (582L) -> add new sibling test files (`solve_result_sheet.test.mjs`, `solve_badge_notes.test.mjs`, `verifier_finish_tests.rs`, `solve_audit_session_replay.rs`, etc.).
+3. **Every bug fix gets a regression test** that fails before the fix. Never add skipped or `#[ignore]` tests. Keep `Cargo.lock` untouched.
+4. **Never access Vivaldi, its profile, or the owner's personal notes.**
+5. **Do NOT bundle WP2–WP7 changes into this PR.** Stay strictly scoped to Work Package 1 below.
+
+## Exact Scope & Acceptance Criteria (Work Package 1: `VAC-1..6`, `GATE-1..3`, `GATE-5..9`, `R1-F3..7`)
+
+1. **Identical-side checks return `trivial`, never `pass`, and never raise a tier (`VAC-1`):**
+   - Add `CheckOutcome::Trivial` (`"trivial"` in serde `snake_case`) in `crates/research-tools/src/solve_model.rs` (update all exhaustive matches across the workspace cleanly).
+   - In `crates/research-tools/src/solve_checks.rs`: `outcome == Some("trivial")` must NOT trigger the `inconclusive` numeric fallback (`identity_numeric`).
+   - In `python/checks/algebra.py` (`identity_symbolic`, `identity_numeric`, `series_match`, `vanishes_to_order`): BEFORE simplification (`.doit()`, `simplify`, `normalize_symbols`), compare the raw parsed input ASTs (`sp.srepr(lhs_raw) == sp.srepr(rhs_raw)`). When identical before simplification, return `outcome: "trivial"` with `evidence: {"identical_sides": true, "reason": "both sides are structurally identical before simplification; nothing was checked"}`.
+   - In `crates/research-tools/src/solve_own_tier.rs`: add `claim_sides_identical(state, claim)` checking `claim.lhs == claim.rhs` OR identical non-empty pre-simplification handle hash (`unevaluated_srepr_sha256.as_deref().unwrap_or(&srepr_sha256)`). Neither `CheckOutcome::Trivial` nor any historical `CheckOutcome::Pass` on `identity_symbolic` / `identity_numeric` / `series_match` / `vanishes_to_order` where `claim_sides_identical(state, claim)` is true may ever grant `Tier::Verified` or `Tier::CheckedNumerically` (leave `independent_recompute` unaffected).
+   - In `crates/research-tools/src/solve_badge.rs` (`NON_VERIFIED_CONSTANTS`): add `SUBLABEL_TRIVIAL_IDENTICAL = "both sides identical — nothing checked"`. In `crates/desktop-server/assets/solve_why.js`: add `trivial: { text: 'Identical sides (nothing checked)', icon: 'warn', tone: 'warn' }` to `CHECK_OUTCOMES`.
+
+2. **`save_expr` preserves unevaluated source & solver prompt requires independent derivation (`VAC-4`):**
+   - In `python/checks/srepr_safe.py`: allow `"UnevaluatedExpr"` in `_STATIC_SYMPY_CONSTRUCTORS`.
+   - In `python/worker.py` & `python/solver_calc.py`:
+     - Capture the AST expression source (`ast.get_source_segment(code, arg_node)`) of `save_expr` calls via `worker.py`'s existing `ast.parse` pass AND support unevaluated SymPy string expressions (`save_expr("lhs", "(x + 1)**2", locals=...)` parsed via `sympy.parsing.sympy_parser.parse_expr(..., evaluate=False)`) as well as `UnevaluatedExpr` / `Integral` / `Sum` / `Derivative` / `Limit` / `MatMul` / `Trace`.
+     - Emit optional `unevaluated_srepr` and `source_expr` alongside `srepr` in worker `exprs_out`. Harvest them into `solve.expr` (`SolveExpr` in `solve_model.rs`: optional `unevaluated_srepr`, `unevaluated_srepr_sha256`, `source_expr` with `#[serde(default, skip_serializing_if = "Option::is_none")]`, backward-compatible with existing ledgers).
+     - In `solve_checks_params.rs`: pass `unevaluated_srepr` (falling back to `srepr`) as the check input so checks re-derive from the unevaluated form! (In `python/checks/algebra.py`, strip `UnevaluatedExpr` / call `.doit()` AFTER the structural-identity check!)
+   - In `crates/agent/src/solve_prompts.rs`: update `Prove`, `Calculate`, `CheckDerivation`, and Discipline rules to require deriving both sides independently, keeping the expression under test in unevaluated form (or passing an unevaluated expression string to `save_expr`), forbidding writing the expected constant/result on both sides, and explaining that identical-side claims return `trivial` and earn no tier.
+   - In `crates/research-tools/src/solve_steps.rs`: attach a `warnings` entry in `step_record` output whenever any claim has identical sides.
+
+3. **User and verifier see producing code; verifier cannot cite self-comparisons (`VAC-2`, `VAC-3`):**
+   - Split `solve_steps.js` (594L) into `solve_steps.js` + `solve_result_sheet.js` (register `/assets/solve_result_sheet.js` in `crates/desktop-server/src/assets.rs` and update asset tests).
+   - Add `crates/desktop-server/src/solve_view_helpers.rs` so `solve_view.rs` stays `<= 600`L: enrich `receipts` with the `sympy_eval` Python `code` from their `tool.request` event, and enrich `handles` with `source_expr` and `produced_by`.
+   - In UI (`solve_steps.js` + `solve_why.js`): make step receipt rows expandable to show the producing `sympy_eval` Python code (and per-handle `source_expr`), rename the Why popover JSON toggle from `"Show code"` to `"Show check record"` (and include a producing-code view if available), and for steps with non-empty prose `details` and `own == Verified`, clarify `own_check_line` (`"own check: the equations shown are verified"`).
+   - Add `crates/agent/src/verifier_handle_sources.rs` called from `verifier_loop_support.rs`: include `sides_identical: bool`, `source_expr`, producing `call_id`, and clipped producing `sympy_eval` code (`handle_sources`, ~1800 chars) in the verifier prompt; instruct the verifier that `trivial` / `sides_identical` checks are NOT evidence and must not be cited; reject `checks_cited` referencing `Trivial` or `claim_sides_identical` checks in `validate_checks_cited`.
+   - In `crates/research-tools/src/solve_own_tier.rs`: a `SolveReview` whose `checks_cited` references any `CheckOutcome::Trivial` check or any check on a `claim_sides_identical` claim must NOT grant `ModelAgreed` / `ModelAgreedSameModel` (invalidating reviews that relied on vacuous self-comparisons, including historical reviews like `seq 537–538` in `s-ce81c873ea592808`).
+
+4. **Finish gate anti-re-rooting, abandoned steps, and repair prompt (`GATE-1`, `GATE-2`):**
+   - `crates/research-tools/src/proof_dag.rs`: in Solve sessions (when `solve.setup` is present in the session events), allow `ledger_supersede` for like-for-like `StepEntryType` replacement (e.g. `final_answer` -> `final_answer`, `symbolic_computation` -> `symbolic_computation`) in addition to `correction`.
+   - `crates/research-tools/src/solve_status.rs` (`propagate_step`): ignore a dependency edge from step `B` to step `A` when `A.superseded_by.as_deref() == Some(&B.entry_id)` so replacing a step that shares a receipt does not mark `B` `Stale`.
+   - `crates/research-tools/src/solve_done.rs` (`validate_solve_finish_preconditions`): require `entry.entry_type == StepEntryType::FinalAnswer` (when finishing a Solve run — verify existing unit tests and update any test that deliberately finishes on a non-`final_answer` only if intended, or check whether existing `solve_done_tests.rs` passes `result`/`derivation` — inspect `solve_done_tests.rs` first so you don't break valid `Calculate` tests! Note: if `Calculate` tasks allow `FinalAnswer` only, verify in `solve_done_tests.rs`; ALWAYS enforce the active-prior-final check!), AND refuse `solve_finish` whenever another active (non-superseded) `final_answer` (or prior `solve.done.final_entry_id`) exists outside `final_entry_id`'s closure: `"earlier final answer \`<id>\` is still active; supersede it explicitly before finishing on a new final answer"`.
+   - In `crates/research-tools/src/solve_done_criteria.rs`: in `evaluate_done_criteria`, if an active un-superseded earlier `final_answer` (or earlier `solve.done.final_entry_id`) exists outside `final_entry_id`'s closure, `FinalTierAtLeast` and `ClosureTierAtLeast` MUST report `met: false` with `"re_rooted_past_active_final"` in evidence (so replaying a historical re-rooted `solve.done` like `seq 562` cannot report tier criteria as met!).
+   - In `crates/research-tools/src/solve_state.rs`: preserve `done_history: Vec<SolveDone>` on `SolveState`. In `solve_view_helpers.rs`: include active un-acknowledged `AssumedByModel` steps even when outside the final closure (tagged `outside_final_closure: true`) in `done_open_items`.
+   - In `crates/agent/src/solve_loop_tools.rs`: skip the automatic repair round when unmet items can only be cleared by the user (`assumed_by_model` or `same model` only); when the repair round runs, append a tamper-evident `solve.repair_round` ledger event and reword the repair prompt to name `below_target` steps and explicitly forbid dropping dependencies or re-rooting around active steps/assumptions.
+   - In `solve_steps.js` & `solve_result_sheet.js`: when `view.done` exists, compute final-answer closure (`computeFinalClosureIds`), render active steps outside it inside a collapsed group `"Not used by the final answer (N steps)"` with `"not used by the final answer"` chips (`data-outside-final="true"`), restrict sheet `Own checks` counts to closure steps, and show a summary note listing any abandoned steps, model assumptions, and earlier final answers outside the closure.
+
+5. **Subset-claim duplicate step refusal/supersede (`GATE-7` / `VAC-6`):**
+   - In `crates/research-tools/src/solve_steps.rs`: when a new step's non-empty `(lhs, rhs, relation)` claim set is a subset (strict or equal) of an active, un-superseded step's claim set, refuse `step_record` with an actionable error naming the active step and instructing the solver to supersede it via `ledger_supersede` or split distinct claims cleanly. Also include `own_tier_reason` in `step_record` results explaining why an inequality or inconclusive check left a step `Unchecked`.
+
+6. **Parameter-based criterion descriptions (`GATE-3`):**
+   - In `solve_result_sheet.js` & `solve_steps.js`: render every criterion from its `kind` / `params` / `evidence` (`describeCriterion`), never raw IDs like `final_different_model_review`; show `"Different model"` ONLY when `require_different_model === true`.
+   - In `solve_state.js` (`buildSetupSubmission`) & `crates/research-tools/src/solve_setup_prefill.rs`: rename the relaxed criterion ID to `final_model_review` when `acceptSameModel` is checked and omit `"independent model"` from `target.description` when solver == verifier.
+
+7. **Inconclusive checks, solver repair notice, and `rests_on` (`R1-F3`, `R1-F4`, `R1-F5`):**
+   - In `solve_own_tier.rs`: collect identity/series sublabels in a temporary Vec inside `evaluate_claims_computed_tier` and commit them ONLY when `evaluate_claims_computed_tier` returns `Some(tier)` (never attach a `"symbolic"` chip to an `Unchecked` step!). Add `check_note: Option<String>` (`skip_serializing_if = "Option::is_none"`) on `OwnEval`/`StepTier`/`StepBadge` (e.g., `"checks inconclusive on 3 of 5 claims"` or `"both sides identical on 2 of 2 claims"`), rendered as a distinct warning chip in `solve_badges.js`.
+   - In `solve_checks.rs` (`AutoCheckGate::after_success`): attach an actionable `attention` field in the `step_record` result whenever any claim ends inconclusive, trivial, or not_run.
+   - In `solve_status.rs` & `solve_badge.rs` & `solve_badges.js`: populate `unchecked_deps: Vec<String>` for direct dependencies with effective rank `<= 0` (excluding `Given`/`Cited`) so even an `Unchecked` dependent renders `"rests on e-1 (assumed by model), e-3 (unchecked)"` with jump links.
+
+8. **Matrix-valued identities & 0-point numeric residual (`R1-F6` / `VAC-5` / check `F2` & `F4`):**
+   - In `python/checks/algebra_probe.py`, `python/checks/algebra.py`, and `python/checks/__init__.py`:
+     - Add `is_exact_zero(e)` returning `e.is_zero_matrix is True` for `sp.MatrixBase`, else `e == 0`, and use it in `algebra.py` (`identity_symbolic`) and `__init__.py`.
+     - In `numeric_probe`, evaluate matrices entrywise when both sides are `sp.MatrixBase` of equal shape (returning `'inconclusive'` on shape mismatch or non-`eq` relation per `solve-s8-s9-s11.md:31`, catching `sp.ShapeError`/`TypeError` in `identity_symbolic` cleanly).
+     - In `algebra.py` `identity_numeric` and `_compare_series`, set `"max_residual": probe["max_err"] if probe["valid"] > 0 else None` (never `"0.0"` when `0` points were evaluated!) and map `probe["status"] == "inconclusive"` in `_compare_series` to `"inconclusive"` rather than `"fail"`.
+
+9. **Finish review selection, no redundant same-model re-review, and reachable `Done` (`R1-F7`, `GATE-5`, `GATE-6`, `GATE-8`):**
+   - In `crates/agent/src/verifier_finish.rs`: under `ReviewPolicy::ProseOnly`, skip claim-bearing steps ONLY when `own.is_computed()`. Cap `max_review_lift` at `1` when solver and verifier are the same provider+model, and skip entries that already have an `Accepted` review for their current `entry_sha256` at that independence (unless that review was invalidated for citing trivial checks).
+   - In `crates/research-tools/src/solve_done_criteria.rs`: in `DoneCriterionKind::NoOpenFlags`, ignore `FLAG_SAME_MODEL` when the setup's tier criteria accept `model_agreed_same_model` (`require_different_model == false`), keeping the flag visible on step badges while making `Done` reachable.
+
+10. **Result sheet solver summary, open items, and live `result_sheet` (`GATE-9`):**
+    - In `crates/research-tools/src/solve_model_records.rs` & `solve_state.rs`: add `summary_markdown: String` and `open_items: Vec<String>` (`#[serde(default)]`) to `SolveDone` and populate them in `parse_solve_done`.
+    - In `solve_result_sheet.js`: render `done.summary_markdown` and `done.open_items` explicitly labeled as written by the model (`"(written by model)"`), fall back to the final step's summary when it has no claims, and drive the sheet status heading from `view.result_sheet.status_line` when present (so post-finish invalidation shows `"Not done"`).
+
+11. **Mandatory Real-Session Replay Regression Fixture:**
+    - Add `crates/research-tools/tests/solve_audit_session_replay.rs` loading `crates/research-tools/tests/fixtures/s-ce81c873ea592808.solve.jsonl` and asserting:
+      - Self-comparisons at `seq 331–355` (`e-6`) and `seq 439–528` (`e-8`, `e-9`) NEVER earn a checked tier (`own != Verified && own != CheckedNumerically`),
+      - `e-3` has `check_note` and no `"symbolic"` sublabel while `Unchecked`,
+      - The second finish at `seq 562` (`e-10`) is refused by `validate_solve_finish_preconditions` (due to active un-superseded `e-7`) AND `evaluate_done_criteria` does NOT report tier criteria (`final_different_model_review`, `closure_model_agreed`) as met!
+
+## Verification Required Before Final Push
+Run all of these on Linux (non-root) after your independent Carbon audit fixes:
+1. `python3 scripts/check_file_length.py --base origin/main` (exit 0)
+2. `python3 -m unittest discover -s python -p "test*.py"` (exit 0, all Python check/worker tests pass)
+3. `node --test crates/desktop-server/tests/*.test.mjs` (0 failures)
+4. `unset RE_SEARCH_PYTHON && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked --no-fail-fast` (0 warnings, 0 failures)
+
+Push cleanly to `origin fix/wp1-solve-provenance-honesty`, open or update a PR targeting `main` (or leave the branch pushed with a clear summary file `docs/audit-wp1-report.md` if `gh` is unavailable — actually do NOT add stray docs to the repo unless needed; print a concise structured summary in your final message with all changed files, tests added, commands run, and any product decisions made).
