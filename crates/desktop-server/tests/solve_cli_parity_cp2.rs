@@ -167,7 +167,7 @@ fn solve_cli_turn_gated_by_setup_and_runs_post_turn_api_verifier_loop() {
         .unwrap();
 
     let tools: Vec<String> = core_tool_set_for_profile(
-        Some(Arc::new(ResearchEnv::new(&data))),
+        Arc::new(ResearchEnv::new(&data)),
         PROFILE_SOLVE_V1,
     )
     .unwrap()
