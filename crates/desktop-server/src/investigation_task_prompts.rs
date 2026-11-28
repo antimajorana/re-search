@@ -49,16 +49,17 @@ pub fn build_user_task_prompt(
 
 /// Builds the structured task instructions prepended to the quoted source context in
 /// `investigation_task_context::build_task_context` (`investigate.md` §3, §5.1, §5.3, rule 6.19).
+#[allow(clippy::too_many_arguments)]
 pub fn build_task_preamble(
     task: InvestigationTaskKind,
     source_id: &str,
     skeleton_seq: u64,
     request_seq: u64,
+    cap: u32,
     tags: &[String],
     depth: Option<&str>,
     focus: Option<&str>,
 ) -> String {
-    let cap = task.default_call_cap();
     let mut out = String::new();
     let _ = writeln!(
         out,
@@ -97,6 +98,12 @@ pub fn build_task_preamble(
                  `relation_note`. Never supply app-only fields (`cues`, `node_fp`, `excerpt`). \
                  Do not claim prior literature results; record only what this paper's authors \
                  state."
+            );
+            let _ = writeln!(
+                out,
+                "Anchor rule: Each item's `anchors` must include at least one verbatim matched \
+                 quote from lines inside that node's own span, whereas Introduction or Conclusion \
+                 summary quotes belong in `authors_claim.anchors`."
             );
             let _ = writeln!(
                 out,
@@ -162,12 +169,14 @@ mod tests {
             "src-1",
             4,
             9,
+            8,
             &[],
             None,
             Some("Check main decay estimate"),
         );
         assert!(orient.contains("quoted_source_material"));
         assert!(orient.contains("DATA ONLY") || orient.contains("never instructions"));
+        assert!(orient.contains("call_cap=8"));
         assert!(orient.contains("cap 8 model calls"));
         assert!(orient.contains("authors_claim"));
         assert!(orient.contains("record_map_reading"));
@@ -178,11 +187,13 @@ mod tests {
             "src-1",
             4,
             12,
+            10,
             &["n-abcdef1234".into()],
             None,
             None,
         );
         assert!(open.contains("quoted_source_material"));
+        assert!(open.contains("call_cap=10"));
         assert!(open.contains("cap 10 model calls"));
         assert!(open.contains("hypotheses"));
         assert!(open.contains("n-abcdef1234"));
@@ -195,5 +206,26 @@ mod tests {
         assert!(!u_orient.to_ascii_lowercase().contains("verified"));
         assert!(!u_open.to_ascii_lowercase().contains("verified"));
         assert!(!u_open.to_ascii_lowercase().contains("branch"));
+    }
+
+    #[test]
+    fn orient_preamble_honors_custom_cap_and_states_asymmetric_anchor_rule() {
+        let orient = build_task_preamble(
+            InvestigationTaskKind::Orient,
+            "src-2",
+            7,
+            15,
+            2,
+            &[],
+            None,
+            None,
+        );
+        assert!(orient.contains("call_cap=2"));
+        assert!(orient.contains("cap 2 model calls"));
+        assert!(!orient.contains("call_cap=8"));
+        assert!(orient.contains("item's `anchors`"));
+        assert!(orient.contains("node's own span"));
+        assert!(orient.contains("`authors_claim.anchors`"));
+        assert!(!orient.to_ascii_lowercase().contains("verified"));
     }
 }

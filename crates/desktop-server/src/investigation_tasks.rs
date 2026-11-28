@@ -9,7 +9,8 @@
 use crate::investigation::{is_investigation, latest};
 use crate::investigation_skeleton::{EVENT_INVESTIGATION_PAPER, EVENT_INVESTIGATION_SKELETON};
 use crate::investigation_task_context::{
-    build_task_context_with_events, record_context_supplied, DEFAULT_CONTEXT_CHAR_BUDGET,
+    build_task_context_with_events, compute_unresolved_rejected, parse_and_resolve_continue_from,
+    record_context_supplied, DEFAULT_CONTEXT_CHAR_BUDGET,
 };
 use crate::routes_session::{bad, conflict, internal, not_found, parse_json_body, ApiResult};
 use crate::state::DesktopState;
@@ -55,6 +56,14 @@ pub fn task_cap_for(task: InvestigationTaskKind) -> u32 {
     task.default_call_cap()
 }
 
+/// Effective model-call cap for `task`, honoring `InvestigateSettings::orient_call_cap` for Orient.
+pub fn task_cap_for_state(state: &DesktopState, task: InvestigationTaskKind) -> u32 {
+    match task {
+        InvestigationTaskKind::Orient => crate::investigation_settings::orient_call_cap(state),
+        _ => task.default_call_cap(),
+    }
+}
+
 /// HTTP handler for `POST /api/sessions/{id}/investigation/tasks` (`investigate.md` §5.2).
 pub fn handle(state: &Arc<DesktopState>, session_id: &str, body: &[u8]) -> ApiResult {
     validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
@@ -88,7 +97,8 @@ pub fn handle(state: &Arc<DesktopState>, session_id: &str, body: &[u8]) -> ApiRe
     let (source_id, skeleton_seq, skeleton) =
         load_pinned_skeleton(state, session_id, &ledger, &events, None)?;
     let tags = parse_and_validate_tags(req_json.get("tags"), task, &skeleton, &events)?;
-    let cap = clamp_cap(req_json.get("max_turns").and_then(Value::as_u64), task_cap_for(task));
+    let continue_from = parse_and_resolve_continue_from(req_json.get("continue_from"), &events, task)?;
+    let cap = clamp_cap(req_json.get("max_turns").and_then(Value::as_u64), task_cap_for_state(state, task));
     let prev_last_seq = events.last().map_or(0, |e| e.seq).max(skeleton_seq);
 
     strip_internal_task_fields(&mut req_json);
@@ -96,6 +106,7 @@ pub fn handle(state: &Arc<DesktopState>, session_id: &str, body: &[u8]) -> ApiRe
     req_json[TASK_SPEC_FIELD] = json!({
         "task": task.as_str(), "tags": tags, "depth": depth, "focus": focus,
         "source_id": source_id, "skeleton_seq": skeleton_seq, "cap": cap,
+        "continue_from": continue_from,
     });
     req_json["max_turns"] = json!(cap);
 
@@ -142,7 +153,7 @@ pub(crate) fn prepare_task(
     let depth = parse_optional_text(spec.get("depth"), "depth", MAX_DEPTH_CHARS)?;
     let raw_focus = parse_optional_text(spec.get("focus"), "focus", MAX_FOCUS_CHARS)?;
     let focus = crate::investigation_context_tasks::canonicalize_task_focus(task, raw_focus);
-    let cap = clamp_cap(spec.get("cap").and_then(Value::as_u64), task_cap_for(task));
+    let cap = clamp_cap(spec.get("cap").and_then(Value::as_u64), task_cap_for_state(state, task));
 
     let ledger = state.open_ledger().map_err(storage)?;
     let events = ledger.read_session(session_id).map_err(storage)?;
@@ -156,15 +167,19 @@ pub(crate) fn prepare_task(
         return Err(conflict("The pinned paper changed before the Investigate task started."));
     }
     let tags = parse_and_validate_tags(spec.get("tags"), task, &skeleton, &events)?;
+    let continue_from = parse_and_resolve_continue_from(spec.get("continue_from"), &events, task)?;
     let receipt = find_source_receipt(&events, &source_id, Some(skeleton.source_seq))
         .or_else(|| find_source_receipt(&events, &source_id, None))
         .ok_or_else(|| not_found(format!("source receipt `{source_id}` not found")))?;
     let env = state.research_env_for_session(session_id).map_err(internal)?;
 
-    let marker_payload = json!({
+    let mut marker_payload = json!({
         "task": task.as_str(), "tags": tags, "depth": depth, "focus": focus,
         "source_id": source_id, "skeleton_seq": skeleton_seq, "cap": cap,
     });
+    if let Some(prev_seq) = continue_from {
+        marker_payload["continue_from"] = json!(prev_seq);
+    }
     let request_seq = {
         let _lock = state.ledger_write_lock.lock().map_err(|_| internal("ledger lock poisoned"))?;
         ledger.append(session_id, MARKER_TASK_REQUESTED, 1, &marker_payload).map_err(storage)?
@@ -172,7 +187,7 @@ pub(crate) fn prepare_task(
 
     let built = match build_task_context_with_events(
         &env.sandbox(), session_id, receipt, &events, &skeleton, skeleton_seq, request_seq,
-        task, &tags, depth.as_deref(), focus.as_deref(), DEFAULT_CONTEXT_CHAR_BUDGET,
+        task, cap, continue_from, &tags, depth.as_deref(), focus.as_deref(), DEFAULT_CONTEXT_CHAR_BUDGET,
     ) {
         Ok(ctx) => ctx,
         Err(err) => {
@@ -298,6 +313,8 @@ pub(crate) fn finish_task(
         &mut saved_items,
         &mut rejected_items,
     );
+    let unresolved_rejected_items =
+        compute_unresolved_rejected(&ledger, &events, request_seq, rejected_items);
 
     let has_saved = saved_items > 0 || saved_edges > 0;
     let has_documented_done = any_done && (has_saved || saved_limitations > 0);
@@ -307,18 +324,24 @@ pub(crate) fn finish_task(
             low.contains("stopped by user") || low.contains("stopped by the user")
         });
 
-    let (status, final_outcome) = if stopped_by_user {
-        (InvestigateTaskState::Stopped, outcome)
+    let (status, final_outcome, ledger_error) = if stopped_by_user {
+        let err = outcome.as_ref().err().cloned();
+        (InvestigateTaskState::Stopped, outcome, err)
     } else {
         match outcome {
-            Ok(reply) if has_saved || has_documented_done => (InvestigateTaskState::Done, Ok(reply)),
-            Ok(_) => (
-                InvestigateTaskState::Failed,
-                Err("The model finished without saving any source-anchored reading records.".into()),
-            ),
-            Err(err) if has_saved => (InvestigateTaskState::Partial, Err(err)),
-            Err(err) if is_interruption_error(&err) => (InvestigateTaskState::Interrupted, Err(err)),
-            Err(err) => (InvestigateTaskState::Failed, Err(err)),
+            Ok(reply) if has_saved || has_documented_done => (InvestigateTaskState::Done, Ok(reply), None),
+            Ok(_) => {
+                let msg = "The model finished without saving any source-anchored reading records.".to_string();
+                (InvestigateTaskState::Failed, Err(msg.clone()), Some(msg))
+            }
+            Err(err) if has_documented_done && err.starts_with("reached max_turns (") => {
+                (InvestigateTaskState::Done, Ok(String::new()), None)
+            }
+            Err(err) if has_saved => (InvestigateTaskState::Partial, Ok(String::new()), Some(err)),
+            Err(err) if is_interruption_error(&err) => {
+                (InvestigateTaskState::Interrupted, Err(err.clone()), Some(err))
+            }
+            Err(err) => (InvestigateTaskState::Failed, Err(err.clone()), Some(err)),
         }
     };
 
@@ -329,10 +352,12 @@ pub(crate) fn finish_task(
         "run_state": run_state,
         "counts": {
             "items": saved_items, "edges": saved_edges,
-            "rejected_items": rejected_items, "rejected_edges": rejected_edges,
+            "rejected_items": rejected_items,
+            "unresolved_rejected_items": unresolved_rejected_items,
+            "rejected_edges": rejected_edges,
             "model_calls": model_calls, "cap": cap,
         },
-        "error": final_outcome.as_ref().err(),
+        "error": ledger_error,
     });
     {
         let _lock = state.ledger_write_lock.lock().map_err(|_| "ledger lock poisoned".to_string())?;

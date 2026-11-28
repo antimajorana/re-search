@@ -16,6 +16,31 @@ fn clip_title(s: &str, max_chars: usize) -> String {
     out
 }
 
+fn strip_suffix_ignore_ascii_case<'a>(s: &'a str, suffix: &str) -> &'a str {
+    if s.len() >= suffix.len() {
+        let split = s.len() - suffix.len();
+        if s.is_char_boundary(split) && s[split..].eq_ignore_ascii_case(suffix) {
+            return &s[..split];
+        }
+    }
+    s
+}
+
+fn clean_origin_label(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("upload") {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return None;
+    }
+    let base = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed).trim();
+    let stripped = strip_suffix_ignore_ascii_case(base, ".pdf.extracted.txt");
+    let stripped = strip_suffix_ignore_ascii_case(stripped, ".pdf").trim();
+    (!stripped.is_empty()).then(|| clip_title(stripped, 80))
+}
+
 fn source_label(payload: &Value) -> Option<String> {
     if let Some(title) = payload["title"]
         .as_str()
@@ -23,6 +48,9 @@ fn source_label(payload: &Value) -> Option<String> {
         .filter(|s| !s.is_empty())
     {
         return Some(clip_title(title, 80));
+    }
+    if let Some(origin_label) = payload["origin"].as_str().and_then(clean_origin_label) {
+        return Some(origin_label);
     }
     let path = payload["primary_path"].as_str().or_else(|| {
         payload["files"]
@@ -223,5 +251,55 @@ mod tests {
         let ho = ledger.read_session("s-ho").unwrap();
         assert!(paper_title(&ho).is_none());
         assert_eq!(session_title(Some(&meta), &ho, "s-ho"), DEFAULT_SESSION_TITLE);
+    }
+
+    #[test]
+    fn source_label_cleans_origin_when_title_missing() {
+        assert_eq!(
+            source_label(&json!({
+                "title": null,
+                "origin": "spectral_bounds.pdf",
+                "primary_path": "src-1/document.pdf.extracted.txt"
+            }))
+            .as_deref(),
+            Some("spectral_bounds")
+        );
+        assert_eq!(
+            source_label(&json!({
+                "title": "",
+                "origin": "/home/u/papers/Decay_Bound.PDF.EXTRACTED.TXT",
+                "primary_path": "src-1/raw.txt"
+            }))
+            .as_deref(),
+            Some("Decay_Bound")
+        );
+        assert_eq!(
+            source_label(&json!({
+                "title": null,
+                "origin": "C:\\Users\\alice\\Downloads\\Quantum_Hall.PDF",
+                "primary_path": "src-1/raw.txt"
+            }))
+            .as_deref(),
+            Some("Quantum_Hall")
+        );
+        // Generic `upload` and bare HTTP(S) URLs fall back to primary_path / files[0].
+        assert_eq!(
+            source_label(&json!({
+                "title": null,
+                "origin": "upload",
+                "primary_path": "src-1/fallback.pdf"
+            }))
+            .as_deref(),
+            Some("fallback.pdf")
+        );
+        assert_eq!(
+            source_label(&json!({
+                "title": null,
+                "origin": "https://arxiv.org/pdf/2501.00042",
+                "files": ["src-1/arxiv_paper.pdf"]
+            }))
+            .as_deref(),
+            Some("arxiv_paper.pdf")
+        );
     }
 }

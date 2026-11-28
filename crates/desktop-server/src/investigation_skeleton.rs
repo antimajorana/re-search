@@ -227,13 +227,14 @@ pub fn handle_with_etag(
                     None,
                     Some(&folded),
                 );
-                let orient_auto_start = crate::investigation_settings::orient_auto_start_enabled(state);
+                let inv_settings = crate::investigation_settings::load_settings(&state.cfg.data_dir);
                 crate::investigation_mapview_v7::enrich_mapview_with_v7(
                     &mut mv,
                     &rec.skeleton,
                     &folded,
-                    orient_auto_start,
+                    inv_settings.orient_auto_start,
                 );
+                mv["orient_call_cap"] = json!(inv_settings.orient_call_cap);
                 crate::investigation_context_tasks::enrich_context_cards_metadata(
                     &mut mv,
                     state,

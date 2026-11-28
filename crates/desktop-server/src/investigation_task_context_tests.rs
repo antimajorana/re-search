@@ -252,20 +252,28 @@ fn task_route_validation_and_prepare_and_finish_lifecycle_states() {
     assert!(res.is_ok() && fin.payload["status"] == "done" && fin.payload["run_state"] == "done");
     assert_eq!(fin.payload["counts"]["model_calls"].as_u64(), Some(2));
 
-    let (res, fin) = run_case(8, 8, Some(json!({"items":[{"tag":"a"},{"tag":"b"}],"edges":[{"from":"a","to":"b"}],"rejected":{"items":[{"index":2}],"edges":[]},"done":false})), Err("max turns reached".into()), false);
-    assert!(res.is_err() && fin.payload["status"] == "partial" && fin.payload["run_state"] == "paused");
+    // Partial at cap returns Ok("") (no red Error UI) while recording error in ledger for audit.
+    let (res, fin) = run_case(8, 8, Some(json!({"items":[{"tag":"a"},{"tag":"b"}],"edges":[{"from":"a","to":"b"}],"rejected":{"items":[{"index":2}],"edges":[]},"done":false})), Err("reached max_turns (8) before model completed".into()), false);
+    assert_eq!(res.as_deref(), Ok(""));
+    assert!(fin.payload["status"] == "partial" && fin.payload["run_state"] == "paused");
+    assert_eq!(fin.payload["error"], "reached max_turns (8) before model completed");
     assert_eq!((fin.payload["counts"]["model_calls"].as_u64(), fin.payload["counts"]["items"].as_u64(), fin.payload["counts"]["edges"].as_u64(), fin.payload["counts"]["rejected_items"].as_u64()), (Some(8), Some(2), Some(1), Some(1)));
 
-    let (_, fin) = run_case(8, 3, Some(json!({"items":[{"tag":"a"}],"edges":[],"rejected":{"items":[],"edges":[]},"done":false})), Err("stopped by user".into()), true);
-    assert!(fin.payload["status"] == "stopped" && fin.payload["run_state"] == "paused" && fin.payload["counts"]["items"] == 1);
+    // Final-turn `record_map_reading` with `done: true` at max_turns cap finishes as Done.
+    let (res, fin) = run_case(1, 1, Some(json!({"items":[{"tag":"t"}],"edges":[],"rejected":{"items":[],"edges":[]},"done":true})), Err("reached max_turns (1) before model completed".into()), false);
+    assert_eq!(res.as_deref(), Ok(""));
+    assert!(fin.payload["status"] == "done" && fin.payload["run_state"] == "done" && fin.payload["error"].is_null());
 
-    let (_, fin) = run_case(8, 1, None, Err("transport connection timed out".into()), false);
-    assert!(fin.payload["status"] == "interrupted" && fin.payload["run_state"] == "interrupted");
+    let (res, fin) = run_case(8, 3, Some(json!({"items":[{"tag":"a"}],"edges":[],"rejected":{"items":[],"edges":[]},"done":false})), Err("stopped by user".into()), true);
+    assert!(res.is_err() && fin.payload["status"] == "stopped" && fin.payload["run_state"] == "paused" && fin.payload["counts"]["items"] == 1);
+
+    let (res, fin) = run_case(8, 1, None, Err("transport connection timed out".into()), false);
+    assert!(res.is_err() && fin.payload["status"] == "interrupted" && fin.payload["run_state"] == "interrupted");
 
     let (res, fin) = run_case(8, 1, None, Ok("empty".into()), false);
     assert!(res.is_err() && fin.payload["status"] == "failed" && fin.payload["run_state"] == "failed");
-    let (_, fin) = run_case(8, 1, None, Err("provider rejected request".into()), false);
-    assert!(fin.payload["status"] == "failed" && fin.payload["run_state"] == "failed");
+    let (res, fin) = run_case(8, 1, None, Err("provider rejected request".into()), false);
+    assert!(res.is_err() && fin.payload["status"] == "failed" && fin.payload["run_state"] == "failed");
 
     // M2: vacuous reading event with 0 items, 0 edges, 0 limitations still fails even with done=true.
     let (res, fin) = run_case(
@@ -421,4 +429,152 @@ fn carbon_audit_guards_profile_cli_cites_and_mapview_excerpts() {
     let dumped = serde_json::to_string(&mv).unwrap();
     assert!(!dumped.contains("LARGE_EXCERPT_SENTINEL_MUST_BE_STRIPPED"), "mapview must omit raw excerpts");
     assert!(dumped.contains("compact self-adjoint operator"), "mapview must keep matched quote chips");
+}
+
+#[test]
+fn orient_section_outline_on_theorem_less_paper_preserves_supplied_ranges() {
+    const SECTION_ONLY_TEX: &[u8] = br#"\documentclass{article}
+\begin{document}
+\begin{abstract}
+We simulate a two-dimensional spin lattice near criticality.
+\end{abstract}
+\section{Introduction}\label{sec:intro}
+Critical scaling is measured numerically across lattice sizes.
+\section{Monte Carlo Setup}\label{sec:mc}
+Cluster updates reduce autocorrelation time near the transition.
+\section{Phase Diagram}\label{sec:phase}
+Susceptibility peaks collapse onto a universal scaling curve.
+\section{Discussion}\label{sec:disc}
+Our numerical scaling agrees with renormalization predictions.
+\end{document}
+"#;
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = DesktopConfig {
+        port: 0, data_dir: tmp.path().to_path_buf(), workspace_root: None, python: None,
+        worker_script: None, api_base_override: None, literature_endpoints: LiteratureEndpoints::default(),
+        open_window: false, print_url_json: false, eval_timeout_s: 30, core_exe: None,
+        claude_exe: None, agy_exe: None, connection_env: Some(Default::default()),
+        chatgpt_test: Some(offline_test_hooks()),
+    };
+    let state = DesktopState::new(cfg.clone(), AuthGuard::new(0).unwrap(), Arc::new(SseHub::new()), ChatGptHub::new(&cfg).unwrap());
+    let env = ResearchEnv::new(tmp.path().to_path_buf());
+    let sid = "inv-sec-only";
+    let ledger = Mutex::new(state.open_ledger().unwrap());
+    ledger.lock().unwrap().append(sid, EVENT_INVESTIGATION_STARTED, 1, &json!({})).unwrap();
+    let src = ingest_bytes(&env.sandbox(), &ledger, &IngestRequest {
+        session_id: sid, file_name: "physics.tex", origin: "upload",
+        raw_bytes: SECTION_ONLY_TEX, source_id_hint: None, section_filter: None, title: Some("Spin Lattice"),
+    }).unwrap();
+    drop(ledger);
+    let rec = pin_source_and_build_skeleton(&state, sid, &src.source_id, None, None, None).unwrap();
+    assert!(!rec.skeleton.nodes.iter().any(|n| n.kind.is_theorem_like()));
+    let events = state.open_ledger().unwrap().read_session(sid).unwrap();
+    let receipt = events.iter().find(|e| e.kind == "source.ingested").unwrap();
+    let built = build_task_context(
+        &env.sandbox(), sid, receipt, &rec.skeleton, rec.event_seq, 10,
+        InvestigationTaskKind::Orient, &[], None, None, DEFAULT_CONTEXT_CHAR_BUDGET,
+    ).unwrap();
+    assert!(built.instructions.contains("Section outline (metadata only; not raw source lines):"));
+    assert!(built.instructions.contains("Monte Carlo Setup") && built.instructions.contains("Phase Diagram"));
+    let mc_node = rec.skeleton.nodes.iter().find(|n| n.title.as_deref() == Some("Monte Carlo Setup")).unwrap();
+    assert!(built.instructions.contains(mc_node.tag.as_deref().unwrap()));
+    // Middle section lines must NOT be credited in supplied_ranges because outline is metadata only.
+    let mc_span = &mc_node.spans[0];
+    assert!(!built.supplied_ranges.iter().any(|r| r.start_line <= mc_span.start_line && r.end_line >= mc_span.end_line));
+}
+
+#[test]
+fn orient_continuation_validation_and_saved_readings_note() {
+    let fx = setup_fixture("inv-cont-unit");
+    let ledger = fx.state.open_ledger().unwrap();
+    let anchor = json!({
+        "source_id": fx.source_id, "path": fx.primary_path, "file_sha256": fx.file_sha256,
+        "start_line": 12, "end_line": 14, "quote": "compact self-adjoint operator",
+        "quote_sha256": ledger::sha256_hex(b"compact self-adjoint operator"),
+        "excerpt": "compact self-adjoint operator", "source_seq": fx.receipt.seq
+    });
+    let lemma_fp = fx.skeleton.nodes.iter().find(|n| n.tag.as_deref() == Some(&fx.lemma_tag)).unwrap().fp.clone();
+
+    let partial_seq = ledger.append(&fx.sid, MARKER_TASK_REQUESTED, 1, &json!({"task":"orient","source_id":fx.source_id,"cap":4})).unwrap();
+    ledger.append(&fx.sid, EVENT_INVESTIGATION_READING, 1, &json!({
+        "schema_version": 1, "request_seq": partial_seq, "source_id": fx.source_id, "skeleton_seq": fx.skel_seq,
+        "done": false, "items": [{"tag": fx.lemma_tag, "node_fp": lemma_fp, "role": "supporting", "gist": "Base bound", "anchors": [anchor]}],
+        "edges": [], "limitations": [], "rejected": {"items":[],"edges":[]}, "anchor_report": {}
+    })).unwrap();
+    // Simulate an undispatched final `record_map_reading` tool_use before hitting the cap.
+    ledger.append(&fx.sid, "model.tool_use", 1, &json!({"id":"call_unsaved","name":"record_map_reading","input":{}})).unwrap();
+    ledger.append(&fx.sid, MARKER_TASK_FINISHED, 1, &json!({"request_seq": partial_seq, "status": "partial"})).unwrap();
+
+    let done_seq = ledger.append(&fx.sid, MARKER_TASK_REQUESTED, 1, &json!({"task":"orient","source_id":fx.source_id,"cap":4})).unwrap();
+    ledger.append(&fx.sid, MARKER_TASK_FINISHED, 1, &json!({"request_seq": done_seq, "status": "done"})).unwrap();
+
+    let open_seq = ledger.append(&fx.sid, MARKER_TASK_REQUESTED, 1, &json!({"task":"open","source_id":fx.source_id,"cap":4})).unwrap();
+    ledger.append(&fx.sid, MARKER_TASK_FINISHED, 1, &json!({"request_seq": open_seq, "status": "partial"})).unwrap();
+
+    let evs = ledger.read_session(&fx.sid).unwrap();
+    assert_eq!(resolve_continuation(&evs, InvestigationTaskKind::Orient, partial_seq).unwrap(), partial_seq);
+    assert_eq!(resolve_continuation(&evs, InvestigationTaskKind::Open, partial_seq).unwrap_err().0, 400);
+    assert_eq!(resolve_continuation(&evs, InvestigationTaskKind::Orient, done_seq).unwrap_err().0, 400);
+    assert_eq!(resolve_continuation(&evs, InvestigationTaskKind::Orient, open_seq).unwrap_err().0, 400);
+    assert_eq!(resolve_continuation(&evs, InvestigationTaskKind::Orient, 99999).unwrap_err().0, 400);
+
+    let baseline = build_task_context_with_events(
+        &fx.env.sandbox(), &fx.sid, &fx.receipt, &evs, &fx.skeleton, fx.skel_seq, 90,
+        InvestigationTaskKind::Orient, 4, None, &[], None, None, DEFAULT_CONTEXT_CHAR_BUDGET,
+    ).unwrap();
+    let cont = build_task_context_with_events(
+        &fx.env.sandbox(), &fx.sid, &fx.receipt, &evs, &fx.skeleton, fx.skel_seq, 90,
+        InvestigationTaskKind::Orient, 4, Some(partial_seq), &[], None, None, DEFAULT_CONTEXT_CHAR_BUDGET,
+    ).unwrap();
+    assert!(cont.instructions.contains("Already saved readings for this paper (metadata, not source lines; do not redo):"));
+    assert!(cont.instructions.contains(&fx.lemma_tag) && cont.instructions.contains("Base bound"));
+    assert!(cont.instructions.contains("unsaved final `record_map_reading` call"));
+    assert_eq!(cont.supplied_ranges, baseline.supplied_ranges);
+}
+
+#[test]
+fn unresolved_rejected_items_tracks_retry_in_fold_mapview_and_finish_task() {
+    let fx = setup_fixture("inv-unres-rej");
+    let ledger = fx.state.open_ledger().unwrap();
+    let anchor = json!({
+        "source_id": fx.source_id, "path": fx.primary_path, "file_sha256": fx.file_sha256,
+        "start_line": 12, "end_line": 14, "quote": "compact self-adjoint operator",
+        "quote_sha256": ledger::sha256_hex(b"compact self-adjoint operator"),
+        "excerpt": "compact self-adjoint operator", "source_seq": fx.receipt.seq
+    });
+    let lemma_fp = fx.skeleton.nodes.iter().find(|n| n.tag.as_deref() == Some(&fx.lemma_tag)).unwrap().fp.clone();
+
+    let rseq = ledger.append(&fx.sid, MARKER_TASK_REQUESTED, 1, &json!({
+        "task":"orient","source_id":fx.source_id,"skeleton_seq":fx.skel_seq,"cap":8
+    })).unwrap();
+    // First call rejects lemma_tag and thm_tag.
+    ledger.append(&fx.sid, "tool.request", 1, &json!({
+        "tool": "record_map_reading",
+        "args": { "request_seq": rseq, "source_id": fx.source_id, "items": [{"tag": fx.lemma_tag}, {"tag": fx.thm_tag}] }
+    })).unwrap();
+    ledger.append(&fx.sid, EVENT_INVESTIGATION_READING, 1, &json!({
+        "schema_version": 1, "request_seq": rseq, "source_id": fx.source_id, "skeleton_seq": fx.skel_seq,
+        "done": false, "items": [], "edges": [], "limitations": [],
+        "rejected": {"items": [{"index":0,"code":"anchor_outside_node","message":"bad"},{"index":1,"code":"anchor_outside_node","message":"bad"}], "edges": []},
+        "anchor_report": {}
+    })).unwrap();
+    // Retry accepts lemma_tag, leaving only thm_tag unresolved.
+    ledger.append(&fx.sid, EVENT_INVESTIGATION_READING, 1, &json!({
+        "schema_version": 1, "request_seq": rseq, "source_id": fx.source_id, "skeleton_seq": fx.skel_seq,
+        "done": true, "items": [{"tag": fx.lemma_tag, "node_fp": lemma_fp, "gist": "Fixed", "anchors": [anchor]}],
+        "edges": [], "limitations": [], "rejected": {"items": [], "edges": []}, "anchor_report": {}
+    })).unwrap();
+
+    investigation_tasks::finish_task(&fx.state, &fx.sid, &json!({ TASK_REQUEST_SEQ_FIELD: rseq, TASK_CAP_FIELD: 8 }), Ok("ok".into()), false).unwrap();
+    let evs = ledger.read_session(&fx.sid).unwrap();
+    let fin = evs.iter().rev().find(|e| e.kind == MARKER_TASK_FINISHED).unwrap();
+    assert_eq!(fin.payload["counts"]["rejected_items"].as_u64(), Some(2));
+    assert_eq!(fin.payload["counts"]["unresolved_rejected_items"].as_u64(), Some(1));
+
+    let folded = research_tools::map_fold::fold_map(&fx.skeleton, &evs, false);
+    assert_eq!(folded.tasks[0].rejected_items, 2);
+    assert_eq!(folded.tasks[0].unresolved_rejected_items, 1);
+    let mv = crate::investigation_mapview::build_mapview_json_with_fold(&fx.skeleton, fx.skel_seq, "blob", "head", None, Some(&folded));
+    assert_eq!(mv["tasks"][0]["rejected_items"], 2);
+    assert_eq!(mv["tasks"][0]["unresolved_rejected_items"], 1);
 }

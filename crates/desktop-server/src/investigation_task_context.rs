@@ -17,6 +17,14 @@ use research_tools::skeleton::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+#[path = "investigation_task_continuation.rs"]
+mod continuation;
+pub(crate) use continuation::{
+    build_orient_continuation_note, compute_unresolved_rejected, parse_and_resolve_continue_from,
+};
+#[allow(unused_imports)]
+pub(crate) use continuation::resolve_continuation;
+
 /// Wrapper tag marking verbatim injected paper text as data, never instructions
 /// (`investigate.md` §5.1, rule 6.19).
 pub const QUOTED_SOURCE_OPEN_TAG: &str = "quoted_source_material";
@@ -59,7 +67,7 @@ pub fn build_task_context(
 ) -> Result<BuiltTaskContext, String> {
     build_task_context_with_events(
         sandbox, session_id, receipt, &[], skeleton, skeleton_seq, request_seq,
-        task, tags, depth, focus, max_chars,
+        task, task.default_call_cap(), None, tags, depth, focus, max_chars,
     )
 }
 
@@ -76,6 +84,8 @@ pub fn build_task_context_with_events(
     skeleton_seq: u64,
     request_seq: u64,
     task: InvestigationTaskKind,
+    cap: u32,
+    continue_from: Option<u64>,
     tags: &[String],
     depth: Option<&str>,
     focus: Option<&str>,
@@ -111,11 +121,19 @@ pub fn build_task_context_with_events(
     ordered.sort_by_key(|n| n.order);
 
     let mut instructions = build_preamble(
-        task, &skeleton.source_id, skeleton_seq, request_seq, tags, depth, focus,
+        task, &skeleton.source_id, skeleton_seq, request_seq, cap, tags, depth, focus,
     );
     if task == InvestigationTaskKind::Orient {
         let budget = (max_chars / 3).min(max_chars.saturating_sub(instructions.chars().count()));
-        instructions.push_str(&build_theorem_headings_index(&ordered, budget));
+        if ordered.iter().any(|n| n.kind.is_theorem_like()) {
+            instructions.push_str(&build_theorem_headings_index(&ordered, budget));
+        } else {
+            instructions.push_str(&build_section_outline(&ordered, budget));
+        }
+        if let Some(prev_seq) = continue_from {
+            let cont_budget = (max_chars / 4).min(max_chars.saturating_sub(instructions.chars().count()));
+            instructions.push_str(&build_orient_continuation_note(skeleton, events, prev_seq, cont_budget));
+        }
     }
 
     // Resolve any V8 `m-` target tags to their owning skeleton tags while surfacing the step's
@@ -232,39 +250,60 @@ pub fn record_context_supplied(
     Ok(Some(seq))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_preamble(
     task: InvestigationTaskKind,
     source_id: &str,
     skeleton_seq: u64,
     request_seq: u64,
+    cap: u32,
     tags: &[String],
     depth: Option<&str>,
     focus: Option<&str>,
 ) -> String {
     crate::investigation_task_prompts::build_task_preamble(
-        task, source_id, skeleton_seq, request_seq, tags, depth, focus,
+        task, source_id, skeleton_seq, request_seq, cap, tags, depth, focus,
     )
 }
 
-fn build_theorem_headings_index(ordered: &[&SkNode], char_budget: usize) -> String {
-    let theorems: Vec<&SkNode> = ordered.iter().copied().filter(|n| n.kind.is_theorem_like()).collect();
-    if theorems.is_empty() || char_budget < 64 {
+fn format_heading_list(nodes: &[&SkNode], header: &str, noun: &str, char_budget: usize) -> String {
+    if nodes.is_empty() || char_budget < 64 {
         return String::new();
     }
-    let mut out = String::from("\nTheorem-like headings index (metadata only; not raw source lines):\n");
+    let mut out = String::from(header);
     let mut included = 0usize;
-    for node in &theorems {
+    for node in nodes {
         let line = format_heading_entry(node);
-        let reserve = if included + 1 < theorems.len() { 48 } else { 0 };
+        let reserve = if included + 1 < nodes.len() { 48 } else { 0 };
         if out.chars().count() + line.chars().count() + reserve > char_budget {
-            let omitted = theorems.len() - included;
-            let _ = writeln!(out, "... ({omitted} more headings omitted; use `read_map_node`)");
+            let omitted = nodes.len() - included;
+            let _ = writeln!(out, "... ({omitted} more {noun} omitted; use `read_map_node`)");
             break;
         }
         out.push_str(&line);
         included += 1;
     }
     if included == 0 { String::new() } else { out }
+}
+
+fn build_theorem_headings_index(ordered: &[&SkNode], char_budget: usize) -> String {
+    let theorems: Vec<&SkNode> = ordered.iter().copied().filter(|n| n.kind.is_theorem_like()).collect();
+    format_heading_list(
+        &theorems,
+        "\nTheorem-like headings index (metadata only; not raw source lines):\n",
+        "headings",
+        char_budget,
+    )
+}
+
+fn build_section_outline(ordered: &[&SkNode], char_budget: usize) -> String {
+    let sections: Vec<&SkNode> = ordered.iter().copied().filter(|n| n.kind == SkNodeKind::Section).collect();
+    format_heading_list(
+        &sections,
+        "\nSection outline (metadata only; not raw source lines):\n",
+        "sections",
+        char_budget,
+    )
 }
 
 fn format_heading_entry(node: &SkNode) -> String {

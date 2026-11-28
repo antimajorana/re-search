@@ -478,17 +478,30 @@ fn run_session_turn(
         delegation: Some(delegation_cfg),
         human: Some(&human_channel),
     };
+    let final_turn_tools = if crate::investigation_tasks::is_task_turn(req) {
+        vec![
+            research_tools::map_defs::RECORD_MAP_READING.to_string(),
+            research_tools::map_defs::RECORD_CONTEXT_CARDS.to_string(),
+        ]
+    } else {
+        Vec::new()
+    };
     let auto_cfg = AutonomousConfig {
         guardrails,
         project_context,
         use_strategist: req.get("use_strategist").and_then(Value::as_bool).unwrap_or(false),
         interactive_plan_mode,
         pause_after_explore,
+        final_turn_tools,
         ..AutonomousConfig::default()
     };
 
+    let has_pinned_paper = is_investigation
+        && crate::investigation::latest(&existing, crate::investigation_skeleton::EVENT_INVESTIGATION_PAPER)
+            .is_some();
     let mut sink = SseEventSink::new(Arc::clone(&state.sse), session_id).with_model_title(
-        meta.as_ref().is_some_and(crate::state::SessionMeta::allows_model_title)
+        !has_pinned_paper
+            && meta.as_ref().is_some_and(crate::state::SessionMeta::allows_model_title)
             && crate::routes_session::model_session_title(&existing).is_none(),
     );
 
