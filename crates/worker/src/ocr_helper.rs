@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_OCR_PAGE_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_OCR_JOB_MEMORY_LIMIT_BYTES: usize = 1024 * 1024 * 1024;
 pub const MAX_OCR_INPUT_PNG_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_OCR_OUTPUT_TEXT_BYTES: usize = 2 * 1024 * 1024;
 pub const MIN_OCR_DPI: u16 = 72;
@@ -272,6 +273,11 @@ impl TesseractCliEngine {
             }
         }
 
+        let exe_clean = strip_verbatim(&fs::canonicalize(&self.config.tesseract_exe).map_err(spawn_err)?);
+        if !exe_clean.is_file() {
+            return Err(OcrHelperError::Unavailable("Install Tesseract to enable OCR".into()));
+        }
+
         let (stage_dir, profile_id, _stage_guard) = create_stage_dir(&self.config.data_dir)?;
         let profile = AppContainerProfile::create(&profile_id).map_err(spawn_err)?;
         let rx_grant = format!("*{}:(OI)(CI)RX", profile.sid_str());
@@ -309,7 +315,7 @@ impl TesseractCliEngine {
 
         let out_base = out_clean.join("result");
         let launch = WorkerLaunch {
-            exe: strip_verbatim(&self.config.tesseract_exe),
+            exe: exe_clean,
             args: vec![
                 path_str(&page_png),
                 path_str(&out_base),
@@ -323,6 +329,7 @@ impl TesseractCliEngine {
             cwd: out_clean.clone(),
             env,
             inherit_handles: Vec::new(),
+            job_memory_limit_bytes: Some(DEFAULT_OCR_JOB_MEMORY_LIMIT_BYTES),
         };
 
         let mut child = spawn_extended(&launch, Some(&profile)).map_err(spawn_err)?;
