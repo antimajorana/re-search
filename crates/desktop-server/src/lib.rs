@@ -51,6 +51,7 @@ pub mod hitl;
 pub mod http_srv;
 pub mod idea;
 mod idea_answer;
+pub mod idea_cli_exchange;
 pub mod idea_exchanges;
 pub mod idea_exchanges_triage;
 pub mod idea_map_exchange;
