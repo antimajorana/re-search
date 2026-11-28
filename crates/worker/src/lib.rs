@@ -35,6 +35,10 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Default per-worker Win32 Job Object committed memory limit (`2 GiB`, keeping
+/// up to three concurrent Python workers safe on the 14.8 GB reference machine).
+pub const DEFAULT_JOB_MEMORY_LIMIT_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
     pub python: PathBuf,
@@ -46,6 +50,17 @@ pub struct WorkerConfig {
     /// (`sessions/<id>/pycache`), isolating sessions from each other.
     pub pycache: PathBuf,
     pub startup_timeout: Duration,
+    /// Optional per-Job committed memory cap in bytes (`JOB_OBJECT_LIMIT_JOB_MEMORY`).
+    /// When `None`, defaults to [`DEFAULT_JOB_MEMORY_LIMIT_BYTES`] (`2 GiB`).
+    pub job_memory_limit_bytes: Option<usize>,
+}
+
+impl WorkerConfig {
+    /// Effective Win32 Job Object memory cap in bytes, defaulting to
+    /// [`DEFAULT_JOB_MEMORY_LIMIT_BYTES`] when `job_memory_limit_bytes` is `None`.
+    pub fn effective_job_memory_limit_bytes(&self) -> usize {
+        self.job_memory_limit_bytes.unwrap_or(DEFAULT_JOB_MEMORY_LIMIT_BYTES)
+    }
 }
 
 #[derive(Debug)]
@@ -209,6 +224,9 @@ impl Worker {
         env.insert("MPLCONFIGDIR".into(), s(&scratch.join("mpl")));
         env.insert("PYTHONNOUSERSITE".into(), "1".into());
         env.insert("PYTHONIOENCODING".into(), "utf-8".into());
+        // Cap OpenBLAS/OpenMP worker pools so multi-core startup does not commit ~410 MiB before math runs.
+        env.insert("OPENBLAS_NUM_THREADS".into(), "1".into());
+        env.insert("OMP_NUM_THREADS".into(), "1".into());
 
         let mut args = vec![
             "-u".to_string(),
@@ -223,6 +241,7 @@ impl Worker {
             cwd: scratch,
             env,
             inherit_handles: vec![to_child.their_handle_value(), from_child.their_handle_value()],
+            job_memory_limit_bytes: Some(self.config.effective_job_memory_limit_bytes()),
         };
         let proc = self.sandbox.spawn_worker(launch).map_err(err)?;
         self.spawn_count += 1;
@@ -451,6 +470,7 @@ mod tests {
             scratch: PathBuf::from("scratch"),
             pycache: PathBuf::from("pycache"),
             startup_timeout: Duration::from_secs(5),
+            job_memory_limit_bytes: None,
         }
     }
 
@@ -482,5 +502,14 @@ mod tests {
     fn protocol_constants_support_v1_and_v2() {
         assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, 1);
         assert_eq!(PROTOCOL_VERSION, 2);
+    }
+
+    #[test]
+    fn worker_config_defaults_and_overrides_job_memory_limit() {
+        assert_eq!(DEFAULT_JOB_MEMORY_LIMIT_BYTES, 2 * 1024 * 1024 * 1024);
+        let mut cfg = dummy_config();
+        assert_eq!(cfg.effective_job_memory_limit_bytes(), DEFAULT_JOB_MEMORY_LIMIT_BYTES);
+        cfg.job_memory_limit_bytes = Some(128 * 1024 * 1024);
+        assert_eq!(cfg.effective_job_memory_limit_bytes(), 128 * 1024 * 1024);
     }
 }

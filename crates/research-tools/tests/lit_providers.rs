@@ -365,12 +365,12 @@ fn citation_relations_and_unsupported_and_disabled_openalex() {
     assert!(r_cr_ref.has_more);
     assert_eq!(r_cr_ref.edges[0], CitationEdge { from: seed_doi.clone(), to: PaperKey::from_doi("10.9999/ref.1").unwrap(), provider: LitProvider::Crossref });
 
-    // Unsupported relations and disabled OpenAlex make ZERO HTTP requests.
+    // Unsupported relations and disabled TheoremSearch make ZERO HTTP requests.
     assert_eq!(run_query_with_gate(&ep, &LitQuery::citation_relation(LitProvider::Arxiv, QueryRelation::Cites { key: seed_ax }), &cfg, &gate).status, QueryStatus::Unsupported);
     assert_eq!(run_query_with_gate(&ep, &LitQuery::citation_relation(LitProvider::Crossref, QueryRelation::CitedBy { key: seed_doi }), &cfg, &gate).status, QueryStatus::Unsupported);
-    let r_oa = run_query_with_gate(&ep, &LitQuery::search(LitProvider::OpenAlex, "spin"), &cfg, &gate);
-    assert_eq!(r_oa.status, QueryStatus::Disabled);
-    assert!(r_oa.error.as_deref().unwrap().contains("not in http_client.rs"));
+    let r_ts = run_query_with_gate(&ep, &LitQuery::search(LitProvider::TheoremSearch, "spin"), &cfg, &gate);
+    assert_eq!(r_ts.status, QueryStatus::Disabled);
+    assert!(r_ts.error.as_deref().unwrap().contains("not allowlisted"));
     assert_eq!(srv.captured().len(), 5);
 }
 
@@ -403,7 +403,7 @@ fn handles_429_retry_after_variants_5xx_malformed_xxe_and_timeout() {
     });
     let ep = LiteratureEndpoints::loopback_mock(&srv.base_url).unwrap();
     let (_, gate) = fake_gate();
-    let cfg = ProviderConfig { semantic_scholar_api_key: None, request_timeout: Some(Duration::from_millis(180)) };
+    let cfg = ProviderConfig { request_timeout: Some(Duration::from_millis(180)), ..ProviderConfig::default() };
 
     let r1 = run_query_with_gate(&ep, &LitQuery::search(LitProvider::SemanticScholar, "ratenum"), &cfg, &gate);
     assert_eq!(r1.status, QueryStatus::RateLimited);
@@ -472,7 +472,7 @@ fn s2_api_key_sent_only_to_s2_and_stripped_on_cross_origin_redirect() {
     let (_, gate) = fake_gate();
     let cfg = ProviderConfig {
         semantic_scholar_api_key: Some("fake-test-s2-key-0001".into()),
-        request_timeout: None,
+        ..ProviderConfig::default()
     };
 
     let r_s2 = run_query_with_gate(&ep_with_b, &LitQuery::search(LitProvider::SemanticScholar, "direct"), &cfg, &gate);

@@ -1,11 +1,10 @@
 //! Research tool endpoints: upload, workspace browsing, LaTeX patching, TeX audit,
-//! literature search, proof DAG, chain verification, narration, side-talk, and export.
+//! literature search, proof DAG, chain verification, narration, and side-talk.
 
 use crate::routes_session::{bad, internal, not_found, parse_json_body, ApiResult};
 use crate::state::{decode_base64, parse_multipart_files, DesktopState, UploadedFile};
 use crate::turn_runner::build_desktop_router;
 use agent::{ask_sidetalk, narrate_session, read_sidetalk_thread};
-use export::{export_session_bytes, ExportFormat};
 use research_tools::fs_tools::{handle_fs_list, handle_fs_read};
 use research_tools::write_tools::{workspace_edit_sha256, EDIT_BASE_CHANGED};
 use research_tools::{
@@ -558,30 +557,6 @@ pub fn handle_post_sidetalk(state: &DesktopState, session_id: &str, body: &[u8])
     let ledger = state.open_ledger().map_err(internal)?;
     let turn = ask_sidetalk(&*transport, &ledger, &env, session_id, question, &model).map_err(bad)?;
     Ok((200, serde_json::to_value(turn).map_err(|e| internal(e.to_string()))?))
-}
-
-pub fn handle_export(
-    state: &DesktopState,
-    session_id: &str,
-    query: &HashMap<String, String>,
-) -> Result<(String, &'static str, Vec<u8>), (u16, String)> {
-    validate_session_id(session_id).map_err(|e| bad(e.to_string()))?;
-    if !state.session_exists(session_id).map_err(internal)? {
-        return Err(not_found(format!("session `{session_id}` not found")));
-    }
-    let fmt_str = query.get("format").map(String::as_str).unwrap_or("tex");
-    let fmt_norm = fmt_str.trim().to_ascii_lowercase();
-    if matches!(fmt_norm.as_str(), "explain_md" | "explain_html") {
-        return crate::explain_export::export_explain_conversation(state, session_id, &fmt_norm);
-    }
-    let fmt = ExportFormat::parse(fmt_str).map_err(bad)?;
-    let (filename, bytes) = export_session_bytes(&state.cfg.data_dir, session_id, fmt).map_err(bad)?;
-    let content_type = match fmt {
-        ExportFormat::Tex => "application/x-tex; charset=utf-8",
-        ExportFormat::Html => "text/html; charset=utf-8",
-        ExportFormat::Zip => "application/zip",
-    };
-    Ok((filename, content_type, bytes))
 }
 
 fn parse_json_upload_files(body: &[u8]) -> Result<Vec<UploadedFile>, (u16, String)> {

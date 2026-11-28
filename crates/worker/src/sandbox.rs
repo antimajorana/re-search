@@ -49,6 +49,8 @@ pub struct WorkerLaunch {
     /// Raw inheritable HANDLE values (cast to `usize`) explicitly allowed via
     /// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`.
     pub inherit_handles: Vec<usize>,
+    /// Optional Win32 Job Object committed memory cap (`JOB_OBJECT_LIMIT_JOB_MEMORY`).
+    pub job_memory_limit_bytes: Option<usize>,
 }
 
 /// A spawned worker process together with whatever keeps it contained.

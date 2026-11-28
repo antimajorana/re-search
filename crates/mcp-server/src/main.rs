@@ -139,6 +139,7 @@ fn build_worker(data_dir: &std::path::Path, session: &str, python: String, scrip
             scratch,
             pycache,
             startup_timeout: Duration::from_secs(90),
+            job_memory_limit_bytes: None,
         },
         sandbox,
     ))

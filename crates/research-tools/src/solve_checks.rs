@@ -1,12 +1,8 @@
 //! Host-registered `check_run` tool and S3 `AutoCheckGate` (`solve.md` 4.4, 5.1, rules R3/R8/R18/R19).
 
-use crate::policy_preset::{SOLVE_CHECK_CALLER, SOLVE_VERIFIER_CALLER};
+use crate::policy_preset::SOLVE_CHECK_CALLER;
 use crate::solve_defs::{CHECK_RUN, SOLVE_V1_CHECK_NAMES, STEP_RECORD};
-use crate::solve_exprs::load_handle_srepr;
-use crate::solve_model::{
-    compute_claim_sha256, event_kinds, CheckOutcome, CheckRequester, ClaimForm, ReceiptRef,
-    SolveCheck,
-};
+use crate::solve_model::{event_kinds, CheckOutcome, ClaimForm, ReceiptRef, SolveCheck};
 use crate::solve_state::SolveState;
 use crate::solve_status::badge_for_step;
 use crate::ResearchEnv;
@@ -17,10 +13,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tools::{CallCtx, CallOutcome, Gate, GateDecision, GateRequest, PostCallCtx, ToolHandler};
 
+#[path = "solve_checks_params.rs"]
+mod params;
+use self::params::{
+    attach_code_hashes, parse_check_outcome, parse_check_run_args, prepare_check_invocation,
+    requester_for_caller,
+};
+
 /// Host cap for automatic and interactive `check_run` executions (`solve.md` 5.1).
 pub const DEFAULT_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 const EVENT_SCHEMA_VERSION: u32 = 1;
-const ALLOWED_CHECK_RUN_KEYS: &[&str] = &["entry_id", "claim_index", "check", "params"];
 
 /// Raw execution result returned by a [`CheckProcessRunner`].
 #[derive(Debug, Clone)]
@@ -49,17 +51,9 @@ pub trait CheckProcessRunner: Send + Sync {
         required_epoch: Option<u64>,
     ) -> Result<CheckExecResult, CheckExecError>;
 
-    /// Whether `name` is currently registered in the check process (S10 checks arrive separately).
+    /// Whether `name` is registered in the host check process (`solve.md` 5.1, S9 + S10).
     fn supports_check(&self, name: &str) -> bool {
-        matches!(
-            name,
-            "symbolic_zero_smoke"
-                | "identity_symbolic"
-                | "identity_numeric"
-                | "series_match"
-                | "vanishes_to_order"
-                | "counterexample_search"
-        )
+        name == "symbolic_zero_smoke" || SOLVE_V1_CHECK_NAMES.contains(&name)
     }
 }
 
@@ -397,169 +391,6 @@ fn invoke_auto_check(
 fn attach_auto_checks_only(result: &mut Value, auto_checks: Vec<Value>) {
     if let Some(obj) = result.as_object_mut() {
         obj.insert("auto_checks".into(), Value::Array(auto_checks));
-    }
-}
-
-struct ParsedCheckArgs {
-    entry_id: String,
-    claim_index: usize,
-    check: String,
-    user_params: Value,
-}
-
-struct PreparedCheck {
-    claim_sha256: String,
-    math_sha256: String,
-    handles: BTreeMap<String, String>,
-    full_params: Value,
-    lhs_code_sha256: Option<String>,
-    rhs_code_sha256: Option<String>,
-}
-
-fn parse_check_run_args(args: &Value) -> Result<ParsedCheckArgs, String> {
-    let obj = args
-        .as_object()
-        .ok_or_else(|| format!("{CHECK_RUN} arguments must be a JSON object"))?;
-    for key in obj.keys() {
-        if !ALLOWED_CHECK_RUN_KEYS.contains(&key.as_str()) {
-            return Err(format!("unknown field `{key}` in {CHECK_RUN} (rule R3)"));
-        }
-    }
-    let entry_id = obj
-        .get("entry_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && s.len() <= 64)
-        .ok_or("`entry_id` must be a non-empty string")?
-        .to_string();
-    let claim_index = match obj.get("claim_index") {
-        None | Some(Value::Null) => 0usize,
-        Some(v) => v
-            .as_u64()
-            .ok_or("`claim_index` must be a non-negative integer")? as usize,
-    };
-    let check = obj
-        .get("check")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| SOLVE_V1_CHECK_NAMES.contains(s))
-        .ok_or("`check` must name a registered Solve check")?
-        .to_string();
-    let user_params = match obj.get("params") {
-        None | Some(Value::Null) => json!({}),
-        Some(v) if v.is_object() => v.clone(),
-        Some(_) => return Err("`params` must be a JSON object".to_string()),
-    };
-    Ok(ParsedCheckArgs {
-        entry_id,
-        claim_index,
-        check,
-        user_params,
-    })
-}
-
-fn prepare_check_invocation(
-    ledger: &Ledger,
-    state: &SolveState,
-    parsed: &ParsedCheckArgs,
-) -> Result<PreparedCheck, String> {
-    let setup = state
-        .setup
-        .as_ref()
-        .ok_or("cannot run `check_run` before `solve.setup` has been recorded")?;
-    let entry = state
-        .entry(&parsed.entry_id)
-        .ok_or_else(|| format!("unknown Solve step `{}`", parsed.entry_id))?;
-    if entry.superseded_by.is_some() {
-        return Err(format!("step `{}` is superseded", parsed.entry_id));
-    }
-    let claim = entry.claims.get(parsed.claim_index).ok_or_else(|| {
-        format!(
-            "step `{}` has no claim at index {}",
-            parsed.entry_id, parsed.claim_index
-        )
-    })?;
-    let claim_sha256 = match &entry.claim_sha256 {
-        Some(h) if !h.is_empty() => h.clone(),
-        _ => compute_claim_sha256(&entry.claims, |h| {
-            state.handles.get(h).map(|e| e.srepr_sha256.as_str())
-        })?,
-    };
-
-    let mut handles = BTreeMap::new();
-    for (side, href) in [("lhs", &claim.lhs), ("rhs", &claim.rhs)] {
-        let expr = state
-            .handles
-            .get(href)
-            .ok_or_else(|| format!("unknown handle `{href}` in claim[{side}]"))?;
-        let srepr = load_handle_srepr(ledger, expr)?
-            .ok_or_else(|| format!("handle `{href}` is non-portable"))?;
-        handles.insert(side.into(), srepr);
-    }
-
-    let code_hash = |h| {
-        let expr = state.handles.get(h)?;
-        state
-            .receipts
-            .get(&expr.produced_by.call_id)
-            .and_then(|r| r.code_sha256.clone())
-    };
-    let lhs_code_sha256 = code_hash(&claim.lhs);
-    let rhs_code_sha256 = code_hash(&claim.rhs);
-
-    let mut full_params = parsed.user_params.as_object().cloned().unwrap_or_default();
-    full_params.insert("symbols".into(), json!(setup.symbols));
-    full_params.insert("dimensions".into(), json!(setup.dimensions));
-    full_params
-        .entry("relation".to_string())
-        .or_insert_with(|| json!(claim.relation));
-    if let Some(domain) = &claim.domain {
-        full_params
-            .entry("domain".to_string())
-            .or_insert_with(|| json!(domain));
-    }
-    if let Some(order) = &claim.order {
-        full_params
-            .entry("order".to_string())
-            .or_insert_with(|| json!(order));
-    }
-
-    Ok(PreparedCheck {
-        claim_sha256,
-        math_sha256: setup.math_sha256.clone(),
-        handles,
-        full_params: Value::Object(full_params),
-        lhs_code_sha256,
-        rhs_code_sha256,
-    })
-}
-
-fn attach_code_hashes(prepared: &PreparedCheck, evidence: &mut Value) {
-    let Some(obj) = evidence.as_object_mut() else {
-        return;
-    };
-    if let Some(h) = &prepared.lhs_code_sha256 {
-        obj.entry("lhs_code_sha256".to_string()).or_insert_with(|| json!(h));
-    }
-    if let Some(h) = &prepared.rhs_code_sha256 {
-        obj.entry("rhs_code_sha256".to_string()).or_insert_with(|| json!(h));
-    }
-}
-
-fn parse_check_outcome(val: Option<&Value>) -> Result<CheckOutcome, String> {
-    let v = val.ok_or("check process reply missing `outcome`")?;
-    serde_json::from_value(v.clone()).map_err(|e| format!("invalid check `outcome`: {e}"))
-}
-
-fn requester_for_caller(caller: &str) -> CheckRequester {
-    if caller == SOLVE_CHECK_CALLER {
-        CheckRequester::Host
-    } else if caller == SOLVE_VERIFIER_CALLER {
-        CheckRequester::Verifier
-    } else if caller == "user" {
-        CheckRequester::User
-    } else {
-        CheckRequester::Solver
     }
 }
 
