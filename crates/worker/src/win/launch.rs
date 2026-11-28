@@ -329,7 +329,7 @@ pub fn spawn_extended(launch: &WorkerLaunch, profile: Option<&AppContainerProfil
     si.StartupInfo.hStdError = nul.stdout;
     si.lpAttributeList = attr_list.as_mut_ptr();
 
-    let job = create_kill_on_close_job()?;
+    let job = create_kill_on_close_job(launch.job_memory_limit_bytes)?;
     restrict_job_ui(&job)?;
     let flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
     // SAFETY: `PROCESS_INFORMATION` is zeroed out-parameter; all buffers remain valid until `CreateProcessW` returns.

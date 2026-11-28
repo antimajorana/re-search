@@ -12,294 +12,29 @@
 //! "vendor-sandboxed, not confined to re:Search tools": the CLI keeps its built-in tools,
 //! which re:Search can only ask it to deny ([`cli_route::antigravity`]), and it needs the
 //! person's acknowledgement first ([`crate::antigravity`]).
+
 use crate::cli_relay::UiRelay;
+pub use crate::cli_turn_setup::{session_route, CliRouteKind, DEFAULT_CLI_MODEL};
+pub(crate) use crate::cli_turn_setup::wants_cli_route;
+use crate::cli_turn_setup::{
+    build_cli_prompt, check_sandbox_id, core_env_for_profile, path_str, pick_model,
+    resolve_cli_turn_profile, resolve_core_exe, route_of_first_start,
+};
 use crate::routes_session::ApiResult;
-use crate::state::{DesktopState, SessionMeta, ANTIGRAVITY_ROUTE, CLAUDE_CLI_ROUTE};
+use crate::state::{DesktopState, SessionMeta};
 use crate::turn_runner::SseEventSink;
-use crate::DesktopConfig;
 use cli_route::antigravity::Antigravity;
 use cli_route::claude::ClaudeCode;
-use cli_route::core_tools::core_tool_set;
-use cli_route::history::{build_session_prompt, DEFAULT_HISTORY_BUDGET};
+use cli_route::core_tools::core_tool_set_for_profile;
 use cli_route::{run_turn, CoreLaunch, Recorder, SessionGuard, StopHandle, TurnEnd, TurnSpec, VendorCli};
-use research_tools::{strip_verbatim_prefix, validate_session_id, LiteratureEndpoints};
+use research_tools::paper_key::Mode;
+use research_tools::policy_preset::SOLVE_CHECK_CALLER;
+use research_tools::tool_profile::TOOL_PROFILE_FIELD;
+use research_tools::{strip_verbatim_prefix, validate_session_id};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use tools::canon::random_hex;
-
-/// Model alias used when neither the request nor the session names one.
-pub const DEFAULT_CLI_MODEL: &str = "sonnet";
-
-/// Which subscription CLI a session runs on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CliRouteKind {
-    Claude,
-    Antigravity,
-}
-
-impl CliRouteKind {
-    /// The `provider` value (and [`SessionMeta::route`]) of the route.
-    pub fn provider_id(self) -> &'static str {
-        match self {
-            Self::Claude => CLAUDE_CLI_ROUTE,
-            Self::Antigravity => ANTIGRAVITY_ROUTE,
-        }
-    }
-
-    /// The route label its ledger start events carry.
-    pub fn ledger_route(self) -> &'static str {
-        match self {
-            Self::Claude => cli_route::claude::ROUTE,
-            Self::Antigravity => cli_route::antigravity::ROUTE,
-        }
-    }
-
-    pub fn from_provider(p: &str) -> Option<Self> {
-        [Self::Claude, Self::Antigravity].into_iter().find(|k| k.provider_id() == p)
-    }
-
-    pub fn from_ledger_route(r: &str) -> Option<Self> {
-        [Self::Claude, Self::Antigravity].into_iter().find(|k| k.ledger_route() == r)
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Claude => "Claude Code",
-            Self::Antigravity => "Antigravity",
-        }
-    }
-
-    fn cli_name(self) -> &'static str {
-        match self {
-            Self::Claude => "Claude Code",
-            Self::Antigravity => "The Antigravity CLI",
-        }
-    }
-}
-
-fn route_of_first_start(events: &[ledger::Event]) -> Option<String> {
-    events
-        .iter()
-        .find(|e| {
-            (e.kind == "session.start" || e.kind == "session.resume")
-                && e.payload.get("route").and_then(Value::as_str).is_some()
-        })
-        .and_then(|e| e.payload.get("route").and_then(Value::as_str))
-        .map(str::to_string)
-}
-
-/// The subscription CLI a session's metadata binds it to, if any.
-fn meta_kind(meta: Option<&SessionMeta>) -> Option<CliRouteKind> {
-    let m = meta?;
-    match m.route.as_deref() {
-        Some(r) => CliRouteKind::from_provider(r),
-        None => m.default_provider.as_deref().and_then(CliRouteKind::from_provider),
-    }
-}
-
-/// Route (and provenance) to show for a session: what its first start event recorded, or
-/// the subscription-CLI route the session is bound to when it has no turn yet.
-pub fn session_route(meta: Option<&SessionMeta>, events: &[ledger::Event]) -> (Value, Value) {
-    if let Some(start) = events.iter().find(|e| {
-        (e.kind == "session.start" || e.kind == "session.resume")
-            && e.payload.get("route").and_then(Value::as_str).is_some()
-    }) {
-        return (start.payload.get("route").cloned().unwrap_or(Value::Null), start.payload.get("provenance").cloned().unwrap_or(Value::Null));
-    }
-    if let Some(kind) = meta_kind(meta) {
-        return (json!(kind.ledger_route()), json!(cli_route::PROVENANCE));
-    }
-    (Value::Null, Value::Null)
-}
-/// Which subscription-CLI route this turn runs on, if any. Binds an unbound session that
-/// has no turns yet when the request asks for `claude-cli` or `antigravity`; refuses to mix
-/// routes in one session (409). The binding is final only once a `session.start` is in the
-/// ledger: until then (a first turn refused before it started) another provider may take
-/// the session.
-pub(crate) fn wants_cli_route(
-    state: &DesktopState,
-    session_id: &str,
-    req: &Value,
-) -> Result<Option<CliRouteKind>, (u16, String)> {
-    let requested = req.get("provider").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
-    let meta = state.load_meta(session_id);
-    let bound = meta_kind(meta.as_ref());
-    let events = state
-        .open_ledger()
-        .and_then(|l| l.read_session(session_id).map_err(|e| e.to_string()))
-        .map_err(|e| (500, e))?;
-    let recorded = route_of_first_start(&events);
-    let recorded_kind = recorded.as_deref().and_then(CliRouteKind::from_ledger_route);
-    if let Some(kind) = requested.and_then(CliRouteKind::from_provider) {
-        if recorded.is_some() && recorded_kind != Some(kind) {
-            return Err((409, format!(
-                "session `{session_id}` already has turns on another route; start a new session for {}",
-                kind.name()
-            )));
-        }
-        if kind == CliRouteKind::Antigravity {
-            crate::antigravity::require_acknowledged(state).map_err(|e| (403, e))?;
-        }
-        if bound != Some(kind) {
-            // Provisional until the turn records `session.start` (see the rebinding below).
-            let mut m = meta.ok_or_else(|| (404, format!("session `{session_id}` has no metadata to bind")))?;
-            m.route = Some(kind.provider_id().to_string());
-            m.default_provider = Some(kind.provider_id().to_string());
-            m.default_model = req.get("model").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
-            state.save_meta(&m).map_err(|e| (500, e))?;
-        }
-        return Ok(Some(kind));
-    }
-    let runs_on = |kind: CliRouteKind, other: &str| {
-        (409, format!(
-            "session `{session_id}` runs on {} ({}); start a new session to use `{other}`",
-            kind.name(),
-            kind.provider_id()
-        ))
-    };
-    match (requested, recorded_kind, bound) {
-        (Some(other), Some(kind), _) => Err(runs_on(kind, other)),
-        // Bound in its metadata, but no turn ever started there (refused before
-        // `session.start`, for example by the billing check or a missing CLI): the binding
-        // was only provisional, so the session may move to the API route.
-        (Some(_), None, Some(kind)) if recorded.is_none() => {
-            if let Some(mut m) = meta {
-                m.route = None;
-                if m.default_provider.as_deref() == Some(kind.provider_id()) {
-                    m.default_provider = None;
-                    m.default_model = None;
-                }
-                state.save_meta(&m).map_err(|e| (500, e))?;
-            }
-            Ok(None)
-        }
-        (Some(other), None, Some(kind)) => Err(runs_on(kind, other)),
-        (Some(_), None, None) => Ok(None),
-        (None, recorded_kind, bound) => {
-            let mut resolved = recorded_kind.or(bound);
-            let meta_provider_unset = meta
-                .as_ref()
-                .and_then(|m| m.default_provider.as_deref())
-                .is_none_or(|s| s.trim().is_empty());
-            if resolved.is_none() && recorded.is_none() && meta_provider_unset {
-                resolved = crate::agent_models::orchestrator_cli_override(state).map(|(k, _)| k);
-            }
-            if resolved == Some(CliRouteKind::Antigravity) {
-                crate::antigravity::require_acknowledged(state).map_err(|e| (403, e))?;
-            }
-            Ok(resolved)
-        }
-    }
-}
-/// A model alias, full model name or slug: never something the CLI could read as a flag.
-fn pick_model(
-    req: &Value,
-    meta: Option<&SessionMeta>,
-    ui: &crate::state::UiSettings,
-    kind: CliRouteKind,
-) -> Result<String, String> {
-    let default = match kind {
-        CliRouteKind::Claude => DEFAULT_CLI_MODEL,
-        CliRouteKind::Antigravity => crate::antigravity::DEFAULT_AGY_MODEL,
-    };
-    let model = req
-        .get("model")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| meta.filter(|m| meta_kind(Some(m)) == Some(kind)).and_then(|m| m.default_model.clone()))
-        .or_else(|| {
-            ui.agent_models
-                .get("orchestrator")
-                .filter(|s| CliRouteKind::from_provider(&s.provider) == Some(kind))
-                .map(|s| s.model.clone())
-        })
-        .unwrap_or_else(|| default.to_string());
-    let ok = match kind {
-        CliRouteKind::Claude => {
-            !model.starts_with('-')
-                && model.len() <= 100
-                && model.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '[' | ']' | '@'))
-        }
-        CliRouteKind::Antigravity => cli_route::antigravity::valid_model_id(&model),
-    };
-    if ok {
-        Ok(model)
-    } else {
-        Err(format!("invalid model `{model}` for {}", kind.name()))
-    }
-}
-fn resolve_core_exe(cfg: &DesktopConfig) -> Result<PathBuf, String> {
-    let check = |p: PathBuf, from: &str| {
-        if p.is_file() {
-            Ok(p)
-        } else {
-            Err(format!("{} not found ({from})", p.display()))
-        }
-    };
-    if let Some(p) = &cfg.core_exe {
-        return check(p.clone(), "--core-exe");
-    }
-    if let Some(p) = std::env::var_os("RE_SEARCH_CORE_EXE").filter(|v| !v.is_empty()) {
-        return check(PathBuf::from(p), "RE_SEARCH_CORE_EXE");
-    }
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let beside = exe.parent().ok_or("executable has no directory")?.join(format!("core{}", std::env::consts::EXE_SUFFIX));
-    check(beside, "beside the running executable; pass --core-exe or set RE_SEARCH_CORE_EXE")
-}
-
-fn path_str(p: &Path) -> String {
-    p.to_string_lossy().into_owned()
-}
-
-/// Environment for `core.exe`: session, token, relay, data, worker, workspace and research
-/// tools (always on for desktop sessions, as on the API route).
-fn core_env(
-    cfg: &DesktopConfig,
-    session: &str,
-    token: &str,
-    relay_addr: &str,
-    scratch: &Path,
-    pycache: &Path,
-    workspace: Option<&Path>,
-) -> BTreeMap<String, String> {
-    let mut env: BTreeMap<String, String> = [
-        ("CORE_SESSION", session.to_string()),
-        ("CORE_SESSION_TOKEN", token.to_string()),
-        ("CORE_DATA_DIR", path_str(&cfg.data_dir)),
-        ("CORE_APPROVAL_ADDR", relay_addr.to_string()),
-        ("CORE_SCRATCH", path_str(scratch)),
-        ("CORE_PYCACHE", path_str(pycache)),
-        ("CORE_ENABLE_RESEARCH_TOOLS", "1".to_string()),
-        ("CORE_EVAL_TIMEOUT_S", cfg.eval_timeout_s.max(30).to_string()),
-    ]
-    .into_iter()
-    .map(|(k, v)| (k.to_string(), v))
-    .collect();
-    if let (Some(py), Some(script)) = (&cfg.python, &cfg.worker_script) {
-        env.insert("CORE_PYTHON".into(), path_str(py));
-        env.insert("CORE_WORKER_SCRIPT".into(), path_str(script));
-    }
-    if let Some(ws) = workspace {
-        env.insert("CORE_WORKSPACE".into(), path_str(&strip_verbatim_prefix(ws)));
-    }
-    let ep = &cfg.literature_endpoints;
-    let def = LiteratureEndpoints::default();
-    for (name, val, default) in [
-        ("RE_SEARCH_ARXIV_BASE", &ep.arxiv_api_base, &def.arxiv_api_base),
-        ("RE_SEARCH_INSPIRE_BASE", &ep.inspire_api_base, &def.inspire_api_base),
-        ("RE_SEARCH_CROSSREF_BASE", &ep.crossref_api_base, &def.crossref_api_base),
-        ("RE_SEARCH_S2_BASE", &ep.semantic_scholar_api_base, &def.semantic_scholar_api_base),
-    ] {
-        if val != default {
-            env.insert(name.into(), val.clone());
-        }
-    }
-    env
-}
 
 /// A subscription-CLI turn's stop handle, registered in [`DesktopState::cli_turns`] before its
 /// thread is spawned (so a stop right after the 202 reaches it); removed when dropped.
@@ -392,35 +127,24 @@ pub(crate) fn run_cli_turn(
     if !existing.is_empty() {
         ledger.verify_session(session_id).map_err(|e| format!("cannot continue session `{session_id}`: {e}"))?;
     }
-    let mut eff_msg = match &subagent {
+    let (mode, profile) = resolve_cli_turn_profile(&existing)?;
+    let eff_msg = match &subagent {
         Some(sa) => crate::subagents::apply_subagent_to_turn_prompt(sa, message),
         None => message.to_string(),
     };
-    let needs_title = allow_model_title && crate::routes_session::model_session_title(&existing).is_none()
-        && !crate::investigation::is_investigation(&existing);
-    if needs_title {
-        eff_msg = format!("Once you can state the main research question, use set_session_title once with a concise title in the user's language.\n\n{eff_msg}");
-    }
-    if let Some(text) = conventions.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
-        eff_msg = format!("Pinned research conventions\n{text}\n\n{eff_msg}");
-    }
-    eff_msg = format!(
-        "Use `search_paper_passages` to locate exact passages in ingested papers and \
-         `search_formal_library` to discover Lean declarations in the attached workspace. \
-         Cite recorded source locations, and type-check any intended formal application.\n\n{eff_msg}"
+    let needs_title = allow_model_title
+        && crate::routes_session::model_session_title(&existing).is_none()
+        && mode != Mode::Investigate;
+    let prompt_build = build_cli_prompt(
+        mode,
+        &existing,
+        Some(&ledger),
+        &eff_msg,
+        conventions.as_deref(),
+        project_context.as_deref(),
+        needs_title,
+        state.cfg.python.is_some(),
     );
-    if state.cfg.python.is_some() {
-        eff_msg = format!(
-            "The re:Search compute worker exposes `check_symbolic_identity(lhs, rhs, variable=x, domain=...)` \
-             and `check_convergence(run, levels, axis=..., atol=..., rtol=..., reference=...)` in `sympy_eval`. \
-             Return the report as the final Python expression and record its `tool_call_ref` with the proof entry. \
-             Report excluded points, counterexamples, and the scope of numerical evidence. \n\n{eff_msg}"
-        );
-    }
-    if let Some(context) = &project_context {
-        eff_msg = format!("{context}\n\nCurrent user request\n{eff_msg}");
-    }
-    let replay = build_session_prompt(&existing, &eff_msg, DEFAULT_HISTORY_BUDGET);
 
     validate_session_id(session_id).map_err(|e| e.to_string())?;
     let sdir = state.session_dir(session_id)?;
@@ -434,38 +158,80 @@ pub(crate) fn run_cli_turn(
     for d in [&work, &scratch, &pycache] {
         std::fs::create_dir_all(d).map_err(|e| format!("could not create {}: {e}", d.display()))?;
     }
+    let check_sdir = state.cfg.data_dir.join("sessions").join(check_sandbox_id(session_id));
+    let (check_scratch, check_pycache) = (check_sdir.join("scratch"), check_sdir.join("pycache"));
+    let check_dirs = if mode == Mode::Solve {
+        for d in [&check_scratch, &check_pycache] {
+            std::fs::create_dir_all(d).map_err(|e| format!("could not create {}: {e}", d.display()))?;
+        }
+        Some((check_scratch.as_path(), check_pycache.as_path()))
+    } else {
+        None
+    };
     let _session_guard = SessionGuard::create(&state.cfg.data_dir, &sdir, session_id)?;
 
     let token = random_hex(32);
-    let relay = cli_route::relay::start_for_caller(
-        state.open_ledger()?,
-        session_id.to_string(),
-        token.clone(),
-        vendor.caller(session_id),
-        Arc::new(UiRelay { state: Arc::clone(state) }),
-    )
+    let relay_decider = Arc::new(UiRelay { state: Arc::clone(state) });
+    let relay = if mode == Mode::Solve {
+        cli_route::relay::start_for_callers(
+            state.open_ledger()?,
+            session_id.to_string(),
+            token.clone(),
+            vec![vendor.caller(session_id), SOLVE_CHECK_CALLER.to_string()],
+            relay_decider,
+        )
+    } else {
+        cli_route::relay::start_for_caller(
+            state.open_ledger()?,
+            session_id.to_string(),
+            token.clone(),
+            vendor.caller(session_id),
+            relay_decider,
+        )
+    }
     .map_err(|e| format!("could not start the approval relay: {e}"))?;
     let workspace = research.workspace_root.clone();
     let mut core = CoreLaunch {
         exe: core_exe,
-        env: core_env(&state.cfg, session_id, &token, &relay.addr, &scratch, &pycache, workspace.as_deref()),
+        env: core_env_for_profile(
+            &state.cfg,
+            session_id,
+            &token,
+            &relay.addr,
+            &scratch,
+            &pycache,
+            workspace.as_deref(),
+            mode,
+            profile.name,
+            check_dirs,
+        ),
     };
     core.env.insert("CORE_CALLER_ROUTE".into(), kind.ledger_route().into());
-    let tools = core_tool_set(Some(Arc::clone(&research)));
+    let tools = core_tool_set_for_profile(Arc::clone(&research), profile.name)?;
 
+    let start_kind = if !existing.iter().any(|e| e.kind == "session.start") {
+        "session.start"
+    } else {
+        "session.resume"
+    };
     let mut start_fields = json!({
         "prompt": message,
         "provider": kind.provider_id(),
         "surface": "desktop",
         "allow_model_title": needs_title,
-        "history_replayed": replay.replayed,
-        "history_chars": replay.history_chars,
-        "history_turns": replay.turns_included,
-        "history_turns_dropped": replay.turns_dropped,
+        "history_replayed": prompt_build.replayed,
+        "history_chars": prompt_build.history_chars,
+        "history_turns": prompt_build.turns_included,
+        "history_turns_dropped": prompt_build.turns_dropped,
         "workspace_root": workspace.as_deref().map(|w| path_str(&strip_verbatim_prefix(w))),
         "workspace_revision": workspace.as_deref().and_then(agent::workspace_revision),
         "project_context": project_context,
+        TOOL_PROFILE_FIELD: profile.name,
     });
+    if mode == Mode::Solve && start_kind == "session.resume" {
+        start_fields["resume_mode"] = json!("brief");
+        start_fields["brief_sha256"] = json!(ledger::sha256_hex(prompt_build.prompt.as_bytes()));
+    }
     if kind == CliRouteKind::Antigravity {
         start_fields["confinement"] = json!(cli_route::antigravity::CONFINEMENT);
         start_fields["route_label"] = json!(crate::antigravity::AGY_LABEL);
@@ -487,10 +253,10 @@ pub(crate) fn run_cli_turn(
         core: &core,
         model: &model,
         reasoning_effort: reasoning_effort.as_deref(),
-        prompt: &replay.prompt,
+        prompt: &prompt_build.prompt,
         tool_defs: &tools.defs,
         policy_version: &tools.policy_version,
-        start_kind: if !existing.iter().any(|e| e.kind == "session.start") { "session.start" } else { "session.resume" },
+        start_kind,
         start_fields,
         inherit_stderr: false,
         allow_env_auth,
@@ -503,6 +269,14 @@ pub(crate) fn run_cli_turn(
     let cli = kind.cli_name();
     match report.end {
         TurnEnd::Completed { exit_code: Some(0), init_verified: true } => {
+            if mode == Mode::Solve {
+                crate::cli_turn_solve::maybe_run_post_cli_solve_review(
+                    state,
+                    &research,
+                    session_id,
+                    stop,
+                )?;
+            }
             let text = sink.final_text().to_string();
             Ok(if text.is_empty() { report.final_text } else { text })
         }
@@ -538,89 +312,5 @@ pub fn handle_stop_turn(state: &DesktopState, session_id: &str) -> ApiResult {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn provisional_cli_switch_clears_stale_default_model() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let cfg = DesktopConfig {
-            port: 0,
-            data_dir: tmp.path().to_path_buf(),
-            workspace_root: None,
-            python: None,
-            worker_script: None,
-            api_base_override: None,
-            literature_endpoints: LiteratureEndpoints::default(),
-            open_window: false,
-            print_url_json: false,
-            eval_timeout_s: 30,
-            core_exe: None,
-            claude_exe: None,
-            agy_exe: None,
-            connection_env: Some(std::collections::BTreeMap::new()),
-            chatgpt_test: Some(crate::chatgpt::offline_test_hooks()),
-        };
-        let chatgpt = crate::chatgpt::ChatGptHub::new(&cfg).unwrap();
-        let state = DesktopState::new(
-            cfg,
-            crate::auth::AuthGuard::new(1).unwrap(),
-            Arc::new(crate::sse::SseHub::new()),
-            chatgpt,
-        );
-        crate::antigravity::handle_acknowledge(&state).unwrap();
-        let meta = SessionMeta {
-            id: "s-switch01".into(),
-            title: "switch".into(),
-            route: Some(CLAUDE_CLI_ROUTE.into()),
-            default_provider: Some(CLAUDE_CLI_ROUTE.into()),
-            default_model: Some("haiku".into()),
-            ..SessionMeta::default()
-        };
-        state.save_meta(&meta).unwrap();
-
-        let kind = wants_cli_route(&state, "s-switch01", &json!({ "provider": "antigravity" })).unwrap();
-        assert_eq!(kind, Some(CliRouteKind::Antigravity));
-        let updated = state.load_meta("s-switch01").unwrap();
-        assert_eq!(updated.route.as_deref(), Some(ANTIGRAVITY_ROUTE));
-        assert_eq!(updated.default_model, None, "stale claude-cli model must be cleared");
-    }
-
-    #[test]
-    fn connection_env_cannot_supply_claude_env_auth_opt_in_for_turns() {
-        if std::env::var_os(cli_route::env_auth::ALLOW_ENV_AUTH_VAR).is_some() {
-            return;
-        }
-        let tmp = tempfile::TempDir::new().unwrap();
-        let cfg = DesktopConfig {
-            port: 0,
-            data_dir: tmp.path().to_path_buf(),
-            workspace_root: None,
-            python: None,
-            worker_script: None,
-            api_base_override: None,
-            literature_endpoints: LiteratureEndpoints::default(),
-            open_window: false,
-            print_url_json: false,
-            eval_timeout_s: 30,
-            core_exe: None,
-            claude_exe: None,
-            agy_exe: None,
-            connection_env: Some(BTreeMap::from([
-                ("ANTHROPIC_API_KEY".to_string(), "sk-ant-dummy".to_string()),
-                (cli_route::env_auth::ALLOW_ENV_AUTH_VAR.to_string(), "1".to_string()),
-            ])),
-            chatgpt_test: Some(crate::chatgpt::offline_test_hooks()),
-        };
-        let chatgpt = crate::chatgpt::ChatGptHub::new(&cfg).unwrap();
-        let state = Arc::new(DesktopState::new(
-            cfg,
-            crate::auth::AuthGuard::new(1).unwrap(),
-            Arc::new(crate::sse::SseHub::new()),
-            chatgpt,
-        ));
-        let err = run_cli_turn(&state, "s-env01", &json!({}), "hi", &StopHandle::new(), CliRouteKind::Claude).unwrap_err();
-        assert!(err.contains("ANTHROPIC_API_KEY") && !err.contains("sk-ant-dummy"), "{err}");
-    }
-}
-
+#[path = "cli_turn_tests.rs"]
+mod tests;

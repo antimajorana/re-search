@@ -13,7 +13,7 @@ use crate::paper_key::{canonical_doi, split_arxiv_id, PaperIds, PaperKey, PaperR
 use ledger::sha256_hex;
 use serde_json::Value;
 
-pub(super) const MAX_AUTHORS_PER_PAPER: usize = 100;
+pub(crate) const MAX_AUTHORS_PER_PAPER: usize = 100;
 
 /// Parsed result page returned by [`parse_provider_response`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,7 +41,10 @@ pub fn parse_provider_response(
         LitProvider::Crossref => {
             ext::parse_crossref_json(raw_bytes, &raw_blob, relation, offset, max_results)
         }
-        LitProvider::OpenAlex | LitProvider::TheoremSearch => {
+        LitProvider::OpenAlex => {
+            crate::lit_openalex::parse_openalex_json(raw_bytes, &raw_blob, relation, offset, max_results)
+        }
+        LitProvider::TheoremSearch => {
             Err(format!("provider `{provider}` is disabled and has no active parser"))
         }
     }
@@ -67,7 +70,7 @@ pub(super) fn sanitized_paper_ref(
     PaperRef::from_ids(PaperIds { arxiv, doi, inspire, s2 }, version).ok()
 }
 
-pub(super) fn make_edge(
+pub(crate) fn make_edge(
     relation: &QueryRelation,
     paper_key: &PaperKey,
     provider: LitProvider,
@@ -87,7 +90,7 @@ pub(super) fn make_edge(
     }
 }
 
-pub(super) fn make_abstract_ref(
+pub(crate) fn make_abstract_ref(
     raw_blob: &str,
     provider: LitProvider,
     verbatim: bool,
@@ -99,7 +102,7 @@ pub(super) fn make_abstract_ref(
     }
 }
 
-pub(super) fn has_more_from_total(offset: usize, returned: usize, total: Option<u64>) -> bool {
+pub(crate) fn has_more_from_total(offset: usize, returned: usize, total: Option<u64>) -> bool {
     returned > 0 && total.is_some_and(|t| (offset as u64).saturating_add(returned as u64) < t)
 }
 
@@ -355,7 +358,7 @@ fn is_withdrawn(comment: Option<&str>, summary: &str) -> bool {
     comment.is_some_and(check) || check(summary)
 }
 
-pub(super) fn default_bib_key(authors: &[String], year: Option<i32>, id: &str) -> String {
+pub(crate) fn default_bib_key(authors: &[String], year: Option<i32>, id: &str) -> String {
     let surname = authors
         .first()
         .map(|a| {
@@ -404,7 +407,7 @@ fn build_arxiv_bibtex(
     lines.join("\n")
 }
 
-pub(super) fn build_bibtex(
+pub(crate) fn build_bibtex(
     key: &str,
     title: &str,
     authors: &[String],

@@ -17,7 +17,21 @@ const ALLOWLISTED_HTTPS_HOSTS: &[&str] = &[
     "inspirehep.net",
     "api.crossref.org",
     "api.semanticscholar.org",
+    // Owner decision 2026-11-26 (X19 Part 1): OpenAlex allowlisted through F3 gate;
+    // TheoremSearch remains excluded/disabled.
+    "api.openalex.org",
 ];
+
+/// Returns `true` when `host` (case-insensitive) is in the production HTTPS literature allowlist.
+pub fn is_allowlisted_https_host(host: &str) -> bool {
+    let lower = host.trim().to_ascii_lowercase();
+    ALLOWLISTED_HTTPS_HOSTS.contains(&lower.as_str())
+}
+
+/// Production HTTPS literature hosts permitted by the allowlist.
+pub fn allowlisted_https_hosts() -> &'static [&'static str] {
+    ALLOWLISTED_HTTPS_HOSTS
+}
 
 /// Bounded HTTP response returned by [`fetch_response_with_gate`] and
 /// [`fetch_response_with_options_and_gate`].
@@ -82,7 +96,10 @@ fn validate_extra_headers(headers: &[(String, String)]) -> Result<(), String> {
         if trimmed.eq_ignore_ascii_case("user-agent") {
             return Err("overriding User-Agent via extra_headers is not permitted".into());
         }
-        if value.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0) {
+        if value
+            .bytes()
+            .any(|b| (b < 0x20 && b != b'\t') || b >= 0x7f)
+        {
             return Err(format!("invalid HTTP header value for `{trimmed}`"));
         }
     }
@@ -100,8 +117,7 @@ fn is_url_permitted(uri: &Uri, endpoints: &LiteratureEndpoints) -> Result<bool, 
         return Err("URL host is empty".into());
     }
     if scheme.eq_ignore_ascii_case("https") {
-        let lower = host.to_ascii_lowercase();
-        if ALLOWLISTED_HTTPS_HOSTS.contains(&lower.as_str()) {
+        if is_allowlisted_https_host(host) {
             return Ok(true);
         }
         return Err(format!("HTTPS host `{host}` is not in the literature allowlist"));
@@ -115,6 +131,7 @@ fn is_url_permitted(uri: &Uri, endpoints: &LiteratureEndpoints) -> Result<bool, 
                 endpoints.inspire_api_base.as_str(),
                 endpoints.crossref_api_base.as_str(),
                 endpoints.semantic_scholar_api_base.as_str(),
+                endpoints.openalex_api_base.as_str(),
             ];
             for base in allowed_bases {
                 if let Some((_, p)) = parse_loopback_origin(base) {

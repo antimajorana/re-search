@@ -175,19 +175,19 @@ fn unbuilt_mode_sessions_report_mode_and_refuse_turns_starting_nothing() {
     assert_eq!(st, 200);
     assert_eq!(serde_json::from_slice::<Value>(&solve_raw).unwrap()["mode"], "solve");
 
-    // POST /api/sessions/{id}/messages refuses cleanly and appends zero events.
-    for (sid, expected_len, label) in [
-        ("s-explore-1", 1usize, "Explore"),
-        ("s-solve-1", 2usize, "Solve"),
+    // POST /api/sessions/{id}/messages refuses unbuilt Explore cleanly and refuses unconfigured Solve.
+    for (sid, expected_len, needle) in [
+        ("s-explore-1", 1usize, "not built yet"),
+        ("s-solve-1", 2usize, "setup"),
     ] {
         let msg = serde_json::to_vec(&json!({ "prompt": "Run please" })).unwrap();
         let (st, _, raw) = raw_http(port, "POST", &format!("/api/sessions/{sid}/messages"), &auth, &msg);
-        assert_eq!(st, 400, "turn on unbuilt {sid} must be refused");
+        assert_eq!(st, 400, "turn on {sid} must be refused");
         let err = serde_json::from_slice::<Value>(&raw).unwrap()["error"]
             .as_str()
             .unwrap()
             .to_string();
-        assert!(err.contains(label) && err.contains("not built yet"), "{err}");
+        assert!(err.contains(needle), "{err}");
         assert_eq!(
             ledger.read_session(sid).unwrap().len(),
             expected_len,

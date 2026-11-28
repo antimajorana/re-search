@@ -13,7 +13,7 @@ fn provider_wire_names_and_allowlist_flags() {
     assert!(LitProvider::Inspire.is_allowlisted());
     assert!(LitProvider::SemanticScholar.is_allowlisted());
     assert!(LitProvider::Crossref.is_allowlisted());
-    assert!(!LitProvider::OpenAlex.is_allowlisted());
+    assert!(LitProvider::OpenAlex.is_allowlisted());
     assert!(!LitProvider::TheoremSearch.is_allowlisted());
 }
 
@@ -21,10 +21,12 @@ fn provider_wire_names_and_allowlist_flags() {
 fn provider_config_debug_redacts_api_key() {
     let cfg = ProviderConfig {
         semantic_scholar_api_key: Some("fake-unit-secret-token-xyz".into()),
+        openalex_api_key: Some("fake-unit-openalex-secret-abc".into()),
         request_timeout: Some(Duration::from_secs(2)),
     };
     let dbg = format!("{cfg:?}");
     assert!(!dbg.contains("fake-unit-secret-token-xyz"));
+    assert!(!dbg.contains("fake-unit-openalex-secret-abc"));
     assert!(dbg.contains("<redacted>"));
 }
 
@@ -120,10 +122,14 @@ fn url_builders_cover_paging_ids_and_relations() {
         QueryStatus::Unsupported
     );
 
-    // OpenAlex & TheoremSearch disabled
-    let q_oa = LitQuery::search(LitProvider::OpenAlex, "spectral gap");
+    // OpenAlex active (X19 Part 1) & TheoremSearch stays disabled
+    let q_oa = LitQuery::search(LitProvider::OpenAlex, "spectral gap").with_paging(5, 10);
+    let oa_url = build_request_url(&ep, &q_oa, 5).unwrap();
+    assert!(oa_url.starts_with("https://api.openalex.org/works?search="));
+    assert!(oa_url.contains("per-page=5&page=3"));
+    let q_ts = LitQuery::search(LitProvider::TheoremSearch, "spectral gap");
     assert_eq!(
-        build_request_url(&ep, &q_oa, 5).unwrap_err().0,
+        build_request_url(&ep, &q_ts, 5).unwrap_err().0,
         QueryStatus::Disabled
     );
 }

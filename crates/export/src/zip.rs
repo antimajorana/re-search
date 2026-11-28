@@ -1,6 +1,5 @@
-//! Reproducible ZIP bundle export (F15): `report.tex`, `references.bib`,
-//! `report.html`, `ledger.json`, `code/step_<seq>.py`, `sources/*`,
-//! `run_all_checks.py`, and `REPRODUCE.md`.
+//! Reproducible ZIP bundle export for Research (`report.tex`, `report.html`,
+//! `references.bib`) and Solve (`zip_solve::build_solve_reproducible_zip`, `notebook.ipynb`).
 
 use crate::html::render_html_document;
 use crate::latex::{
@@ -17,11 +16,86 @@ use std::path::Path;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipWriter};
 
-fn fixed_zip_options() -> SimpleFileOptions {
+pub(crate) fn fixed_zip_options() -> SimpleFileOptions {
     SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
         .last_modified_time(DateTime::default())
         .unix_permissions(0o644)
+}
+
+pub(crate) fn write_zip_entries(entries: BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, String> {
+    let buf = Cursor::new(Vec::new());
+    let mut writer = ZipWriter::new(buf);
+    let opts = fixed_zip_options();
+    for (name, bytes) in entries {
+        writer
+            .start_file(&name, opts)
+            .map_err(|e| format!("zip start_file `{name}` failed: {e}"))?;
+        writer
+            .write_all(&bytes)
+            .map_err(|e| format!("zip write `{name}` failed: {e}"))?;
+    }
+    let cursor = writer
+        .finish()
+        .map_err(|e| format!("zip finish failed: {e}"))?;
+    Ok(cursor.into_inner())
+}
+
+pub(crate) fn insert_runtime_files(entries: &mut BTreeMap<String, Vec<u8>>) -> Vec<Value> {
+    let runtime: [(&str, &[u8]); 12] = [
+        ("run_all_checks.py", include_bytes!("replay_checks.py")),
+        (
+            "_re_search_runtime/worker.py",
+            include_bytes!("../../../python/worker.py"),
+        ),
+        (
+            "_re_search_runtime/solver_calc.py",
+            include_bytes!("../../../python/solver_calc.py"),
+        ),
+        (
+            "_re_search_runtime/symbolic_validation.py",
+            include_bytes!("../../../python/symbolic_validation.py"),
+        ),
+        (
+            "_re_search_runtime/numerical_validation.py",
+            include_bytes!("../../../python/numerical_validation.py"),
+        ),
+        (
+            "_re_search_runtime/checks/__init__.py",
+            include_bytes!("../../../python/checks/__init__.py"),
+        ),
+        (
+            "_re_search_runtime/checks/srepr_safe.py",
+            include_bytes!("../../../python/checks/srepr_safe.py"),
+        ),
+        (
+            "_re_search_runtime/checks/algebra.py",
+            include_bytes!("../../../python/checks/algebra.py"),
+        ),
+        (
+            "_re_search_runtime/checks/algebra_probe.py",
+            include_bytes!("../../../python/checks/algebra_probe.py"),
+        ),
+        (
+            "_re_search_runtime/checks/physics.py",
+            include_bytes!("../../../python/checks/physics.py"),
+        ),
+        (
+            "_re_search_runtime/checks/physics_helpers.py",
+            include_bytes!("../../../python/checks/physics_helpers.py"),
+        ),
+        (
+            "_re_search_runtime/checks/physics_matrix.py",
+            include_bytes!("../../../python/checks/physics_matrix.py"),
+        ),
+    ];
+    runtime
+        .iter()
+        .map(|(path, bytes)| {
+            entries.insert((*path).into(), bytes.to_vec());
+            json!({"path": path, "sha256": sha256_hex(bytes)})
+        })
+        .collect()
 }
 
 pub(crate) fn build_reproducible_zip(
@@ -81,32 +155,7 @@ pub(crate) fn build_reproducible_zip(
         "_re_search_runtime/replay_steps.json".into(),
         serde_json::to_vec_pretty(&replay_workers).map_err(|e| e.to_string())?,
     );
-    let runtime: [(&str, &[u8]); 5] = [
-        ("run_all_checks.py", include_bytes!("replay_checks.py")),
-        (
-            "_re_search_runtime/worker.py",
-            include_bytes!("../../../python/worker.py"),
-        ),
-        (
-            "_re_search_runtime/solver_calc.py",
-            include_bytes!("../../../python/solver_calc.py"),
-        ),
-        (
-            "_re_search_runtime/symbolic_validation.py",
-            include_bytes!("../../../python/symbolic_validation.py"),
-        ),
-        (
-            "_re_search_runtime/numerical_validation.py",
-            include_bytes!("../../../python/numerical_validation.py"),
-        ),
-    ];
-    let runtime_files: Vec<_> = runtime
-        .iter()
-        .map(|(path, bytes)| {
-            entries.insert((*path).into(), bytes.to_vec());
-            json!({"path": path, "sha256": sha256_hex(bytes)})
-        })
-        .collect();
+    let runtime_files = insert_runtime_files(&mut entries);
     entries.insert("REPRODUCE.md".into(), build_reproduce_md(data).into_bytes());
     let document_files: Vec<_> = [
         "report.tex",
@@ -152,24 +201,10 @@ pub(crate) fn build_reproducible_zip(
         serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?,
     );
 
-    let buf = Cursor::new(Vec::new());
-    let mut writer = ZipWriter::new(buf);
-    let opts = fixed_zip_options();
-    for (name, bytes) in entries {
-        writer
-            .start_file(&name, opts)
-            .map_err(|e| format!("zip start_file `{name}` failed: {e}"))?;
-        writer
-            .write_all(&bytes)
-            .map_err(|e| format!("zip write `{name}` failed: {e}"))?;
-    }
-    let cursor = writer
-        .finish()
-        .map_err(|e| format!("zip finish failed: {e}"))?;
-    Ok(cursor.into_inner())
+    write_zip_entries(entries)
 }
 
-fn worker_environment(raw: &Value) -> Value {
+pub(crate) fn worker_environment(raw: &Value) -> Value {
     let mut env = serde_json::Map::new();
     if let Some(protocol) = raw["protocol"].as_u64() {
         env.insert("protocol".into(), json!(protocol));
@@ -184,6 +219,7 @@ fn worker_environment(raw: &Value) -> Value {
         "solver_calc_sha256",
         "symbolic_validation_sha256",
         "numerical_validation_sha256",
+        "checks_sha256",
     ] {
         if let Some(value) = raw[field]
             .as_str()
@@ -199,7 +235,7 @@ fn worker_environment(raw: &Value) -> Value {
     }
 }
 
-fn recorded_turns(events: &[Event]) -> Vec<Value> {
+pub(crate) fn recorded_turns(events: &[Event]) -> Vec<Value> {
     events
         .iter()
         .filter(|event| matches!(event.kind.as_str(), "session.start" | "session.resume"))
@@ -228,7 +264,7 @@ fn recorded_turns(events: &[Event]) -> Vec<Value> {
         .collect()
 }
 
-fn collect_source_manifest(
+pub(crate) fn collect_source_manifest(
     data_dir: &Path,
     session: &str,
     events: &[Event],

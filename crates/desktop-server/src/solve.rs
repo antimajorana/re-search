@@ -62,7 +62,7 @@ pub fn handle_solve(
         ("POST", ["ack"]) => crate::solve_routes_ext::handle_ack(state, session_id, body),
         ("POST", ["check"]) => crate::solve_check_routes::handle_check(state, session_id, body),
         ("POST", ["recheck"]) => crate::solve_check_routes::handle_recheck(state, session_id, body),
-        // Downstream seam: S17 (transcribe).
+        ("POST", ["transcribe"]) => crate::solve_intake::handle_transcribe(state, session_id, body),
         _ => Err(not_found(format!("unknown solve endpoint: {method} /{}", rest.join("/")))),
     }
 }
@@ -77,7 +77,19 @@ pub fn session_solve_view(
     let toolbox = probe_toolbox(state);
     let approval_grants = build_solve_approval_grants(state, session_id);
     let model_connected = has_connected_model(state);
-    build_solve_view(events, running, toolbox, approval_grants, model_connected)
+    let mut view = build_solve_view(events, running, toolbox, approval_grants, model_connected);
+    let folded = SolveState::from_events(events);
+    let cli_review = crate::cli_turn_solve::resolve_cli_verifier_status(
+        state,
+        session_id,
+        folded.setup.as_ref(),
+        None,
+        None,
+    );
+    if let Some(obj) = view.as_object_mut() {
+        obj.insert("cli_review".into(), cli_review);
+    }
+    view
 }
 
 fn handle_view(state: &DesktopState, session_id: &str, events: &[Event]) -> ApiResult {
@@ -112,10 +124,11 @@ fn handle_prefill(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRes
         p.zip(m).map(|(provider, model)| RoleModel { provider, model })
     });
     let verifier = parse_optional_role(val.get("verifier")).or_else(|| {
-        ui.agent_models.get("verifier").map(|s| RoleModel {
-            provider: s.provider.clone(),
-            model: s.model.clone(),
-        })
+        ui.agent_models
+            .get("step_verifier")
+            .or_else(|| ui.agent_models.get("full_verifier"))
+            .or_else(|| ui.agent_models.get("verifier"))
+            .map(|s| RoleModel { provider: s.provider.clone(), model: s.model.clone() })
     });
     let task_kind_override = val
         .get("task_kind")
@@ -141,6 +154,13 @@ fn handle_prefill(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRes
         task_kind_override,
         allow_numeric_target,
     });
+    let cli_review = crate::cli_turn_solve::resolve_cli_verifier_status(
+        state,
+        session_id,
+        None,
+        solver.as_ref(),
+        verifier.as_ref(),
+    );
 
     Ok((
         200,
@@ -150,6 +170,7 @@ fn handle_prefill(state: &DesktopState, session_id: &str, body: &[u8]) -> ApiRes
             "toolbox": probe_toolbox(state),
             "approval_grants": build_solve_approval_grants(state, session_id),
             "model_connected": has_connected_model(state),
+            "cli_review": cli_review,
         }),
     ))
 }

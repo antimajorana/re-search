@@ -547,3 +547,41 @@ fn explicit_investigation_v1_enforces_exact_defs_when_router_profile_is_none() {
     .unwrap_err();
     assert_eq!(err_wrong_defs.kind, ResumeRejectKind::Drift);
 }
+
+#[test]
+fn r2_brief_resume_allows_solve_transitions_but_rejects_replay_or_cross_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let ledger = Ledger::open(dir.path()).unwrap();
+    let s1 = research_tools::tool_profile::solve_v1();
+    let mut s2 = s1.clone();
+    s2.name = "solve/2";
+    let custom_lookup = |name: &str| match name {
+        "solve/1" => Ok(s1.clone()),
+        "solve/2" => Ok(s2.clone()),
+        "research/1" => Ok(research_v1()),
+        other => Err(format!("unknown {other}")),
+    };
+    let ev = |seq: u64, kind: &str, payload: Value| ledger::Event {
+        session: "s-r2".into(),
+        seq,
+        ts_ms: (seq * 10) as i64,
+        kind: kind.into(),
+        schema_version: 1,
+        payload,
+        prev_hash: "".into(),
+        event_hash: "".into(),
+    };
+    let start_solve = ev(1, "session.start", json!({ "tool_profile": "solve/1" }));
+    let cp = ev(2, "solve.checkpoint", json!({ "leg": 1, "upto_seq": 1, "brief_blob": "b", "brief_sha256": "abc123", "reason": "context" }));
+    let brief_res = ev(3, "session.resume", json!({ "tool_profile": "solve/2", "resume_mode": "brief", "brief_sha256": "abc123" }));
+    let (res, switched) = super::resolve_session_profile_with_lookup("s-ok", &[start_solve.clone(), cp.clone(), brief_res], custom_lookup).unwrap();
+    assert!(switched && res.profile.name == "solve/2");
+    let replay_res = ev(3, "session.resume", json!({ "tool_profile": "solve/2", "resume_mode": "replay" }));
+    assert_eq!(super::resolve_session_profile_with_lookup("s-rep", &[start_solve.clone(), cp.clone(), replay_res], custom_lookup).unwrap_err().kind, ResumeRejectKind::Drift);
+    let bad_sha = ev(3, "session.resume", json!({ "tool_profile": "solve/2", "resume_mode": "brief", "brief_sha256": "wrong" }));
+    assert_eq!(super::resolve_session_profile_with_lookup("s-sha", &[start_solve, cp.clone(), bad_sha], custom_lookup).unwrap_err().kind, ResumeRejectKind::Drift);
+    let start_res = ev(1, "session.start", json!({ "tool_profile": "research/1" }));
+    let cross = ev(3, "session.resume", json!({ "tool_profile": "solve/1", "resume_mode": "brief", "brief_sha256": "abc123" }));
+    assert_eq!(super::resolve_session_profile_with_lookup("s-cross", &[start_res, cp, cross], custom_lookup).unwrap_err().kind, ResumeRejectKind::Drift);
+    let _ = ledger;
+}

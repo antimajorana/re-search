@@ -108,6 +108,7 @@ fn contained_worker_reuses_session_approval_until_timeout_respawn() {
             scratch,
             pycache,
             startup_timeout: Duration::from_secs(60),
+            job_memory_limit_bytes: None,
         },
         Box::new(sandbox),
     );

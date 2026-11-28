@@ -89,9 +89,8 @@ pub fn parse_requested_mode(raw: &str) -> Result<Mode, String> {
     }
 }
 
-/// Desktop-server gate for Solve session creation and turns (`solve/1` tool profile is frozen
-/// in package S7, while Solve session creation, setup, and turn execution land in S4/S12).
-const DESKTOP_MODE_SOLVE_ENABLED: bool = false;
+/// Desktop-server gate for Solve session creation and turns (`solve/1` enabled in S12e).
+const DESKTOP_MODE_SOLVE_ENABLED: bool = true;
 
 /// Desktop-server gate for bare Explore session creation and Conversation turns (`explore/1`
 /// tool profile is frozen in package X7 and used directly by `build_idea_router`, while bare
@@ -221,7 +220,7 @@ mod tests {
         assert!(is_mode_built(Mode::Research));
         assert!(is_mode_built(Mode::Investigate));
         assert!(!is_mode_built(Mode::Explore));
-        assert!(!is_mode_built(Mode::Solve));
+        assert!(is_mode_built(Mode::Solve));
 
         // Older investigation/1 sessions (marker-inferred or explicit) upgrade to investigation/2.
         assert_eq!(
@@ -250,11 +249,17 @@ mod tests {
 
         let explore_err = profile_for_mode(Mode::Explore).unwrap_err();
         assert!(explore_err.contains("Explore mode is not built yet"), "{explore_err}");
-        let solve_err = profile_for_mode(Mode::Solve).unwrap_err();
-        assert!(solve_err.contains("Solve mode is not built yet"), "{solve_err}");
+        assert_eq!(
+            profile_for_mode(Mode::Solve).unwrap().name,
+            research_tools::tool_profile::PROFILE_SOLVE_V1
+        );
 
-        let sess_err = profile_for_session(&[ev(1, MARKER_SOLVE_STARTED, json!({}))]).unwrap_err();
-        assert!(sess_err.contains("Solve mode is not built yet"), "{sess_err}");
+        assert_eq!(
+            profile_for_session(&[ev(1, MARKER_SOLVE_STARTED, json!({}))])
+                .unwrap()
+                .name,
+            research_tools::tool_profile::PROFILE_SOLVE_V1
+        );
     }
 
     #[test]

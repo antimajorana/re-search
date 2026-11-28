@@ -129,11 +129,27 @@ function createMockDocument() {
       removeAttribute(k) {
         attrs.delete(k);
       },
+      get firstChild() {
+        return children[0] || null;
+      },
+      get firstElementChild() {
+        return children[0] || null;
+      },
       appendChild(child) {
         if (child.parentNode && typeof child.remove === 'function') child.remove();
         child.parentNode = el;
         children.push(child);
         return child;
+      },
+      prepend(...nodes) {
+        for (let i = nodes.length - 1; i >= 0; i -= 1) {
+          const n = typeof nodes[i] === 'string' ? doc.createTextNode(nodes[i]) : nodes[i];
+          if (n) {
+            if (n.parentNode && typeof n.remove === 'function') n.remove();
+            n.parentNode = el;
+            children.unshift(n);
+          }
+        }
       },
       append(...nodes) {
         for (const n of nodes) {
@@ -187,6 +203,9 @@ function createMockDocument() {
 
   const doc = {
     createElement(tag) {
+      return makeElement(tag);
+    },
+    createElementNS(_ns, tag) {
       return makeElement(tag);
     },
     createTextNode(txt) {
@@ -409,8 +428,7 @@ test('mode_stages mounts solve_artifacts below solve_setup and cleans up on stag
     await ctrl.syncFromRail('sess_solve_42', [{ id: 'sess_solve_42', mode: 'solve' }]);
     await new Promise((r) => setTimeout(r, 10));
 
-    assert.equal(ctrl.getSolveTabs().length, 1);
-    assert.equal(ctrl.getSolveTabs()[0].id, 'artifacts');
+    assert.deepEqual(ctrl.getSolveTabs().map((t) => t.id), ['artifacts', 'transcribe']);
     const sec = solveHost.querySelector('.solve-artifacts-section');
     assert.ok(sec, 'solve artifacts section should mount inside solve host');
     assert.equal(sec.querySelectorAll('.solve-artifact-card').length, 2);
