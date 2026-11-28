@@ -386,23 +386,7 @@ fn record_document(
     let marker = history
         .iter()
         .rev()
-        .find(|e| {
-            matches!(
-                e.kind.as_str(),
-                "investigation.mapping_requested"
-                    | "investigation.mapping_finished"
-                    | "investigation.branch_requested"
-                    | "investigation.branch_finished"
-                    | "investigation.conventions_resumed"
-                    | "investigation.conventions_finished"
-                    | "investigation.question_requested"
-                    | "investigation.answer"
-                    | "investigation.requested"
-                    | "investigation.result"
-                    | "session.end"
-                    | "session.abort"
-            )
-        })
+        .find(|e| crate::investigation_markers::is_investigation_marker(&e.kind))
         .filter(|e| e.kind == expected || (document==Document::Conventions && e.kind=="investigation.conventions_resumed"))
         .ok_or(if document == Document::Branch { "Select a result and start a focused branch before saving its dependencies." } else { "Start mapping the paper before recording its overview. Claim checks use the existing map." })?;
     let request = if marker.kind == "investigation.conventions_resumed" {

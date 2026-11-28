@@ -1,29 +1,19 @@
-//! Background solver turn runner, research router builder, and SSE EventSink.
+//! Background solver turn runner and SSE EventSink. Routers are built in `routers.rs`.
 
-use crate::approver::UiApprover;
+pub(crate) use crate::routers::{build_desktop_router, build_lean_router};
 pub(crate) use crate::session_view::{reconstruct_session_view, SseEventSink};
 use crate::state::DesktopState;
 use crate::turn_control::ApiTurnGuard;
 use agent::{
-    compute_worker_tools, explore_worker_tools, inspect_session_for_resume, lean_worker_tools,
-    literature_worker_tools, resume_autonomous_research_loop, run_autonomous_research_loop,
-    AgentConfig, AutonomousConfig, AutonomousRoles, CancelToken, CustomSubagentDelegation,
-    DelegatedWorkerSpec, DelegationConfig, GuardrailConfig, ResumeConfig, SessionOutcome,
-    DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_WORKER_MAX_TURNS, EXPLORE_BRANCH_MAX_TURNS,
-    WORKER_MAX_TOKENS,
+    compute_worker_tools, explore_worker_tools, inspect_session_for_resume_with_profile,
+    lean_worker_tools, literature_worker_tools, resume_autonomous_research_loop,
+    run_autonomous_research_loop, AgentConfig, AutonomousConfig, AutonomousRoles, CancelToken,
+    CustomSubagentDelegation, DelegatedWorkerSpec, DelegationConfig, GuardrailConfig, ResumeConfig,
+    SessionOutcome, DEFAULT_MAX_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_WORKER_MAX_TURNS,
+    EXPLORE_BRANCH_MAX_TURNS, WORKER_MAX_TOKENS,
 };
-use research_tools::{register_lean_tool, register_research_tools, research_policy, ResearchEnv};
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tools::{builtin, CallCtx, Registry, Router, WorkerEpoch};
-#[cfg(windows)]
-use worker::appcontainer::AppContainerSandbox;
-#[cfg(windows)]
-use worker::sandbox::Sandbox;
-use worker::{EpochHandle, Worker};
-#[cfg(windows)]
-use worker::WorkerConfig;
+use std::sync::Arc;
 
 pub(crate) fn spawn_turn_thread(
     state: Arc<DesktopState>,
@@ -31,6 +21,44 @@ pub(crate) fn spawn_turn_thread(
     mut req_json: Value,
     prompt: String,
 ) -> Result<(), (u16, String)> {
+    crate::investigation_tasks::strip_internal_task_fields(&mut req_json);
+    spawn_turn_thread_inner(state, session_id, req_json, prompt, false)
+}
+
+pub(crate) fn spawn_task_turn_thread(
+    state: Arc<DesktopState>,
+    session_id: String,
+    req_json: Value,
+    prompt: String,
+) -> Result<(), (u16, String)> {
+    spawn_turn_thread_inner(state, session_id, req_json, prompt, true)
+}
+
+fn spawn_turn_thread_inner(
+    state: Arc<DesktopState>,
+    session_id: String,
+    mut req_json: Value,
+    prompt: String,
+    allow_task_spec: bool,
+) -> Result<(), (u16, String)> {
+    let ledger = state
+        .open_ledger()
+        .map_err(|e| (500, e))?;
+    let pre_events = ledger
+        .read_session(&session_id)
+        .map_err(|e| (500, e.to_string()))?;
+    if let Err(err) = crate::session_mode::profile_for_session(&pre_events) {
+        return Err((400, err));
+    }
+    let is_solve = crate::session_mode::session_mode(&pre_events) == research_tools::paper_key::Mode::Solve;
+    if is_solve
+        && research_tools::solve_state::SolveState::from_events(&pre_events)
+            .setup
+            .is_none()
+    {
+        return Err((400, "Solve session requires setup before running a turn".to_string()));
+    }
+
     let activity = crate::session_lifecycle::reserve_turn(&state, &session_id)?;
     {
         let mut active = state
@@ -44,6 +72,21 @@ pub(crate) fn spawn_turn_thread(
     // `provider: "claude-cli"` / `"antigravity"` (or a session bound to one) runs on that
     // subscription-CLI route; anything else on the in-core API route. A session never mixes
     // routes.
+    if allow_task_spec {
+        let req_prov = req_json.get("provider").and_then(Value::as_str).map(str::trim);
+        let bound_route = state.load_meta(&session_id).and_then(|m| m.route);
+        if matches!(req_prov, Some("claude-cli" | "antigravity"))
+            || matches!(bound_route.as_deref(), Some("claude-cli" | "antigravity"))
+        {
+            if let Ok(mut active) = state.active_turns.lock() {
+                active.remove(&session_id);
+            }
+            return Err((
+                400,
+                "Investigate v2 tasks require an API or ChatGPT provider until `cli_turn.rs` passes `CORE_TOOL_PROFILE`.".to_string(),
+            ));
+        }
+    }
     let on_cli_route = match crate::cli_turn::wants_cli_route(&state, &session_id, &req_json) {
         Ok(v) => v,
         Err(e) => {
@@ -53,6 +96,15 @@ pub(crate) fn spawn_turn_thread(
             return Err(e);
         }
     };
+    if allow_task_spec && on_cli_route.is_some() {
+        if let Ok(mut active) = state.active_turns.lock() {
+            active.remove(&session_id);
+        }
+        return Err((
+            400,
+            "Investigate v2 tasks require an API or ChatGPT provider until `cli_turn.rs` passes `CORE_TOOL_PROFILE`.".to_string(),
+        ));
+    }
 
     // Register stop handles before spawning the worker thread so an immediate `POST .../stop`
     // after `202 Accepted` reaches both CLI and in-core API/ChatGPT turns.
@@ -83,29 +135,52 @@ pub(crate) fn spawn_turn_thread(
     } else {
         crate::investigation::PaperRoute::InCore
     };
-    if let Err(error) =
-        crate::investigation::prepare(&state, &session_id, &mut req_json, &prompt, paper_route)
-    {
-        if let Ok(mut active) = state.active_turns.lock() { active.remove(&session_id); }
-        return Err(error);
+    let is_v6_task = if allow_task_spec {
+        match crate::investigation_tasks::prepare_task(&state, &session_id, &mut req_json) {
+            Ok(v) => v,
+            Err(error) => {
+                if let Ok(mut active) = state.active_turns.lock() { active.remove(&session_id); }
+                return Err(error);
+            }
+        }
+    } else {
+        false
+    };
+    if !is_v6_task && !is_solve {
+        if let Err(error) =
+            crate::investigation::prepare(&state, &session_id, &mut req_json, &prompt, paper_route)
+        {
+            if let Ok(mut active) = state.active_turns.lock() { active.remove(&session_id); }
+            return Err(error);
+        }
     }
 
+    let spawn_fail_req = is_v6_task.then(|| req_json.clone());
     let thread_state = Arc::clone(&state);
     let thread_session = session_id.clone();
     std::thread::Builder::new()
         .name(format!("turn-{session_id}"))
         .spawn(move || {
             let _activity = activity;
-            let outcome = match (&registered_cli, &registered_api) {
+            let (outcome, cancelled) = match (&registered_cli, &registered_api) {
                 (Some((reg, kind)), _) => {
-                    crate::cli_turn::run_cli_turn(&thread_state, &thread_session, &req_json, &prompt, &reg.stop, *kind)
+                    let caller = format!("{}:{}", kind.ledger_route(), thread_session);
+                    let res = crate::investigation_tasks::record_supplied_for_caller(
+                        &thread_state, &thread_session, &req_json, &caller,
+                    ).and_then(|()| {
+                        crate::cli_turn::run_cli_turn(&thread_state, &thread_session, &req_json, &prompt, &reg.stop, *kind)
+                    });
+                    (res, reg.stop.is_stopped())
                 }
                 (_, Some(api_guard)) => {
-                    run_session_turn(&thread_state, &thread_session, &req_json, &prompt, &api_guard.cancel)
+                    let res = run_session_turn(&thread_state, &thread_session, &req_json, &prompt, &api_guard.cancel);
+                    (res, api_guard.cancel.is_cancelled())
                 }
-                (None, None) => Err("missing turn registration".into()),
+                (None, None) => (Err("missing turn registration".into()), false),
             };
-            let outcome = crate::investigation::finish(&thread_state, &thread_session, &req_json, outcome);
+            let outcome = crate::investigation_finish::finish_with_cancel(
+                &thread_state, &thread_session, &req_json, outcome, cancelled,
+            );
             drop(registered_cli);
             drop(registered_api);
             if let Ok(mut active) = thread_state.active_turns.lock() {
@@ -129,10 +204,14 @@ pub(crate) fn spawn_turn_thread(
             }
         })
         .map_err(|e| {
+            let err = format!("failed to spawn solver thread: {e}");
+            if let Some(req_meta) = &spawn_fail_req {
+                crate::investigation_tasks::fail_task_on_spawn_error(&state, &session_id, req_meta, &err);
+            }
             if let Ok(mut active) = state.active_turns.lock() {
                 active.remove(&session_id);
             }
-            (500, format!("failed to spawn solver thread: {e}"))
+            (500, err)
         })?;
     Ok(())
 }
@@ -169,6 +248,11 @@ fn run_session_turn(
 ) -> Result<String, String> {
     if cancel.is_cancelled() {
         return Err("stopped by user".into());
+    }
+    let pre_ledger = state.open_ledger()?;
+    let pre_events = pre_ledger.read_session(session_id).map_err(|e| e.to_string())?;
+    if crate::session_mode::session_mode(&pre_events) == research_tools::paper_key::Mode::Solve {
+        return crate::solve_turn_routes::run_desktop_solve_turn(state, session_id, req, prompt, cancel);
     }
     let meta = state.load_meta(session_id);
     let ui = state.load_ui_settings();
@@ -209,6 +293,8 @@ fn run_session_turn(
         prepared_paper_reader.is_some(),
     );
     let transport = state.build_transport(provider, &model)?;
+    let in_core_caller = format!("agent:{}:{}", transport.info().provider, session_id);
+    crate::investigation_tasks::record_supplied_for_caller(state, session_id, req, &in_core_caller)?;
     let v_built = crate::agent_models::resolve_optional_role_transport(
         state,
         &ui,
@@ -267,10 +353,19 @@ fn run_session_turn(
                     .map(|built| (sa, built))
             })
             .collect();
+    let ledger = state.open_ledger()?;
+    let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
+    let mode = crate::session_mode::session_mode(&existing);
+    let profile = crate::session_mode::profile_for_session(&existing)?;
+    let is_investigation = mode == research_tools::paper_key::Mode::Investigate;
     let lean_router = Some(build_lean_router(Arc::clone(state), Arc::clone(&env), session_id)?);
 
-    let (router, containment, contained) =
-        build_desktop_router(Arc::clone(state), Arc::clone(&env), session_id)?;
+    let (router, containment, contained) = crate::routers::build_desktop_router_for_profile(
+        Arc::clone(state),
+        Arc::clone(&env),
+        session_id,
+        profile.name,
+    )?;
 
     let guardrails = GuardrailConfig {
         verification_mode: req
@@ -291,12 +386,10 @@ fn run_session_turn(
             .or(ui.pinned_conventions),
         ..GuardrailConfig::default()
     };
-    let ledger = state.open_ledger()?;
-    let existing = ledger.read_session(session_id).map_err(|e| e.to_string())?;
-    let is_investigation = crate::investigation::is_investigation(&existing);
     let paper_reading_turn = req.get("_paper_map_request").is_some()
         || req.get("_paper_branch_request").is_some()
-        || req.get("_paper_conventions_request").is_some();
+        || req.get("_paper_conventions_request").is_some()
+        || crate::investigation_tasks::is_task_turn(req);
     let delegation_cfg = DelegationConfig {
         compute_worker: if paper_reading_turn { None } else { compute_built.as_ref().map(|b| {
             make_worker_spec(
@@ -431,11 +524,12 @@ fn run_session_turn(
     } else {
         let defs = router.registry().defs();
         let expected_defs: Vec<tools::ToolDef> = defs.iter().map(|d| (*d).clone()).collect();
-        inspect_session_for_resume(
+        inspect_session_for_resume_with_profile(
             &ledger,
             session_id,
             router.policy().version.as_str(),
             &expected_defs,
+            router.tool_profile(),
         )
         .map_err(|e| e.to_string())?;
         let eff_prompt = match &subagent {
@@ -468,118 +562,8 @@ fn run_session_turn(
 
     match outcome {
         SessionOutcome::Aborted { reason, .. } => Err(reason),
-        SessionOutcome::Completed { .. } | SessionOutcome::Refusal { .. } => Ok(sink.final_text().to_string()),
+        SessionOutcome::Completed { .. }
+        | SessionOutcome::Refusal { .. }
+        | SessionOutcome::Paused { .. } => Ok(sink.final_text().to_string()),
     }
-}
-
-struct WorkerEpochAdapter {
-    epoch: Option<EpochHandle>,
-    contained: bool,
-}
-
-impl WorkerEpoch for WorkerEpochAdapter {
-    fn live_epoch(&self) -> Option<u64> {
-        self.epoch.as_ref().and_then(EpochHandle::live)
-    }
-
-    fn is_contained(&self) -> bool {
-        self.contained
-    }
-}
-
-#[cfg(windows)]
-fn build_desktop_worker(state: &DesktopState, session: &str) -> Result<Option<Worker>, String> {
-    let (Some(python), Some(script)) = (&state.cfg.python, &state.cfg.worker_script) else {
-        return Ok(None);
-    };
-    let sdir = state.cfg.data_dir.join("sessions").join(session);
-    let scratch = sdir.join("scratch");
-    let pycache = sdir.join("pycache");
-    let sandbox: Box<dyn Sandbox> = Box::new(
-        AppContainerSandbox::new(
-            state.cfg.data_dir.clone(),
-            session,
-            python.clone(),
-            script.clone(),
-            scratch.clone(),
-            pycache.clone(),
-        )
-        .map_err(|e| format!("AppContainer sandbox setup failed: {e}"))?,
-    );
-    Ok(Some(Worker::new(
-        WorkerConfig {
-            python: python.clone(),
-            script: script.clone(),
-            scratch,
-            pycache,
-            startup_timeout: Duration::from_secs(90),
-        },
-        sandbox,
-    )))
-}
-
-#[cfg(not(windows))]
-fn build_desktop_worker(_state: &DesktopState, _session: &str) -> Result<Option<Worker>, String> {
-    Ok(None)
-}
-
-pub(crate) fn build_desktop_router(
-    state: Arc<DesktopState>,
-    env: Arc<ResearchEnv>,
-    session: &str,
-) -> Result<(Router, String, bool), String> {
-    let worker = build_desktop_worker(&state, session)?;
-    let epoch_handle = worker.as_ref().map(Worker::epoch_handle);
-    let contained = worker.as_ref().is_some_and(|w| w.containment().is_contained());
-    let containment = match &worker {
-        Some(w) => w.containment().summary(),
-        None => "desktop host (no sandboxed Python worker configured)".to_string(),
-    };
-    let worker = Arc::new(Mutex::new(worker));
-    let timeout = Duration::from_secs(state.cfg.eval_timeout_s.max(30));
-
-    let mut registry = Registry::new();
-    registry.register_worker_session(
-        builtin::sympy_eval_def(),
-        Arc::new(WorkerEpochAdapter {
-            epoch: epoch_handle,
-            contained,
-        }),
-        Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
-            let code = args["code"].as_str().ok_or("`code` must be a string")?;
-            let mut guard = worker.lock().map_err(|_| "worker lock poisoned".to_string())?;
-            let w = guard
-                .as_mut()
-                .ok_or("no Python compute worker configured (`--python` required)")?;
-            let (result, ran_epoch) = w
-                .evaluate_in_epoch(code, timeout, ctx.required_epoch)
-                .map_err(|e| e.to_string())?;
-            ctx.record_worker_execution(ran_epoch, w.last_request_id());
-            if let Some(hello) = w.hello() {
-                ctx.record_worker_environment(hello);
-            }
-            Ok(result)
-        }),
-    );
-    registry.register(builtin::ledger_note_def(), builtin::ledger_note_handler());
-    register_research_tools(&mut registry, env);
-
-    let ledger = state.open_ledger()?;
-    let approver = Arc::new(
-        UiApprover::new(state, containment.clone(), contained).with_session_network_grant(true),
-    );
-    let router = Router::new(registry, research_policy(), ledger, session, approver);
-    Ok((router, containment, contained))
-}
-
-pub(crate) fn build_lean_router(
-    state: Arc<DesktopState>,
-    env: Arc<ResearchEnv>,
-    session: &str,
-) -> Result<Router, String> {
-    let mut registry = Registry::new();
-    register_lean_tool(&mut registry, env);
-    let ledger = state.open_ledger()?;
-    let approver = Arc::new(UiApprover::new(state, "lean4".into(), false));
-    Ok(Router::new(registry, research_policy(), ledger, session, approver))
 }

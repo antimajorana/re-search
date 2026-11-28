@@ -1,0 +1,231 @@
+{
+  "paper_key": "arxiv:2601.00004",
+  "version": "v1",
+  "primary_path": "main.tex",
+  "quality": "full",
+  "quality_notes_contains": [],
+  "theorem_defs": [],
+  "macros": [],
+  "nodes": [
+    {
+      "kind": "front_matter",
+      "env_name": "abstract",
+      "title": "Abstract",
+      "label": null,
+      "parent_order": null,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 6,
+          "end_line": 8
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "section",
+      "env_name": "section",
+      "title": "Model Hamiltonian",
+      "label": "sec:ham",
+      "parent_order": null,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 10,
+          "end_line": 21
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "1",
+      "number_basis": "computed",
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "equation",
+      "env_name": "equation",
+      "title": null,
+      "label": "eq:ham-total",
+      "parent_order": 1,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 12,
+          "end_line": 14
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "1",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "section",
+      "env_name": "subsection",
+      "title": "Normal coordinates",
+      "label": "sec:normal",
+      "parent_order": 1,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 15,
+          "end_line": 21
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 1,
+      "number": "1.1",
+      "number_basis": "computed",
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "equation",
+      "env_name": "align",
+      "title": null,
+      "label": "eq:omega-plus",
+      "parent_order": 3,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 18,
+          "end_line": 18
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "2",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "equation",
+      "env_name": "align",
+      "title": null,
+      "label": "eq:omega-minus",
+      "parent_order": 3,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 19,
+          "end_line": 19
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "3",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "section",
+      "env_name": "section",
+      "title": "Perturbative shift and numerical comparison",
+      "label": "sec:shift",
+      "parent_order": null,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 22,
+          "end_line": 36
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "2",
+      "number_basis": "computed",
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "equation",
+      "env_name": "equation",
+      "title": null,
+      "label": "eq:shift",
+      "parent_order": 6,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 24,
+          "end_line": 26
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "4",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "table",
+      "env_name": "table",
+      "title": "Comparison of perturbative and numerical frequency shifts for $\\omega_0=1$, $g=0.2$.",
+      "label": "tab:shifts",
+      "parent_order": 6,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 27,
+          "end_line": 33
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "1",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "figure",
+      "env_name": "figure",
+      "title": "Splitting $\\omega_+ - \\omega_-$ versus coupling $g$.",
+      "label": "fig:split",
+      "parent_order": 6,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 34,
+          "end_line": 36
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "1",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "bibliography",
+      "env_name": "bibliography",
+      "title": "References",
+      "label": null,
+      "parent_order": null,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 37,
+          "end_line": 37
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_heading",
+      "proof_hint": null
+    }
+  ]
+}

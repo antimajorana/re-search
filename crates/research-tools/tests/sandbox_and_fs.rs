@@ -2,11 +2,12 @@
 //! and F3 (`fs_list` & `fs_read`) routed end-to-end through `tools::Router::try_call`.
 
 use ledger::Ledger;
+#[cfg(windows)]
+use research_tools::{is_symlink_or_junction, TEX_AUDIT};
 use research_tools::{
-    is_symlink_or_junction, register_research_tools, research_policy, research_tool_defs,
-    resolve_sources_session_id, strip_verbatim_prefix, strip_verbatim_str, validate_session_id,
-    LiteratureEndpoints, ResearchEnv, SandboxError, SandboxRoot, FS_LIST, FS_READ,
-    RESEARCH_POLICY_VERSION, TEX_AUDIT,
+    register_research_tools, research_policy, research_tool_defs, resolve_sources_session_id,
+    strip_verbatim_prefix, strip_verbatim_str, validate_session_id, LiteratureEndpoints,
+    ResearchEnv, SandboxError, SandboxRoot, FS_LIST, FS_READ, RESEARCH_POLICY_VERSION,
 };
 use serde_json::json;
 use std::fs;

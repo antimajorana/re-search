@@ -1,0 +1,54 @@
+[
+  {
+    "id": "msg_q_prove_01_1",
+    "stop_reason": "tool_use",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "tu_q_prove_01_1",
+        "name": "ledger_note",
+        "input": {
+          "text": "s1 (Given): (V, <.,.>) is a finite-dimensional complex inner-product space with <.,.> antilinear in the first argument, linear in the second, and positive definite (<v, v> > 0 for v != 0), and H = H^dagger satisfies <H u, v> = <u, H v> for all u, v in V."
+        }
+      }
+    ]
+  },
+  {
+    "id": "msg_q_prove_01_2",
+    "stop_reason": "tool_use",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "tu_q_prove_01_2",
+        "name": "ledger_note",
+        "input": {
+          "text": "s2 (Reality of eigenvalues): Let H v = lambda v with v != 0. Then lambda <v, v> = <v, lambda v> = <v, H v> = <H v, v> = <lambda v, v> = conj(lambda) <v, v>. Since v != 0 implies <v, v> > 0, (lambda - conj(lambda)) = 0, so lambda = conj(lambda) is real."
+        }
+      }
+    ]
+  },
+  {
+    "id": "msg_q_prove_01_3",
+    "stop_reason": "tool_use",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "tu_q_prove_01_3",
+        "name": "ledger_note",
+        "input": {
+          "text": "s3 (Orthogonality): Let H u = lambda u and H v = mu v with u != 0, v != 0, and lambda != mu. By s2 both lambda and mu are real, so mu <u, v> = <u, H v> = <H u, v> = conj(lambda) <u, v> = lambda <u, v>. Hence (mu - lambda) <u, v> = 0, and since lambda != mu we conclude <u, v> = 0."
+        }
+      }
+    ]
+  },
+  {
+    "id": "msg_q_prove_01_4",
+    "stop_reason": "end_turn",
+    "content": [
+      {
+        "type": "text",
+        "text": "For any Hermitian operator H = H^dagger on a finite-dimensional complex inner-product space (V, <.,.>), every eigenvalue lambda is real (lambda = conj(lambda)) and eigenvectors for distinct eigenvalues lambda != mu are orthogonal (<u, v> = 0)."
+      }
+    ]
+  }
+]

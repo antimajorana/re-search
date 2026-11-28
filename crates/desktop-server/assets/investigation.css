@@ -1,4 +1,10 @@
 .rail-new-wrap { display: grid; gap: 5px; }
+.rail-new-wrap .mode-disabled { justify-content: space-between; opacity: .72; cursor: not-allowed; }
+.rail-new-wrap .mode-soon { font-size: 10px; font-weight: 500; }
+.rail-more-menu { display: grid; gap: 5px; }
+.rail-more-summary { cursor: pointer; font-size: 12px; color: var(--ink-secondary); padding: 2px 4px; }
+.mini-pill.mode-tag { font-weight: 600; }
+.mini-pill.mode-investigate { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
 .investigation-nav, .investigation-origin { padding: 8px clamp(14px, 3vw, 40px); border-bottom: 1px solid var(--border-subtle); }
 .investigation-nav { display: flex; justify-content: center; }
 .investigation-origin { font-size: .88rem; max-height: 28vh; overflow: auto; flex: 0 0 auto; }

@@ -13,6 +13,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  file-length:
+    name: Touched source files stay within 600 lines
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check the rule itself
+        run: python3 scripts/check_file_length.py --self-test
+      - name: Check the files this pull request touches
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: python3 scripts/check_file_length.py --base "origin/$BASE_REF"
   windows:
     name: Research workflows on Windows
     runs-on: windows-2025

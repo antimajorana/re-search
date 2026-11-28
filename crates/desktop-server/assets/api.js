@@ -195,6 +195,89 @@ export function openInvestigationResearch(id, request) {
   return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/research`, request);
 }
 
+export function pinInvestigationSkeleton(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/skeleton`, payload);
+}
+
+export function getInvestigationMapview(id) {
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/investigation/mapview`);
+}
+
+export function getInvestigationLegacy(id) {
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/investigation/legacy`);
+}
+
+export function getInvestigationNodeText(id, tag, seq) {
+  const qs = new URLSearchParams({ tag: String(tag) });
+  if (seq != null) qs.set('seq', String(seq));
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/investigation/node-text?${qs}`);
+}
+
+export function openInvestigationPaper(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/open`, payload);
+}
+
+export function getInvestigationOpenStatus(id, jobId) {
+  const qs = new URLSearchParams({ job_id: String(jobId) });
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/investigation/open-status?${qs}`);
+}
+
+export function investigationCited(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/cited`, payload);
+}
+
+export function startInvestigationTask(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/tasks`, payload);
+}
+
+export function saveInvestigationNote(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/notes`, payload);
+}
+
+export async function exportInvestigationFile(id, { format = 'rsmap', includeStatements = false, includeNotes = false } = {}) {
+  const qs = new URLSearchParams({ format, include_statements: includeStatements ? '1' : '0', include_notes: includeNotes ? '1' : '0' });
+  const headers = csrfToken ? { 'X-ReSearch-Token': csrfToken } : {};
+  const resp = await fetch(`/api/sessions/${encodeURIComponent(id)}/investigation/export?${qs}`, { method: 'GET', credentials: 'same-origin', headers });
+  if (!resp.ok) {
+    let msg = `HTTP ${resp.status}`;
+    try { const d = await resp.json(); msg = d?.error || d?.message || msg; } catch {}
+    const err = new Error(msg); err.status = resp.status; throw err;
+  }
+  const disp = resp.headers?.get?.('content-disposition') || '';
+  const m = disp.match(/filename="([^"]+)"/);
+  return { blob: await resp.blob(), filename: m?.[1] || `investigation.${format === 'html' ? 'html' : 'rsmap'}`, contentType: resp.headers?.get?.('content-type') || '' };
+}
+
+export function importInvestigationMap(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/import`, payload);
+}
+
+export function getInvestigateSettings() {
+  return rawJson('GET', '/api/settings/investigate');
+}
+
+export function putInvestigateSettings(payload) {
+  return rawJson('PUT', '/api/settings/investigate', payload);
+}
+
+export function listLibraryPapers(params = {}) {
+  const qs = new URLSearchParams(params);
+  const suffix = qs.toString() ? `?${qs}` : '';
+  return rawJson('GET', `/api/library${suffix}`);
+}
+
+export function createHandoff(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/handoff`, payload);
+}
+
+export function buildInvestigationHandoffPacket(id, payload) {
+  return rawJson('POST', `/api/sessions/${encodeURIComponent(id)}/investigation/handoff-packet`, payload);
+}
+
+export function getHandoffs(id) {
+  return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}/handoffs`);
+}
+
 export function getSession(id) {
   return rawJson('GET', `/api/sessions/${encodeURIComponent(id)}`);
 }

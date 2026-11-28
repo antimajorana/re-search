@@ -1,0 +1,3 @@
+dir = "refs/papers"
+external_pdf_roots = ["../shared_pdfs"]
+arxiv_source_dir = ".kandinsky/cache/arxiv-src"

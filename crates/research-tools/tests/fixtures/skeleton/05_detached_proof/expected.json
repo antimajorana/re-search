@@ -1,0 +1,286 @@
+{
+  "paper_key": "arxiv:2601.00005",
+  "version": "v1",
+  "primary_path": "main.tex",
+  "quality": "full",
+  "quality_notes_contains": [],
+  "theorem_defs": [
+    {
+      "env_name": "corollary",
+      "kind": "corollary",
+      "display_title": "Corollary",
+      "shared_counter": "theorem",
+      "parent_counter": null,
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "lemma",
+      "kind": "lemma",
+      "display_title": "Lemma",
+      "shared_counter": "theorem",
+      "parent_counter": null,
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "proposition",
+      "kind": "proposition",
+      "display_title": "Proposition",
+      "shared_counter": "theorem",
+      "parent_counter": null,
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "theorem",
+      "kind": "theorem",
+      "display_title": "Theorem",
+      "shared_counter": null,
+      "parent_counter": "section",
+      "starred": false,
+      "style": null
+    }
+  ],
+  "macros": [],
+  "nodes": [
+    {
+      "kind": "section",
+      "env_name": "section",
+      "title": "Statements of results",
+      "label": "sec:statements",
+      "parent_order": null,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 8,
+          "end_line": 17
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "1",
+      "number_basis": "computed",
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "lemma",
+      "env_name": "lemma",
+      "title": "Strict positivity preservation",
+      "label": "lem:pos",
+      "parent_order": 0,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 9,
+          "end_line": 11
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "1.1",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "theorem",
+      "env_name": "theorem",
+      "title": "Spectral gap for positive stochastic matrices",
+      "label": "thm:gap",
+      "parent_order": 0,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 12,
+          "end_line": 14
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "1.2",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "corollary",
+      "env_name": "corollary",
+      "title": "Exponential mixing",
+      "label": "cor:mix",
+      "parent_order": 0,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 15,
+          "end_line": 17
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "1.3",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "section",
+      "env_name": "section",
+      "title": "Proofs",
+      "label": "sec:proofs",
+      "parent_order": null,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 18,
+          "end_line": 27
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "2",
+      "number_basis": "computed",
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "proof",
+      "env_name": "proof",
+      "title": "Proof of Lemma~\\ref{lem:pos}",
+      "label": null,
+      "parent_order": 4,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 19,
+          "end_line": 21
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": {
+        "kind": "header_ref",
+        "label": "lem:pos",
+        "heading": "Proof of Lemma~\\ref{lem:pos}"
+      }
+    },
+    {
+      "kind": "proof",
+      "env_name": "proof",
+      "title": "Proof of Theorem 1.2",
+      "label": null,
+      "parent_order": 4,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 22,
+          "end_line": 24
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": {
+        "kind": "header_mention",
+        "kind_word": "theorem",
+        "target_text": "1.2",
+        "heading": "Proof of Theorem 1.2"
+      }
+    },
+    {
+      "kind": "proof",
+      "env_name": "proof",
+      "title": "Proof of Corollary~\\ref{cor:mix} \\cite{seneta2006}",
+      "label": null,
+      "parent_order": 4,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 25,
+          "end_line": 27
+        }
+      ],
+      "head_cites": [
+        "seneta2006"
+      ],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": {
+        "kind": "header_ref",
+        "label": "cor:mix",
+        "heading": "Proof of Corollary~\\ref{cor:mix} \\cite{seneta2006}"
+      }
+    },
+    {
+      "kind": "section",
+      "env_name": "section",
+      "title": "A short remark with attached proof",
+      "label": "sec:attached",
+      "parent_order": null,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 28,
+          "end_line": 34
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "3",
+      "number_basis": "computed",
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "proposition",
+      "env_name": "proposition",
+      "title": "Row sum invariance",
+      "label": "prop:rowsum",
+      "parent_order": 8,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 29,
+          "end_line": 31
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "3.1",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "proof",
+      "env_name": "proof",
+      "title": null,
+      "label": null,
+      "parent_order": 8,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 32,
+          "end_line": 34
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": {
+        "kind": "adjacent",
+        "target_order": 9
+      }
+    }
+  ]
+}

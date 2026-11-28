@@ -1,0 +1,43 @@
+\documentclass{article}
+\usepackage{amsmath,amsthm,listings}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem*{remark}{Remark}
+\begin{document}
+\section{Energy drift % ignore this brace }
+  and modified Hamiltonians $O(h^{2p})$}\label{sec:drift}
+Inline verbatim \verb|\begin{theorem} fake \end{theorem}| stays prose, and 95\% of steps stay bounded. % \begin{theorem} commented
+\begin{verbatim}
+\section{Verbatim fake section}
+\begin{theorem}
+Fake verbatim theorem.
+\end{theorem}
+\end{verbatim}
+\begin{lstlisting}
+\begin{lemma} Fake listing lemma \end{lemma}
+\end{lstlisting}
+\iffalse
+\iftrue
+Nested conditional with $A \iff B$.
+\fi
+\begin{theorem}
+Dead theorem inside iffalse.
+\end{theorem}
+\fi
+\iffalse
+Dead branch before else.
+\else
+\begin{lemma}[Alive branch]\label{lem:alive}
+The midpoint flow is time-reversible.
+\end{lemma}
+\fi
+\begin{theorem}[Symplectic drift \cite[Theorem 3.2]{hairer2006}]\label{thm:drift}
+Over exponentially long times, the energy error satisfies
+\begin{equation}\label{eq:modified}\tag{S1}
+|H(z_n) - H(z_0)| \le C h^{2p}.
+\end{equation}
+\end{theorem}
+\section{Cyclic include recovery}\label{sec:cycle}
+\input{cycle_a}
+\end{document}

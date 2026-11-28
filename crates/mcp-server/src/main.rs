@@ -9,14 +9,19 @@
 //!   CORE_SESSION, CORE_DATA_DIR                          required
 //!   CORE_APPROVAL_ADDR, CORE_SESSION_TOKEN               approval channel (else: deny)
 //!   CORE_PYTHON, CORE_WORKER_SCRIPT, CORE_SCRATCH, CORE_PYCACHE  compute worker
+//!   CORE_CHECK_SCRATCH, CORE_CHECK_PYCACHE, CORE_CHECK_TIMEOUT_S Solve check worker
 //!   CORE_EVAL_TIMEOUT_S                                  default 120
+//!   CORE_TOOL_PROFILE                                    frozen tool profile (e.g. `solve/1`)
 //!   CORE_WORKSPACE, CORE_ENABLE_RESEARCH_TOOLS           research tools + `v0.4-research`
 //!                                                        (also when sessions/<id>/sources exists)
 //!   RE_SEARCH_{ARXIV,INSPIRE,CROSSREF,S2}_BASE           literature endpoint overrides
 
-mod approver;
-
-use approver::{DenyAll, TcpApprover};
+use mcp_server::approver::{DenyAll, TcpApprover};
+use mcp_server::solve_wire::{
+    self, build_check_worker, build_solve_router_with_bindings, parse_check_timeout,
+    solve_sympy_handler, HarvestPreviews, McpCheckRunner, WorkerEpochAdapter,
+};
+use research_tools::tool_profile::PROFILE_SOLVE_V1;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -34,28 +39,15 @@ use worker::appcontainer::AppContainerSandbox;
 use worker::sandbox::Sandbox;
 #[cfg(windows)]
 use worker::WorkerConfig;
-use worker::{EpochHandle, Worker};
-
-struct WorkerEpochAdapter {
-    epoch: Option<EpochHandle>,
-    contained: bool,
-}
-
-impl tools::WorkerEpoch for WorkerEpochAdapter {
-    fn live_epoch(&self) -> Option<u64> {
-        self.epoch.as_ref().and_then(EpochHandle::live)
-    }
-
-    fn is_contained(&self) -> bool {
-        self.contained
-    }
-}
+use worker::Worker;
 
 struct CoreServer {
     router: Arc<Router>,
     /// Who is on the other end of stdin/stdout. Fixed when the process
     /// starts; never taken from a request.
     caller: String,
+    /// Optional Solve handle-harvest preview store (`Some` only on `solve/1`).
+    harvest_previews: Option<HarvestPreviews>,
 }
 
 impl ServerHandler for CoreServer {
@@ -94,13 +86,22 @@ impl ServerHandler for CoreServer {
     ) -> Result<CallToolResponse, McpError> {
         let router = self.router.clone();
         let caller = self.caller.clone();
+        let previews = self.harvest_previews.clone();
         let name = request.name.to_string();
         let args = Value::Object(request.arguments.unwrap_or_default());
         // The router blocks (approval prompt, worker), so keep it off the
         // async thread that serves the MCP stream.
-        let outcome = tokio::task::spawn_blocking(move || router.call(&caller, &name, &args))
-            .await
-            .map_err(|e| McpError::internal_error(format!("tool task failed: {e}"), None))?;
+        let outcome = tokio::task::spawn_blocking(move || {
+            let mut outcome = router.call(&caller, &name, &args);
+            if name == "sympy_eval" {
+                if let (Some(previews), CallOutcome::Ok(val)) = (&previews, &mut outcome) {
+                    previews.attach_to_result(val);
+                }
+            }
+            outcome
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("tool task failed: {e}"), None))?;
         let result = match outcome {
             CallOutcome::Ok(value) => CallToolResult::success(vec![ContentBlock::text(value.to_string())]),
             CallOutcome::Denied(why) => CallToolResult::error(vec![ContentBlock::text(format!("DENIED: {why}"))]),
@@ -138,6 +139,7 @@ fn build_worker(data_dir: &std::path::Path, session: &str, python: String, scrip
             scratch,
             pycache,
             startup_timeout: Duration::from_secs(90),
+            job_memory_limit_bytes: None,
         },
         sandbox,
     ))
@@ -150,19 +152,75 @@ fn build_worker(_data_dir: &std::path::Path, _session: &str, _python: String, _s
     Err("AppContainer sandbox requires Windows".to_string())
 }
 
-fn build_router() -> Result<Router, String> {
+fn build_research_env(
+    data_dir: &std::path::Path,
+    workspace_root: Option<PathBuf>,
+) -> Result<Arc<research_tools::ResearchEnv>, String> {
+    let mut endpoints = research_tools::LiteratureEndpoints::default();
+    if let Some(u) = env("RE_SEARCH_ARXIV_BASE") {
+        endpoints.arxiv_api_base = u.trim_end_matches('/').to_string();
+        endpoints.arxiv_eprint_base = endpoints.arxiv_api_base.clone();
+    }
+    if let Some(u) = env("RE_SEARCH_INSPIRE_BASE") {
+        endpoints.inspire_api_base = u.trim_end_matches('/').to_string();
+    }
+    if let Some(u) = env("RE_SEARCH_CROSSREF_BASE") {
+        endpoints.crossref_api_base = u.trim_end_matches('/').to_string();
+    }
+    if let Some(u) = env("RE_SEARCH_S2_BASE").or_else(|| env("RE_SEARCH_SEMANTIC_SCHOLAR_BASE")) {
+        endpoints.semantic_scholar_api_base = u.trim_end_matches('/').to_string();
+    }
+    let r_env = match workspace_root {
+        Some(ws) => research_tools::ResearchEnv::with_workspace(data_dir.to_path_buf(), ws)
+            .map_err(|e| format!("invalid CORE_WORKSPACE: {e}"))?,
+        None => research_tools::ResearchEnv::new(data_dir.to_path_buf()),
+    }
+    .with_endpoints(endpoints);
+    Ok(Arc::new(r_env))
+}
+
+fn resolve_profile_name(
+    explicit_profile: Option<String>,
+    ledger: &ledger::Ledger,
+    session: &str,
+) -> Result<String, String> {
+    if let Some(name) = explicit_profile {
+        return Ok(name);
+    }
+    let events = ledger.read_session(session).map_err(|e| e.to_string())?;
+    // Subscription-CLI callers that do not pass `CORE_TOOL_PROFILE` expect the
+    // legacy profile list until `cli_turn.rs` passes `CORE_TOOL_PROFILE` explicitly.
+    let explicit = events
+        .iter()
+        .find(|e| e.kind == "session.start")
+        .and_then(|e| e.payload.get(research_tools::tool_profile::TOOL_PROFILE_FIELD));
+    if explicit.is_some() {
+        Ok(research_tools::tool_profile::active_profile_for_session_events(&events)?
+            .name
+            .to_string())
+    } else {
+        let legacy = research_tools::tool_profile::legacy_profile_name_for_events(&events);
+        Ok(research_tools::tool_profile::lookup(legacy)
+            .map_err(|e| e.to_string())?
+            .name
+            .to_string())
+    }
+}
+
+fn build_router() -> Result<(Router, Option<HarvestPreviews>), String> {
     let session = env("CORE_SESSION").ok_or("CORE_SESSION is not set")?;
     let data_dir = PathBuf::from(env("CORE_DATA_DIR").ok_or("CORE_DATA_DIR is not set")?);
     let ledger = ledger::Ledger::open(&data_dir).map_err(|e| e.to_string())?;
 
     let timeout = Duration::from_secs(env("CORE_EVAL_TIMEOUT_S").and_then(|s| s.parse().ok()).unwrap_or(120));
-    let worker = match (env("CORE_PYTHON"), env("CORE_WORKER_SCRIPT")) {
-        (Some(python), Some(script)) => Some(build_worker(&data_dir, &session, python, script)?),
-        _ => None,
+    let python_cfg = env("CORE_PYTHON").zip(env("CORE_WORKER_SCRIPT"));
+    let worker = match &python_cfg {
+        Some((python, script)) => Some(build_worker(&data_dir, &session, python.clone(), script.clone())?),
+        None => None,
     };
     let epoch_handle = worker.as_ref().map(Worker::epoch_handle);
-    let contained = worker.as_ref().is_some_and(|w| w.containment().is_contained());
-    let containment = match &worker {
+    let solver_contained = worker.as_ref().is_some_and(|w| w.containment().is_contained());
+    let solver_containment = match &worker {
         Some(w) => w.containment().summary(),
         None => "no compute worker configured".to_string(),
     };
@@ -181,7 +239,93 @@ fn build_router() -> Result<Router, String> {
     let enable_flag = env("CORE_ENABLE_RESEARCH_TOOLS")
         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
         .unwrap_or(false);
-    let use_research = workspace_root.is_some() || sources_exist || enable_flag;
+    let explicit_profile = env(cli_route::core_tools::CORE_TOOL_PROFILE_ENV)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let use_profile =
+        workspace_root.is_some() || sources_exist || enable_flag || explicit_profile.is_some();
+
+    let sympy_epoch = Arc::new(WorkerEpochAdapter { epoch: epoch_handle, contained: solver_contained });
+
+    if use_profile {
+        let r_env = build_research_env(&data_dir, workspace_root)?;
+        let profile_name = resolve_profile_name(explicit_profile, &ledger, &session)?;
+
+        if profile_name == PROFILE_SOLVE_V1 {
+            let check_worker = match &python_cfg {
+                Some((python, script)) => build_check_worker(
+                    &data_dir,
+                    &session,
+                    python,
+                    script,
+                    env("CORE_CHECK_SCRATCH"),
+                    env("CORE_CHECK_PYCACHE"),
+                )?,
+                None => None,
+            };
+            let check_epoch_handle = check_worker.as_ref().map(Worker::epoch_handle);
+            let check_contained = check_worker.as_ref().is_some_and(|w| w.containment().is_contained());
+            let contained = solver_contained && check_contained;
+            let containment = match &check_worker {
+                Some(cw) => format!("{solver_containment}; check: {}", cw.containment().summary()),
+                None => format!("{solver_containment}; check: not configured"),
+            };
+            let approver: Arc<dyn tools::Approver> = match (env("CORE_APPROVAL_ADDR"), env("CORE_SESSION_TOKEN")) {
+                (Some(addr), Some(token)) => {
+                    Arc::new(TcpApprover { addr, token, containment, contained, wait: Duration::from_secs(900) })
+                }
+                _ => Arc::new(DenyAll),
+            };
+            let check_timeout = parse_check_timeout(env("CORE_CHECK_TIMEOUT_S"));
+            let check_runner = Arc::new(McpCheckRunner::new(check_worker, check_timeout));
+            let check_epoch = Arc::new(WorkerEpochAdapter { epoch: check_epoch_handle, contained: check_contained });
+            let sympy_handler = solve_sympy_handler(worker, data_dir.clone(), timeout);
+            let wired = build_solve_router_with_bindings(
+                r_env,
+                ledger,
+                &session,
+                sympy_epoch,
+                sympy_handler,
+                check_epoch,
+                check_runner.clone(),
+                check_runner,
+                approver,
+            )?;
+            return Ok((wired.router, Some(wired.previews)));
+        }
+
+        let sympy_handler: Arc<dyn ToolHandler> = Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
+            let code = args["code"].as_str().ok_or("`code` must be a string")?;
+            let mut guard = worker.lock().map_err(|_| "worker lock poisoned".to_string())?;
+            let w = guard.as_mut().ok_or("no compute worker is configured for this session")?;
+            let (result, ran_epoch) = w.evaluate_in_epoch(code, timeout, ctx.required_epoch).map_err(|e| e.to_string())?;
+            ctx.record_worker_execution(ran_epoch, w.last_request_id());
+            if let Some(hello) = w.hello() {
+                ctx.record_worker_environment(hello);
+            }
+            Ok(result)
+        });
+        let mut registry = Registry::new();
+        let policy = cli_route::core_tools::register_core_tools_for_profile(
+            &mut registry,
+            sympy_epoch,
+            sympy_handler,
+            r_env,
+            &profile_name,
+        )?;
+        let approver: Arc<dyn tools::Approver> = match (env("CORE_APPROVAL_ADDR"), env("CORE_SESSION_TOKEN")) {
+            (Some(addr), Some(token)) => Arc::new(TcpApprover {
+                addr,
+                token,
+                containment: solver_containment,
+                contained: solver_contained,
+                wait: Duration::from_secs(900),
+            }),
+            _ => Arc::new(DenyAll),
+        };
+        let router = Router::new(registry, policy, ledger, &session, approver).with_tool_profile(profile_name);
+        return Ok((router, None));
+    }
 
     let sympy_handler: Arc<dyn ToolHandler> = Arc::new(move |ctx: &CallCtx<'_>, args: &Value| {
         let code = args["code"].as_str().ok_or("`code` must be a string")?;
@@ -194,45 +338,20 @@ fn build_router() -> Result<Router, String> {
         }
         Ok(result)
     });
-    let sympy_epoch = Arc::new(WorkerEpochAdapter { epoch: epoch_handle, contained });
-
-    // The same registration the supervisor uses to compute the tool list it expects the
-    // agent CLI to offer (`cli_route::core_tools::core_tool_set`).
-    let research = if use_research {
-        let mut endpoints = research_tools::LiteratureEndpoints::default();
-        if let Some(u) = env("RE_SEARCH_ARXIV_BASE") {
-            endpoints.arxiv_api_base = u.trim_end_matches('/').to_string();
-            endpoints.arxiv_eprint_base = endpoints.arxiv_api_base.clone();
-        }
-        if let Some(u) = env("RE_SEARCH_INSPIRE_BASE") {
-            endpoints.inspire_api_base = u.trim_end_matches('/').to_string();
-        }
-        if let Some(u) = env("RE_SEARCH_CROSSREF_BASE") {
-            endpoints.crossref_api_base = u.trim_end_matches('/').to_string();
-        }
-        if let Some(u) = env("RE_SEARCH_S2_BASE").or_else(|| env("RE_SEARCH_SEMANTIC_SCHOLAR_BASE")) {
-            endpoints.semantic_scholar_api_base = u.trim_end_matches('/').to_string();
-        }
-        let r_env = match workspace_root {
-            Some(ws) => research_tools::ResearchEnv::with_workspace(data_dir.clone(), ws)
-                .map_err(|e| format!("invalid CORE_WORKSPACE: {e}"))?,
-            None => research_tools::ResearchEnv::new(data_dir.clone()),
-        }
-        .with_endpoints(endpoints);
-        Some(Arc::new(r_env))
-    } else {
-        None
-    };
     let mut registry = Registry::new();
-    let policy = cli_route::core_tools::register_core_tools(&mut registry, sympy_epoch, sympy_handler, research);
-
+    let policy = cli_route::core_tools::register_core_tools(&mut registry, sympy_epoch, sympy_handler, None);
     let approver: Arc<dyn tools::Approver> = match (env("CORE_APPROVAL_ADDR"), env("CORE_SESSION_TOKEN")) {
-        (Some(addr), Some(token)) => {
-            Arc::new(TcpApprover { addr, token, containment, contained, wait: Duration::from_secs(900) })
-        }
+        (Some(addr), Some(token)) => Arc::new(TcpApprover {
+            addr,
+            token,
+            containment: solver_containment,
+            contained: solver_contained,
+            wait: Duration::from_secs(900),
+        }),
         _ => Arc::new(DenyAll),
     };
-    Ok(Router::new(registry, policy, ledger, &session, approver))
+    let _ = solve_wire::parse_check_timeout;
+    Ok((Router::new(registry, policy, ledger, &session, approver), None))
 }
 
 /// Resolve the fixed caller identity for this server process: `antigravity:<session>` when
@@ -247,18 +366,19 @@ fn resolve_caller(session: &str, route_env: Option<&str>) -> String {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let router = match build_router() {
-        Ok(r) => Arc::new(r),
+    let (router, harvest_previews) = match build_router() {
+        Ok(pair) => pair,
         Err(e) => {
             eprintln!("core: cannot start: {e}");
             std::process::exit(2);
         }
     };
+    let router = Arc::new(router);
     // The route that started this server (it labels every tool call and is part of each
     // approval digest): `CORE_CALLER_ROUTE=antigravity` on the Antigravity route; anything
     // else, or nothing, is the Claude Code route as before.
     let caller = resolve_caller(router.session(), std::env::var("CORE_CALLER_ROUTE").ok().as_deref());
-    let server = CoreServer { router, caller };
+    let server = CoreServer { router, caller, harvest_previews };
     match server.serve(rmcp::transport::io::stdio()).await {
         Ok(running) => {
             if let Err(e) = running.waiting().await {

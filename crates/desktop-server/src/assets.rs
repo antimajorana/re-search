@@ -7,6 +7,49 @@ pub struct StaticAsset {
 
 pub const INDEX_HTML: &str = include_str!("../assets/index.html");
 
+const INDEX_PARTIALS: &[(&str, &str)] = &[
+    (
+        "      <!-- INCLUDE:index_investigation.html -->\n",
+        include_str!("../assets/index_investigation.html"),
+    ),
+    (
+        "          <!-- INCLUDE:index_latex_body.html -->\n",
+        include_str!("../assets/index_latex_body.html"),
+    ),
+    (
+        "          <!-- INCLUDE:index_dag_top.html -->\n",
+        include_str!("../assets/index_dag_top.html"),
+    ),
+    (
+        "        <!-- INCLUDE:index_sources.html -->\n",
+        include_str!("../assets/index_sources.html"),
+    ),
+    (
+        "    <!-- INCLUDE:index_source_reader.html -->\n",
+        include_str!("../assets/index_source_reader.html"),
+    ),
+    (
+        "  <!-- INCLUDE:index_dialogs.html -->\n",
+        include_str!("../assets/index_dialogs.html"),
+    ),
+];
+
+/// Returns the complete desktop UI document by splicing the extracted HTML partials
+/// into `assets/index.html`.
+pub fn render_index_html() -> String {
+    let mut html = INDEX_HTML.to_string();
+    for (marker, partial) in INDEX_PARTIALS {
+        // Normalize CRLF on Windows checkouts if needed while preserving LF checkouts byte-for-byte.
+        let crlf_marker = marker.replace('\n', "\r\n");
+        if html.contains(marker) {
+            html = html.replacen(marker, partial, 1);
+        } else if html.contains(&crlf_marker) {
+            html = html.replacen(&crlf_marker, partial, 1);
+        }
+    }
+    html
+}
+
 fn pdf_renderer_asset(name: &str) -> Option<StaticAsset> {
     const BUNDLE: &[u8] = include_bytes!("../vendor/pdfjs/renderer.zip");
     let mut assets = zip::ZipArchive::new(std::io::Cursor::new(BUNDLE)).ok()?;
@@ -96,6 +139,94 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_graph.js"),
         }),
+        "/assets/graph_layout.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/graph_layout.js"),
+        }),
+        "/assets/graph_view.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/graph_view.js"),
+        }),
+        "/assets/ui_badge.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/ui_badge.js"),
+        }),
+        "/assets/run_bar.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/run_bar.js"),
+        }),
+        "/assets/quote_chip.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/quote_chip.js"),
+        }),
+        "/assets/approval_card.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/approval_card.js"),
+        }),
+        "/assets/solve_state.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_state.js"),
+        }),
+        "/assets/solve_setup.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_setup.js"),
+        }),
+        "/assets/solve_badges.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_badges.js"),
+        }),
+        "/assets/solve_steps.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_steps.js"),
+        }),
+        "/assets/solve_why.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_why.js"),
+        }),
+        "/assets/solve_exprs.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_exprs.js"),
+        }),
+        "/assets/solve_transcribe.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_transcribe.js"),
+        }),
+        "/assets/solve_artifacts.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/solve_artifacts.js"),
+        }),
+        "/assets/writeup_btn.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/writeup_btn.js"),
+        }),
+        "/assets/solve.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/solve.css"),
+        }),
+        "/assets/api_idea.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/api_idea.js"),
+        }),
+        "/assets/idea_state.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/idea_state.js"),
+        }),
+        "/assets/idea_setup.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/idea_setup.js"),
+        }),
+        "/assets/idea_search.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/idea_search.js"),
+        }),
+        "/assets/idea.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/idea.js"),
+        }),
+        "/assets/idea.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/idea.css"),
+        }),
         "/assets/investigation_conventions.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_conventions.js"),
@@ -115,6 +246,86 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
         "/assets/investigation_scope.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/investigation_scope.js"),
+        }),
+        "/assets/investigation_outline.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_outline.js"),
+        }),
+        "/assets/investigation_results.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_results.js"),
+        }),
+        "/assets/investigation_node.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_node.js"),
+        }),
+        "/assets/investigation_v3_shell.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_v3_shell.js"),
+        }),
+        "/assets/mode_stages.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/mode_stages.js"),
+        }),
+        "/assets/investigation_shell.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_shell.css"),
+        }),
+        "/assets/investigation_entry.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_entry.js"),
+        }),
+        "/assets/investigation_skip.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_skip.js"),
+        }),
+        "/assets/investigation_wholemap_model.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_wholemap_model.js"),
+        }),
+        "/assets/investigation_wholemap.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_wholemap.js"),
+        }),
+        "/assets/investigation_wholemap.css" => Some(StaticAsset {
+            content_type: "text/css; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_wholemap.css"),
+        }),
+        "/assets/investigation_badges.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_badges.js"),
+        }),
+        "/assets/investigation_node_model.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_node_model.js"),
+        }),
+        "/assets/investigation_notes_ui.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_notes_ui.js"),
+        }),
+        "/assets/investigation_context.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_context.js"),
+        }),
+        "/assets/investigation_context_cards.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_context_cards.js"),
+        }),
+        "/assets/investigation_orient_ui.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_orient_ui.js"),
+        }),
+        "/assets/investigation_share_ui.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_share_ui.js"),
+        }),
+        "/assets/investigation_handoff_ui.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_handoff_ui.js"),
+        }),
+        "/assets/investigation_legacy.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/investigation_legacy.js"),
         }),
         "/assets/api.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
@@ -159,6 +370,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
         "/assets/session_rail.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/session_rail.js"),
+        }),
+        "/assets/new_menu.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/new_menu.js"),
         }),
         "/assets/session_folders.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
@@ -216,6 +431,18 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/canvas_sources.js"),
         }),
+        "/assets/library_send_back.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/library_send_back.js"),
+        }),
+        "/assets/lessons.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/lessons.js"),
+        }),
+        "/assets/lesson_remember.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/lesson_remember.js"),
+        }),
         "/assets/projects.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/projects.js"),
@@ -244,6 +471,10 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/hitl.js"),
         }),
+        "/assets/worker_activity.js" => Some(StaticAsset {
+            content_type: "application/javascript; charset=utf-8",
+            bytes: include_bytes!("../assets/worker_activity.js"),
+        }),
         "/assets/app.js" => Some(StaticAsset {
             content_type: "application/javascript; charset=utf-8",
             bytes: include_bytes!("../assets/app.js"),
@@ -260,86 +491,32 @@ pub fn lookup_asset(path: &str) -> Option<StaticAsset> {
             content_type: "text/css; charset=utf-8",
             bytes: include_bytes!("../vendor/katex/katex.min.css"),
         }),
-        "/vendor/katex/fonts/KaTeX_AMS-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_AMS-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Caligraphic-Bold.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Caligraphic-Bold.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Caligraphic-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Caligraphic-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Fraktur-Bold.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Fraktur-Bold.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Fraktur-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Fraktur-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Main-Bold.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Main-Bold.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Main-BoldItalic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Main-BoldItalic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Main-Italic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Main-Italic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Main-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Main-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Math-BoldItalic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Math-BoldItalic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Math-Italic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Math-Italic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_SansSerif-Bold.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_SansSerif-Bold.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_SansSerif-Italic.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_SansSerif-Italic.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_SansSerif-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_SansSerif-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Script-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Script-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Size1-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Size1-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Size2-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Size2-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Size3-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Size3-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Size4-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Size4-Regular.woff2"),
-        }),
-        "/vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2" => Some(StaticAsset {
-            content_type: "font/woff2",
-            bytes: include_bytes!("../vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2"),
-        }),
-        _ => None,
+        _ => crate::assets_fonts::lookup_katex_font(clean),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_index_html_expands_all_partials_cleanly() {
+        let html = render_index_html();
+        assert!(!html.contains("<!-- INCLUDE:"), "unexpanded partial marker in rendered index.html");
+        for id in [
+            "investigation-panel",
+            "latex-editor",
+            "dag-fork-bar",
+            "panel-sources",
+            "source-reader-body",
+            "workspace-dialog",
+            "session-folder-dialog",
+            "worked-example",
+        ] {
+            assert!(
+                html.contains(&format!("id=\"{id}\"")),
+                "missing #{id} in rendered index.html"
+            );
+        }
     }
 }

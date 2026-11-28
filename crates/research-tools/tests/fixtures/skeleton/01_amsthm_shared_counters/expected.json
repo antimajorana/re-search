@@ -1,0 +1,330 @@
+{
+  "paper_key": "arxiv:2601.00001",
+  "version": "v1",
+  "primary_path": "main.tex",
+  "quality": "full",
+  "quality_notes_contains": [],
+  "theorem_defs": [
+    {
+      "env_name": "corollary",
+      "kind": "corollary",
+      "display_title": "Corollary",
+      "shared_counter": "theorem",
+      "parent_counter": null,
+      "starred": false,
+      "style": "plain"
+    },
+    {
+      "env_name": "definition",
+      "kind": "definition",
+      "display_title": "Definition",
+      "shared_counter": "theorem",
+      "parent_counter": null,
+      "starred": false,
+      "style": "definition"
+    },
+    {
+      "env_name": "lemma",
+      "kind": "lemma",
+      "display_title": "Lemma",
+      "shared_counter": "theorem",
+      "parent_counter": null,
+      "starred": false,
+      "style": "plain"
+    },
+    {
+      "env_name": "proposition",
+      "kind": "proposition",
+      "display_title": "Proposition",
+      "shared_counter": "theorem",
+      "parent_counter": null,
+      "starred": false,
+      "style": "plain"
+    },
+    {
+      "env_name": "remark",
+      "kind": "remark",
+      "display_title": "Remark",
+      "shared_counter": null,
+      "parent_counter": null,
+      "starred": true,
+      "style": "remark"
+    },
+    {
+      "env_name": "theorem",
+      "kind": "theorem",
+      "display_title": "Theorem",
+      "shared_counter": null,
+      "parent_counter": "section",
+      "starred": false,
+      "style": "plain"
+    }
+  ],
+  "macros": [
+    {
+      "name": "\\R",
+      "arity": 0,
+      "body": "\\mathbb{R}"
+    },
+    {
+      "name": "\\Lap",
+      "arity": 1,
+      "body": "\\Delta_{#1}"
+    },
+    {
+      "name": "\\Deg",
+      "arity": 0,
+      "body": "\\operatorname{deg}"
+    }
+  ],
+  "nodes": [
+    {
+      "kind": "front_matter",
+      "env_name": "abstract",
+      "title": "Abstract",
+      "label": null,
+      "parent_order": null,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 18,
+          "end_line": 20
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "section",
+      "env_name": "section",
+      "title": "Graph Laplacian and harmonicity",
+      "label": "sec:setup",
+      "parent_order": null,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 21,
+          "end_line": 38
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "1",
+      "number_basis": "computed",
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "definition",
+      "env_name": "definition",
+      "title": "Weighted Laplacian",
+      "label": "def:lap",
+      "parent_order": 1,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 23,
+          "end_line": 29
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "1.1",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "equation",
+      "env_name": "equation",
+      "title": null,
+      "label": "eq:lap",
+      "parent_order": 2,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 25,
+          "end_line": 27
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "1",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "lemma",
+      "env_name": "lemma",
+      "title": "Dirichlet form identity \\cite[Proposition 2.1]{keller2020}",
+      "label": "lem:dirichlet",
+      "parent_order": 1,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 30,
+          "end_line": 35
+        }
+      ],
+      "head_cites": [
+        "keller2020"
+      ],
+      "eq_count": 1,
+      "number": "1.2",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "proof",
+      "env_name": "proof",
+      "title": null,
+      "label": null,
+      "parent_order": 1,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 36,
+          "end_line": 38
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": {
+        "kind": "adjacent",
+        "target_order": 4
+      }
+    },
+    {
+      "kind": "section",
+      "env_name": "section",
+      "title": "Maximum principle and uniqueness",
+      "label": "sec:max",
+      "parent_order": null,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 39,
+          "end_line": 54
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "2",
+      "number_basis": "computed",
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "theorem",
+      "env_name": "theorem",
+      "title": "Discrete maximum principle",
+      "label": "thm:max",
+      "parent_order": 6,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 40,
+          "end_line": 45
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "2.1",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "equation",
+      "env_name": "equation",
+      "title": null,
+      "label": "eq:max-bound",
+      "parent_order": 7,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 42,
+          "end_line": 44
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "2",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "proof",
+      "env_name": "proof",
+      "title": null,
+      "label": null,
+      "parent_order": 6,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 46,
+          "end_line": 48
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": {
+        "kind": "adjacent",
+        "target_order": 7
+      }
+    },
+    {
+      "kind": "corollary",
+      "env_name": "corollary",
+      "title": "Uniqueness of the Dirichlet problem",
+      "label": "cor:unique",
+      "parent_order": 6,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 49,
+          "end_line": 51
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "2.2",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "remark",
+      "env_name": "remark",
+      "title": null,
+      "label": null,
+      "parent_order": 6,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 52,
+          "end_line": 54
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    }
+  ]
+}

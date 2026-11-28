@@ -45,6 +45,7 @@ pub struct ResumeInspection {
     pub leg: u32,
     pub start_turn: u32,
     pub prior_outcome: String,
+    pub tool_profile: String,
 }
 
 #[derive(Debug, Clone)]
@@ -94,11 +95,12 @@ pub(crate) fn format_fork_assumption(assumption: &str) -> String {
     )
 }
 
-pub(crate) fn verify_and_read(
+pub(crate) fn verify_and_read_with_profile(
     ledger: &Ledger,
     session: &str,
     expected_policy_version: &str,
     expected_defs: &[ToolDef],
+    active_router_profile: Option<&str>,
 ) -> Result<(ResumeInspection, Vec<Event>), ResumeReject> {
     let (_, events) = ledger.read_verified_session(session).map_err(|err| {
         let kind = match err {
@@ -122,19 +124,14 @@ pub(crate) fn verify_and_read(
             format!("cannot resume session `{session}`: route `{label}` has partial provenance; only `--route api` sessions can be resumed"),
         ));
     }
-    let recorded_policy = start_ev.payload.get("policy_version").and_then(Value::as_str);
-    if recorded_policy != Some(expected_policy_version) {
-        return Err(reject(
-            ResumeRejectKind::Drift,
-            format!("cannot resume session `{session}`: policy_version `{}` differs from expected `{expected_policy_version}`", recorded_policy.unwrap_or("<missing>")),
-        ));
-    }
-    check_tool_defs_drift(session, &start_ev.payload, expected_defs)?;
-    if let Some(resume) = events.iter().rev().find(|event| {
-        event.kind == "session.resume" && event.payload["tool_defs"].is_array()
-    }) {
-        check_tool_defs_drift(session, &resume.payload, expected_defs)?;
-    }
+    let resolved = crate::resume_profile::verify_profile_policy_and_defs(
+        session,
+        &events,
+        start_ev,
+        expected_policy_version,
+        expected_defs,
+        active_router_profile,
+    )?;
 
     let (mut resume_count, mut max_turn_seen, mut last_leg_idx) = (0u32, 0u32, 0usize);
     let (mut last_provider, mut last_model) = (None, None);
@@ -183,64 +180,16 @@ pub(crate) fn verify_and_read(
             leg: 2 + resume_count,
             start_turn: max_turn_seen + 1,
             prior_outcome,
+            tool_profile: resolved.profile.name.to_string(),
         },
         events,
     ))
 }
 
+#[cfg(test)]
 fn check_tool_defs_drift(session: &str, payload: &Value, expected_defs: &[ToolDef]) -> Result<(), ResumeReject> {
-    let recorded = payload
-        .get("tool_defs")
-        .and_then(Value::as_array)
-        .ok_or_else(|| reject(ResumeRejectKind::Drift, format!("session `{session}` missing `tool_defs`")))?;
-    let mut prior = recorded.iter().peekable();
-    for exp in expected_defs {
-        let same_id = prior.peek().and_then(|rec| rec["id"].as_str()) == Some(exp.id.as_str());
-        // Existing research sessions can gain the discovery tools and paper-map recorder.
-        // The recorder requires a matching Investigation paper in the verified session history.
-        // Every recorded tool still has to match its original definition and order.
-        if !same_id
-            && matches!(
-                exp.id.as_str(),
-                "search_formal_library"
-                    | "search_paper_passages"
-                    | "read_paper_lines"
-                    | "record_paper_map"
-                    | "record_paper_summary"
-                    | "record_paper_branch"
-                    | "record_paper_conventions"
-            )
-            && exp.effect == policy::EffectClass::ReadWorkspace
-        {
-            continue;
-        }
-        let hash = prior.next().and_then(|rec| rec["def_hash"].as_str());
-        let compatible = same_id
-            && (hash == Some(exp.def_hash().as_str())
-                || {
-                    // Early Investigation sessions recorded this exact schema before the optional answer index.
-                    let mut earlier = exp.clone();
-                    earlier.id == "record_paper_map"
-                        && earlier.input_schema["properties"]
-                            .as_object_mut()
-                            .is_some_and(|p| p.remove("answer_node_ids").is_some())
-                        && hash == Some(earlier.def_hash().as_str())
-                }
-                || {
-                    // Pre-pointer (7c36a0e) Investigation recorders upgraded to pointer-citation schemas.
-                    research_tools::investigation::is_current_recorder_def(exp)
-                        && research_tools::investigation::earlier_defs(&exp.id)
-                            .iter()
-                            .any(|d| hash == Some(d.def_hash().as_str()))
-                });
-        if !compatible {
-            return Err(reject(ResumeRejectKind::Drift, format!("cannot resume session `{session}`: tool definition drift for `{}`", exp.id)));
-        }
-    }
-    if prior.next().is_some() {
-        return Err(reject(ResumeRejectKind::Drift, format!("cannot resume session `{session}`: tools were removed or reordered")));
-    }
-    Ok(())
+    let profile = research_tools::tool_profile::investigation_v1();
+    crate::resume_profile::check_tool_defs_drift_for_profile(session, payload, expected_defs, &profile)
 }
 
 pub fn inspect_session_for_resume(
@@ -249,7 +198,29 @@ pub fn inspect_session_for_resume(
     expected_policy_version: &str,
     expected_defs: &[ToolDef],
 ) -> Result<ResumeInspection, ResumeReject> {
-    let (insp, events) = verify_and_read(ledger, session, expected_policy_version, expected_defs)?;
+    inspect_session_for_resume_with_profile(
+        ledger,
+        session,
+        expected_policy_version,
+        expected_defs,
+        None,
+    )
+}
+
+pub fn inspect_session_for_resume_with_profile(
+    ledger: &Ledger,
+    session: &str,
+    expected_policy_version: &str,
+    expected_defs: &[ToolDef],
+    active_router_profile: Option<&str>,
+) -> Result<ResumeInspection, ResumeReject> {
+    let (insp, events) = verify_and_read_with_profile(
+        ledger,
+        session,
+        expected_policy_version,
+        expected_defs,
+        active_router_profile,
+    )?;
     // Validate full blob & tool-output rehydration during pre-flight inspection
     // before any caller creates session directories, locks, or workers.
     rehydrate_history(ledger, &events, insp.last_provider)?;
@@ -506,10 +477,9 @@ pub fn resume_agent_loop(
 
     let session = router.session();
     let defs = router.registry().defs();
-    let expected_defs: Vec<ToolDef> = defs.iter().map(|d| (*d).clone()).collect();
     let policy_version = router.policy().version.as_str();
     let (inspection, events) =
-        verify_and_read(ledger, session, policy_version, &expected_defs).map_err(|e| e.to_string())?;
+        crate::resume_profile::verify_router_for_resume(ledger, router).map_err(|e| e.to_string())?;
 
     let info = transport.info();
     let target_provider = ProviderKind::parse(info.provider)?;
@@ -526,31 +496,30 @@ pub fn resume_agent_loop(
         .unwrap_or(&inspection.system_prompt)
         .to_string();
     let mut audit = Audit { ledger, session, sink, last_seq: inspection.resumed_from_seq };
-    audit.emit(
-        "session.resume",
-        json!({
-            "route": "api",
-            "provenance": "in-core loop, full provenance",
-            "leg": inspection.leg,
-            "resumed_from_seq": inspection.resumed_from_seq,
-            "prior_outcome": inspection.prior_outcome,
-            "start_turn": inspection.start_turn,
-            "provider": info.provider,
-            "endpoint": info.endpoint,
-            "api_key_env": info.api_key_env,
-            "model_requested": cfg.model_requested,
-            "model": cfg.model,
-            "prompt": cfg.prompt,
-            "system_prompt": system_prompt,
-            "max_turns": cfg.max_turns,
-            "max_tokens": cfg.max_tokens,
-            "policy_version": policy_version,
-            "containment": cfg.containment,
-            "contained": cfg.contained,
-            "history_messages": messages.len(),
-            "tool_defs": tool_defs_json(&defs),
-        }),
-    )?;
+    let mut resume_payload = json!({
+        "route": "api",
+        "provenance": "in-core loop, full provenance",
+        "leg": inspection.leg,
+        "resumed_from_seq": inspection.resumed_from_seq,
+        "prior_outcome": inspection.prior_outcome,
+        "start_turn": inspection.start_turn,
+        "provider": info.provider,
+        "endpoint": info.endpoint,
+        "api_key_env": info.api_key_env,
+        "model_requested": cfg.model_requested,
+        "model": cfg.model,
+        "prompt": cfg.prompt,
+        "system_prompt": system_prompt,
+        "max_turns": cfg.max_turns,
+        "max_tokens": cfg.max_tokens,
+        "policy_version": policy_version,
+        "containment": cfg.containment,
+        "contained": cfg.contained,
+        "history_messages": messages.len(),
+        "tool_defs": tool_defs_json(&defs),
+    });
+    crate::resume_profile::insert_tool_profile(&mut resume_payload, router, &events);
+    audit.emit("session.resume", resume_payload)?;
 
     run_turn_loop(
         transport,

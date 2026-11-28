@@ -1,0 +1,201 @@
+{
+  "nodes": [
+    {
+      "id": "n-def0000001",
+      "kind": "definition",
+      "label": "Definition 1.1: Finite-chain Hamiltonian",
+      "group": "Section 1: Setup",
+      "parent": null,
+      "grade": "code",
+      "badges": [
+        { "text": "By code", "icon": "code", "tone": "ok" }
+      ],
+      "flags": [],
+      "stale": false,
+      "dim": false
+    },
+    {
+      "id": "n-ass0000002",
+      "kind": "assumption",
+      "label": "Assumption 1.2: Uniform spectral gap",
+      "group": "Section 1: Setup",
+      "parent": null,
+      "grade": "code",
+      "badges": [
+        { "text": "By code", "icon": "code", "tone": "ok" }
+      ],
+      "flags": [],
+      "stale": false,
+      "dim": false
+    },
+    {
+      "id": "n-eq00000003",
+      "kind": "equation",
+      "label": "Eq. (1.4): Commutator norm bound",
+      "group": "Section 1: Setup",
+      "parent": "n-def0000001",
+      "grade": "code",
+      "badges": [
+        { "text": "By code", "icon": "code", "tone": "ok" }
+      ],
+      "flags": [],
+      "stale": false,
+      "dim": false
+    },
+    {
+      "id": "n-lem0000004",
+      "kind": "lemma",
+      "label": "Lemma 2.1: Exponential tail decay",
+      "group": "Section 2: Decay Estimate",
+      "parent": null,
+      "grade": "quote_fulltext",
+      "badges": [
+        { "text": "Authors: Restated (model)", "icon": "model", "tone": "info" }
+      ],
+      "flags": ["cites [Toy98] in its heading"],
+      "stale": false,
+      "dim": false
+    },
+    {
+      "id": "n-lem0000005",
+      "kind": "lemma",
+      "label": "Lemma 2.2: Boundary stability",
+      "group": "Section 2: Decay Estimate",
+      "parent": null,
+      "grade": "code",
+      "badges": [
+        { "text": "By code", "icon": "code", "tone": "ok" }
+      ],
+      "flags": [],
+      "stale": false,
+      "dim": false
+    },
+    {
+      "id": "n-thm0000006",
+      "kind": "theorem",
+      "label": "Theorem 3.1: Quasi-local evolution",
+      "group": "Section 3: Main Theorem",
+      "parent": null,
+      "grade": "code",
+      "badges": [
+        { "text": "Main result (model)", "icon": "pin", "tone": "ok" },
+        { "text": "Authors: New (model)", "icon": "model", "tone": "info" }
+      ],
+      "flags": ["pinned"],
+      "stale": false,
+      "dim": false
+    },
+    {
+      "id": "m-stp0000007",
+      "kind": "claim",
+      "label": "Step 1: Duhamel integral split (model)",
+      "group": "Section 3: Main Theorem",
+      "parent": "n-thm0000006",
+      "grade": "model",
+      "badges": [
+        { "text": "Proof step (model)", "icon": "model", "tone": "muted" }
+      ],
+      "flags": [],
+      "stale": false,
+      "dim": false
+    },
+    {
+      "id": "n-cor0000008",
+      "kind": "corollary",
+      "label": "Corollary 3.2: Correlation clustering",
+      "group": "Section 3: Main Theorem",
+      "parent": null,
+      "grade": "code",
+      "badges": [
+        { "text": "By code", "icon": "code", "tone": "ok" }
+      ],
+      "flags": ["changed"],
+      "stale": true,
+      "dim": false
+    },
+    {
+      "id": "n-rem0000009",
+      "kind": "remark",
+      "label": "Remark 4.1: Periodic boundary note",
+      "group": "Section 4: Auxiliary Remarks",
+      "parent": null,
+      "grade": "code",
+      "badges": [
+        { "text": "By code", "icon": "code", "tone": "neutral" }
+      ],
+      "flags": ["not referred to by any main result"],
+      "stale": false,
+      "dim": true
+    }
+  ],
+  "edges": [
+    {
+      "src": "n-def0000001",
+      "dst": "n-lem0000004",
+      "kind": "uses",
+      "role": "statement",
+      "basis": "code"
+    },
+    {
+      "src": "n-ass0000002",
+      "dst": "n-thm0000006",
+      "kind": "uses",
+      "role": "statement",
+      "basis": "code"
+    },
+    {
+      "src": "n-eq00000003",
+      "dst": "n-lem0000004",
+      "kind": "uses",
+      "role": "proof",
+      "basis": "code"
+    },
+    {
+      "src": "n-lem0000004",
+      "dst": "n-thm0000006",
+      "kind": "uses",
+      "role": "proof",
+      "basis": "code"
+    },
+    {
+      "src": "n-lem0000005",
+      "dst": "n-thm0000006",
+      "kind": "uses",
+      "role": "proof",
+      "basis": "evidence"
+    },
+    {
+      "src": "n-lem0000005",
+      "dst": "m-stp0000007",
+      "kind": "uses",
+      "role": "argument",
+      "basis": "model"
+    },
+    {
+      "src": "m-stp0000007",
+      "dst": "n-thm0000006",
+      "kind": "proves",
+      "role": "proof",
+      "basis": "model"
+    },
+    {
+      "src": "n-thm0000006",
+      "dst": "n-cor0000008",
+      "kind": "uses",
+      "role": "statement",
+      "basis": "code"
+    },
+    {
+      "src": "n-def0000001",
+      "dst": "n-rem0000009",
+      "kind": "uses",
+      "role": "prose",
+      "basis": "code"
+    }
+  ],
+  "legend": [
+    { "label": "By code (skeleton)", "icon": "code", "tone": "ok", "dashed": false },
+    { "label": "Matched quote", "icon": "quote", "tone": "ok", "dashed": false },
+    { "label": "Model statement (model)", "icon": "model", "tone": "muted", "dashed": true }
+  ]
+}

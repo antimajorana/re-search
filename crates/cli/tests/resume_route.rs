@@ -469,3 +469,91 @@ fn resume_rejects_tamper_unknown_legacy_cli_route_and_live_lock_but_recovers_sta
     assert!(!lock_path.exists());
     assert_eq!(verify_cli(&lock_dir.0, Some(&s_lock)).status.code(), Some(0));
 }
+
+#[test]
+fn resume_with_research_upgrades_explicit_investigation_v1_and_preflights_before_creating_dirs() {
+    use research_tools::tool_profile::{
+        investigation_v1, investigation_v2, MARKER_INVESTIGATION_STARTED, PROFILE_INVESTIGATION_V1,
+        PROFILE_INVESTIGATION_V2, TOOL_PROFILE_FIELD,
+    };
+    use research_tools::RESEARCH_POLICY_VERSION;
+
+    let dir = TempDir::new("inv1-cli");
+    let d = dir.0.to_string_lossy().into_owned();
+    let ledger = Ledger::open(&dir.0).unwrap();
+    let sid = "s-cli-inv1-explicit";
+    ledger.append_with_hash(sid, MARKER_INVESTIGATION_STARTED, 1, &json!({ "title": "CLI Inv1" })).unwrap();
+    let i1_defs: Vec<Value> = investigation_v1().defs.iter().map(|def| json!({ "id": def.id, "def_hash": def.def_hash() })).collect();
+    ledger.append_with_hash(sid, "session.start", 1, &json!({
+        "route": "api", "provenance": "in-core loop, full provenance",
+        "provider": "openai", "endpoint": "http://127.0.0.1:0/v1/chat/completions", "api_key_env": "OPENAI_API_KEY",
+        "model_requested": "gpt-4.1-mini", "model": "gpt-4.1-mini",
+        "prompt": "map v1", "system_prompt": "Investigate.", "max_turns": 4, "max_tokens": 1024,
+        "policy_version": RESEARCH_POLICY_VERSION, "tool_profile": PROFILE_INVESTIGATION_V1, "tool_defs": i1_defs,
+    })).unwrap();
+    let resp_blob = ledger.put_blob(&serde_json::to_vec(&openai_chat_ok("chat_inv1", "gpt-4.1-mini", "mapped").body).unwrap()).unwrap();
+    ledger.append_with_hash(sid, "model.response", 1, &json!({
+        "turn": 1, "response_id": "chat_inv1", "model": "gpt-4.1-mini", "stop_reason": "stop", "usage": {}, "duration_ms": 2, "raw_blob": resp_blob
+    })).unwrap();
+    ledger.append_with_hash(sid, "session.end", 1, &json!({ "outcome": "completed", "stop_reason": "stop", "num_turns": 1, "last_turn": 1, "duration_ms": 3 })).unwrap();
+
+    // 1. Without `--enable-research-tools`, builtin router (`active_router_profile = None`) rejects explicit `investigation/1` as Drift.
+    let no_res = run_cli(Some(("OPENAI_API_KEY", TEST_KEY)), &["resume", sid, "--prompt", "no research", "--data-dir", &d]);
+    assert_eq!(no_res.status.code(), Some(2), "stderr: {}", String::from_utf8_lossy(&no_res.stderr));
+    assert_eq!(ledger.read_session(sid).unwrap().len(), 4);
+
+    // 2. Unknown, tampered, cli-route, or missing-key runs with `--enable-research-tools true` fail before creating `sessions/<id>` dirs.
+    let missing = run_cli(Some(("OPENAI_API_KEY", TEST_KEY)), &[
+        "resume", "s-missing-res", "--enable-research-tools", "true", "--prompt", "next", "--data-dir", &d,
+    ]);
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(!dir.0.join("sessions").join("s-missing-res").exists());
+
+    let no_key = run_cli(None, &[
+        "resume", sid, "--enable-research-tools", "true", "--prompt", "next", "--data-dir", &d,
+    ]);
+    assert_eq!(no_key.status.code(), Some(2));
+    assert!(!dir.0.join("sessions").join(sid).exists());
+
+    ledger.append_with_hash("s-cli-unbuilt", "session.start", 1, &json!({ "route": "claude-code-cli", "tool_profile": "explore/1" })).unwrap();
+    let cli_route = run_cli(Some(("OPENAI_API_KEY", TEST_KEY)), &[
+        "resume", "s-cli-unbuilt", "--enable-research-tools", "true", "--prompt", "next", "--data-dir", &d,
+    ]);
+    assert_eq!(cli_route.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&cli_route.stderr).contains("only `--route api` sessions can be resumed"));
+    assert!(!dir.0.join("sessions").join("s-cli-unbuilt").exists());
+
+    let tamper_dir = TempDir::new("inv1-cli-tamper");
+    let dt = tamper_dir.0.to_string_lossy().into_owned();
+    let t_ledger = Ledger::open(&tamper_dir.0).unwrap();
+    t_ledger.append_with_hash("s-tamper-res", MARKER_INVESTIGATION_STARTED, 1, &json!({ "title": "Tamper" })).unwrap();
+    t_ledger.append_with_hash("s-tamper-res", "session.start", 1, &json!({
+        "route": "api", "provider": "openai", "model": "gpt-4.1-mini", "prompt": "p",
+        "policy_version": RESEARCH_POLICY_VERSION, "tool_profile": PROFILE_INVESTIGATION_V1, "tool_defs": i1_defs,
+    })).unwrap();
+    let t_blob = t_ledger.put_blob(&serde_json::to_vec(&openai_chat_ok("chat_t", "gpt-4.1-mini", "ok").body).unwrap()).unwrap();
+    t_ledger.append_with_hash("s-tamper-res", "model.response", 1, &json!({
+        "turn": 1, "response_id": "chat_t", "model": "gpt-4.1-mini", "stop_reason": "stop", "usage": {}, "duration_ms": 1, "raw_blob": t_blob
+    })).unwrap();
+    std::fs::write(tamper_dir.0.join("blobs").join(&t_blob[..2]).join(&t_blob), b"corrupt").unwrap();
+    let tampered = run_cli(Some(("OPENAI_API_KEY", TEST_KEY)), &[
+        "resume", "s-tamper-res", "--enable-research-tools", "true", "--prompt", "next", "--data-dir", &dt,
+    ]);
+    assert_eq!(tampered.status.code(), Some(1));
+    assert!(!tamper_dir.0.join("sessions").join("s-tamper-res").exists());
+
+    // 3. With `--enable-research-tools true`, explicit `investigation/1` upgrades cleanly to `investigation/2`.
+    let srv = MockServer::start(vec![openai_chat_ok("chat_inv2", "gpt-4.1-mini", "upgraded to v2")]);
+    let ok = run_cli(Some(("OPENAI_API_KEY", TEST_KEY)), &[
+        "resume", sid, "--enable-research-tools", "true", "--prompt", "continue in v2", "--data-dir", &d, "--api-base", &srv.base_url,
+    ]);
+    assert_eq!(ok.status.code(), Some(0), "stderr:\n{}", String::from_utf8_lossy(&ok.stderr));
+    let reqs = srv.take_requests();
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0].body["tools"].as_array().unwrap().len(), investigation_v2().defs.len());
+
+    let evs = Ledger::open_existing(&dir.0).unwrap().read_session(sid).unwrap();
+    let res_ev = evs.iter().find(|e| e.kind == "session.resume").expect("session.resume recorded");
+    assert_eq!(res_ev.payload[TOOL_PROFILE_FIELD], PROFILE_INVESTIGATION_V2);
+    assert_eq!(verify_cli(&dir.0, Some(sid)).status.code(), Some(0));
+}

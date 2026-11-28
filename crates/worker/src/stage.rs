@@ -14,9 +14,46 @@ use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 const STAGE_LOCK_TIMEOUT: Duration = Duration::from_secs(120);
 const STALE_LOCK_AGE: Duration = Duration::from_secs(15 * 60);
-const ALLOWED_PACKAGES: &[&str] = &["sympy", "mpmath", "numpy", "numpy.libs"];
-const ALLOWED_DIST_PREFIXES: &[&str] = &["sympy-", "mpmath-", "numpy-"];
-const WORKER_HELPERS: &[&str] = &["solver_calc.py", "symbolic_validation.py", "numerical_validation.py"];
+const ALLOWED_PACKAGES: &[&str] = &[
+    "sympy",
+    "mpmath",
+    "numpy",
+    "numpy.libs",
+    "scipy",
+    "scipy.libs",
+    "matplotlib",
+    "mpl_toolkits",
+    "pylab.py",
+    "contourpy",
+    "cycler",
+    "fonttools",
+    "kiwisolver",
+    "packaging",
+    "pil",
+    "pillow.libs",
+    "pyparsing",
+    "dateutil",
+    "tzdata",
+    "six.py",
+];
+const ALLOWED_DIST_PREFIXES: &[&str] = &[
+    "sympy-",
+    "mpmath-",
+    "numpy-",
+    "scipy-",
+    "matplotlib-",
+    "contourpy-",
+    "cycler-",
+    "fonttools-",
+    "kiwisolver-",
+    "packaging-",
+    "pillow-",
+    "pyparsing-",
+    "python_dateutil-",
+    "python-dateutil-",
+    "tzdata-",
+    "six-",
+];
 static TMP_SEQ: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
@@ -241,13 +278,13 @@ fn hex_digest(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn compute_fingerprint(probe: &PythonProbe, source_python: &Path, scripts: &[(&str, Vec<u8>)]) -> io::Result<String> {
+fn compute_fingerprint(probe: &PythonProbe, source_python: &Path, scripts: &[(String, Vec<u8>)]) -> io::Result<String> {
     let mut h = Sha256::new();
     let update_field = |h: &mut Sha256, s: &str| {
         h.update((s.len() as u64).to_le_bytes());
         h.update(s.as_bytes());
     };
-    update_field(&mut h, "stage-v3");
+    update_field(&mut h, "stage-v5");
     update_field(&mut h, &probe.base.to_string_lossy());
     update_field(&mut h, &probe.ver);
     let canon_py = strip_verbatim(&fs::canonicalize(source_python)?);
@@ -320,7 +357,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path, skip_lib_site: bool, depth: usize)
     Ok(())
 }
 
-fn staged_paths(target: &Path, scripts: &[(&str, Vec<u8>)]) -> Option<StagedRuntime> {
+fn staged_paths(target: &Path, scripts: &[(String, Vec<u8>)]) -> Option<StagedRuntime> {
     let ready = target.join("ready.json");
     let py = target.join("py").join("python.exe");
     if ready.is_file() && py.is_file() && scripts.iter().all(|(name, _)| target.join(name).is_file()) {
@@ -345,14 +382,7 @@ pub fn ensure_staged_runtime(data_dir: &Path, source_python: &Path, worker_scrip
         return Err(io::Error::new(io::ErrorKind::NotFound, format!("worker script not found: {}", worker_script.display())));
     }
     let probe = probe_source_python(source_python)?;
-    let mut scripts = vec![("worker.py", fs::read(worker_script)?)];
-    for &name in WORKER_HELPERS {
-        match fs::read(worker_script.with_file_name(name)) {
-            Ok(bytes) => scripts.push((name, bytes)),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
+    let scripts = crate::protocol::collect_staged_scripts(worker_script)?;
     let fp = compute_fingerprint(&probe, source_python, &scripts)?;
     let runtime_root = data_dir.join("runtime");
     let target = runtime_root.join(&fp);
@@ -398,9 +428,7 @@ pub fn ensure_staged_runtime(data_dir: &Path, source_python: &Path, worker_scrip
             }
         }
     }
-    for (name, bytes) in &scripts {
-        fs::write(tmp_dir.join(name), bytes)?;
-    }
+    crate::protocol::write_staged_scripts(&tmp_dir, &scripts)?;
 
     if target.exists() {
         fs::remove_dir_all(&target)?;
@@ -471,5 +499,32 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn allowlist_matches_scipy_matplotlib_and_transitive_runtime_entries() {
+        for entry in [
+            "numpy",
+            "numpy.libs",
+            "scipy",
+            "scipy.libs",
+            "matplotlib",
+            "mpl_toolkits",
+            "pylab.py",
+            "PIL",
+            "fontTools",
+            "dateutil",
+            "tzdata",
+            "scipy-1.18.1.dist-info",
+            "matplotlib-3.11.2.dist-info",
+            "pillow-13.0.0.dist-info",
+            "python_dateutil-4.0.0.dist-info",
+            "tzdata-2026.6.dist-info",
+        ] {
+            assert!(matches_package_entry(entry), "expected allowlist match for {entry}");
+        }
+        for rejected in ["pip", "pytest", "requests", "pip-26.2.2.dist-info", "scipy-1.18.1-cp314.whl"] {
+            assert!(!matches_package_entry(rejected), "unexpected allowlist match for {rejected}");
+        }
     }
 }

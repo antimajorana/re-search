@@ -1,0 +1,28 @@
+\documentclass{article}
+\usepackage{amsmath,amsthm}
+\title{Manual Counter Resets in Shifted Sections}
+\author{Synthetic Case P5-07}
+\newtheorem{thm}{Theorem}[section]
+\newtheorem{lem}{Lemma}[section]
+\renewcommand{\thethm}{\thesection.\arabic{thm}}
+\begin{document}
+\maketitle
+
+\section{Overview}
+\label{sec:overview}
+
+\begin{lem}[Auxiliary bound]
+\label{lem:aux}
+Every compactly supported function satisfies a standard Friedrichs inequality.
+\end{lem}
+
+\section{Refined Bound}
+\label{sec:refined}
+
+\setcounter{thm}{3}
+\begin{thm}[Bounded tail energy]
+\label{thm:drifted-bound}
+After manually shifting the theorem counter in this section, the tail energy remains uniformly bounded.
+\end{thm}
+
+\end{document}

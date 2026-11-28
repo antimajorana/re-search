@@ -331,46 +331,6 @@ fn load_dag_with_computation_check(ledger: &Ledger, session: &str) -> Result<Pro
     Ok(dag)
 }
 
-#[cfg(test)]
-mod computation_tests {
-    use super::*;
-
-    #[test]
-    fn calculation_gate_requires_linked_successful_results() {
-        let tmp = tempfile::tempdir().unwrap();
-        let ledger = Ledger::open(tmp.path()).unwrap();
-        let session = "calc";
-        let append = |kind, payload| ledger.append(session, kind, 1, &payload).unwrap();
-        append("session.start", json!({}));
-        append("tool.request", json!({"call_id": "failed", "tool": "sympy_eval"}));
-        append("tool.result", json!({"call_id": "failed", "ok": false, "error": {"inline": "worker unavailable"}}));
-        append("tool.request", json!({"call_id": "exception", "tool": "sympy_eval"}));
-        append("tool.result", json!({"call_id": "exception", "ok": true, "result": {
-            "inline": json!({"value": null, "error": {"message": "division by zero"}}).to_string()
-        }}));
-        assert!(check_computation_interpretation(&ledger, session).is_ok());
-
-        append("proof.entry", json!({"entry_id": "e-early", "entry_type": "result",
-            "summary": "Result asserted before evaluation", "tool_call_ref": "actual"}));
-        append("tool.request", json!({"call_id": "actual", "tool": "sympy_eval"}));
-        let blob = ledger.put_blob(br#"{"value":"4","stdout":""}"#).unwrap();
-        let result_seq = append("tool.result", json!({"call_id": "actual", "ok": true, "result": {"blob": blob}}));
-        // The substring rule previously credited "actual" inside this unrelated citation.
-        append("proof.entry", json!({"entry_id": "e-1", "entry_type": "result",
-            "summary": "Unrelated result", "tool_call_ref": "unactualized"}));
-        let error = check_computation_interpretation(&ledger, session).unwrap_err();
-        assert!(error.contains(&format!("[{result_seq}]")), "{error}");
-
-        append("proof.entry", json!({"entry_id": "e-2", "entry_type": "symbolic_computation",
-            "summary": "Evaluate 2+2", "tool_call_ref": "actual"}));
-        append("proof.entry", json!({"entry_id": "e-3", "entry_type": "result",
-            "summary": "The sum is 4", "depends_on": ["e-2"]}));
-        assert!(check_computation_interpretation(&ledger, session).is_ok());
-        append("proof.supersede", json!({"entry_id": "e-3", "replaced_by": "e-1"}));
-        assert!(check_computation_interpretation(&ledger, session).is_err());
-    }
-}
-
 /// Checks whether a final answer may be accepted under `verification_mode`.
 /// When `verification_mode` is `true`, requires both computation interpretation
 /// and an accepted full-solution verification of the current proof.
@@ -415,30 +375,30 @@ pub fn run_research_loop(
     let session = router.session();
     let info = transport.info();
     let defs = router.registry().defs();
-    let mut audit = Audit { ledger, session, sink, last_seq: 0 };
-    audit.emit(
-        "session.start",
-        json!({
-            "route": "api",
-            "provenance": "in-core loop, full provenance",
-            "provider": info.provider,
-            "endpoint": info.endpoint,
-            "api_key_env": info.api_key_env,
-            "model_requested": cfg.model_requested,
-            "model": cfg.model,
-            "prompt": cfg.prompt,
-            "system_prompt": system_prompt,
-            "max_turns": cfg.max_turns,
-            "max_tokens": cfg.max_tokens,
-            "policy_version": router.policy().version.as_str(),
-            "containment": cfg.containment,
-            "contained": cfg.contained,
-            "verification_mode": guardrails.verification_mode,
-            "calculation_mode": guardrails.calculation_mode,
-            "pinned_conventions": guardrails.pinned_conventions,
-            "tool_defs": tool_defs_json(&defs),
-        }),
-    )?;
+    let existing = ledger.read_session(session).map_err(|e| e.to_string())?;
+    let mut audit = Audit { ledger, session, sink, last_seq: existing.last().map_or(0, |e| e.seq) };
+    let mut start_payload = json!({
+        "route": "api",
+        "provenance": "in-core loop, full provenance",
+        "provider": info.provider,
+        "endpoint": info.endpoint,
+        "api_key_env": info.api_key_env,
+        "model_requested": cfg.model_requested,
+        "model": cfg.model,
+        "prompt": cfg.prompt,
+        "system_prompt": system_prompt,
+        "max_turns": cfg.max_turns,
+        "max_tokens": cfg.max_tokens,
+        "policy_version": router.policy().version.as_str(),
+        "containment": cfg.containment,
+        "contained": cfg.contained,
+        "verification_mode": guardrails.verification_mode,
+        "calculation_mode": guardrails.calculation_mode,
+        "pinned_conventions": guardrails.pinned_conventions,
+        "tool_defs": tool_defs_json(&defs),
+    });
+    crate::resume_profile::insert_tool_profile(&mut start_payload, router, &existing);
+    audit.emit("session.start", start_payload)?;
 
     let initial_messages = vec![Message {
         role: Role::User,
@@ -488,4 +448,44 @@ pub fn run_research_loop(
         }))?;
     }
     Ok(leg.outcome)
+}
+
+#[cfg(test)]
+mod computation_tests {
+    use super::*;
+
+    #[test]
+    fn calculation_gate_requires_linked_successful_results() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(tmp.path()).unwrap();
+        let session = "calc";
+        let append = |kind, payload| ledger.append(session, kind, 1, &payload).unwrap();
+        append("session.start", json!({}));
+        append("tool.request", json!({"call_id": "failed", "tool": "sympy_eval"}));
+        append("tool.result", json!({"call_id": "failed", "ok": false, "error": {"inline": "worker unavailable"}}));
+        append("tool.request", json!({"call_id": "exception", "tool": "sympy_eval"}));
+        append("tool.result", json!({"call_id": "exception", "ok": true, "result": {
+            "inline": json!({"value": null, "error": {"message": "division by zero"}}).to_string()
+        }}));
+        assert!(check_computation_interpretation(&ledger, session).is_ok());
+
+        append("proof.entry", json!({"entry_id": "e-early", "entry_type": "result",
+            "summary": "Result asserted before evaluation", "tool_call_ref": "actual"}));
+        append("tool.request", json!({"call_id": "actual", "tool": "sympy_eval"}));
+        let blob = ledger.put_blob(br#"{"value":"4","stdout":""}"#).unwrap();
+        let result_seq = append("tool.result", json!({"call_id": "actual", "ok": true, "result": {"blob": blob}}));
+        // The substring rule previously credited "actual" inside this unrelated citation.
+        append("proof.entry", json!({"entry_id": "e-1", "entry_type": "result",
+            "summary": "Unrelated result", "tool_call_ref": "unactualized"}));
+        let error = check_computation_interpretation(&ledger, session).unwrap_err();
+        assert!(error.contains(&format!("[{result_seq}]")), "{error}");
+
+        append("proof.entry", json!({"entry_id": "e-2", "entry_type": "symbolic_computation",
+            "summary": "Evaluate 2+2", "tool_call_ref": "actual"}));
+        append("proof.entry", json!({"entry_id": "e-3", "entry_type": "result",
+            "summary": "The sum is 4", "depends_on": ["e-2"]}));
+        assert!(check_computation_interpretation(&ledger, session).is_ok());
+        append("proof.supersede", json!({"entry_id": "e-3", "replaced_by": "e-1"}));
+        assert!(check_computation_interpretation(&ledger, session).is_err());
+    }
 }

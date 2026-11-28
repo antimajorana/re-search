@@ -1,0 +1,90 @@
+# Evaluation sheet: not recorded, live tier
+
+Format: one sheet per run (overview section 7.1). Measures and targets: section 7.3.
+
+## Run
+
+| Field | Value |
+|---|---|
+| Date | not recorded |
+| Tier | live |
+| Gate for milestone | none |
+| Build: git commit | not recorded |
+| Build: crate version | not recorded |
+| Models | none |
+| Model calls | not measured |
+| Wall time | not measured |
+| Cases run (0) | none |
+
+## Gate: INCOMPLETE
+
+PASS needs every measure that has a pass rule to be measured and to pass. A measure without a value counts as not measured, never as a pass.
+
+- Failed (0): none
+- Pass rule, not measured (24): `time_to_skeleton_tex_s`, `time_to_candidates_s`, `time_to_solve_setup_s`, `runs_above_cap`, `statement_recall_tex_theorem_envs`, `section_recall_tex_theorem_envs`, `wrong_carry_overs`, `judged_same_key_different_unreviewed`, `wrong_statement_located`, `pdf_wrong_page_chip`, `pdf_scanned_reported_plain_text`, `sync_second_changes`, `sync_planted_case_mismatches`, `sync_source_folder_diffs`, `sync_removed_source_quote_breaks`, `planted_error_ends_failed_pct`, `planted_error_ends_verified`, `planted_error_ends_checked_numerically`, `writeup_failures`, `lessons_gate_drift`, `quotes_surviving_handover_pct`, `old_ledgers_not_resuming`, `old_ledgers_view_differs`, `forbidden_word_property_failures`
+
+## Measures
+
+| Measure | Id | Applies to | Rule | Value | Outcome | Says in 7.3 | Note |
+|---|---|---|---|---|---|---|---|
+| Investigate: time from input to skeleton, TeX paper | `time_to_skeleton_tex_s` | All modes | below 10 | not measured | not measured | Investigate TeX under 10 s |  |
+| Explore: time from input to candidates | `time_to_candidates_s` | All modes | below 6 | not measured | not measured | Explore candidates under 6 s |  |
+| Solve: time from input to setup | `time_to_solve_setup_s` | All modes | below 1 | not measured | not measured | Solve setup under 1 s |  |
+| Investigate: time from input to skeleton, PDF with text layer | `time_to_skeleton_pdf_s` | All modes | recorded | not measured | not measured | Investigate from a PDF with a text layer: recorded; a target is set after the first F14a sheet |  |
+| Runs whose model calls or tokens went above the cap | `runs_above_cap` | All | must be 0 | not measured | not measured | Never above the cap |  |
+| Typical model calls per run | `model_calls_typical` | All | recorded | not measured | not measured | typical value recorded |  |
+| Typical tokens per run | `tokens_typical` | All | recorded | not measured | not measured | typical value recorded |  |
+| Theorem-like statement recall, all papers of P and P6 | `statement_recall` | P, P6 | recorded | not measured | not measured | For PDF the figure is recorded and shown beside the quality line; no blocking value before the first sheet |  |
+| Section recall, all papers of P and P6 | `section_recall` | P, P6 | recorded | not measured | not measured | For PDF the figure is recorded and shown beside the quality line; no blocking value before the first sheet |  |
+| Theorem-like statement recall, TeX papers with theorem environments | `statement_recall_tex_theorem_envs` | P | at least 0.9 | not measured | not measured | below 0.9 on TeX papers with theorem environments blocks M1 |  |
+| Section recall, TeX papers with theorem environments | `section_recall_tex_theorem_envs` | P | at least 0.9 | not measured | not measured | below 0.9 on TeX papers with theorem environments blocks M1 |  |
+| "Uses" edge precision, statement role | `uses_edge_precision_statement` | P | recorded | not measured | not measured |  |  |
+| "Uses" edge precision, proof role | `uses_edge_precision_proof` | P | recorded | not measured | not measured |  |  |
+| Tags unchanged for unchanged statements | `tags_unchanged_share` | P2 | recorded | not measured | not measured |  |  |
+| Wrong carry-overs | `wrong_carry_overs` | P2 | must be 0 | not measured | not measured | Wrong carry-overs must be 0 |  |
+| Authors' label agreement with the key | `author_label_agreement` | P3 | recorded | not measured | not measured |  |  |
+| Share of labels whose quote contains a cue | `label_quote_cue_share` | P3 | recorded | not measured | not measured |  |  |
+| Known earlier source found | `earlier_source_found` | I, and the P-to-I chains of C | recorded | not measured | not measured |  |  |
+| "None in scope" shown for a result that has a known earlier source | `none_in_scope_false_negative_rate` | I, and the P-to-I chains of C | recorded | not measured | not measured | The second number is the false-negative rate that decides whether the feature is announced |  |
+| "Judged same" where the key says different | `judged_same_key_different` | I, C | recorded | not measured | not measured | Recorded; every such case reviewed |  |
+| Of those, cases not yet reviewed | `judged_same_key_different_unreviewed` | I, C | must be 0 | not measured | not measured | every such case reviewed |  |
+| Wrong statement shown as located | `wrong_statement_located` | P5 | must be 0 | not measured | not measured | Must be 0 (candidates list is acceptable) |  |
+| Known-paper recall of the search alone, keyless services | `search_recall_keyless` | I | recorded | not measured | not measured | Recorded per service set (keyless; with keys; with and without the library) |  |
+| Known-paper recall of the search alone, services with keys | `search_recall_with_keys` | I | recorded | not measured | not measured | Recorded per service set (keyless; with keys; with and without the library) |  |
+| Known-paper recall of the search alone, with library | `search_recall_with_library` | I | recorded | not measured | not measured | Recorded per service set (keyless; with keys; with and without the library) |  |
+| Known-paper recall of the search alone, without library | `search_recall_without_library` | I | recorded | not measured | not measured | Recorded per service set (keyless; with keys; with and without the library) |  |
+| Quotes accepted per model call | `quotes_accepted_per_model_call` | Investigate tasks, Explore readers | recorded | not measured | not measured |  |  |
+| Quotes rejected (reasons in the note) | `quotes_rejected` | Investigate tasks, Explore readers | recorded | not measured | not measured |  |  |
+| Sentence copied by hand from the page matches in stored text | `pdf_sentence_match_share` | P6 | recorded | not measured | not measured | Recorded per page basis (text layer, scan with text layer, own OCR) |  |
+| Quote chip opens the wrong page | `pdf_wrong_page_chip` | P6 | must be 0 | not measured | not measured | Must be 0 |  |
+| Scanned page reported as a plain text layer | `pdf_scanned_reported_plain_text` | P6 and the PDF fixtures | must be 0 | not measured | not measured | Must be 0 |  |
+| Character errors per 100 characters on sampled lines of scans | `pdf_scan_char_errors_per_100` | P6 | recorded | not measured | not measured |  |  |
+| Lines in the wrong reading order on two-column pages | `pdf_two_col_wrong_order_lines` | P6 | recorded | not measured | not measured |  |  |
+| Sync: rows changed by a second sync | `sync_second_changes` | B | must be 0 | not measured | not measured | Must pass; in CI |  |
+| Sync: planted cases not ending in their expected state | `sync_planted_case_mismatches` | B | must be 0 | not measured | not measured | Must pass; in CI |  |
+| Sync: source folder bytes differing after sync | `sync_source_folder_diffs` | B | must be 0 | not measured | not measured | Must pass; in CI |  |
+| Sync: quote checks broken when a source is removed | `sync_removed_source_quote_breaks` | B | must be 0 | not measured | not measured | Must pass; in CI |  |
+| Planted error ends Failed | `planted_error_ends_failed_pct` | Q | must equal 100 | not measured | not measured | Must be 100 percent |  |
+| Planted error ends Verified | `planted_error_ends_verified` | Q | must be 0 | not measured | not measured | ending Verified or Numerically checked is a release blocker |  |
+| Planted error ends Numerically checked | `planted_error_ends_checked_numerically` | Q | must be 0 | not measured | not measured | ending Verified or Numerically checked is a release blocker |  |
+| Share of steps Verified | `steps_verified_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
+| Share of steps Numerically checked | `steps_checked_numerically_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
+| Share of steps Model agreed | `steps_model_agreed_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
+| Share of steps Unchecked | `steps_unchecked_share` | Q | recorded | not measured | not measured | decides whether SymPy's reach is enough |  |
+| Final answer equals the key | `final_answer_equals_key` | Q | recorded | not measured | not measured |  |  |
+| Write-up: cases failing TeX compile, formula handle, citation, check table, or status checks | `writeup_failures` | W | must be 0 | not measured | not measured | Must pass |  |
+| Corrections: runs whose tier, verdict, or gate differs with vs without lessons for the same events | `lessons_gate_drift` | K | must be 0 | not measured | not measured | Must pass; in CI |  |
+| Corrections: corrected error recurrence across runs with vs without lesson | `lessons_error_recurrence` | K | recorded | not measured | not measured |  |  |
+| Quotes surviving re-matching after a hand-over of unchanged bytes | `quotes_surviving_handover_pct` | C | must equal 100 | not measured | not measured | Must be 100 percent |  |
+| Target case solved correctly when started from a hand-over | `handover_target_solved` | C | recorded | not measured | not measured |  |  |
+| Old ledgers that do not resume | `old_ledgers_not_resuming` | R | must be 0 | not measured | not measured | Must pass; in CI |  |
+| Old ledgers whose views differ before and after | `old_ledgers_view_differs` | R | must be 0 | not measured | not measured | Must pass; in CI |  |
+| Peak memory on the reference laptop | `peak_memory_mb` | All | recorded | not measured | not measured | Recorded at each milestone |  |
+| Build time on the reference laptop | `build_time_s` | All | recorded | not measured | not measured | Recorded at each milestone |  |
+| Failing property tests for "new", "novel", "proved", "verified" outside the allowed places | `forbidden_word_property_failures` | All | must be 0 | not measured | not measured | Property tests in CI |  |
+
+55 measures: 24 with a pass rule, 31 recorded only.
+
+## Remarks
+
+None.

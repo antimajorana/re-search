@@ -1,0 +1,21 @@
+[
+  {
+    "id": "msg_selftest_1",
+    "stop_reason": "tool_use",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "tu_selftest_1",
+        "name": "ledger_note",
+        "input": { "text": "Square the integral and use polar coordinates: I^2 = pi." }
+      }
+    ]
+  },
+  {
+    "id": "msg_selftest_2",
+    "stop_reason": "end_turn",
+    "content": [
+      { "type": "text", "text": "The integral equals sqrt(pi)." }
+    ]
+  }
+]

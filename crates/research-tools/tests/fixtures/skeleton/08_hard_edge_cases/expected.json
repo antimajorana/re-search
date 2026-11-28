@@ -1,0 +1,202 @@
+{
+  "paper_key": "arxiv:2601.00008",
+  "version": "v1",
+  "primary_path": "main.tex",
+  "quality": "partial",
+  "quality_notes_contains": [
+    "include cycle detected"
+  ],
+  "theorem_defs": [
+    {
+      "env_name": "lemma",
+      "kind": "lemma",
+      "display_title": "Lemma",
+      "shared_counter": "theorem",
+      "parent_counter": null,
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "proposition",
+      "kind": "proposition",
+      "display_title": "Proposition",
+      "shared_counter": "theorem",
+      "parent_counter": null,
+      "starred": false,
+      "style": null
+    },
+    {
+      "env_name": "remark",
+      "kind": "remark",
+      "display_title": "Remark",
+      "shared_counter": null,
+      "parent_counter": null,
+      "starred": true,
+      "style": null
+    },
+    {
+      "env_name": "theorem",
+      "kind": "theorem",
+      "display_title": "Theorem",
+      "shared_counter": null,
+      "parent_counter": "section",
+      "starred": false,
+      "style": null
+    }
+  ],
+  "macros": [],
+  "nodes": [
+    {
+      "kind": "section",
+      "env_name": "section",
+      "title": "Energy drift and modified Hamiltonians $O(h^{2p})$",
+      "label": "sec:drift",
+      "parent_order": null,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 8,
+          "end_line": 40
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "1",
+      "number_basis": "computed",
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "lemma",
+      "env_name": "lemma",
+      "title": "Alive branch",
+      "label": "lem:alive",
+      "parent_order": 0,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 31,
+          "end_line": 33
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "1.1",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "theorem",
+      "env_name": "theorem",
+      "title": "Symplectic drift \\cite[Theorem 3.2]{hairer2006}",
+      "label": "thm:drift",
+      "parent_order": 0,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 35,
+          "end_line": 40
+        }
+      ],
+      "head_cites": [
+        "hairer2006"
+      ],
+      "eq_count": 0,
+      "number": "1.2",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "equation",
+      "env_name": "equation",
+      "title": null,
+      "label": "eq:modified",
+      "parent_order": 2,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 37,
+          "end_line": 39
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "S1",
+      "number_basis": "printed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "section",
+      "env_name": "section",
+      "title": "Cyclic include recovery",
+      "label": "sec:cycle",
+      "parent_order": null,
+      "spans": [
+        {
+          "path": "main.tex",
+          "start_line": 41,
+          "end_line": 41
+        },
+        {
+          "path": "cycle_a.tex",
+          "start_line": 1,
+          "end_line": 3
+        },
+        {
+          "path": "cycle_b.tex",
+          "start_line": 1,
+          "end_line": 3
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "2",
+      "number_basis": "computed",
+      "confidence": "tex_heading",
+      "proof_hint": null
+    },
+    {
+      "kind": "proposition",
+      "env_name": "proposition",
+      "title": "Symplectic form preservation",
+      "label": "prop:symp",
+      "parent_order": 4,
+      "spans": [
+        {
+          "path": "cycle_a.tex",
+          "start_line": 1,
+          "end_line": 3
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": "2.1",
+      "number_basis": "computed",
+      "confidence": "tex_env",
+      "proof_hint": null
+    },
+    {
+      "kind": "remark",
+      "env_name": "remark",
+      "title": null,
+      "label": null,
+      "parent_order": 4,
+      "spans": [
+        {
+          "path": "cycle_b.tex",
+          "start_line": 1,
+          "end_line": 3
+        }
+      ],
+      "head_cites": [],
+      "eq_count": 0,
+      "number": null,
+      "number_basis": null,
+      "confidence": "tex_env",
+      "proof_hint": null
+    }
+  ]
+}

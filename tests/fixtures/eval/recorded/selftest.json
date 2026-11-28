@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "notes": "Harness self-test recording, written by hand. It is not a response of any real service. Real recordings (set I and the literature services) are a TODO slot; see docs/design/eval-2026-11/README.md.",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/selftest/lookup",
+      "query": "id=one&format=json",
+      "status": 200,
+      "content_type": "application/json",
+      "body": "{\"selftest\":\"one\"}"
+    },
+    {
+      "method": "GET",
+      "path": "/selftest/file",
+      "status": 200,
+      "content_type": "text/plain",
+      "body_file": "selftest-body.txt"
+    }
+  ]
+}

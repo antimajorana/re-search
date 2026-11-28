@@ -1,5 +1,6 @@
 //! Session-level Investigation state. Map revisions, reader corrections and optional checks are
 //! separate ledger records, so reopening a paper preserves what the authors and the reader said.
+#[cfg(test)]
 pub(crate) use crate::investigation_finish::finish;
 pub(crate) use crate::investigation_view::view;
 use crate::investigation_view::branch_history;
@@ -30,7 +31,7 @@ pub(crate) fn marker(events: &[Event]) -> Option<&Event> {
 }
 
 pub(crate) fn is_investigation(events: &[Event]) -> bool {
-    marker(events).is_some_and(|e| e.kind == "investigation.started")
+    crate::session_mode::session_mode(events) == research_tools::paper_key::Mode::Investigate
 }
 
 pub(crate) fn latest<'a>(events: &'a [Event], kind: &str) -> Option<&'a Event> {

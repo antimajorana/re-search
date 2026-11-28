@@ -2,29 +2,117 @@
 
 pub mod archive;
 pub mod arxiv;
+pub mod budget_pool;
 pub mod formal_library;
 pub mod fs_tools;
 pub mod http_client;
+pub mod idea_queries;
+pub mod idea_rank;
+pub mod idea_terms;
 pub mod ingest;
 pub mod investigation;
 pub mod investigation_evidence;
+pub mod investigation_markers;
 pub mod investigation_outline;
 pub mod latex_compile;
 pub mod latex_repair;
 pub mod lean_check;
+pub mod lessons;
+pub mod lessons_backup;
+pub mod lessons_capture;
+pub mod lessons_draft;
+pub mod lessons_prompt;
+pub mod lessons_schema;
+pub mod lessons_select;
+pub mod lines_sent;
+pub mod library;
+mod library_ext_types;
+mod library_marks;
+mod library_rebuild;
+mod library_rebuild_lit;
+pub mod library_schema;
+pub mod lit_abstracts;
+pub mod lit_openalex;
+pub mod lit_providers;
 pub mod literature;
+pub mod map_authors_claim;
+pub mod map_context;
+pub mod map_context_defs;
+pub mod map_defs;
+pub mod map_fold;
+pub mod map_model_nodes;
+pub mod map_node_read;
+pub mod map_reading;
+pub mod net_rate;
+pub mod paper_fetch;
+mod paper_fetch_job;
+mod paper_fetch_meta;
+mod paper_fetch_validate;
+pub mod paper_key;
 pub mod paper_lines;
 pub mod paper_passages;
+pub mod paper_sources;
 pub mod pdf;
+pub mod pdf_firstpage;
+mod pdf_firstpage_norm;
+pub mod pdf_match;
+pub mod pdf_pages;
+mod pdf_pages_bench;
+mod pdf_pages_job;
+mod pdf_pages_layout;
+mod pdf_pages_scan;
 pub mod policy_preset;
+pub mod prior_work;
+pub mod prior_work_wording;
+pub mod proof_closure;
 pub mod proof_dag;
+pub mod quote_core;
+pub mod run_budget;
 pub mod sandbox;
 pub mod sanity;
+pub mod search_coverage;
 pub mod session_activity;
+pub mod skeleton;
+mod solve_badge;
+pub mod solve_checks;
+pub mod solve_defs;
+pub mod solve_derivation;
+pub mod solve_done;
+pub mod solve_exprs;
+mod solve_exprs_show;
+pub mod solve_gates;
+pub mod solve_model;
+mod solve_model_records;
+mod solve_own_tier;
+pub mod solve_artifacts;
+mod solve_artifacts_sniff;
+pub mod solve_receipts;
+pub mod solve_setup;
+mod solve_setup_prefill;
+pub mod solve_state;
+pub mod solve_status;
+pub mod solve_steps;
+pub mod source_bibtex;
+mod source_bibtex_parse;
+mod source_bibtex_tex;
+pub mod source_dedupe;
+pub mod source_export;
+mod source_export_bib;
+pub mod source_folder;
+mod source_folder_parse;
+mod source_frontmatter;
+pub mod source_kandinsky;
+mod source_kandinsky_resolve;
+pub mod source_sync;
+mod source_sync_reconcile;
+pub mod source_zotero;
+mod source_zotero_parse;
+pub mod status_badge;
 pub mod tex_audit;
 mod tex_audit_sources;
 pub mod tex_bundle;
 pub mod tex_scan;
+pub mod tool_profile;
 pub mod write_tools;
 
 pub use investigation_evidence::{
@@ -53,7 +141,9 @@ pub use literature::{
     literature_search_def, run_literature_search, LiteratureHit, LiteratureRequest,
     LITERATURE_SEARCH,
 };
-pub use policy_preset::{research_policy, RESEARCH_POLICY_VERSION};
+pub use policy_preset::{
+    research_policy, solve_policy, RESEARCH_POLICY_VERSION, SOLVE_POLICY_VERSION,
+};
 pub use proof_dag::{
     effective_verification_verdict, ledger_append_def, ledger_query_def, ledger_supersede_def, read_proof_dag, ProofDag,
     ProofEntry, ProofStatus, LEDGER_APPEND, LEDGER_QUERY, LEDGER_SUPERSEDE,
@@ -78,6 +168,11 @@ use tools::{Registry, ToolDef};
 
 pub const DEFAULT_LATEX_COMPILE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Default production base URL for OpenAlex (`api.openalex.org`, X19 Part 1).
+pub fn default_openalex_api_base() -> String {
+    "https://api.openalex.org".to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LiteratureEndpoints {
     pub arxiv_api_base: String,
@@ -85,6 +180,8 @@ pub struct LiteratureEndpoints {
     pub inspire_api_base: String,
     pub crossref_api_base: String,
     pub semantic_scholar_api_base: String,
+    #[serde(default = "default_openalex_api_base")]
+    pub openalex_api_base: String,
 }
 
 impl Default for LiteratureEndpoints {
@@ -95,6 +192,7 @@ impl Default for LiteratureEndpoints {
             inspire_api_base: "https://inspirehep.net".to_string(),
             crossref_api_base: "https://api.crossref.org".to_string(),
             semantic_scholar_api_base: "https://api.semanticscholar.org".to_string(),
+            openalex_api_base: default_openalex_api_base(),
         }
     }
 }
@@ -112,7 +210,8 @@ impl LiteratureEndpoints {
             arxiv_eprint_base: trimmed.clone(),
             inspire_api_base: trimmed.clone(),
             crossref_api_base: trimmed.clone(),
-            semantic_scholar_api_base: trimmed,
+            semantic_scholar_api_base: trimmed.clone(),
+            openalex_api_base: format!("{trimmed}/openalex"),
         })
     }
 }

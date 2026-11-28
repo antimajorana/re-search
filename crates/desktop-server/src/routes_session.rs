@@ -1,12 +1,12 @@
 //! Session, SSE, approval, fork, diff, and provider-settings REST handlers.
 
 use crate::projects::{attach_session, list_projects, project_for_session, save_new_session};
+pub use crate::routes_settings::{handle_get_settings, handle_put_settings};
 use crate::session_lifecycle::{is_turn_running, list_session_grants};
 use crate::session_view::summarize_session_events;
 use crate::sse::stream_session_sse;
-use crate::state::{now_ms, update_provider_roles_from_ui, DesktopState, ForkInfo, SessionMeta, DEFAULT_SESSION_TITLE};
+use crate::state::{now_ms, DesktopState, ForkInfo, SessionMeta, DEFAULT_SESSION_TITLE};
 use crate::turn_runner::{reconstruct_session_view, spawn_turn_thread};
-use agent::{ProviderKeyStore, ProviderKind, RoleAssignment};
 use export::{compute_branch_diff, fork_session, ForkOptions};
 use research_tools::validate_session_id;
 use serde_json::{json, Value};
@@ -138,9 +138,10 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
         let (route, _) = crate::cli_turn::session_route(meta.as_ref(), &events);
         let is_agy = route.as_str() == Some(crate::state::ANTIGRAVITY_ROUTE);
         let stats = summarize_session_events(&events);
+        let mode = crate::session_mode::session_mode(&events);
         sessions.push(json!({
             "id": id,
-            "mode": if crate::investigation::is_investigation(&events) { "investigation" } else { "research" },
+            "mode": crate::session_mode::api_mode_name(mode),
             "title": title,
             "route": route,
             "confinement": is_agy.then_some(cli_route::antigravity::CONFINEMENT),
@@ -166,9 +167,24 @@ pub fn handle_list_sessions(state: &DesktopState) -> ApiResult {
 
 pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResult {
     let val = parse_json_body(body)?;
-    let mode = val.get("mode").map(|v| v.as_str().unwrap_or("")).unwrap_or("research");
-    if !matches!(mode, "research" | "investigation") { return Err(bad("Choose Research or Investigation.")); }
-    if mode == "investigation" && val.get("prompt").and_then(Value::as_str).is_some_and(|p| !p.trim().is_empty()) {
+    let raw_mode = val.get("mode").map(|v| v.as_str().unwrap_or("")).unwrap_or(crate::session_mode::MODE_API_RESEARCH);
+    let mode = crate::session_mode::parse_requested_mode(raw_mode).map_err(bad)?;
+    if mode == research_tools::paper_key::Mode::Explore {
+        if val.get("text").is_some() {
+            return crate::routes_idea::create_explore_session(state, &val);
+        }
+        return Err(bad(
+            "Explore sessions require an idea `text` at creation; bare Explore sessions (tool profile `explore/1`) are not built yet.",
+        ));
+    }
+    if mode != research_tools::paper_key::Mode::Solve {
+        crate::session_mode::profile_for_mode(mode).map_err(bad)?;
+    } else if val.get("prompt").and_then(Value::as_str).is_some_and(|p| !p.trim().is_empty()) {
+        return Err(bad("Create the Solve session and confirm its setup before starting a run."));
+    }
+    if mode == research_tools::paper_key::Mode::Investigate
+        && val.get("prompt").and_then(Value::as_str).is_some_and(|p| !p.trim().is_empty())
+    {
         return Err(bad("Create the Investigation and upload its primary paper before starting a turn."));
     }
     let id = match val.get("id").and_then(Value::as_str) {
@@ -256,8 +272,11 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
         deleted: false,
     };
     save_new_session(state, &meta, project_id)?;
-    if mode == "investigation" {
-        state.open_ledger().map_err(internal)?.append_new_session(&id, &[("investigation.started", 1, &json!({}))])
+    if let Some(marker) = crate::session_mode::start_marker_for_mode(mode) {
+        state
+            .open_ledger()
+            .map_err(internal)?
+            .append_new_session(&id, &[(marker, 1, &json!({}))])
             .map_err(|e| internal(e.to_string()))?;
     }
 
@@ -277,7 +296,7 @@ pub fn handle_create_session(state: &Arc<DesktopState>, body: &[u8]) -> ApiResul
             "title": title,
             "workspace_root": workspace_root,
             "created_ms": meta.created_ms,
-            "mode": mode,
+            "mode": crate::session_mode::api_mode_name(mode),
             "route": meta.route,
             "project_id": project_id,
         }),
@@ -334,34 +353,38 @@ pub fn handle_get_session(state: &DesktopState, session_id: &str) -> ApiResult {
         })
         .collect();
 
-    Ok((
-        200,
-        json!({
-            "id": session_id,
-            "title": title,
-            "workspace_root": workspace_root,
-            "route": route,
-            "confinement": is_agy.then_some(cli_route::antigravity::CONFINEMENT),
-            "route_label": is_agy.then_some(crate::antigravity::AGY_LABEL),
-            "provenance": provenance,
-            "meta": meta,
-            "fork_info": fork_info,
-            "project_id": project.map(|p| p.id),
-            "events": events_json,
-            "mode": if crate::investigation::is_investigation(&events) { "investigation" } else { "research" },
-            "investigation": crate::investigation::view(&events, running),
-            "messages": messages,
-            "traces": traces,
-            "sources": sources,
-            "linked_sources": linked_sources,
-            "stats": stats,
-            "archived": meta.as_ref().is_some_and(|m| m.archived),
-            "running": running,
-            "session_grants": list_session_grants(state, session_id),
-            "pending_approvals": pending,
-            "pending_checkpoints": state.hitl.list_pending(session_id),
-        }),
-    ))
+    let mode = crate::session_mode::session_mode(&events);
+    let mut body = json!({
+        "id": session_id,
+        "title": title,
+        "workspace_root": workspace_root,
+        "route": route,
+        "confinement": is_agy.then_some(cli_route::antigravity::CONFINEMENT),
+        "route_label": is_agy.then_some(crate::antigravity::AGY_LABEL),
+        "provenance": provenance,
+        "meta": meta,
+        "fork_info": fork_info,
+        "project_id": project.map(|p| p.id),
+        "events": events_json,
+        "mode": crate::session_mode::api_mode_name(mode),
+        "investigation": crate::investigation::view(&events, running),
+        "solve": (mode == research_tools::paper_key::Mode::Solve)
+            .then(|| crate::solve::session_solve_view(state, session_id, &events, running)),
+        "messages": messages,
+        "traces": traces,
+        "sources": sources,
+        "linked_sources": linked_sources,
+        "stats": stats,
+        "archived": meta.as_ref().is_some_and(|m| m.archived),
+        "running": running,
+        "session_grants": list_session_grants(state, session_id),
+        "pending_approvals": pending,
+        "pending_checkpoints": state.hitl.list_pending(session_id),
+    });
+    if mode == research_tools::paper_key::Mode::Explore {
+        body["idea"] = crate::idea_view::view(&events, running);
+    }
+    Ok((200, body))
 }
 
 pub fn handle_sse_stream(
@@ -499,107 +522,6 @@ pub fn handle_diff(state: &DesktopState, base_id: &str, other_id: &str) -> ApiRe
     let ledger = state.open_ledger().map_err(internal)?;
     let report = compute_branch_diff(&ledger, base_id, other_id).map_err(bad)?;
     Ok((200, serde_json::to_value(report).map_err(|e| internal(e.to_string()))?))
-}
-
-pub fn handle_get_settings(state: &DesktopState) -> ApiResult {
-    Ok((200, state.settings_json().map_err(internal)?))
-}
-
-pub fn handle_put_settings(state: &DesktopState, body: &[u8]) -> ApiResult {
-    let val = parse_json_body(body)?;
-    let mut store = ProviderKeyStore::load_from_data_dir(&state.cfg.data_dir).map_err(internal)?;
-
-    let next_provider = match val.get("default_provider").and_then(Value::as_str) {
-        Some(dp) => Some(ProviderKind::parse(dp).map_err(bad)?.cli_name().to_string()),
-        None => None,
-    };
-    let next_model = val.get("default_model").and_then(Value::as_str).map(|dm| {
-        let trimmed = dm.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    });
-    let next_conv = match val.get("pinned_conventions").and_then(Value::as_str) {
-        Some(conv) => {
-            agent::validate_pinned_conventions(conv).map_err(bad)?;
-            Some(conv.to_string())
-        }
-        None => None,
-    };
-    let next_role_presets = val.get("role_presets").cloned();
-    let next_auto_approve = match val.get("auto_approve_tools") {
-        Some(v) => Some(v.as_bool().ok_or_else(|| bad("`auto_approve_tools` must be a boolean"))?),
-        None => None,
-    };
-    let next_agent_models = match val.get("agent_models") {
-        Some(am_val) => {
-            let mut map = state.load_ui_settings().agent_models;
-            crate::agent_models::parse_agent_models_patch(am_val, &mut map)?;
-            Some(map)
-        }
-        None => None,
-    };
-    let reader_patch = crate::paper_reader::parse_reader_settings_patch(&val)?;
-
-    if let Some(roles_val) = val.get("roles") {
-        let parsed: RoleAssignment =
-            serde_json::from_value(roles_val.clone()).map_err(|e| bad(format!("invalid `roles`: {e}")))?;
-        agent::validate_roles(&parsed).map_err(bad)?;
-        store.roles = parsed;
-    } else {
-        let mut preview_ui = state.load_ui_settings();
-        if let Some(dp) = &next_provider {
-            preview_ui.default_provider = Some(dp.clone());
-        }
-        if let Some(dm) = &next_model {
-            preview_ui.default_model = dm.clone();
-        }
-        update_provider_roles_from_ui(&mut store.roles, &preview_ui);
-        agent::validate_roles(&store.roles).map_err(bad)?;
-    }
-
-    if let Some(keys) = val.get("keys").and_then(Value::as_object) {
-        for (k, v) in keys {
-            let pk = ProviderKind::parse(k).map_err(bad)?;
-            if v.is_null() {
-                store.set_key(pk, None).map_err(bad)?;
-            } else if let Some(s) = v.as_str() {
-                store.set_key(pk, Some(s.to_string())).map_err(bad)?;
-            } else {
-                return Err(bad(format!("`keys.{k}` must be a string or null")));
-            }
-        }
-    }
-    if let Some(bases) = val.get("base_urls").and_then(Value::as_object) {
-        for (k, v) in bases {
-            let pk = ProviderKind::parse(k).map_err(bad)?;
-            let url = if v.is_null() {
-                None
-            } else if let Some(s) = v.as_str() {
-                Some(s.to_string())
-            } else {
-                return Err(bad(format!("`base_urls.{k}` must be a string or null")));
-            };
-            store.set_base_url(pk, url).map_err(bad)?;
-        }
-    }
-
-    store.save_to_data_dir(&state.cfg.data_dir).map_err(internal)?;
-    state
-        .update_ui_settings(|ui| {
-            if let Some(dp) = next_provider { ui.default_provider = Some(dp); }
-            if let Some(dm) = next_model { ui.default_model = dm; }
-            if let Some(conv) = next_conv { ui.pinned_conventions = Some(conv); }
-            if let Some(rp) = next_role_presets { ui.role_presets = Some(rp); }
-            if let Some(auto) = next_auto_approve { ui.auto_approve_tools = auto; }
-            if let Some(am) = next_agent_models { ui.agent_models = am; }
-            if let Some(en) = reader_patch.enabled { ui.paper_readers_enabled = en; }
-            if let Some(mp) = reader_patch.max_parallel { ui.paper_reader_max_parallel = mp; }
-        })
-        .map_err(internal)?;
-    if val.get("keys").is_some() || val.get("base_urls").is_some() {
-        // Lists fetched with the old key or from the old host are no longer valid.
-        state.catalog.clear();
-    }
-    Ok((200, state.settings_json().map_err(internal)?))
 }
 
 fn clip_title(s: &str, max_chars: usize) -> String {

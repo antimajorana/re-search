@@ -40,7 +40,7 @@ def check_investigation(browser, binary):
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             expect(page.locator('#composer-model option:checked')).to_have_text('Gemini fixture')
-            page.get_by_role("button", name="Investigate a paper", exact=True).click()
+            page.get_by_role("button", name="Investigate", exact=True).click()
             expect(page.locator("#investigation-setup")).to_be_visible()
             expect(page.locator('#composer-model option:checked')).to_have_text('Gemini fixture')
             parent = page.evaluate("async () => (await (await import('/assets/api.js')).listSessions()).sessions[0].id")
@@ -340,7 +340,79 @@ def check_investigation(browser, binary):
             expect(graph.locator(".investigation-claim-title")).to_have_text(lines[1])
             assert not errors, errors
     check_question_first_investigation(browser, binary)
+    check_v3_tex_zero_model_investigation(browser, binary)
     print("Investigation upload, provider selection, focused map, exact passages, correction, recheck and linked Research passed")
+
+
+def check_v3_tex_zero_model_investigation(browser, binary):
+    tex = "\n".join([
+        r"\documentclass{article}",
+        r"\newtheorem{lemma}{Lemma}[section]",
+        r"\newtheorem{theorem}[lemma]{Theorem}",
+        r"\newtheorem{definition}[lemma]{Definition}",
+        r"\begin{document}",
+        r"\section{Setup}\label{sec:setup}",
+        r"\begin{definition}[Quadratic energy]\label{def:energy}",
+        r"For $u \in H^1$, set $E(u) = \int |\nabla u|^2\,dx$.",
+        r"\end{definition}",
+        r"\begin{lemma}[Coercivity]\label{lem:coercive}",
+        r"Every normalized mode satisfies $E(u) \ge \lambda_1 \|u\|_2^2$.",
+        r"\end{lemma}",
+        r"\section{Main bound}\label{sec:main}",
+        r"\begin{theorem}[Spectral gap]\label{thm:gap}",
+        r"Under Definition~\ref{def:energy}, the lowest excited energy obeys $E(u_1) > 0$.",
+        r"\end{theorem}",
+        r"\begin{proof}",
+        r"Apply Lemma~\ref{lem:coercive} to the orthogonal complement.",
+        r"\end{proof}",
+        r"\end{document}",
+    ])
+    with tempfile.TemporaryDirectory(prefix="re-search-v3-tex-") as directory:
+        root = Path(directory)
+        (root / "paper").mkdir()
+        model_calls = []
+
+        def mock_no_models(page):
+            page.route("**/api/models*", lambda r: r.fulfill(json={"providers": []}))
+            page.route("**/messages", lambda r: (model_calls.append(r.request.url), r.abort()))
+
+        with open_install(browser, binary, root, before_navigate=mock_no_models) as page:
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.get_by_role("button", name="Investigate", exact=True).click()
+            expect(page.locator("#investigation-setup")).to_be_visible()
+            page.get_by_label("Primary paper", exact=True).set_input_files(
+                {"name": "spectral_gap.tex", "mimeType": "application/x-tex", "buffer": tex.encode("utf-8")}
+            )
+            page.get_by_role("button", name="Find main results").click()
+            shell = page.locator("#investigation-v3-shell")
+            expect(shell).to_be_visible()
+            expect(page.locator("#investigation-setup")).to_be_hidden()
+            expect(page.locator("#settings-dialog")).to_be_hidden()
+            expect(shell.locator(".inv-quality-line")).to_contain_text("Structure read from TeX source")
+            expect(shell.locator(".inv-outline")).to_contain_text("Setup")
+            expect(shell.locator(".inv-outline")).to_contain_text("Main bound")
+            expect(shell.locator(".inv-results")).to_contain_text("Theorem 2.1: Spectral gap")
+            expect(shell.locator(".inv-results .katex").first).to_be_visible()
+            shell.locator(".inv-result-item").filter(has_text="Theorem 2.1: Spectral gap").click()
+            card = shell.locator(".ui-node-card")
+            expect(card).to_contain_text("Connect a model to get an explanation")
+            expect(card.locator(".inv-chip-row--statement")).to_contain_text("Definition 1.1: Quadratic energy")
+            expect(card.locator(".inv-chip-row--proof")).to_contain_text("Lemma 1.2: Coercivity")
+            card.get_by_role("button", name="Proof", exact=True).click()
+            expect(card.locator(".inv-node-proof")).to_be_visible()
+            card.locator(".inv-chip-row--proof .inv-chip").click()
+            expect(card).to_contain_text("Lemma 1.2: Coercivity")
+            expect(card.locator(".inv-chip-row--used-by")).to_contain_text("Theorem 2.1: Spectral gap")
+            shell.get_by_role("button", name="← Previous statement").click()
+            expect(card).to_contain_text("Theorem 2.1: Spectral gap")
+            card.get_by_role("button", name="Source lines").click()
+            expect(page.locator("#source-reader-dialog")).to_be_visible()
+            page.keyboard.press("Escape")
+            assert model_calls == [], f"expected zero model calls on V3 TeX open, got {model_calls}"
+            assert "verified" not in shell.inner_text().lower()
+            assert not errors, errors
+
 
 
 def check_question_first_investigation(browser, binary):
@@ -361,7 +433,7 @@ def check_question_first_investigation(browser, binary):
             page.on("pageerror", lambda error: errors.append(str(error)))
             uploads = []
             page.route("**/upload", lambda r: (uploads.append(True), r.continue_()))
-            page.get_by_role("button", name="Investigate a paper", exact=True).click()
+            page.get_by_role("button", name="Investigate", exact=True).click()
             expect(page.locator("#investigation-setup")).to_be_visible()
             page.get_by_label("Primary paper", exact=True).set_input_files(
                 {"name": "dynamics.txt", "mimeType": "text/plain", "buffer": body.encode()}
@@ -385,7 +457,7 @@ def check_question_first_investigation(browser, binary):
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             expect(page.locator('#composer-model option:checked')).to_have_text('Gemini fixture')
-            page.get_by_role("button", name="Investigate a paper", exact=True).click()
+            page.get_by_role("button", name="Investigate", exact=True).click()
             expect(page.locator("#investigation-setup")).to_be_visible()
             expect(page.locator('#composer-model option:checked')).to_have_text('Gemini fixture')
             sid = page.evaluate("async () => (await (await import('/assets/api.js')).listSessions()).sessions[0].id")
