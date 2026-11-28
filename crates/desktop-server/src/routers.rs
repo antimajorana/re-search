@@ -91,6 +91,10 @@ pub(crate) fn build_desktop_router_for_profile(
         let bundle = crate::solve_runtime::build_solve_router(state, env, session)?;
         return Ok((bundle.router, bundle.containment, bundle.contained));
     }
+    if profile_name == research_tools::tool_profile::PROFILE_EXPLORE_V1 {
+        let router = build_idea_router(state, env, session)?;
+        return Ok((router, "explore host".to_string(), false));
+    }
     let profile = lookup_profile(profile_name).map_err(|e| e.to_string())?;
     let worker = build_desktop_worker(&state, session)?;
     let epoch_handle = worker.as_ref().map(Worker::epoch_handle);
