@@ -347,3 +347,52 @@ test('Prefill filters out CLI roles, preserves user Not-selected choice, and che
     dom.restore();
   }
 });
+
+test('Same-session syncFromRail refresh during an active Solve run preserves syncSeq and live polling', async () => {
+  const dom = makeDom();
+  try {
+    let viewPolls = 0;
+    const stages = createModeStagesController({
+      isModelConnected: () => true,
+      listConnectedModels: () => [{ provider: 'anthropic', model: 'claude-haiku-4-5', label: 'Anthropic / claude-haiku-4-5' }],
+      pollIntervalMs: 15,
+      solveOpts: { debounceMs: 0 },
+      fetchJson: async (method, url, body) => {
+        if (url === '/api/sessions/s-poll-sync/solve/view') {
+          viewPolls += 1;
+          if (viewPolls === 1) {
+            return {
+              setup: { statement: 'Integrate x^2', revision: 1 },
+              steps: [{ entry_id: 'e-1', entry_type: 'assumption', summary: 'Setup conventions', badge: 'given' }],
+              run_state: { state: 'running', running: true, model_calls_used: 0, model_calls_max: 60 },
+              model_connected: true,
+            };
+          }
+          return {
+            setup: { statement: 'Integrate x^2', revision: 1 },
+            steps: [
+              { entry_id: 'e-1', entry_type: 'assumption', summary: 'Setup conventions', badge: 'given' },
+              { entry_id: 'e-2', entry_type: 'assumption', summary: 'Evaluate integral of x^2', badge: 'model_agreed' },
+            ],
+            run_state: { state: 'paused', running: false, model_calls_used: 2, model_calls_max: 60 },
+            model_connected: true,
+          };
+        }
+        return { ok: true };
+      },
+    });
+
+    await stages.syncFromRail('s-poll-sync', [{ id: 's-poll-sync', mode: 'solve' }]);
+    // Simulate session rail refreshes firing while the Solve run is active.
+    await stages.syncFromRail('s-poll-sync', [{ id: 's-poll-sync', mode: 'solve' }]);
+    await stages.syncFromRail('s-poll-sync', [{ id: 's-poll-sync', mode: 'solve' }]);
+    await new Promise((r) => setTimeout(r, 60));
+
+    assert.ok(viewPolls >= 2, `expected live poll to fire after same-session syncFromRail, got viewPolls=${viewPolls}`);
+    assert.equal(dom.solveStage.querySelector('[data-run-state="paused"]') !== null, true);
+    const wsText = dom.solveStage.querySelector('[data-testid="solve-workspace"]')?.textContent || '';
+    assert.ok(wsText.includes('Evaluate integral of x^2'), `expected workspace to render polled e-2 step, got: ${wsText}`);
+  } finally {
+    dom.restore();
+  }
+});

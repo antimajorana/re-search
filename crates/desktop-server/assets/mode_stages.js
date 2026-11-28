@@ -480,8 +480,15 @@ export function createModeStagesController(deps = {}) {
       for (const s of sessions) if (s?.id && s?.mode) modeBySession.set(s.id, normalizeMode(s.mode));
     }
     if (!activeSessionId) { syncSeq += 1; resetStages(null, null); return null; }
+    const cachedMode = modeBySession.get(activeSessionId) || null;
+    if (activeSessionId === mountedSessionId && (mountedMode === 'solve' || mountedMode === 'explore') && (!cachedMode || cachedMode === mountedMode)) {
+      return mountedMode === 'solve' ? activeSolveView : activeExploreCtrl;
+    }
+    if (inFlightMount?.sessionId === activeSessionId && (!cachedMode || cachedMode === 'solve')) {
+      try { return await inFlightMount.promise; } catch { return null; }
+    }
     const seq = ++syncSeq;
-    let mode = modeBySession.get(activeSessionId) || null;
+    let mode = cachedMode;
     if (!mode) {
       try {
         const sess = (!customFetch && typeof apiMod.getSession === 'function')
