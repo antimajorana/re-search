@@ -381,6 +381,9 @@ pub(super) fn estimate_prompt_chars(system: &str, messages: &[Message], tools: &
                     name.chars().count() + input.to_string().chars().count()
                 }
                 ContentBlock::ToolResult { content, .. } => content.chars().count(),
+                ContentBlock::Image { media_type, data_base64 } => {
+                    media_type.chars().count() + data_base64.chars().count()
+                }
                 ContentBlock::Other { raw, .. } => raw.to_string().chars().count(),
             };
         }

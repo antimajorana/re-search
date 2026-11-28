@@ -73,6 +73,7 @@ pub mod routes_lessons;
 pub mod routes_lessons_ui;
 pub mod routes_library;
 pub mod routes_ocr;
+pub mod routes_pdf_vision;
 pub mod routes_session;
 pub mod routes_settings;
 pub mod routes_sources;

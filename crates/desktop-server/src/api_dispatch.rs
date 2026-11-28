@@ -54,6 +54,14 @@ pub(crate) fn dispatch_api(
         ("GET", ["api", "sessions", sid, "sources", source, "page-image"]) => {
             crate::routes_ocr::serve_page_image(&mut stream, state, sid, source, &req.query);
         }
+        ("POST", ["api", "sessions", sid, "sources", source, "transcribe-equations"]) => {
+            write_api_res(
+                &mut stream,
+                crate::routes_pdf_vision::handle_transcribe_equations(
+                    state, sid, source, &req.body,
+                ),
+            );
+        }
         ("GET", ["api", "projects"]) => write_api_res(&mut stream, crate::projects::handle_list(state)),
         ("POST", ["api", "projects"]) => {
             write_api_res(&mut stream, crate::projects::handle_create(state, &req.body));

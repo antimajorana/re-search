@@ -132,6 +132,7 @@ fn serialize_gemini_request(expected_model: &str, req: &ModelRequest) -> Result<
             "request model `{req_model}` does not match GeminiTransport model `{expected_model}`"
         )));
     }
+    crate::vision::validate_request_images(ProviderKind::Gemini, req)?;
 
     let mut tool_names: HashMap<&str, &str> = HashMap::new();
     let mut contents = Vec::with_capacity(req.messages.len());
@@ -244,6 +245,9 @@ fn encode_message<'a>(msg: &'a Message, tool_names: &mut HashMap<&'a str, &'a st
                         "response": response_obj,
                     }
                 }));
+            }
+            ContentBlock::Image { media_type, data_base64 } => {
+                parts.push(crate::vision::encode_gemini_image(media_type, data_base64));
             }
             ContentBlock::RedactedThinking { .. } | ContentBlock::Other { .. } => {}
         }

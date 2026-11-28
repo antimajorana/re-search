@@ -70,6 +70,7 @@ mod pdf_pages_layout;
 mod pdf_pages_scan;
 pub mod pdf_render;
 mod pdf_render_png;
+pub mod pdf_vision;
 pub mod policy_preset;
 pub mod prior_work;
 pub mod prior_work_wording;

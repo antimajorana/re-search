@@ -188,6 +188,7 @@ fn serialize_openai_request(provider: ProviderKind, req: &ModelRequest) -> Resul
     if req.max_tokens == 0 {
         return Err(config_err("max_tokens must be >= 1"));
     }
+    crate::vision::validate_request_images(provider, req)?;
 
     let mut obj = serde_json::Map::new();
     obj.insert("model".into(), json!(req.model));
@@ -243,7 +244,9 @@ fn encode_tool(spec: &ToolSpec) -> Value {
 fn encode_message(msg: &Message, out: &mut Vec<Value>) -> Result<(), TransportError> {
     match msg.role {
         Role::User => {
+            let has_image = msg.content.iter().any(|b| matches!(b, ContentBlock::Image { .. }));
             let mut text_parts: Vec<&str> = Vec::new();
+            let mut multi_parts: Vec<Value> = Vec::new();
             for block in &msg.content {
                 match block {
                     ContentBlock::ToolResult { tool_use_id, is_error: _, content } => {
@@ -253,14 +256,29 @@ fn encode_message(msg: &Message, out: &mut Vec<Value>) -> Result<(), TransportEr
                             "content": content,
                         }));
                     }
-                    ContentBlock::Text { text } => text_parts.push(text.as_str()),
+                    ContentBlock::Text { text } => {
+                        if has_image {
+                            if !text.is_empty() {
+                                multi_parts.push(json!({ "type": "text", "text": text }));
+                            }
+                        } else {
+                            text_parts.push(text.as_str());
+                        }
+                    }
+                    ContentBlock::Image { media_type, data_base64 } => {
+                        multi_parts.push(crate::vision::encode_openai_image(media_type, data_base64));
+                    }
                     ContentBlock::Thinking { .. }
                     | ContentBlock::RedactedThinking { .. }
                     | ContentBlock::ToolUse { .. }
                     | ContentBlock::Other { .. } => {}
                 }
             }
-            if !text_parts.is_empty() {
+            if has_image {
+                if !multi_parts.is_empty() {
+                    out.push(json!({ "role": "user", "content": multi_parts }));
+                }
+            } else if !text_parts.is_empty() {
                 let joined = text_parts.join("\n");
                 if !joined.is_empty() {
                     out.push(json!({ "role": "user", "content": joined }));
@@ -288,6 +306,7 @@ fn encode_message(msg: &Message, out: &mut Vec<Value>) -> Result<(), TransportEr
                     ContentBlock::Thinking { .. }
                     | ContentBlock::RedactedThinking { .. }
                     | ContentBlock::ToolResult { .. }
+                    | ContentBlock::Image { .. }
                     | ContentBlock::Other { .. } => {}
                 }
             }
