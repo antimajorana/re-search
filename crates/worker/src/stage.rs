@@ -14,8 +14,46 @@ use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
 const STAGE_LOCK_TIMEOUT: Duration = Duration::from_secs(120);
 const STALE_LOCK_AGE: Duration = Duration::from_secs(15 * 60);
-const ALLOWED_PACKAGES: &[&str] = &["sympy", "mpmath", "numpy", "numpy.libs"];
-const ALLOWED_DIST_PREFIXES: &[&str] = &["sympy-", "mpmath-", "numpy-"];
+const ALLOWED_PACKAGES: &[&str] = &[
+    "sympy",
+    "mpmath",
+    "numpy",
+    "numpy.libs",
+    "scipy",
+    "scipy.libs",
+    "matplotlib",
+    "mpl_toolkits",
+    "pylab.py",
+    "contourpy",
+    "cycler",
+    "fonttools",
+    "kiwisolver",
+    "packaging",
+    "pil",
+    "pillow.libs",
+    "pyparsing",
+    "dateutil",
+    "tzdata",
+    "six.py",
+];
+const ALLOWED_DIST_PREFIXES: &[&str] = &[
+    "sympy-",
+    "mpmath-",
+    "numpy-",
+    "scipy-",
+    "matplotlib-",
+    "contourpy-",
+    "cycler-",
+    "fonttools-",
+    "kiwisolver-",
+    "packaging-",
+    "pillow-",
+    "pyparsing-",
+    "python_dateutil-",
+    "python-dateutil-",
+    "tzdata-",
+    "six-",
+];
 static TMP_SEQ: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone)]
@@ -246,7 +284,7 @@ fn compute_fingerprint(probe: &PythonProbe, source_python: &Path, scripts: &[(St
         h.update((s.len() as u64).to_le_bytes());
         h.update(s.as_bytes());
     };
-    update_field(&mut h, "stage-v4");
+    update_field(&mut h, "stage-v5");
     update_field(&mut h, &probe.base.to_string_lossy());
     update_field(&mut h, &probe.ver);
     let canon_py = strip_verbatim(&fs::canonicalize(source_python)?);
@@ -461,5 +499,32 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn allowlist_matches_scipy_matplotlib_and_transitive_runtime_entries() {
+        for entry in [
+            "numpy",
+            "numpy.libs",
+            "scipy",
+            "scipy.libs",
+            "matplotlib",
+            "mpl_toolkits",
+            "pylab.py",
+            "PIL",
+            "fontTools",
+            "dateutil",
+            "tzdata",
+            "scipy-1.18.1.dist-info",
+            "matplotlib-3.11.2.dist-info",
+            "pillow-13.0.0.dist-info",
+            "python_dateutil-4.0.0.dist-info",
+            "tzdata-2026.6.dist-info",
+        ] {
+            assert!(matches_package_entry(entry), "expected allowlist match for {entry}");
+        }
+        for rejected in ["pip", "pytest", "requests", "pip-26.2.2.dist-info", "scipy-1.18.1-cp314.whl"] {
+            assert!(!matches_package_entry(rejected), "unexpected allowlist match for {rejected}");
+        }
     }
 }

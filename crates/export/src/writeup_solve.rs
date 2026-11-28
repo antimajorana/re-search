@@ -20,6 +20,7 @@ use ledger::{Event, Ledger};
 use research_tools::library::Library;
 use research_tools::paper_key::Mode;
 use research_tools::proof_closure::{all_deps, closure_for_target, topological_order};
+use research_tools::proof_dag::tool_reference_matches;
 use research_tools::sandbox::WorkspaceSandbox;
 use research_tools::solve_model::{
     Claim, ClaimForm, ClaimRelation, HandleRef, SolveDoneStatus, SolveEntry, SolveRunStatus,
@@ -320,9 +321,13 @@ fn build_step_formulas(state: &SolveState, entry: &SolveEntry) -> Result<Vec<Wri
         .handles
         .iter()
         .filter(|(_, e)| {
-            e.owner_entry.as_deref() == Some(entry.entry_id.as_str())
-                && e.portable
-                && !e.latex.trim().is_empty()
+            let owned = match e.owner_entry.as_deref() {
+                Some(owner) => owner == entry.entry_id,
+                None => entry.tool_call_ref.iter().chain(entry.tool_call_refs.iter()).any(|r| {
+                    tool_reference_matches(r, &e.produced_by.call_id, e.produced_by.result_seq)
+                }),
+            };
+            owned && e.portable && !e.latex.trim().is_empty()
         })
         .enumerate()
     {

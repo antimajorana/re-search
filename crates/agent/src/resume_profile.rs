@@ -46,6 +46,41 @@ pub fn resolve_session_profile(
     session: &str,
     events: &[Event],
 ) -> Result<ResolvedSessionProfile, ResumeReject> {
+    resolve_session_profile_with_lookup(session, events, |name| {
+        lookup(name).map_err(|e| e.to_string())
+    })
+    .map(|(resolved, _)| resolved)
+}
+
+fn is_solve_profile(name: &str) -> bool {
+    name.starts_with("solve/")
+}
+
+fn valid_brief_resume_checkpoint(events: &[Event], resume_ev: &Event) -> bool {
+    if resume_ev.payload.get("resume_mode").and_then(Value::as_str) != Some("brief") {
+        return false;
+    }
+    let Some(sha) = resume_ev.payload.get("brief_sha256").and_then(Value::as_str) else {
+        return false;
+    };
+    if sha.is_empty() {
+        return false;
+    }
+    events.iter().any(|cp| {
+        cp.kind == "solve.checkpoint"
+            && cp.seq < resume_ev.seq
+            && cp.payload.get("brief_sha256").and_then(Value::as_str) == Some(sha)
+    })
+}
+
+pub(crate) fn resolve_session_profile_with_lookup<F>(
+    session: &str,
+    events: &[Event],
+    mut lookup_fn: F,
+) -> Result<(ResolvedSessionProfile, bool), ResumeReject>
+where
+    F: FnMut(&str) -> Result<ToolProfile, String>,
+{
     let start_ev = events
         .iter()
         .find(|e| e.kind == "session.start")
@@ -58,7 +93,7 @@ pub fn resolve_session_profile(
 
     let (mut profile, explicit) = match start_ev.payload.get(TOOL_PROFILE_FIELD) {
         Some(Value::String(name)) => {
-            let p = lookup(name)
+            let p = lookup_fn(name)
                 .map_err(|e| drift(format!("cannot resume session `{session}`: {e}")))?;
             (p, true)
         }
@@ -69,17 +104,26 @@ pub fn resolve_session_profile(
         }
         None => {
             let inferred = legacy_profile_name_for_events(events);
-            let p = lookup(inferred)
+            let p = lookup_fn(inferred)
                 .map_err(|e| drift(format!("cannot resume session `{session}`: {e}")))?;
             (p, false)
         }
     };
 
     // Rule R2: replay resume cannot switch tool profiles mid-session, except the single
-    // forward compatibility upgrade `investigation/1 -> investigation/2` (`00-overview.md` 2.2,
-    // `investigate.md` §8.2). Downgrades (`investigation/2 -> investigation/1`) and cross-mode
-    // changes remain `Drift`.
+    // forward compatibility upgrade `investigation/1 -> investigation/2`, OR a Solve-only
+    // brief-resume boundary (`resume_mode: "brief"` with `brief_sha256` matching a prior
+    // `solve.checkpoint`). Cross-mode changes (`research/1 -> solve/1`) remain `Drift`.
+    let mut brief_switched = false;
     for ev in events.iter().filter(|e| e.kind == "session.resume") {
+        if ev.payload.get("resume_mode").and_then(Value::as_str) == Some("brief")
+            && !valid_brief_resume_checkpoint(events, ev)
+        {
+            return Err(drift(format!(
+                "cannot resume session `{session}`: brief resume at seq {} missing matching prior `solve.checkpoint`",
+                ev.seq
+            )));
+        }
         if let Some(val) = ev.payload.get(TOOL_PROFILE_FIELD) {
             let Some(res_name) = val.as_str() else {
                 return Err(drift(format!(
@@ -88,18 +132,27 @@ pub fn resolve_session_profile(
                 )));
             };
             if profile.name == PROFILE_INVESTIGATION_V1 && res_name == PROFILE_INVESTIGATION_V2 {
-                profile = lookup(PROFILE_INVESTIGATION_V2)
+                profile = lookup_fn(PROFILE_INVESTIGATION_V2)
                     .map_err(|e| drift(format!("cannot resume session `{session}`: {e}")))?;
             } else if res_name != profile.name {
-                return Err(drift(format!(
-                    "cannot resume session `{session}`: `{TOOL_PROFILE_FIELD}` changed from `{}` to `{res_name}` at seq {}",
-                    profile.name, ev.seq
-                )));
+                if is_solve_profile(profile.name)
+                    && is_solve_profile(res_name)
+                    && valid_brief_resume_checkpoint(events, ev)
+                {
+                    profile = lookup_fn(res_name)
+                        .map_err(|e| drift(format!("cannot resume session `{session}`: {e}")))?;
+                    brief_switched = true;
+                } else {
+                    return Err(drift(format!(
+                        "cannot resume session `{session}`: `{TOOL_PROFILE_FIELD}` changed from `{}` to `{res_name}` at seq {}",
+                        profile.name, ev.seq
+                    )));
+                }
             }
         }
     }
 
-    Ok(ResolvedSessionProfile { profile, explicit })
+    Ok((ResolvedSessionProfile { profile, explicit }, brief_switched))
 }
 
 /// Data-driven tool-definition drift check using `profile.may_gain` and `profile.earlier_defs`.
@@ -157,7 +210,9 @@ pub(crate) fn verify_profile_policy_and_defs(
     expected_defs: &[ToolDef],
     active_router_profile: Option<&str>,
 ) -> Result<ResolvedSessionProfile, ResumeReject> {
-    let mut resolved = resolve_session_profile(session, events)?;
+    let (mut resolved, brief_switched) = resolve_session_profile_with_lookup(session, events, |name| {
+        lookup(name).map_err(|e| e.to_string())
+    })?;
     let upgrading_to_v2 = resolved.profile.name == PROFILE_INVESTIGATION_V1
         && active_router_profile == Some(PROFILE_INVESTIGATION_V2);
 
@@ -170,28 +225,30 @@ pub(crate) fn verify_profile_policy_and_defs(
         }
     }
 
-    let recorded_policy = start_ev.payload.get("policy_version").and_then(Value::as_str);
-    if resolved.explicit {
-        let profile_policy = resolved.profile.policy.version.as_str();
-        if recorded_policy != Some(profile_policy) {
+    if !brief_switched {
+        let recorded_policy = start_ev.payload.get("policy_version").and_then(Value::as_str);
+        if resolved.explicit {
+            let profile_policy = resolved.profile.policy.version.as_str();
+            if recorded_policy != Some(profile_policy) {
+                return Err(drift(format!(
+                    "cannot resume session `{session}`: policy_version `{}` differs from profile `{}` policy `{profile_policy}`",
+                    recorded_policy.unwrap_or("<missing>"),
+                    resolved.profile.name
+                )));
+            }
+            if expected_policy_version != profile_policy {
+                return Err(drift(format!(
+                    "cannot resume session `{session}`: active policy_version `{expected_policy_version}` differs from profile `{}` policy `{profile_policy}`",
+                    resolved.profile.name
+                )));
+            }
+        }
+        if recorded_policy != Some(expected_policy_version) {
             return Err(drift(format!(
-                "cannot resume session `{session}`: policy_version `{}` differs from profile `{}` policy `{profile_policy}`",
-                recorded_policy.unwrap_or("<missing>"),
-                resolved.profile.name
+                "cannot resume session `{session}`: policy_version `{}` differs from expected `{expected_policy_version}`",
+                recorded_policy.unwrap_or("<missing>")
             )));
         }
-        if expected_policy_version != profile_policy {
-            return Err(drift(format!(
-                "cannot resume session `{session}`: active policy_version `{expected_policy_version}` differs from profile `{}` policy `{profile_policy}`",
-                resolved.profile.name
-            )));
-        }
-    }
-    if recorded_policy != Some(expected_policy_version) {
-        return Err(drift(format!(
-            "cannot resume session `{session}`: policy_version `{}` differs from expected `{expected_policy_version}`",
-            recorded_policy.unwrap_or("<missing>")
-        )));
     }
     if let Some(resume_ev) = events
         .iter()
@@ -232,7 +289,9 @@ pub(crate) fn verify_profile_policy_and_defs(
         expected_defs
     };
 
-    check_tool_defs_drift_for_profile(session, &start_ev.payload, check_defs, &resolved.profile)?;
+    if !brief_switched {
+        check_tool_defs_drift_for_profile(session, &start_ev.payload, check_defs, &resolved.profile)?;
+    }
     if let Some(resume) = events
         .iter()
         .rev()

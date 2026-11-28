@@ -36,6 +36,8 @@ function makeStageDom() {
       tagName: String(tag).toUpperCase(),
       namespaceURI: ns,
       id: '',
+      ownerDocument: null,
+      parentNode: null,
       dataset: {},
       style: {},
       children: [],
@@ -50,6 +52,8 @@ function makeStageDom() {
       selected: false,
       rows: 0,
       tabIndex: 0,
+      get firstChild() { return this.children[0] || null; },
+      get firstElementChild() { return this.children[0] || null; },
       get className() { return [...classes].join(' '); },
       set className(v) {
         classes.clear();
@@ -80,12 +84,29 @@ function makeStageDom() {
       removeAttribute(k) { attrs.delete(String(k)); },
       append(...nodes) {
         for (const n of nodes) {
+          if (n && typeof n === 'object') {
+            if (n.parentNode && typeof n.remove === 'function') n.remove();
+            n.parentNode = this;
+          }
           this.children.push(n);
-          if (this.tagName === 'SELECT' && n?.tagName === 'OPTION') this.options.push(n);
+          if (this.tagName === 'SELECT' && n?.tagName === 'OPTION' && (!this.value || n.selected)) this.options.push(n);
         }
       },
+      prepend(...nodes) {
+        for (const n of nodes) if (n && typeof n === 'object') n.parentNode = this;
+        this.children.unshift(...nodes);
+      },
       appendChild(n) { this.append(n); return n; },
+      removeChild(n) {
+        const idx = this.children.indexOf(n);
+        if (idx >= 0) { this.children.splice(idx, 1); if (n && typeof n === 'object') n.parentNode = null; }
+        return n;
+      },
+      remove() {
+        if (this.parentNode && typeof this.parentNode.removeChild === 'function') this.parentNode.removeChild(this);
+      },
       replaceChildren(...nodes) {
+        for (const c of this.children) if (c && typeof c === 'object') c.parentNode = null;
         this.children = [];
         this.options = [];
         text = '';
@@ -149,13 +170,16 @@ function makeStageDom() {
 
   const prevDoc = globalThis.document;
   const prevStages = globalThis.__reSearchModeStages;
-  globalThis.document = {
+  const doc = {
     head,
-    createElement: (tag) => makeEl(tag, null),
-    createElementNS: (ns, tag) => makeEl(tag, ns),
+    createElement: (tag) => { const n = makeEl(tag, null); n.ownerDocument = doc; return n; },
+    createElementNS: (ns, tag) => { const n = makeEl(tag, ns); n.ownerDocument = doc; return n; },
+    createTextNode: (txt) => { const n = makeEl('#text', null); n.textContent = String(txt ?? ''); n.ownerDocument = doc; return n; },
     getElementById: (id) => byId.get(id) || null,
     querySelector: (sel) => head.querySelector(sel) || shell.querySelector(sel) || null,
   };
+  for (const n of [head, shell, homeExplore, exploreStage, solveStage, activeTitle]) n.ownerDocument = doc;
+  globalThis.document = doc;
 
   return {
     makeEl,
@@ -174,7 +198,7 @@ function makeStageDom() {
   };
 }
 
-test('index.html and assets.rs wire solve.css, #explore-session-stage, #solve-session-stage, and mode_stages.js while keeping Solve/Explore rail buttons not built yet', () => {
+test('index.html and assets.rs wire solve.css, #explore-session-stage, #solve-session-stage, and mode_stages.js with Solve enabled and Explore not built yet', () => {
   const indexHtml = fs.readFileSync(path.join(assetsDir, 'index.html'), 'utf8');
   const assetsRs = fs.readFileSync(path.join(crateRoot, 'src', 'assets.rs'), 'utf8');
   assert.match(indexHtml, /href="\/assets\/solve\.css"/);
@@ -186,12 +210,12 @@ test('index.html and assets.rs wire solve.css, #explore-session-stage, #solve-se
   const exploreEntry = MODE_MENU_ENTRIES.find((e) => e.id === 'explore');
   const solveEntry = MODE_MENU_ENTRIES.find((e) => e.id === 'solve');
   assert.equal(exploreEntry.built, false);
-  assert.equal(solveEntry.built, false);
+  assert.equal(solveEntry.built, true);
   assert.ok(exploreEntry.title.includes(NOT_BUILT_YET_LABEL));
-  assert.ok(solveEntry.title.includes(NOT_BUILT_YET_LABEL));
+  assert.ok(!solveEntry.title.includes(NOT_BUILT_YET_LABEL));
 });
 
-test('mode_stages.js mounts solve_setup.js and idea.js, handles session switching, guards rapid races, and wires mountExploreCard default onCreated', async () => {
+test('mode_stages.js mounts solve_setup.js, solve_steps.js, solve_transcribe.js, and idea.js, handles session switching, guards rapid races, and supports openNewSolveSession + mountExploreCard', async () => {
   const dom = makeStageDom();
   try {
     const calls = [];
@@ -202,6 +226,12 @@ test('mode_stages.js mounts solve_setup.js and idea.js, handles session switchin
       solveOpts: { debounceMs: 0 },
       fetchJson: async (method, url, body) => {
         calls.push({ method, url, body });
+        if (method === 'POST' && url === '/api/sessions' && body?.mode === 'solve') {
+          return { id: 's-solve-new', mode: 'solve', title: 'Solve' };
+        }
+        if (url === '/api/sessions/s-solve-new/solve/view') {
+          return { setup: null, steps: [], handles: [], checks: [], receipts: [], model_connected: false };
+        }
         if (url === '/api/sessions/s-solve-slow/solve/view') {
           return new Promise((resolve) => { pendingSolveResolve = resolve; });
         }
@@ -254,13 +284,15 @@ test('mode_stages.js mounts solve_setup.js and idea.js, handles session switchin
     globalThis.__reSearchModeStages = stages;
     dom.resetInnerHtmlCount();
 
-    // 1. Mount Solve session -> unhide #solve-session-stage, render solve_setup.js, wire prefill/setup/approvals.
+    // 1. Mount Solve session -> unhide #solve-session-stage, render solve_setup.js + solve_steps.js + solve_transcribe.js.
     await stages.syncFromRail('s-solve-1', [{ id: 's-solve-1', mode: 'solve' }]);
     assert.equal(dom.innerHtmlWrites, 0, 'mode_stages.js must never write innerHTML');
     assert.equal(dom.solveStage.hidden, false);
     assert.equal(dom.exploreStage.hidden, true);
     assert.equal(dom.shell.getAttribute('data-mode-stage'), 'solve');
     assert.ok(dom.solveStage.querySelector('[data-testid="solve-setup-card"]'));
+    assert.ok(dom.solveStage.querySelector('[data-testid="solve-workspace"]'), 'solve_steps.js workspace must mount');
+    assert.ok(dom.solveStage.querySelector('[data-tab-id="transcribe"]'), 'S17b transcribe tab must mount');
 
     await stages.getSolveView().triggerPrefill();
     assert.equal(stages.getSolveView().getState().conventions, 'hbar = 1');
@@ -274,6 +306,15 @@ test('mode_stages.js mounts solve_setup.js and idea.js, handles session switchin
     await new Promise((r) => setTimeout(r, 5));
     await stages.getSolveView().submitSetup();
     assert.ok(dom.solveStage.querySelector('[data-testid="solve-collapsed-bar"]'));
+    assert.ok(dom.solveStage.querySelector('[data-testid="solve-workspace"]'), 'submitSetup must keep solve_steps.js workspace intact');
+
+    // 1b. openNewSolveSession creates a new Solve session and mounts setup + workspace cleanly.
+    const createdSolve = await stages.openNewSolveSession();
+    assert.equal(createdSolve.id, 's-solve-new');
+    assert.equal(stages.getActiveSessionId(), 's-solve-new');
+    assert.equal(stages.getActiveMode(), 'solve');
+    assert.ok(dom.solveStage.querySelector('[data-testid="solve-workspace"]'));
+    assert.ok(dom.solveStage.querySelector('[data-tab-id="transcribe"]'));
 
     // 2. Rapid switch race: start loading slow Solve session, immediately switch to Explore -> slow Solve must not overwrite!
     const slowPromise = stages.syncFromRail('s-solve-slow', [

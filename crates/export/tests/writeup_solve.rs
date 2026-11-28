@@ -358,3 +358,39 @@ fn cited_ocr_quote_emits_ocr_tag_and_physical_pdf_page_and_refuses_tamper() {
     let tamper_err = build_solve_writeup(&data_dir, sid).unwrap_err();
     assert!(tamper_err.contains("F4 re-verification"), "unexpected err: {tamper_err}");
 }
+
+#[test]
+fn claimless_step_resolves_live_owner_entry_none_handles_via_tool_call_refs() {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let ledger = Ledger::open(&data_dir).unwrap();
+    let sid = "s-live-owner-none";
+    let math_sha = append_setup(&ledger, sid, "Live handle ownership via tool_call_refs.", "Live Owner");
+
+    // Live `harvest_exprs_out` writes `owner_entry: None`; ownership comes from `tool_call_refs`.
+    append_expr(&ledger, sid, "live_term", 1, r"\frac{1}{2} x^2", "Mul(Rational(1,2),Pow(x,2))", None, true);
+    let e1_sha = research_tools::solve_model::compute_entry_sha256(None, "Compute kinetic term.", "");
+    ledger.append_with_hash(sid, event_kinds::PROOF_ENTRY, 1, &json!({
+        "entry_id": "e-1", "entry_type": StepEntryType::Derivation.as_str(),
+        "summary": "Compute kinetic term.", "details": "", "depends_on": [],
+        "origin": StepOrigin::Solver, "tool_call_refs": ["call-live_term-1"],
+        "entry_sha256": e1_sha,
+    })).unwrap();
+
+    let h_fin = append_expr(&ledger, sid, "fin", 1, "x^2", "Pow(x,2)", Some("e-2"), true);
+    let claim = Claim {
+        form: ClaimForm::Equation, lhs: HandleRef::new("fin", 1).unwrap(),
+        rhs: HandleRef::new("fin", 1).unwrap(), relation: ClaimRelation::Eq,
+        order: None, domain: None, how: None,
+    };
+    let csha = compute_claim_sha256(std::slice::from_ref(&claim), |_| Some(h_fin.as_str())).unwrap();
+    append_step(&ledger, sid, "e-2", StepEntryType::FinalAnswer, StepOrigin::Solver, "Final identity.", "", &["e-1"], &[claim], Some(&csha), None, None);
+    append_check(&ledger, sid, "chk-fin", &csha, &math_sha, "identity_symbolic", "pass", json!({ "residual": "0" }));
+
+    let doc = build_solve_writeup(&data_dir, sid).unwrap();
+    let formulas: Vec<&str> = doc.sections.iter().flat_map(|s| &s.blocks).filter_map(|b| match b {
+        WriteupBlock::Formula { latex, .. } => Some(latex.as_str()),
+        _ => None,
+    }).collect();
+    assert!(formulas.contains(&r"\frac{1}{2} x^2"), "missing live-owned formula: {formulas:?}");
+}

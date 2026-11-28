@@ -10,6 +10,8 @@ import {
   MORE_MENU_LABEL,
   NOT_BUILT_YET_LABEL,
   bindNewMenu,
+  buildModeMenuEntries,
+  isSolveMenuEnabled,
   renderNewMenu,
 } from '../assets/new_menu.js';
 
@@ -128,7 +130,7 @@ async function importSessionRail() {
   return import(`data:text/javascript;base64,${Buffer.from(src).toString('base64')}`);
 }
 
-test('new_menu.js disables Explore and Solve with "not built yet" and keeps Research under More', () => {
+test('new_menu.js enables Solve by default, disables Explore with "not built yet", and keeps Research under More', () => {
   const dom = makeFakeDom();
   try {
     const mount = dom.makeEl('div');
@@ -137,6 +139,7 @@ test('new_menu.js disables Explore and Solve with "not built yet" and keeps Rese
 
     assert.equal(dom.innerHtmlWrites, 0, 'new_menu.js must not write innerHTML');
     assert.equal(MODE_MENU_ENTRIES.length, 4);
+    assert.equal(isSolveMenuEnabled(), true, 'Solve must be enabled by default without localStorage');
 
     const inv = mount.querySelector('#new-investigation-btn');
     const exp = mount.querySelector('#new-explore-btn');
@@ -145,28 +148,38 @@ test('new_menu.js disables Explore and Solve with "not built yet" and keeps Rese
     const res = more?.querySelector('#new-research-btn');
 
     assert.ok(inv && !inv.disabled, 'Investigate button must be enabled');
+    assert.ok(sol && !sol.disabled, 'Solve button must be enabled by default');
+    assert.equal(sol.getAttribute('aria-disabled'), null, 'Solve must not set aria-disabled');
+    assert.ok(!sol.textContent.includes(NOT_BUILT_YET_LABEL), 'Solve must not show not built yet');
     assert.ok(more && more.tagName === 'DETAILS', 'New research must live inside More details menu');
     assert.equal(more.querySelector('summary')?.textContent, MORE_MENU_LABEL);
     assert.ok(res && !res.disabled, 'New research button inside More must be enabled');
 
-    for (const [name, btn] of [['Explore', exp], ['Solve', sol]]) {
-      assert.ok(btn, `${name} button must be listed`);
-      assert.equal(btn.disabled, true, `${name} must be disabled`);
-      assert.equal(btn.getAttribute('aria-disabled'), 'true', `${name} must set aria-disabled`);
-      assert.ok(
-        btn.textContent.includes(NOT_BUILT_YET_LABEL),
-        `${name} button must include "${NOT_BUILT_YET_LABEL}", got "${btn.textContent}"`
-      );
-      // Even if a caller forces click dispatch after clearing disabled, nothing starts.
-      btn.disabled = false;
-      const ev = btn.dispatch('click');
-      assert.equal(ev.prevented, true, `click on unbuilt ${name} must be prevented`);
-      assert.equal(selected.length, 0, `click on unbuilt ${name} must start nothing`);
-    }
+    assert.ok(exp, 'Explore button must be listed');
+    assert.equal(exp.disabled, true, 'Explore must be disabled');
+    assert.equal(exp.getAttribute('aria-disabled'), 'true', 'Explore must set aria-disabled');
+    assert.ok(
+      exp.textContent.includes(NOT_BUILT_YET_LABEL),
+      `Explore button must include "${NOT_BUILT_YET_LABEL}", got "${exp.textContent}"`
+    );
+    // Even if a caller forces click dispatch after clearing disabled, Explore starts nothing.
+    exp.disabled = false;
+    const ev = exp.dispatch('click');
+    assert.equal(ev.prevented, true, 'click on unbuilt Explore must be prevented');
+    assert.equal(selected.length, 0, 'click on unbuilt Explore must start nothing');
 
     inv.dispatch('click');
+    sol.dispatch('click');
     res.dispatch('click');
-    assert.deepEqual(selected, ['investigation', 'research']);
+    assert.deepEqual(selected, ['investigation', 'solve', 'research']);
+
+    // Opting out of Solve via buildModeMenuEntries({ solveBuilt: false }) preserves unbuilt guard.
+    const optedOutMount = dom.makeEl('div');
+    renderNewMenu(optedOutMount, { entries: buildModeMenuEntries({ solveBuilt: false }) });
+    const solOptOut = optedOutMount.querySelector('#new-solve-btn');
+    assert.equal(solOptOut.disabled, true);
+    assert.ok(solOptOut.textContent.includes(NOT_BUILT_YET_LABEL));
+    assert.equal(isSolveMenuEnabled({ solveEnabled: false }), false);
 
     // bindNewMenu guards statically rendered markup identically.
     const staticRoot = dom.makeEl('div');
@@ -275,7 +288,7 @@ test('session_rail.js renders mode rail tags for all modes, falls back legacy se
   }
 });
 
-test('index.html and assets.rs wire /assets/new_menu.js and disabled unbuilt modes', () => {
+test('index.html and assets.rs wire /assets/new_menu.js, enable Solve, and keep Explore disabled', () => {
   const indexHtml = fs.readFileSync(path.join(assetsDir, 'index.html'), 'utf8');
   const assetsRs = fs.readFileSync(path.join(crateRoot, 'src', 'assets.rs'), 'utf8');
 
@@ -283,7 +296,9 @@ test('index.html and assets.rs wire /assets/new_menu.js and disabled unbuilt mod
   assert.match(indexHtml, /id="rail-new-menu"/);
   assert.match(indexHtml, /id="new-investigation-btn"/);
   assert.match(indexHtml, /id="new-explore-btn"[^>]*disabled/);
-  assert.match(indexHtml, /id="new-solve-btn"[^>]*disabled/);
+  const solveBtnMatch = indexHtml.match(/<button\s+id="new-solve-btn"[^>]*>/);
+  assert.ok(solveBtnMatch, 'index.html must contain #new-solve-btn');
+  assert.ok(!/\bdisabled\b/.test(solveBtnMatch[0]), '#new-solve-btn must be enabled by default');
   assert.match(indexHtml, /id="rail-more-menu"/);
   assert.match(indexHtml, /id="new-research-btn"/);
   assert.match(indexHtml, /not built yet/);

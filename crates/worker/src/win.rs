@@ -26,10 +26,11 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, TerminateJobObject, JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_UILIMIT_DESKTOP, JOB_OBJECT_UILIMIT_DISPLAYSETTINGS,
-    JOB_OBJECT_UILIMIT_EXITWINDOWS, JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES,
-    JOB_OBJECT_UILIMIT_READCLIPBOARD, JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
+    SetInformationJobObject, TerminateJobObject, JOBOBJECT_BASIC_UI_RESTRICTIONS,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_UILIMIT_DESKTOP, JOB_OBJECT_UILIMIT_DISPLAYSETTINGS, JOB_OBJECT_UILIMIT_EXITWINDOWS,
+    JOB_OBJECT_UILIMIT_GLOBALATOMS, JOB_OBJECT_UILIMIT_HANDLES, JOB_OBJECT_UILIMIT_READCLIPBOARD,
+    JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS, JOB_OBJECT_UILIMIT_WRITECLIPBOARD,
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
@@ -139,7 +140,13 @@ impl Drop for Job {
     }
 }
 
-pub(crate) fn create_kill_on_close_job() -> io::Result<Job> {
+pub(crate) fn create_kill_on_close_job(job_memory_limit_bytes: Option<usize>) -> io::Result<Job> {
+    if job_memory_limit_bytes == Some(0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "job_memory_limit_bytes must be greater than zero",
+        ));
+    }
     // SAFETY: valid FFI calls; `Job` owns the created handle on success.
     unsafe {
         let handle = CreateJobObjectW(null_mut(), null_mut());
@@ -149,6 +156,10 @@ pub(crate) fn create_kill_on_close_job() -> io::Result<Job> {
         let job = Job(handle);
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if let Some(limit) = job_memory_limit_bytes {
+            info.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
+            info.JobMemoryLimit = limit;
+        }
         if SetInformationJobObject(
             job.0,
             JobObjectExtendedLimitInformation,
@@ -160,6 +171,27 @@ pub(crate) fn create_kill_on_close_job() -> io::Result<Job> {
         }
         Ok(job)
     }
+}
+
+#[cfg(test)]
+pub(crate) fn query_job_extended_limits(job: &Job) -> io::Result<JOBOBJECT_EXTENDED_LIMIT_INFORMATION> {
+    use windows_sys::Win32::System::JobObjects::QueryInformationJobObject;
+    let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
+    let mut ret_len: u32 = 0;
+    // SAFETY: `job.0` is a valid job handle owned by `job` and `info` matches `JobObjectExtendedLimitInformation`.
+    if unsafe {
+        QueryInformationJobObject(
+            job.0,
+            JobObjectExtendedLimitInformation,
+            (&mut info as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            &mut ret_len,
+        )
+    } == 0
+    {
+        return Err(last_error("QueryInformationJobObject"));
+    }
+    Ok(info)
 }
 
 pub(crate) fn restrict_job_ui(job: &Job) -> io::Result<()> {
@@ -207,7 +239,7 @@ impl JobChild {
 
 /// Start `command` suspended inside a fresh kill-on-close Job Object, then resume it.
 pub fn spawn_in_job(mut command: Command) -> io::Result<JobChild> {
-    let job = create_kill_on_close_job()?;
+    let job = create_kill_on_close_job(None)?;
     command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
     let mut child = command.spawn()?;
     // SAFETY: `job.0` and `child` process handle are valid for this call.
@@ -272,5 +304,35 @@ pub fn process_is_gone(pid: u32, wait_ms: u32) -> bool {
         let gone = WaitForSingleObject(handle, wait_ms) == WAIT_OBJECT_0;
         CloseHandle(handle);
         gone
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kill_on_close_job_sets_optional_memory_limit() {
+        let uncapped = create_kill_on_close_job(None).unwrap();
+        let uncapped_info = query_job_extended_limits(&uncapped).unwrap();
+        assert_eq!(
+            uncapped_info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        );
+        assert_eq!(uncapped_info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY, 0);
+        assert_eq!(uncapped_info.JobMemoryLimit, 0);
+
+        let limit = 64 * 1024 * 1024;
+        let capped = create_kill_on_close_job(Some(limit)).unwrap();
+        let capped_info = query_job_extended_limits(&capped).unwrap();
+        assert_eq!(
+            capped_info.BasicLimitInformation.LimitFlags
+                & (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_JOB_MEMORY),
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_JOB_MEMORY
+        );
+        assert_eq!(capped_info.JobMemoryLimit, limit);
+
+        let zero_err = create_kill_on_close_job(Some(0)).err().expect("zero limit must fail");
+        assert_eq!(zero_err.kind(), io::ErrorKind::InvalidInput);
     }
 }

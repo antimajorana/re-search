@@ -163,7 +163,7 @@ fn worker_setup(
 
 fn map_outcome(outcome: SessionOutcome) -> i32 {
     match outcome {
-        SessionOutcome::Completed { .. } => 0,
+        SessionOutcome::Completed { .. } | SessionOutcome::Paused { .. } => 0,
         SessionOutcome::Refusal { .. } => EXIT_REFUSAL,
         SessionOutcome::Aborted { .. } => EXIT_ABORTED,
     }

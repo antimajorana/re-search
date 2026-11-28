@@ -354,6 +354,7 @@ fn drive_autonomous_rounds(
         let leg_turns = match &leg.outcome {
             SessionOutcome::Completed { turns, .. }
             | SessionOutcome::Refusal { turns, .. }
+            | SessionOutcome::Paused { turns, .. }
             | SessionOutcome::Aborted { turns, .. } => *turns,
         };
         turns_used += leg_turns;
@@ -363,6 +364,7 @@ fn drive_autonomous_rounds(
         let SessionOutcome::Completed { stop_reason, .. } = &leg.outcome else {
             return Ok(match leg.outcome {
                 SessionOutcome::Refusal { text, .. } => SessionOutcome::Refusal { turns: turns_used, text },
+                SessionOutcome::Paused { reason, .. } => SessionOutcome::Paused { turns: turns_used, reason },
                 SessionOutcome::Aborted { reason, .. } => SessionOutcome::Aborted { turns: turns_used, reason },
                 SessionOutcome::Completed { .. } => unreachable!(),
             });

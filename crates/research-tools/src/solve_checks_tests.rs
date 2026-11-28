@@ -26,14 +26,23 @@ impl WorkerEpoch for StaticEpoch {
 struct MockCheckRunner {
     timeout_next: AtomicBool,
     calls: AtomicU64,
+    support_dimensions: bool,
+    seen_handles: std::sync::Mutex<Vec<(String, BTreeMap<String, String>)>>,
     outcome: std::sync::Mutex<(&'static str, Value)>,
 }
 
 impl CheckProcessRunner for MockCheckRunner {
+    fn supports_check(&self, name: &str) -> bool {
+        if name == "dimensions" && !self.support_dimensions {
+            return false;
+        }
+        name == "symbolic_zero_smoke" || crate::solve_defs::SOLVE_V1_CHECK_NAMES.contains(&name)
+    }
+
     fn run_check(
         &self,
         name: &str,
-        _handles: &BTreeMap<String, String>,
+        handles: &BTreeMap<String, String>,
         _params: &Value,
         timeout: Duration,
         _required_epoch: Option<u64>,
@@ -42,6 +51,10 @@ impl CheckProcessRunner for MockCheckRunner {
         if self.timeout_next.swap(false, Ordering::SeqCst) {
             return Err(CheckExecError::Timeout(timeout));
         }
+        self.seen_handles
+            .lock()
+            .unwrap()
+            .push((name.to_string(), handles.clone()));
         let (out, ev) = self.outcome.lock().unwrap().clone();
         Ok(CheckExecResult {
             raw: json!({
@@ -173,6 +186,8 @@ fn auto_check_gate_runs_and_handles_denied_and_timeout() {
     let runner_ok = Arc::new(MockCheckRunner {
         timeout_next: AtomicBool::new(false),
         calls: AtomicU64::new(0),
+        support_dimensions: false,
+        seen_handles: std::sync::Mutex::new(Vec::new()),
         outcome: std::sync::Mutex::new(("pass", json!({ "comparison": "exact", "exact": true }))),
     });
     let (_tmp, _env, ledger, router, sid) = setup_router(true, runner_ok);
@@ -204,6 +219,8 @@ fn auto_check_gate_runs_and_handles_denied_and_timeout() {
     let runner_den = Arc::new(MockCheckRunner {
         timeout_next: AtomicBool::new(false),
         calls: AtomicU64::new(0),
+        support_dimensions: false,
+        seen_handles: std::sync::Mutex::new(Vec::new()),
         outcome: std::sync::Mutex::new(("pass", json!({ "comparison": "exact", "exact": true }))),
     });
     let (_tmp2, _env2, _ledger2, router_den, _sid2) = setup_router(false, runner_den);
@@ -230,6 +247,8 @@ fn auto_check_gate_runs_and_handles_denied_and_timeout() {
     let runner_to = Arc::new(MockCheckRunner {
         timeout_next: AtomicBool::new(true),
         calls: AtomicU64::new(0),
+        support_dimensions: false,
+        seen_handles: std::sync::Mutex::new(Vec::new()),
         outcome: std::sync::Mutex::new(("pass", json!({}))),
     });
     let (_tmp3, _env3, ledger3, router_to, sid3) = setup_router(true, runner_to);
@@ -258,4 +277,71 @@ fn auto_check_gate_runs_and_handles_denied_and_timeout() {
         )
         .unwrap();
     assert!(matches!(bad, CallOutcome::Error { .. }));
+}
+
+#[test]
+fn auto_check_gate_executes_dimensions_and_validates_s10_params() {
+    let runner = Arc::new(MockCheckRunner {
+        timeout_next: AtomicBool::new(false),
+        calls: AtomicU64::new(0),
+        support_dimensions: true,
+        seen_handles: std::sync::Mutex::new(Vec::new()),
+        outcome: std::sync::Mutex::new(("pass", json!({ "comparison": "exact", "exact": true }))),
+    });
+    let (_tmp, _env, ledger, router, sid) = setup_router(true, Arc::clone(&runner));
+    let out = router
+        .try_call(
+            "solver:solve",
+            STEP_RECORD,
+            &json!({
+                "entry_type": "symbolic_computation",
+                "summary": "Auto-check identity + dimensions",
+                "details": "Both host checks execute when dimensions present",
+                "tool_call_refs": ["sym-1"],
+                "claims": [{ "form": "equation", "lhs": "lhs@1", "rhs": "rhs@1", "relation": "eq" }]
+            }),
+        )
+        .unwrap();
+    let CallOutcome::Ok(val) = out else {
+        panic!("expected Ok, got {out:?}");
+    };
+    let autos = val["auto_checks"].as_array().unwrap();
+    assert_eq!(autos.len(), 2);
+    assert_eq!(autos[0]["check"], "identity_symbolic");
+    assert_eq!(autos[1]["check"], "dimensions");
+    assert_eq!(autos[1]["outcome"], "pass");
+    assert_eq!(
+        ledger.read_session(&sid).unwrap().iter().filter(|e| e.kind == event_kinds::SOLVE_CHECK).count(),
+        2
+    );
+
+    // limit_case resolves `target_handle` from verified ledger handle into handles["target"].
+    let lc = router
+        .try_call(
+            SOLVE_CHECK_CALLER,
+            CHECK_RUN,
+            &json!({
+                "entry_id": "e-1",
+                "check": "limit_case",
+                "params": { "variable": "x", "point": "0", "target_handle": "rhs@1" }
+            }),
+        )
+        .unwrap();
+    assert!(matches!(lc, CallOutcome::Ok(_)), "{lc:?}");
+    let seen = runner.seen_handles.lock().unwrap();
+    let last = seen.last().unwrap();
+    assert_eq!(last.0, "limit_case");
+    assert!(last.1.contains_key("target"));
+
+    // R3 & S10 schema validation rejects forged/host-reserved keys and bad S10 params.
+    for bad_call in [
+        json!({ "entry_id": "e-1", "check": "dimensions", "params": { "dimensions": { "x": { "length": 1 } } } }),
+        json!({ "entry_id": "e-1", "check": "dimensions", "params": { "assumptions": ["x > 0"] } }),
+        json!({ "entry_id": "e-1", "check": "limit_case", "params": { "variable": "x", "point": "0", "target": "Integer(0)" } }),
+        json!({ "entry_id": "e-1", "check": "matrix_property", "params": { "property": "diagonal" } }),
+        json!({ "entry_id": "e-1", "check": "symmetry", "params": { "kind": "even", "variable": "x", "nested": { "expected_value": 0 } } }),
+    ] {
+        let err = router.try_call(SOLVE_CHECK_CALLER, CHECK_RUN, &bad_call).unwrap();
+        assert!(matches!(err, CallOutcome::Error { .. }), "expected rejection for {bad_call}: {err:?}");
+    }
 }
