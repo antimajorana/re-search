@@ -129,3 +129,24 @@ All verification ran on Linux as non-root (`uid=1001(antigravity)`, `gid=1001(an
 3. **`crates/desktop-server/src/cli_turn_solve.rs` (CP2 / S14 dependency):** Automatic post-turn model verification on CLI routes does not execute yet because S14 (`agent::verifier_loop`) is not merged on base; `cli_review` honestly reports `automatic_review_available: false` and `D16_CP2_PENDING_S14_NOTICE`.
 4. **`crates/desktop-server/assets/solve_setup.js` (S5/S13):** Currently 597 lines and owned by S5/S13; does not yet render `cli_review.notice` or `result_sheet.status_line` in the browser DOM until S13 wires those JSON fields.
 5. **Pre-existing Clippy lint on Rust 1.97:** `crates/desktop-server/src/evidence.rs:744` (`clippy::manual_unwrap_or`, >600L, documented in `RULES.md`), untouched.
+
+---
+
+## 8. Integration Addendum — CP2 & `turn_runner.rs` CLI Dispatch (Rebased onto `78e453d`)
+
+Integrated after PR #66 (`S14+S20`) and PR #67 (`S18b`) merged onto `origin/gemini/work/fixed` (`78e453d`):
+
+- **`crates/desktop-server/src/turn_runner.rs` (570 lines):** Removed lines `61–70` (the temporary `"until S15"` 400 refusal on `claude-cli`/`antigravity`), while preserving the `solve.setup` guard (`"Solve session requires setup before running a turn"`) and `wants_cli_route` routing.
+- **`crates/desktop-server/src/cli_turn_solve.rs` & `cli_turn.rs` (CP2 S14 `verifier_loop` wiring):** Flipped `automatic_review_available` and `s14_verifier_loop_ready` to `true` (`notice: null`) in `resolve_cli_verifier_status`, added `maybe_run_post_cli_solve_review` (invoking `run_finish_review_batches` / `run_solve_verifier_loop` and emitting `"solve_updated"` SSE), and called it from `cli_turn::run_cli_turn` upon `TurnEnd::Completed { exit_code: Some(0), init_verified: true }` in `Mode::Solve`.
+- **`crates/mcp-server/src/solve_wire.rs:283`:** Preserved S18b `job_memory_limit_bytes: None` in the `#[cfg(windows)]` `WorkerRole::Check` `WorkerConfig`.
+- **Tests (`solve_cli_parity.rs` + `solve_cli_parity_cp2.rs`):** Updated D16 configured-verifier assertions (`automatic_review_available == true`, `s14_verifier_loop_ready == true`, `notice == null`) and added cross-platform pre-setup 400 / post-setup 202 / CP2 `verifier_loop` tests plus a `#[cfg(windows)]` `FakeCli` E2E test.
+- **Post-edit verification (`6b4d191`, rebased onto `78e453d`):**
+  - `py -3 scripts/check_file_length.py --base origin/gemini/work/fixed`: passed (`No touched source file is over 600 lines.`)
+  - Frozen files check: `0` frozen files modified
+  - `node --check` + `node --test crates/desktop-server/tests/*.test.mjs`: `240 passed, 0 failed, 0 skipped`
+  - Windows `cargo check --workspace --all-targets --locked` + `cargo test --locked -p desktop-server --test solve_cli_parity --test solve_cli_parity_cp2`: passed (`solve_cli_parity` `4/4`, `solve_cli_parity_cp2` `2/2` including Windows `FakeCli` E2E)
+  - Non-root WSL2 Clippy (`-- -D warnings -A clippy::manual_unwrap_or`): `0` warnings/errors
+  - Non-root WSL2 targeted `solve_cli_parity` (`4/4`) + `solve_cli_parity_cp2` (`1/1`)
+  - Non-root WSL2 full workspace tests (`RE_SEARCH_PYTHON` unset): **`170` suites, `1,294 passed, 0 failed, 2 ignored`** (`0` new ignored)
+  - Non-root WSL2 real-Python targeted tests (`-p worker -p research-tools -p mcp-server`, `sympy 1.14.0`, `mpmath 1.3.0`, `numpy 2.5.4`): **`52` suites, `560 passed, 0 failed, 0 ignored`**
+
