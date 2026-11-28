@@ -9,6 +9,7 @@ import {
   highlightTermsSegments,
 } from './idea_state.js';
 import { createApprovalCard } from './approval_card.js';
+import { renderPaperReadRow } from './idea_read_ui.js';
 import { createBadge } from './ui_badge.js';
 
 function el(tag, className, text) {
@@ -167,6 +168,12 @@ function renderSingleCandidateCard(cand, terms, triageCtx) {
     card.append(absEl);
   }
 
+  const readPaper = triageCtx?.papersByKey?.get(key) || cand.paper_read || null;
+  if (readPaper) {
+    const readRow = renderPaperReadRow(readPaper, { onAttachPdf: triageCtx?.onAttachPdf });
+    if (readRow) card.append(readRow);
+  }
+
   if (Array.isArray(cand.found_by) && cand.found_by.length > 0) {
     const qRow = el('div', 'idea-chip-row');
     for (const qid of cand.found_by) qRow.append(el('span', 'idea-chip', String(qid)));
@@ -189,10 +196,17 @@ export function renderCandidateCards(candidates, terms = [], opts = {}) {
     return wrap;
   }
 
+  const papersByKey = new Map();
+  for (const p of Array.isArray(opts?.papers) ? opts.papers : []) {
+    if (p?.key) papersByKey.set(String(p.key), p);
+  }
+  const onAttachPdf = typeof opts?.onAttachPdf === 'function' ? opts.onAttachPdf : null;
+
   const triage = opts?.triage && typeof opts.triage === 'object' ? opts.triage : null;
   const triageItems = Array.isArray(triage?.items) ? triage.items : [];
   if (triageItems.length === 0) {
-    for (const cand of list) wrap.append(renderSingleCandidateCard(cand, terms, null));
+    const flatCtx = papersByKey.size > 0 || onAttachPdf ? { papersByKey, onAttachPdf } : null;
+    for (const cand of list) wrap.append(renderSingleCandidateCard(cand, terms, flatCtx));
     return wrap;
   }
 
@@ -220,6 +234,8 @@ export function renderCandidateCards(candidates, terms = [], opts = {}) {
   };
   const triageCtx = {
     byKey,
+    papersByKey,
+    onAttachPdf,
     readingSet,
     maxPapers,
     quickAbstractOnly,
@@ -341,8 +357,10 @@ export function renderCandidateList(candidates, opts = {}) {
   section.append(
     renderCandidateCards(list, terms, {
       triage,
+      papers: opts.papers,
       maxPapers: opts.maxPapers,
       onSaveReadingList: opts.onSaveReadingList,
+      onAttachPdf: opts.onAttachPdf,
     }),
   );
   return section;

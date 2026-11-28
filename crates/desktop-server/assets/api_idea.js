@@ -86,3 +86,8 @@ export function decideIdeaApproval(sessionId, callId, payload) {
   );
 }
 
+/** Attach a user-supplied PDF/TeX file (or uploaded source_id) to an Explore paper key (X9). */
+export function attachIdeaPdf(sessionId, attachPayload) {
+  return postIdeaOp(sessionId, 'read', { attach_pdf: attachPayload });
+}
+
